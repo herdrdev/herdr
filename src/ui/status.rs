@@ -193,16 +193,6 @@ pub(super) fn render_config_diagnostic(frame: &mut Frame, area: Rect, message: &
     }
 }
 
-pub(super) fn state_dot(state: AgentState, seen: bool, p: &Palette) -> (&'static str, Style) {
-    match (state, seen) {
-        (AgentState::Blocked, _) => ("●", Style::default().fg(p.red)),
-        (AgentState::Working, _) => ("●", Style::default().fg(p.yellow)),
-        (AgentState::Idle, false) => ("●", Style::default().fg(p.teal)),
-        (AgentState::Idle, true) => ("○", Style::default().fg(p.green)),
-        (AgentState::Unknown, _) => ("·", Style::default().fg(p.overlay0)),
-    }
-}
-
 pub(super) fn agent_icon(
     state: AgentState,
     seen: bool,

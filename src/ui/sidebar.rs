@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{agent_icon, state_dot, state_label, state_label_color};
+use super::status::{agent_icon, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
@@ -663,7 +663,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             break;
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
+        let (icon, icon_style) = agent_icon(agg_state, agg_seen, app.spinner_tick, p);
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
@@ -879,7 +879,7 @@ fn render_workspace_list(
             Style::default().fg(p.subtext0)
         };
 
-        let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
+        let (icon, icon_style) = agent_icon(agg_state, agg_seen, app.spinner_tick, p);
         let label = ws.display_name_from(&app.terminals, terminal_runtimes);
         let mut line1 = Vec::new();
         let mut show_workspace_icon = true;
@@ -889,7 +889,7 @@ fn render_workspace_list(
             let icon = if collapsed { "▸" } else { "▾" };
             let (state_icon, state_style) = if collapsed {
                 let (state, seen) = space_aggregate_state(app, &key);
-                state_dot(state, seen, p)
+                agent_icon(state, seen, app.spinner_tick, p)
             } else {
                 (icon, Style::default().fg(p.accent))
             };
@@ -1463,6 +1463,65 @@ mod tests {
                 render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 15, 6), false)
             })
             .expect("workspace list should render");
+    }
+
+    #[test]
+    fn workspace_list_uses_distinct_glyphs_for_blocked_and_done() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("blocked"), Workspace::test_new("done")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+
+        let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, state| {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().state = state;
+        };
+        set_state(&mut app, 0, AgentState::Blocked);
+        set_state(&mut app, 1, AgentState::Idle);
+        // Idle + unseen is the "done" state on the second row.
+        let done_pane = app.workspaces[1].tabs[0].root_pane;
+        app.workspaces[1].tabs[0]
+            .panes
+            .get_mut(&done_pane)
+            .unwrap()
+            .seen = false;
+
+        app.view.workspace_card_areas = vec![
+            crate::app::state::WorkspaceCardArea {
+                ws_idx: 0,
+                rect: Rect::new(0, 1, 20, 1),
+                indented: false,
+            },
+            crate::app::state::WorkspaceCardArea {
+                ws_idx: 1,
+                rect: Rect::new(0, 2, 20, 1),
+                indented: false,
+            },
+        ];
+
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("test terminal");
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        terminal
+            .draw(|frame| {
+                render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 20, 6), false)
+            })
+            .expect("workspace list should render");
+
+        // The leading glyph sits one cell past the row's left edge: line is
+        // [" ", icon, " ", label].
+        let buf = terminal.backend().buffer();
+        let blocked_glyph = buf[(1, 1)].symbol().to_string();
+        let done_glyph = buf[(1, 2)].symbol().to_string();
+
+        assert_ne!(
+            blocked_glyph, done_glyph,
+            "blocked and done spaces must render distinct shapes, not just colors"
+        );
     }
 
     fn workspace_with_worktree_space(

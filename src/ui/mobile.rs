@@ -11,7 +11,7 @@ use super::sidebar::{
     next_entry_is_indented_workspace, workspace_list_entries_expanded, AgentPanelEntry,
     WorkspaceListEntry,
 };
-use super::status::{agent_icon, state_dot};
+use super::status::agent_icon;
 use super::text::{display_width_u16, truncate_end};
 use crate::app::state::{Palette, ToastKind, ToastNotification};
 use crate::app::AppState;
@@ -320,14 +320,7 @@ fn render_header_status(
     };
 
     let (state, seen) = ws.aggregate_state(&app.terminals);
-    let (dot, dot_style) = if matches!(state, AgentState::Working) {
-        (
-            super::spinner_frame(app.spinner_tick),
-            Style::default().fg(p.yellow),
-        )
-    } else {
-        state_dot(state, seen, p)
-    };
+    let (dot, dot_style) = agent_icon(state, seen, app.spinner_tick, p);
     let tab_label = mobile_tab_status(ws);
     let row1 = Rect::new(area.x, area.y, area.width, 1);
     let tab_w = display_width_u16(&tab_label)
@@ -576,7 +569,7 @@ fn render_mobile_switcher_content(
         let selected = *ws_idx == app.selected;
         let bg = mobile_item_bg(selected, active, p);
         let (state, seen) = ws.aggregate_state(&app.terminals);
-        let (dot, dot_style) = state_dot(state, seen, p);
+        let (dot, dot_style) = agent_icon(state, seen, app.spinner_tick, p);
 
         let mut title_spans = vec![Span::styled("  ", Style::default().bg(bg))];
         // Worktrees of the same space render as branches off their parent, so a
@@ -1375,6 +1368,110 @@ mod tests {
 
         assert!(row.contains("tab 2"), "mobile tab row: {row:?}");
         assert!(!row.contains("tab 3"), "mobile tab row: {row:?}");
+    }
+
+    fn mobile_header_status_glyph(state: AgentState, seen: bool) -> String {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("space")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().state = state;
+        app.workspaces[0].tabs[0].panes.get_mut(&pane).unwrap().seen = seen;
+
+        let backend = ratatui::backend::TestBackend::new(24, 3);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_header_status(
+                    &app,
+                    &TerminalRuntimeRegistry::new(),
+                    frame,
+                    Rect::new(0, 0, 24, 3),
+                )
+            })
+            .unwrap();
+
+        // Header status row is [" ", glyph, " ", name], so the glyph is the
+        // second cell of the row.
+        terminal.backend().buffer()[(1, 0)].symbol().to_string()
+    }
+
+    #[test]
+    fn mobile_header_status_uses_distinct_glyphs_for_blocked_and_done() {
+        let blocked = mobile_header_status_glyph(AgentState::Blocked, true);
+        let done = mobile_header_status_glyph(AgentState::Idle, false);
+
+        assert_ne!(
+            blocked, done,
+            "blocked and done spaces must render distinct shapes in the mobile header, not just colors"
+        );
+    }
+
+    #[test]
+    fn mobile_switcher_list_uses_distinct_glyphs_for_blocked_and_done() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![
+            crate::workspace::Workspace::test_new("blocked"),
+            crate::workspace::Workspace::test_new("done"),
+        ];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+
+        let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, state| {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().state = state;
+        };
+        set_state(&mut app, 0, AgentState::Blocked);
+        set_state(&mut app, 1, AgentState::Idle);
+        let done_pane = app.workspaces[1].tabs[0].root_pane;
+        app.workspaces[1].tabs[0]
+            .panes
+            .get_mut(&done_pane)
+            .unwrap()
+            .seen = false;
+
+        // No detected agents, so the agents block is empty and the blocked shape
+        // can only originate from a space row's status glyph.
+        assert!(agent_panel_entries(&app).is_empty());
+
+        let backend = ratatui::backend::TestBackend::new(40, 20);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_mobile_switcher_content(
+                    &app,
+                    &TerminalRuntimeRegistry::new(),
+                    frame,
+                    Rect::new(0, 0, 40, 20),
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let rendered: String = (0..buffer.area.height)
+            .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol())
+            .collect();
+
+        // Blocked renders "◉" and done renders "●": distinct shapes, not just colors.
+        assert!(
+            rendered.contains('◉'),
+            "blocked space should render the distinct ◉ shape: {rendered:?}"
+        );
+        assert!(
+            rendered.contains('●'),
+            "done space should render the ● shape: {rendered:?}"
+        );
     }
 
     #[cfg(unix)]
