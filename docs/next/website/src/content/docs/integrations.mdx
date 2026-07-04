@@ -58,9 +58,9 @@ Herdr uses integrations in two different ways:
 
 Custom socket integrations can also report state when they define state that is not visible in the native terminal UI.
 
-Some integrations report native agent session references. Herdr uses official session references to resume Claude Code, Codex, Devin CLI, Droid, Kimi Code CLI, Qoder CLI, Cursor Agent CLI, GitHub Copilot CLI, Pi, OMP, Hermes Agent, OpenCode, Kilo Code CLI, and MastraCode panes after a Herdr server restart unless `[session] resume_agents_on_restore = false` disables it.
+Some integrations report native agent session references. Herdr uses official session references to resume Claude Code, Codex, Devin CLI, Droid, Kimi Code CLI, Qoder CLI, Cursor Agent CLI, GitHub Copilot CLI, Pi, OMP, Hermes Agent, OpenCode, Kilo Code CLI, MastraCode, and Antigravity CLI panes after a Herdr server restart unless `[session] resume_agents_on_restore = false` disables it.
 
-Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Cursor Agent CLI version `1`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `2`, or MastraCode version `1`. Check installed versions with `herdr integration status`.
+Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Cursor Agent CLI version `1`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `2`, MastraCode version `1`, or Antigravity CLI version `1`. Check installed versions with `herdr integration status`.
 
 ## Pi
 
@@ -255,6 +255,18 @@ The hook reports MastraCode lifecycle state and thread identity to Herdr for aut
 Herdr uses `~/.mastracode`. Install writes `hooks/herdr-agent-state.sh` and adds Herdr command entries to `hooks.json`, creating the directory when missing. Uninstall removes the matching hook entries and deletes the hook script.
 
 Herdr resumes stored MastraCode threads with `mastracode --thread <id>`.
+
+## Antigravity CLI
+
+Install the Antigravity CLI hook:
+
+```bash
+herdr integration install antigravity-cli
+```
+
+Herdr uses `~/.gemini/antigravity-cli/` by default, or `ANTIGRAVITY_CLI_CONFIG_DIR` when set. The directory is created if it does not exist. Install writes `hooks/herdr-agent-state.sh` (or `herdr-agent-state.ps1` on Windows) and adds Herdr entries to `hooks.json`. Uninstall removes the matching hook entries and deletes the hook script.
+
+After Antigravity CLI emits a session-bearing event, Herdr can use the reported conversation ID to resume the pane with `agy --conversation <id>` after a Herdr server restart.
 
 ## Custom status labels
 

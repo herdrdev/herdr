@@ -186,6 +186,13 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
+        ("herdr:antigravity_cli", "antigravity-cli", AgentSessionRefKind::Id) => {
+            vec![
+                "agy".into(),
+                "--conversation".into(),
+                session_ref.value.clone(),
+            ]
+        }
         _ => return None,
     };
 
@@ -220,6 +227,7 @@ fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:qodercli", "qodercli")
             | ("herdr:kilo", "kilo")
             | ("herdr:cursor", "cursor")
+            | ("herdr:antigravity_cli", "antigravity-cli")
     )
 }
 
@@ -402,6 +410,16 @@ mod tests {
             .argv,
             vec!["cursor-agent", "--resume", "cursor-session"]
         );
+        assert_eq!(
+            plan(
+                "herdr:antigravity_cli",
+                "antigravity-cli",
+                &AgentSessionRef::id("agy-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["agy", "--conversation", "agy-session"]
+        );
     }
 
     #[test]
@@ -528,6 +546,16 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qoder-id");
+
+        let session_ref = session_ref_from_report(
+            "herdr:antigravity_cli",
+            "antigravity-cli",
+            Some("agy-id".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "agy-id");
     }
 
     #[test]
@@ -661,5 +689,19 @@ mod tests {
             "devin-session"
         )
         .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:antigravity_cli",
+            "antigravity-cli",
+            AgentSessionRefKind::Id,
+            "agy-session"
+        )
+        .is_some());
+        let agy_session = absolute_test_path("agy-session");
+        assert!(plan(
+            "herdr:antigravity_cli",
+            "antigravity-cli",
+            &AgentSessionRef::path(&agy_session).unwrap()
+        )
+        .is_none());
     }
 }
