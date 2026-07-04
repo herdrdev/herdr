@@ -101,6 +101,7 @@ fn clear_integration_path_env() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -3305,5 +3306,104 @@ fn uninstall_mastracode_errors_when_event_value_not_array() {
     } else {
         std::env::remove_var("HOME");
     }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    fs::write(
+        agy_dir.join("hooks.json"),
+        r#"{"PreInvocation":[{"matcher":"*","hooks":[{"type":"command","command":"echo keep-me"}]}]}"#,
+    )
+    .unwrap();
+    std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    let installed = install_antigravity_cli().unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        agy_dir.join("hooks").join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.hooks_path, agy_dir.join("hooks.json"));
+    assert_eq!(
+        fs::read_to_string(&installed.hook_path).unwrap(),
+        ANTIGRAVITY_CLI_HOOK_ASSET
+    );
+
+    let hooks_file: Value =
+        serde_json::from_str(&fs::read_to_string(agy_dir.join("hooks.json")).unwrap()).unwrap();
+    let hooks = hooks_file.as_object().unwrap();
+
+    // Verify hooks for all events are registered
+    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+        let entries = hooks.get(event).and_then(Value::as_array).unwrap();
+        assert!(entries.iter().any(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|h_entries| {
+                    h_entries.iter().any(|h| {
+                        h.get("type").and_then(Value::as_str) == Some("command")
+                            && h.get("command")
+                                .and_then(Value::as_str)
+                                .is_some_and(|cmd| cmd.contains("herdr-agent-state") && cmd.contains(action))
+                    })
+                })
+        }));
+    }
+
+    // Verify existing unrelated hook is kept
+    let pre_invocation = hooks.get("PreInvocation").and_then(Value::as_array).unwrap();
+    assert!(pre_invocation.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|h_entries| {
+                h_entries.iter().any(|h| {
+                    h.get("type").and_then(Value::as_str) == Some("command")
+                        && h.get("command").and_then(Value::as_str) == Some("echo keep-me")
+                })
+            })
+    }));
+
+    std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_antigravity_cli_removes_hooks_json_entries_and_hook_file() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    // Install first
+    let installed = install_antigravity_cli().unwrap();
+    assert!(installed.hook_path.is_file());
+
+    // Uninstall
+    let result = uninstall_antigravity_cli().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(!installed.hook_path.is_file());
+    assert!(result.updated_hooks);
+
+    let hooks_file: Value =
+        serde_json::from_str(&fs::read_to_string(agy_dir.join("hooks.json")).unwrap()).unwrap();
+    let hooks = hooks_file.as_object().unwrap();
+
+    // Verify hooks for all events are removed
+    for (event, _) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+        let entries = hooks.get(event).and_then(Value::as_array);
+        if let Some(entries) = entries {
+            assert!(entries.is_empty());
+        }
+    }
+
+    std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);
 }

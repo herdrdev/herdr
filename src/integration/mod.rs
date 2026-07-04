@@ -179,6 +179,25 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
 const CURSOR_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const CURSOR_HOOK_ASSET: &str = include_str!("assets/cursor/herdr-agent-state.sh");
 const CURSOR_INTEGRATION_VERSION: u32 = 1;
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "herdr-agent-state.ps1"
+} else {
+    "herdr-agent-state.sh"
+};
+const ANTIGRAVITY_CLI_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/antigravity_cli/herdr-agent-state.ps1")
+} else {
+    include_str!("assets/antigravity_cli/herdr-agent-state.sh")
+};
+const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 1;
+const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 5] = [
+    ("PreInvocation", "working"),
+    ("PreToolUse", "working"),
+    ("PostToolUse", "working"),
+    ("PostInvocation", "idle"),
+    ("Stop", "release"),
+];
+const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const MASTRACODE_HOOK_ASSET: &str = include_str!("assets/mastracode/herdr-agent-state.sh");
 const MASTRACODE_INTEGRATION_VERSION: u32 = 1;
@@ -197,7 +216,6 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("Stop", "idle"),
     ("SessionEnd", "release"),
 ];
-const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

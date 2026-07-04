@@ -1513,7 +1513,8 @@
             "hermes",
             "qodercli",
             "cursor",
-            "mastracode"
+            "mastracode",
+            "antigravity_cli"
           ],
           "type": "string"
         },
@@ -5929,7 +5930,8 @@
             "hermes",
             "qodercli",
             "cursor",
-            "mastracode"
+            "mastracode",
+            "antigravity_cli"
           ],
           "type": "string"
         },
