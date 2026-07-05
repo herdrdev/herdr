@@ -933,14 +933,12 @@ impl App {
         match self.state.mode {
             Mode::RenameWorkspace if !self.state.workspaces.is_empty() && !new_name.is_empty() => {
                 let workspace_id = self.public_workspace_id(self.state.selected);
-                self.dispatch_runtime_mutation(
+                self.runtime_workspace_rename(
                     "tui.workspace.rename",
-                    crate::api::schema::Method::WorkspaceRename(
-                        crate::api::schema::WorkspaceRenameParams {
-                            workspace_id,
-                            label: new_name,
-                        },
-                    ),
+                    crate::api::schema::WorkspaceRenameParams {
+                        workspace_id,
+                        label: new_name,
+                    },
                 );
             }
             Mode::RenameTab if self.state.creating_new_tab => {
@@ -950,15 +948,15 @@ impl App {
                 } else {
                     Some(new_name)
                 };
-                self.dispatch_runtime_mutation(
+                self.runtime_tab_create(
                     "tui.tab.create_named",
-                    crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
+                    crate::api::schema::TabCreateParams {
                         workspace_id: None,
                         cwd: None,
                         focus: true,
                         label,
                         env: Default::default(),
-                    }),
+                    },
                 );
             }
             Mode::RenameTab if !new_name.is_empty() => {
@@ -976,14 +974,12 @@ impl App {
                         .is_some_and(|name| new_name == name);
                 if !keep_auto_name {
                     if let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) {
-                        self.dispatch_runtime_mutation(
+                        self.runtime_tab_rename(
                             "tui.tab.rename",
-                            crate::api::schema::Method::TabRename(
-                                crate::api::schema::TabRenameParams {
-                                    tab_id,
-                                    label: new_name,
-                                },
-                            ),
+                            crate::api::schema::TabRenameParams {
+                                tab_id,
+                                label: new_name,
+                            },
                         );
                     }
                 }

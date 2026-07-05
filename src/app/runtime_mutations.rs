@@ -1,7 +1,9 @@
 use crate::api::schema::{
-    LayoutSetSplitRatioParams, Method, PaneFocusDirectionParams, PaneRenameParams,
-    PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneZoomParams, TabTarget,
-    WorkspaceTarget, WorktreeCreateParams, WorktreeOpenParams, WorktreeRemoveParams,
+    EmptyParams, LayoutSetSplitRatioParams, Method, PaneFocusDirectionParams, PaneRenameParams,
+    PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneZoomParams, TabCreateParams,
+    TabMoveParams, TabRenameParams, TabTarget, WorkspaceCreateParams, WorkspaceMoveParams,
+    WorkspaceRenameParams, WorkspaceTarget, WorktreeCreateParams, WorktreeOpenParams,
+    WorktreeRemoveParams,
 };
 
 use super::App;
@@ -27,6 +29,30 @@ impl App {
         self.dispatch_runtime_mutation(id, Method::WorkspaceFocus(WorkspaceTarget { workspace_id }))
     }
 
+    pub(crate) fn runtime_workspace_create(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceCreateParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceCreate(params))
+    }
+
+    pub(crate) fn runtime_workspace_rename(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceRenameParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceRename(params))
+    }
+
+    pub(crate) fn runtime_workspace_move(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceMoveParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceMove(params))
+    }
+
     pub(crate) fn runtime_workspace_close(
         &mut self,
         id: &'static str,
@@ -35,12 +61,36 @@ impl App {
         self.dispatch_runtime_mutation(id, Method::WorkspaceClose(WorkspaceTarget { workspace_id }))
     }
 
+    pub(crate) fn runtime_tab_create(
+        &mut self,
+        id: &'static str,
+        params: TabCreateParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::TabCreate(params))
+    }
+
     pub(crate) fn runtime_tab_focus(&mut self, id: &'static str, tab_id: String) -> String {
         self.dispatch_runtime_mutation(id, Method::TabFocus(TabTarget { tab_id }))
     }
 
+    pub(crate) fn runtime_tab_rename(
+        &mut self,
+        id: &'static str,
+        params: TabRenameParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::TabRename(params))
+    }
+
+    pub(crate) fn runtime_tab_move(&mut self, id: &'static str, params: TabMoveParams) -> String {
+        self.dispatch_runtime_mutation(id, Method::TabMove(params))
+    }
+
     pub(crate) fn runtime_tab_close(&mut self, id: &'static str, tab_id: String) -> String {
         self.dispatch_runtime_mutation(id, Method::TabClose(TabTarget { tab_id }))
+    }
+
+    pub(crate) fn runtime_server_reload_config(&mut self, id: &'static str) -> String {
+        self.dispatch_runtime_mutation(id, Method::ServerReloadConfig(EmptyParams::default()))
     }
 
     pub(crate) fn runtime_pane_focus(&mut self, id: &'static str, pane_id: String) -> String {

@@ -546,7 +546,7 @@ fn main() -> io::Result<()> {
             ),
             (
                 "herdr api <subcommand>",
-                "Inspect the bundled socket API schema",
+                "Inspect socket API metadata and live runtime state",
             ),
             (
                 "herdr workspace <subcommand>",

@@ -109,16 +109,14 @@ impl App {
         let previous_mode = self.state.mode;
         match action {
             NavigateAction::NewWorkspace => {
-                self.dispatch_runtime_mutation(
+                self.runtime_workspace_create(
                     "tui.key.workspace.create",
-                    crate::api::schema::Method::WorkspaceCreate(
-                        crate::api::schema::WorkspaceCreateParams {
-                            cwd: None,
-                            focus: true,
-                            label: None,
-                            env: Default::default(),
-                        },
-                    ),
+                    crate::api::schema::WorkspaceCreateParams {
+                        cwd: None,
+                        focus: true,
+                        label: None,
+                        env: Default::default(),
+                    },
                 );
                 leave_navigate_mode(&mut self.state);
             }
@@ -223,17 +221,15 @@ impl App {
                     if self.state.prompt_new_tab_name {
                         super::modal::open_new_tab_dialog(&mut self.state);
                     } else {
-                        self.dispatch_runtime_mutation(
+                        self.runtime_tab_create(
                             "tui.key.tab.create",
-                            crate::api::schema::Method::TabCreate(
-                                crate::api::schema::TabCreateParams {
-                                    workspace_id: None,
-                                    cwd: None,
-                                    focus: true,
-                                    label: None,
-                                    env: Default::default(),
-                                },
-                            ),
+                            crate::api::schema::TabCreateParams {
+                                workspace_id: None,
+                                cwd: None,
+                                focus: true,
+                                label: None,
+                                env: Default::default(),
+                            },
                         );
                         leave_navigate_mode(&mut self.state);
                     }
@@ -330,12 +326,7 @@ impl App {
             NavigateAction::Help => super::modal::open_keybind_help(&mut self.state),
             NavigateAction::Settings => super::settings::open_settings(&mut self.state),
             NavigateAction::ReloadConfig => {
-                self.dispatch_runtime_mutation(
-                    "tui.server.reload_config",
-                    crate::api::schema::Method::ServerReloadConfig(
-                        crate::api::schema::EmptyParams::default(),
-                    ),
-                );
+                self.runtime_server_reload_config("tui.server.reload_config");
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::OpenNotificationTarget => {
@@ -368,12 +359,12 @@ impl App {
 
     pub(crate) fn move_workspace_via_api(&mut self, source_ws_idx: usize, insert_idx: usize) {
         let workspace_id = self.public_workspace_id(source_ws_idx);
-        self.dispatch_runtime_mutation(
+        self.runtime_workspace_move(
             "tui.workspace.move",
-            crate::api::schema::Method::WorkspaceMove(crate::api::schema::WorkspaceMoveParams {
+            crate::api::schema::WorkspaceMoveParams {
                 workspace_id,
                 insert_index: insert_idx,
-            }),
+            },
         );
     }
 
@@ -420,12 +411,12 @@ impl App {
         let Some(tab_id) = self.public_tab_id(ws_idx, source_tab_idx) else {
             return;
         };
-        self.dispatch_runtime_mutation(
+        self.runtime_tab_move(
             "tui.tab.move",
-            crate::api::schema::Method::TabMove(crate::api::schema::TabMoveParams {
+            crate::api::schema::TabMoveParams {
                 tab_id,
                 insert_index: insert_idx,
-            }),
+            },
         );
     }
 
