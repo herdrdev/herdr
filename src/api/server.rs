@@ -674,6 +674,7 @@ mod tests {
             custom_status: None,
             state_labels: HashMap::new(),
             agent_session: None,
+            scroll: None,
             revision: 0,
         }
     }

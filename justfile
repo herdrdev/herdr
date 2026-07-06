@@ -93,6 +93,22 @@ release-docs-check:
             exit 1; \
         fi; \
     done
+    @for file in website/src/content/docs/*.mdx; do \
+        for locale in ja zh-cn; do \
+            translated="website/src/content/docs/$locale/$(basename "$file")"; \
+            if [ ! -f "$translated" ]; then \
+                echo "error: $translated is missing; translate stable docs before releasing"; \
+                exit 1; \
+            fi; \
+        done; \
+    done
+    @for file in website/src/content/docs/ja/*.mdx website/src/content/docs/zh-cn/*.mdx; do \
+        released="website/src/content/docs/$(basename "$file")"; \
+        if [ ! -f "$released" ]; then \
+            echo "error: $file has no matching english doc; remove the stale translation"; \
+            exit 1; \
+        fi; \
+    done
 
 # Prepare the release commit without tagging or pushing (usage: just release-prepare 0.1.1)
 release-prepare version:

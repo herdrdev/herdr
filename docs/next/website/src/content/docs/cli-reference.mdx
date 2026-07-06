@@ -224,6 +224,8 @@ herdr pane report-agent <pane_id> \
 
 Those commands include `foreground_cwd` when Herdr can resolve the cwd of the foreground process controlling the pane. The existing `cwd` field remains the pane/workspace cwd used for labels and follow-cwd behavior.
 
+`pane get` and `pane list` include `scroll` when terminal scroll metrics are available. `scroll.offset_from_bottom == 0` means the pane is at the bottom of its scrollback.
+
 Report display-only pane metadata without taking over semantic state:
 
 ```bash

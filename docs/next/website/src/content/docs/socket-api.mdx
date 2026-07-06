@@ -150,6 +150,18 @@ like `ctrl+h`, `control+j`, `alt+x`, and `shift+tab`, function keys like
 Herdr returns that pane. When it is omitted, Herdr returns the active focused
 pane.
 
+`PaneInfo` includes `scroll` when terminal scroll metrics are available:
+
+```json
+{
+  "offset_from_bottom": 12,
+  "max_offset_from_bottom": 240,
+  "viewport_rows": 30
+}
+```
+
+Clients can treat `offset_from_bottom == 0` as at-bottom state.
+
 `pane.layout` returns the tab layout snapshot with `workspace_id`, `tab_id`,
 `zoomed`, outer `area`, `focused_pane_id`, pane rects, and split rects/ratios.
 `pane.neighbor` and `pane.edges` include that same layout snapshot so clients
@@ -630,7 +642,10 @@ Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`,
 that workspace.
 Pane event subscriptions include `pane.created`, `pane.closed`, `pane.focused`,
 `pane.moved`, `pane.exited`, `pane.agent_detected`,
-`pane.output_matched`, and `pane.agent_status_changed`.
+`pane.output_matched`, `pane.agent_status_changed`, and `pane.scroll_changed`.
+`pane.scroll_changed` is scoped to one `pane_id` and emits `pane_id`,
+`workspace_id`, and the current `scroll` metrics whenever Herdr observes a
+changed scroll snapshot.
 Layout event subscriptions include `layout.updated`. The event carries the
 updated `PaneLayoutSnapshot` for one tab. Clients that bootstrap with
 `session.snapshot` should replace the cached layout with the same

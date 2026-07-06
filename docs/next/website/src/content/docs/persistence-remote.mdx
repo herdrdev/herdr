@@ -69,6 +69,15 @@ Native Windows `herdr --remote` is not part of the Windows beta. From Windows, S
 
 By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings and a private per-attach control socket for connection reuse. Existing user keepalive settings win. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
 
+Remote attach uses your normal OpenSSH authentication. If the target uses a passphrase-protected key in a non-interactive shell, script, CI job, or mobile terminal that cannot show the passphrase prompt, load the key into ssh-agent first:
+
+```bash
+ssh-add
+herdr --remote workbox
+```
+
+For any remote authentication failure, verify plain SSH access first with `ssh workbox`, then run `herdr --remote workbox` again.
+
 By default, remote attach uses the normal restart/stop flow if it needs to replace or restart a running remote server. To opt into experimental live handoff for a supported running remote server, pass `--handoff`:
 
 ```bash

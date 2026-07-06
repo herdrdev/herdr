@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::common::{AgentStatus, ReadSource};
-use super::panes::{PaneInfo, PaneReadResult};
+use super::panes::{PaneInfo, PaneReadResult, PaneScrollInfo};
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::WorktreeInfo;
@@ -72,6 +72,8 @@ pub enum Subscription {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_status: Option<AgentStatus>,
     },
+    #[serde(rename = "pane.scroll_changed")]
+    PaneScrollChanged { pane_id: String },
     #[serde(rename = "layout.updated")]
     LayoutUpdated {},
 }
@@ -350,6 +352,8 @@ pub enum SubscriptionEventKind {
     PaneOutputMatched,
     #[serde(rename = "pane.agent_status_changed")]
     PaneAgentStatusChanged,
+    #[serde(rename = "pane.scroll_changed")]
+    ScrollChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -363,6 +367,7 @@ pub struct SubscriptionEventEnvelope {
 pub enum SubscriptionEventData {
     PaneOutputMatched(PaneOutputMatchedEvent),
     PaneAgentStatusChanged(PaneAgentStatusChangedEvent),
+    ScrollChanged(PaneScrollChangedEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -387,6 +392,13 @@ pub struct PaneAgentStatusChangedEvent {
     pub display_agent: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneScrollChangedEvent {
+    pub pane_id: String,
+    pub workspace_id: String,
+    pub scroll: PaneScrollInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

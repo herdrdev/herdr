@@ -1,0 +1,54 @@
+name: Translation issue
+description: Report an incorrect or unclear translation in the herdr docs.
+labels: ["translation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Docs translations are LLM-generated from the English source. Reports about wrong, unclear, or unnatural translations are welcome here.
+
+        For bugs in herdr itself, use the bug report template instead.
+
+  - type: checkboxes
+    id: translation-confirmation
+    attributes:
+      label: Is this a translation issue?
+      description: Bugs belong in the bug report template. Feature requests, ideas, and questions belong in Discussions.
+      options:
+        - label: I confirm this is a translation issue in the herdr docs, not a bug report, feature request, or question.
+          required: true
+
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: URL of the affected docs page.
+      placeholder: https://herdr.dev/ja/docs/quick-start/
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - 日本語 (Japanese)
+        - 简体中文 (Simplified Chinese)
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong
+      description: Quote the incorrect or unclear text and explain the problem. Writing in Japanese or Chinese is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: Optional. How should it read instead?
+    validations:
+      required: false

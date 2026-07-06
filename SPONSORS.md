@@ -34,9 +34,17 @@ qualifies for.
 - [Zack Drach](https://github.com/babymastodon)
 - [Alexandre Gressier](https://github.com/alexandregressier)
 - [MathiasFranceschi](https://github.com/MathiasFranceschi)
+- [Leland Kwong](https://github.com/leland-kwong)
+- [Markus Huggler](https://github.com/magbeat)
 
 ## One-time supporters
 
+- [Thanh Pham](https://github.com/humanrouter)
+- [Kenta Mukai](https://github.com/muk-ai)
+- [Darek Dwornikowski](https://github.com/tdi)
+- [metaphorics](https://github.com/metaphorics)
+- [Henrique Pinheiro](https://github.com/phenome)
+- [Super Serious Studios](https://github.com/SuperSeriousStudios)
 - [takaya-ishiyama](https://github.com/takaya-ishiyama)
 - [u-ways](https://github.com/u-ways)
 - [mtxmiller](https://github.com/mtxmiller)

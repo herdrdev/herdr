@@ -548,8 +548,7 @@ impl App {
                         .cloned()
                         .map(|space| self.worktree_info_for_membership(&space, None));
                 }
-                self.state.selected = ws_idx;
-                self.state.close_selected_workspace();
+                self.close_removed_linked_worktree_workspace(ws_idx);
                 self.shutdown_detached_terminal_runtimes();
                 self.emit_event(EventEnvelope {
                     event: EventKind::WorkspaceClosed,

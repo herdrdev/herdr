@@ -1,0 +1,270 @@
+---
+import MarketingLayout from '../components/MarketingLayout.astro';
+---
+
+<MarketingLayout
+  title="Herdr stats: live public numbers"
+  description="Live public stats for Herdr — GitHub stars, downloads, and website traffic, pulled from publicly verifiable sources."
+  canonicalPath="/stats/"
+>
+  <main class="stats-page">
+    <section class="hero stats-hero">
+      <div class="hero-left">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="status-dot dot-working"></span>
+            build in public · live numbers
+          </p>
+          <div class="hero-stat-value" id="star-count">—</div>
+          <div class="hero-stat-label"><span class="live-dot" aria-hidden="true"></span> GitHub stars · counting live</div>
+          <p class="hero-lede">
+            Live public stats for herdr: stars, installs, and traffic. Everything on this
+            page comes from sources you can check yourself, refreshed continuously.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/ogulcancelik/herdr">★ Star on GitHub</a>
+            <a class="button button-secondary" href="/docs/install/">Get herdr</a>
+          </div>
+          <p class="hero-note" id="hero-note"></p>
+        </div>
+      </div>
+      <div class="hero-right">
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>github stars · all time</span>
+            <span class="when" id="stars-since"></span>
+          </div>
+          <div id="chart-stars" class="chart-slot"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="stats-main">
+      <section class="kpi-row" aria-label="Headline numbers">
+        <div class="kpi">
+          <div class="label">total installs</div>
+          <div class="value" id="kpi-installs">—</div>
+          <div class="sub" id="kpi-installs-sub"></div>
+        </div>
+        <div class="kpi">
+          <div class="label">daily visitors</div>
+          <div class="value" id="kpi-visitors">—</div>
+          <div class="sub">herdr.dev uniques · 7-day avg · cloudflare</div>
+        </div>
+        <div class="kpi">
+          <div class="label">releases shipped</div>
+          <div class="value" id="kpi-releases">—</div>
+          <div class="sub">stable + preview channels</div>
+        </div>
+        <div class="kpi">
+          <div class="label">days old</div>
+          <div class="value" id="kpi-age">—</div>
+          <div class="sub" id="kpi-age-sub"></div>
+        </div>
+      </section>
+
+      <section class="stats-section">
+        <h2>Week by week</h2>
+        <p class="section-sub">Weekly totals. The current week is still filling up, shown dimmed.</p>
+        <div class="velocity-grid">
+          <div class="chart-card">
+            <div class="chart-card-title"><span>stars / week</span></div>
+            <div id="chart-stars-week" class="chart-slot"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-title"><span>downloads / week</span></div>
+            <div id="chart-downloads-week" class="chart-slot"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-title"><span>avg daily visitors / week</span></div>
+            <div id="chart-visitors-week" class="chart-slot"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-section">
+        <h2>Downloads</h2>
+        <p class="section-sub" id="downloads-sub"></p>
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>release downloads · cumulative</span>
+            <span class="when">github api</span>
+          </div>
+          <div id="chart-downloads" class="chart-slot"></div>
+        </div>
+      </section>
+
+      <section class="stats-section">
+        <h2>Where the herd browses from</h2>
+        <p class="section-sub" id="traffic-sub"></p>
+        <div class="traffic-grid">
+          <div class="chart-card">
+            <div class="chart-card-title"><span>top countries</span><span class="when">visits</span></div>
+            <div id="rank-countries"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-title"><span>top referrers</span><span class="when">visits</span></div>
+            <div id="rank-referrers"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-title"><span>top pages</span><span class="when">page views</span></div>
+            <div id="rank-paths"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-section">
+        <h2>Timeline</h2>
+        <p class="section-sub">From first commit to today.</p>
+        <div id="timeline"></div>
+      </section>
+
+      <p class="sources-note" id="sources-note">
+        Every number on this page comes from publicly verifiable sources: the
+        <a href="https://api.github.com/repos/ogulcancelik/herdr">GitHub API</a> for stars and release downloads, and
+        <a href="https://formulae.brew.sh/api/analytics/install/365d.json">Homebrew analytics</a> for brew installs.
+        Website traffic is measured by Cloudflare (unique visitors per day, herdr.dev zone).
+        <span id="updated-note"></span>
+      </p>
+    </div>
+
+    <script>
+      import { initStatsPage } from '../scripts/stats-page';
+      initStatsPage();
+    </script>
+  </main>
+</MarketingLayout>
+
+<style is:global>
+  .stats-hero { min-height: auto; }
+  .stats-hero .hero-left { padding: 3.5rem 3rem 3.5rem max(2.5rem, calc((100vw - var(--max)) / 2)); }
+  .stats-hero .hero-right { padding: 3rem max(2.5rem, calc((100vw - var(--max)) / 2)) 3rem 2.5rem; }
+  .stats-hero .chart-card { width: 100%; position: relative; z-index: 1; }
+  .hero-stat-value {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: clamp(3.2rem, 7vw, 5.2rem);
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+    min-height: 1em;
+  }
+  .hero-stat-label {
+    display: flex; align-items: center; gap: 0.55rem;
+    margin-top: 0.55rem;
+    font-family: var(--mono); font-size: 0.95rem; color: var(--muted);
+  }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: live-pulse 2.4s ease-in-out infinite; }
+  @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+  .stats-main { max-width: var(--max); margin: 0 auto; padding: 0 1.5rem 4rem; }
+  .stats-section { margin-top: 3.5rem; }
+  .stats-section > h2 { font-family: var(--mono); font-weight: 400; letter-spacing: -0.02em; font-size: 1.45rem; margin: 0 0 0.35rem; color: var(--ink); }
+  .stats-section > .section-sub { color: var(--muted); font-size: 0.95rem; margin: 0 0 1.4rem; max-width: 62ch; }
+
+  .chart-card {
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: var(--bg-elevated); padding: 1rem 1.1rem 0.8rem; position: relative;
+  }
+  .chart-card-title {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    font-family: var(--mono); font-size: 0.85rem; color: var(--ink-soft); margin-bottom: 0.5rem;
+  }
+  .chart-card-title .when { color: var(--muted-2); font-size: 0.78rem; }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart svg:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+  .chart .grid { stroke: var(--line); stroke-width: 1; }
+  .chart .grid.strong { stroke: var(--line-strong); }
+  .chart .tick { fill: var(--muted-2); font-family: var(--mono); font-size: 11px; }
+  .chart .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .chart .area { opacity: 0.1; }
+  .chart .dot { stroke: var(--bg-elevated); stroke-width: 2; }
+  .chart .event-dot { fill: var(--bg-elevated); stroke-width: 2; }
+  .chart .milestone-label { fill: var(--muted); font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .chart .milestone-leader { stroke: var(--line-strong); stroke-width: 1; }
+  .chart .cap-label { fill: var(--muted); font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .chart .crosshair { stroke: var(--line-strong); stroke-width: 1; }
+  .chart .hover-dot { stroke: var(--bg-elevated); stroke-width: 2; }
+  .chart .bar .hit { fill: transparent; }
+  .chart .bar.partial .fill { opacity: 0.45; }
+  .chart .bar:hover .fill, .chart .bar.active .fill { filter: brightness(1.12); }
+
+  .chart-tip {
+    position: absolute; pointer-events: none; z-index: 4;
+    background: var(--ink); color: var(--bg);
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.4;
+    padding: 0.35rem 0.55rem; border-radius: var(--radius-md);
+    white-space: nowrap; transform: translate(-50%, calc(-100% - 10px));
+  }
+  .chart-tip strong { font-size: 0.88rem; }
+  .chart-empty { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; padding: 2rem 0; text-align: center; }
+
+  .chart-table { margin-top: 0.4rem; font-family: var(--mono); font-size: 0.78rem; }
+  .chart-table summary { color: var(--muted-2); cursor: pointer; padding: 0.25rem 0; }
+  .chart-table summary:hover { color: var(--muted); }
+  .chart-table-scroll {
+    max-height: 250px; overflow-y: auto; margin-top: 0.4rem;
+    scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+  }
+  .chart-table-scroll::-webkit-scrollbar { width: 8px; }
+  .chart-table-scroll::-webkit-scrollbar-track { background: transparent; }
+  .chart-table-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+  /* the site stylesheet styles tables globally (min-width, accent last column) — reset inside cards */
+  .chart-table table { width: 100%; min-width: 0; border-collapse: collapse; font-size: 0.78rem; }
+  .chart-table th, .chart-table td { text-align: left; padding: 0.28rem 0.6rem 0.28rem 0; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: 0.78rem; }
+  .chart-table th { color: var(--muted); font-weight: 600; letter-spacing: 0.04em; }
+  .chart-table th:last-child, .chart-table td:last-child { background: none; color: var(--ink-soft); font-weight: 600; text-align: right; padding-right: 0; }
+  .chart-table tr:last-child td { border-bottom: 0; }
+
+  .kpi-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.9rem; margin-top: 3rem; }
+  .kpi {
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: var(--bg-elevated); padding: 1rem 1.1rem;
+  }
+  .kpi .label { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); }
+  .kpi .value { font-family: var(--mono); font-weight: 600; font-size: 1.9rem; letter-spacing: -0.02em; color: var(--ink); margin: 0.25rem 0 0.15rem; }
+  .kpi .sub { font-family: var(--mono); font-size: 0.75rem; color: var(--muted-2); }
+  .kpi .sub .up { color: var(--green); font-weight: 600; }
+
+  .velocity-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; }
+  .traffic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; }
+
+  .rank-list { display: flex; flex-direction: column; gap: 0.15rem; margin-top: 0.3rem; }
+  .rank-row {
+    display: grid; grid-template-columns: minmax(0, 45%) 1fr auto;
+    gap: 0.7rem; align-items: center; padding: 0.28rem 0;
+  }
+  .rank-name { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-bar { height: 8px; border-radius: 2px; background: color-mix(in srgb, var(--yellow) 14%, transparent); overflow: hidden; }
+  .rank-fill { display: block; height: 100%; border-radius: 2px; background: var(--yellow); }
+  .rank-value { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .milestone-term {
+    background: var(--term-bg); border: 1px solid var(--term-border); border-radius: var(--radius-lg);
+    font-family: var(--mono); font-size: 0.92rem; padding: 1.1rem 1.3rem; max-width: 560px;
+  }
+  .term-line { display: flex; gap: 1.2rem; padding: 0.22rem 0; align-items: baseline; }
+  .term-cmd-line { margin-bottom: 0.5rem; gap: 0.6rem; }
+  .term-prompt { color: var(--term-prompt); }
+  .term-cmd { color: var(--term-text); }
+  .term-date { color: var(--term-dim); flex: 0 0 4.4em; }
+  .term-text { color: var(--term-text); flex: 1; }
+  .term-note { color: var(--term-muted); }
+  .term-line:last-child .term-text { color: var(--term-green-bright); font-weight: 600; }
+  .term-line:last-child .term-note { color: var(--term-green-bright); }
+
+  .sources-note { margin-top: 3.5rem; padding-top: 1.4rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; max-width: 72ch; }
+  .sources-note a { color: var(--accent); }
+
+  .stats-stale {
+    margin-top: 1rem; font-family: var(--mono); font-size: 0.8rem; color: var(--yellow);
+  }
+
+  @media (max-width: 900px) {
+    .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .velocity-grid, .traffic-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>

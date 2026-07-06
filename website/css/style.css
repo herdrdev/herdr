@@ -1490,6 +1490,14 @@ samp {
     font-weight: 400;
 }
 
+.logo-cloud-note {
+    margin: 0.35rem 0 0;
+    color: var(--muted-2);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    line-height: 1.4;
+}
+
 .logo-marquee {
     position: relative;
     overflow: hidden;
@@ -1536,6 +1544,116 @@ samp {
 
 .logo-card span {
     display: none;
+}
+
+.community-section {
+    padding-top: 4.25rem;
+}
+
+.community-video-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.community-video-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--ink-soft);
+    transition:
+        border-color 120ms ease,
+        transform 120ms ease,
+        background 120ms ease;
+}
+
+.community-video-card:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+    background: color-mix(in srgb, var(--bg-elevated) 88%, var(--accent-soft));
+    color: var(--ink-soft);
+}
+
+.community-video-thumb {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    background: var(--term-bg);
+    border-bottom: 1px solid var(--line);
+}
+
+.community-video-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 180ms ease;
+}
+
+.community-video-card:hover .community-video-thumb img {
+    transform: scale(1.025);
+}
+
+.play-badge {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    display: grid;
+    place-items: center;
+    width: 2.3rem;
+    height: 2.3rem;
+    border: 1px solid color-mix(in srgb, #fff 45%, transparent);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--term-bg) 78%, transparent);
+    backdrop-filter: blur(8px);
+}
+
+.play-badge::before {
+    content: "";
+    display: block;
+    width: 0;
+    height: 0;
+    margin-left: 0.16rem;
+    border-top: 0.42rem solid transparent;
+    border-bottom: 0.42rem solid transparent;
+    border-left: 0.68rem solid #fff;
+}
+
+.community-video-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 1rem;
+}
+
+.community-video-meta {
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.community-video-title {
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 1.05rem;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+
+.community-video-desc {
+    margin-top: auto;
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.55;
 }
 
 @keyframes logo-marquee {
@@ -2330,6 +2448,10 @@ td:last-child {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .community-video-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .access-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -2443,6 +2565,7 @@ td:last-child {
 
     .pillar-grid,
     .contrast-grid,
+    .community-video-grid,
     .access-grid,
     .differ-list {
         grid-template-columns: 1fr;

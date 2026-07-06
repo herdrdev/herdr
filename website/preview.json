@@ -2,34 +2,63 @@
   "schema_version": 1,
   "channel": "preview",
   "base_version": "0.7.1",
-  "build_id": "2026-06-30-3459798b606d",
-  "commit": "3459798b606d019d4ac404d407af956d7539ef54",
-  "built_at": "2026-06-30T17:57:27Z",
-  "protocol": 15,
-  "notes": "Preview build 2026-06-30-3459798b606d\n\nBuilt from `3459798b606d` on `master`.\nBase stable: v0.7.1\nCompare: https://github.com/ogulcancelik/herdr/compare/7811d84f15f1b2e41d68901d368791b15e0bf6c7...3459798b606d019d4ac404d407af956d7539ef54\n\n### Added\n- Add shell completions\n- Hide single-tab tab row\n- Add hidden collapsed sidebar mode\n- Add terminal session control stream\n- Add terminal session observe stream\n- Expose api schema from cli\n- Generate socket protocol schema\n- Add session snapshot api\n- Emit placement mutation events\n- Render worktrees as a tree in the mobile switcher\n- Agents-first mobile switcher with global header summary\n\n### Fixed\n- Extend local server startup wait\n- Keep remote sessions alive across disconnects\n- Resolve split current from caller pane\n- Opencode \u2014 report subagent permission prompts as blocked + handle session.status object form (#838)\n- Render ansi undercurl styles\n- Reuse remote ssh connection\n- Add copy mode ctrl page navigation\n- Preserve windows win32 bracketed paste\n- Discover package-managed remote herdr installs\n- Recover omp resume and blocked states\n- Keep powershell panes alive after agent ctrl-c\n- Include api schema in nix source\n- Remove focused pane title border marker\n- Route tui modal mutations through api authority\n- Encode ctrl slash as ctrl underscore\n- Keep active auto-named tab readable\n- Compact indexed keybind help ranges\n- Measure ui labels by display width\n- Answer osc 12 cursor color queries\n- Avoid pi release on internal session reloads (#800)\n\n### Maintenance\n- Route headless workspace tab mutations through runtime dispatch\n- Route tui mutations through runtime dispatch\n- Accept non-empty issue update channels\n- Add skills cli install guidance\n- Refactor readme and sharpen site positioning\n- Route tui mutations through runtime authority\n- Tighten issue reporting guardrails\n- Split integration module",
+  "build_id": "2026-07-06-4dae557eefd9",
+  "commit": "4dae557eefd992cbc03d435c6265842611811a67",
+  "built_at": "2026-07-06T12:17:00Z",
+  "protocol": 16,
+  "notes": "Preview build 2026-07-06-4dae557eefd9\n\nBuilt from `4dae557eefd9` on `master`.\nBase stable: v0.7.1\nCompare: https://github.com/ogulcancelik/herdr/compare/3459798b606d019d4ac404d407af956d7539ef54...4dae557eefd992cbc03d435c6265842611811a67\n\n### Added\n- Add japanese and simplified chinese docs with i18n, translation issue flow\n- Add public stats page at herdr.dev/stats\n- Expose session snapshot through cli\n- Emit layout update events for runtime layout changes\n- Add mastracode integration (#788)\n- Paginate plugins page with show more button\n- Follow focused pane cwd for new workspaces\n- Inject powershell prompt shell integration for cwd reporting on windows\n\n### Fixed\n- Detect grok build working and blocked states from current ui chrome (#1055)\n- Retry pi state socket reports\n- Support custom command keybindings on windows\n- Switch prefix ASCII input source on the foreground client (#1016)\n- Wait for server stop socket cleanup\n- Allow foreground agent session takeover\n- Kitty graphics streams freeze on partial updates and leak host images (#948)\n- Restore windows recent pane reads\n- Preserve pi and omp working status across reloads (#984)\n- Scope empty image paste bridge to remote\n- Forward page keys to primary-screen pagers\n- Keep windows wait connections open\n- Stop sgr mouse sequences leaking into panes\n- Leave context menu after closing tab\n- Draw host cursor on windows\n- Keep copy feedback above retained pane updates\n- Allow windows arm64 installer fallback\n- Replace stale agent session from foreground reports\n- Preserve windows backspace input\n- Follow cached cwd for new tabs\n- Open scrollback editor on windows without sh\n\n### Performance\n- Cache foreground process group scans\n\n### Maintenance\n- Use homebrew zig for preview macos builds\n- Accept common environment aliases in issue gate\n- Replace apple-sdk wrappers with xcbuild (#995)\n- Wait for client frame before crash assertion\n- Keep windows smoke cleanup non-fatal\n- Wait for windows smoke pane output\n- Route headless deferred creates through runtime helpers\n- Route cli pane placement through runtime adapters\n- Route cli workspace tab worktree through runtime adapters\n- Route tui runtime mutations through typed adapters\n- Route worktree tui actions through runtime wrappers\n- Route pane layout tui actions through runtime wrappers\n- Add mastracode integration docs and website agent grid card\n- Add trendshift badge\n- Clarify agent instruction scope",
   "assets": {
     "linux-x86_64": {
-      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-30-3459798b606d/herdr-linux-x86_64",
-      "sha256": "0302d856719ccc6e41288d2640db7361e3c2e63047d75c14d4da96177fdd76fe"
+      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-linux-x86_64",
+      "sha256": "89cdcb7303b2461ed53659c1e27cabc40eb1c4d7f4014bc0d3420c7884cbdfb0"
     },
     "linux-aarch64": {
-      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-30-3459798b606d/herdr-linux-aarch64",
-      "sha256": "e48a407a4276491ef946f093c5a789adc53b369a78e40e7ef322b9a094db78a4"
+      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-linux-aarch64",
+      "sha256": "10dc280b5df1f889d529986fbfbd2c15b6ad5104413ad5f9ea27b353321230a2"
     },
     "macos-x86_64": {
-      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-30-3459798b606d/herdr-macos-x86_64",
-      "sha256": "69558cfb8afaef115d0a0a78c3b7424a1f5f2469ae8d19a2fef39af0ee10fffe"
+      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-macos-x86_64",
+      "sha256": "682a9ac9eb9c23d35bb4dcf34089dc9fbdc0872e60763463c874e7207f400a73"
     },
     "macos-aarch64": {
-      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-30-3459798b606d/herdr-macos-aarch64",
-      "sha256": "eaa330fdb016de2130237d353371444561e6027ad19ab4e752546b81ce14c71a"
+      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-macos-aarch64",
+      "sha256": "5d02f2f30377c1790bee0a24c38532377cf67f5c8d009302b120406c48a7a796"
     },
     "windows-x86_64": {
-      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-30-3459798b606d/herdr-windows-x86_64.exe",
-      "sha256": "9e319d9d7d653fa4cc7d775e1f653886dd4080b64516ea6bf2ef4d64b33cf891"
+      "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-windows-x86_64.exe",
+      "sha256": "7c2189c218d210fa253e579c3d50b9c501cb16c3d3729e1de3dba366c5773a14"
     }
   },
   "builds": {
+    "2026-07-06-4dae557eefd9": {
+      "base_version": "0.7.1",
+      "commit": "4dae557eefd992cbc03d435c6265842611811a67",
+      "built_at": "2026-07-06T12:17:00Z",
+      "protocol": 16,
+      "tag": "preview-2026-07-06-4dae557eefd9",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-linux-x86_64",
+          "sha256": "89cdcb7303b2461ed53659c1e27cabc40eb1c4d7f4014bc0d3420c7884cbdfb0"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-linux-aarch64",
+          "sha256": "10dc280b5df1f889d529986fbfbd2c15b6ad5104413ad5f9ea27b353321230a2"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-macos-x86_64",
+          "sha256": "682a9ac9eb9c23d35bb4dcf34089dc9fbdc0872e60763463c874e7207f400a73"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-macos-aarch64",
+          "sha256": "5d02f2f30377c1790bee0a24c38532377cf67f5c8d009302b120406c48a7a796"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-06-4dae557eefd9/herdr-windows-x86_64.exe",
+          "sha256": "7c2189c218d210fa253e579c3d50b9c501cb16c3d3729e1de3dba366c5773a14"
+        }
+      }
+    },
     "2026-06-30-3459798b606d": {
       "base_version": "0.7.1",
       "commit": "3459798b606d019d4ac404d407af956d7539ef54",

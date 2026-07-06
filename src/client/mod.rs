@@ -1447,6 +1447,21 @@ async fn run_client_loop(
                         "clipboard image paste trigger received, but local clipboard has no image"
                     );
                 }
+                if let Some(image) = read_image_file_from_terminal_drop(&data, is_remote_client) {
+                    info!(
+                        bytes = image.bytes.len(),
+                        extension = image.extension,
+                        "bridging local image file drop to remote server"
+                    );
+                    let msg = ClientMessage::ClipboardImage {
+                        extension: image.extension.to_owned(),
+                        data: image.bytes,
+                    };
+                    if let Err(e) = write_to_server(&mut write_stream, &msg) {
+                        return Err(ClientError::ConnectionLost(e));
+                    }
+                    continue;
+                }
                 let msg = ClientMessage::Input { data };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
@@ -1798,6 +1813,115 @@ fn should_bridge_clipboard_image_paste(
     )
 }
 
+#[cfg(unix)]
+fn read_image_file_from_terminal_drop(
+    data: &[u8],
+    is_remote_client: bool,
+) -> Option<crate::platform::ClipboardImage> {
+    let (path, extension) = image_path_from_terminal_drop(data, is_remote_client)?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let file = std::fs::File::open(&path).ok()?;
+    let bytes =
+        match crate::platform::read_limited_reader(file, MAX_CLIPBOARD_IMAGE_PAYLOAD).ok()? {
+            crate::platform::LimitedRead::Complete(bytes) => bytes,
+            crate::platform::LimitedRead::Empty => return None,
+            crate::platform::LimitedRead::Oversized => {
+                warn!(
+                    max = MAX_CLIPBOARD_IMAGE_PAYLOAD,
+                    "local image file drop is too large to bridge"
+                );
+                return None;
+            }
+        };
+
+    Some(crate::platform::ClipboardImage { bytes, extension })
+}
+
+#[cfg(unix)]
+fn image_path_from_terminal_drop(
+    data: &[u8],
+    is_remote_client: bool,
+) -> Option<(std::path::PathBuf, &'static str)> {
+    if !is_remote_client {
+        return None;
+    }
+
+    let bytes = bracketed_paste_payload(data).unwrap_or(data);
+    let text = std::str::from_utf8(bytes).ok()?;
+    let text = text.trim_end_matches(['\r', '\n']);
+    if text.is_empty() || text.contains(['\r', '\n']) {
+        return None;
+    }
+
+    let text = unescape_terminal_drop_path(strip_matching_path_quotes(text));
+    let path = std::path::PathBuf::from(text);
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let extension = recognized_image_extension(path.extension()?.to_str()?)?;
+    Some((path, extension))
+}
+
+#[cfg(unix)]
+fn bracketed_paste_payload(data: &[u8]) -> Option<&[u8]> {
+    const START: &[u8] = b"\x1b[200~";
+    const END: &[u8] = b"\x1b[201~";
+    data.strip_prefix(START)?.strip_suffix(END)
+}
+
+#[cfg(unix)]
+fn strip_matching_path_quotes(text: &str) -> &str {
+    if text.len() < 2 {
+        return text;
+    }
+
+    let bytes = text.as_bytes();
+    match (bytes.first(), bytes.last()) {
+        (Some(b'\''), Some(b'\'')) | (Some(b'"'), Some(b'"')) => &text[1..text.len() - 1],
+        _ => text,
+    }
+}
+
+#[cfg(unix)]
+fn unescape_terminal_drop_path(text: &str) -> String {
+    let mut unescaped = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(escaped) = chars.next() {
+                unescaped.push(escaped);
+            } else {
+                unescaped.push(ch);
+            }
+        } else {
+            unescaped.push(ch);
+        }
+    }
+    unescaped
+}
+
+#[cfg(unix)]
+fn recognized_image_extension(extension: &str) -> Option<&'static str> {
+    if extension.eq_ignore_ascii_case("png") {
+        Some("png")
+    } else if extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg") {
+        Some("jpg")
+    } else if extension.eq_ignore_ascii_case("gif") {
+        Some("gif")
+    } else if extension.eq_ignore_ascii_case("webp") {
+        Some("webp")
+    } else if extension.eq_ignore_ascii_case("bmp") {
+        Some("bmp")
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Clipboard forwarding
 // ---------------------------------------------------------------------------
@@ -2129,6 +2253,90 @@ mod tests {
             true,
             Some(ctrl_v)
         ));
+    }
+
+    #[cfg(unix)]
+    struct TempImageFile {
+        path: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl TempImageFile {
+        fn new(extension: &str, bytes: &[u8]) -> Self {
+            Self::with_name_fragment("test", extension, bytes)
+        }
+
+        fn with_name_fragment(name_fragment: &str, extension: &str, bytes: &[u8]) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "herdr-client-drop-{name_fragment}-{}-{nanos}.{extension}",
+                std::process::id()
+            ));
+            std::fs::write(&path, bytes).unwrap();
+            Self { path }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TempImageFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_image_file_drop_bridge_reads_bracketed_absolute_image_path() {
+        let file = TempImageFile::new("PNG", b"image-bytes");
+        let input = format!("\x1b[200~{}\x1b[201~", file.path.display());
+
+        let image = read_image_file_from_terminal_drop(input.as_bytes(), true).unwrap();
+
+        assert_eq!(image.extension, "png");
+        assert_eq!(image.bytes, b"image-bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_image_file_drop_bridge_reads_plain_quoted_path_with_newline() {
+        let file = TempImageFile::new("jpeg", b"jpeg-bytes");
+        let input = format!("'{}'\n", file.path.display());
+
+        let image = read_image_file_from_terminal_drop(input.as_bytes(), true).unwrap();
+
+        assert_eq!(image.extension, "jpg");
+        assert_eq!(image.bytes, b"jpeg-bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_image_file_drop_bridge_unescapes_spaces_in_paths() {
+        let file = TempImageFile::with_name_fragment("space test", "png", b"image-bytes");
+        let escaped_path = file.path.display().to_string().replace(' ', "\\ ");
+
+        let image = read_image_file_from_terminal_drop(escaped_path.as_bytes(), true).unwrap();
+
+        assert_eq!(image.extension, "png");
+        assert_eq!(image.bytes, b"image-bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_image_file_drop_bridge_ignores_non_remote_and_non_image_input() {
+        let file = TempImageFile::new("png", b"image-bytes");
+        let path = file.path.display().to_string();
+
+        assert!(read_image_file_from_terminal_drop(path.as_bytes(), false).is_none());
+        assert!(read_image_file_from_terminal_drop(b"relative.png\n", true).is_none());
+        assert!(read_image_file_from_terminal_drop(b"/tmp/file.txt\n", true).is_none());
+        assert!(read_image_file_from_terminal_drop(
+            format!("{}\nextra", file.path.display()).as_bytes(),
+            true
+        )
+        .is_none());
     }
 
     #[test]

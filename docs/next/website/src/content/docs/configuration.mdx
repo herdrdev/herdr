@@ -71,7 +71,7 @@ Set the executable Herdr uses for newly created interactive panes:
 default_shell = "nu"
 ```
 
-When unset or empty, Herdr uses `$SHELL`, then `/bin/sh`. This is an executable name or path, not a shell command line. Existing panes keep their current shell until they are recreated. Command panes still run through `/bin/sh -c`; detached custom command keybindings use Herdr's existing `/bin/sh -lc` path.
+When unset or empty, Herdr uses `$SHELL`, then `/bin/sh` on Unix and PowerShell on Windows. This is an executable name or path, not a shell command line. Existing panes keep their current shell until they are recreated. Custom command keybinding strings run through `/bin/sh -c` for pane commands and `/bin/sh -lc` for detached commands on Unix; on Windows they run through `cmd.exe /d /c`.
 
 Set how Herdr starts newly created interactive pane shells:
 
@@ -247,6 +247,8 @@ description = "apply layout"
 An optional `description` can be provided. When specified, this description is displayed in the keybind help panel (opened with `prefix+?`) in place of the default `'custom command'` label.
 
 Custom commands receive `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, and `HERDR_ACTIVE_PANE_CWD` when those values are available. Shell commands run from the focused pane's working directory when Herdr can detect it.
+
+On Windows, custom command strings use `cmd.exe /d /c`, so environment variables use `%HERDR_BIN_PATH%` syntax. To run PowerShell syntax, invoke it explicitly, for example `powershell.exe -NoProfile -Command "..."`.
 
 ## Theme
 

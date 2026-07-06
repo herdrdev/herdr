@@ -1,7 +1,8 @@
 ---
-const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+const { siteTitle, siteTitleHref, locale } = Astro.locals.starlightRoute;
 const isPreview = Astro.url.pathname === '/docs/preview/' || Astro.url.pathname.startsWith('/docs/preview/');
-const docsHref = isPreview ? '/docs/preview/' : '/docs/';
+const localePrefix = locale ? `/${locale}` : '';
+const docsHref = isPreview ? '/docs/preview/' : `${localePrefix}/docs/`;
 ---
 
 <div class="title-row sl-flex">

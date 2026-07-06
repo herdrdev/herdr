@@ -155,9 +155,26 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Zig
+        if: runner.os != 'macOS'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
+
+      - name: Restore Homebrew Zig cache
+        if: runner.os == 'macOS'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: homebrew-zig-0.15-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            homebrew-zig-0.15-${{ runner.os }}-
+
+      - name: Install patched Zig on macOS
+        if: runner.os == 'macOS'
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
+          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix zig@0.15)/bin/zig" version
 
       - name: Prefer official Ubuntu mirrors over Azure
         if: runner.os == 'Linux'
@@ -173,7 +190,7 @@ jobs:
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'
-        run: brew install cmake ninja
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
 
       - name: Set Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'

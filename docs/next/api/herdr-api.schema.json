@@ -745,6 +745,16 @@
               "minimum": 0,
               "type": "integer"
             },
+            "scroll": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/PaneScrollInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "state_labels": {
               "additionalProperties": {
                 "type": "string"
@@ -894,6 +904,31 @@
             "direction",
             "ratio",
             "rect"
+          ],
+          "type": "object"
+        },
+        "PaneScrollInfo": {
+          "properties": {
+            "max_offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "viewport_rows": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset_from_bottom",
+            "max_offset_from_bottom",
+            "viewport_rows"
           ],
           "type": "object"
         },
@@ -3357,6 +3392,22 @@
             },
             {
               "properties": {
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "pane.scroll_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "layout.updated",
                   "type": "string"
@@ -5094,6 +5145,50 @@
           ],
           "type": "object"
         },
+        "PaneScrollChangedEvent": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "scroll": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneScrollInfo"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "workspace_id",
+            "scroll"
+          ],
+          "type": "object"
+        },
+        "PaneScrollInfo": {
+          "properties": {
+            "max_offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "viewport_rows": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset_from_bottom",
+            "max_offset_from_bottom",
+            "viewport_rows"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -5117,13 +5212,17 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/PaneAgentStatusChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/PaneScrollChangedEvent"
             }
           ]
         },
         "SubscriptionEventKind": {
           "enum": [
             "pane.output_matched",
-            "pane.agent_status_changed"
+            "pane.agent_status_changed",
+            "pane.scroll_changed"
           ],
           "type": "string"
         }
@@ -6379,6 +6478,16 @@
               "minimum": 0,
               "type": "integer"
             },
+            "scroll": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PaneScrollInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "state_labels": {
               "additionalProperties": {
                 "type": "string"
@@ -6810,6 +6919,31 @@
             "pane_id",
             "focused_pane_id",
             "layout"
+          ],
+          "type": "object"
+        },
+        "PaneScrollInfo": {
+          "properties": {
+            "max_offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset_from_bottom": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "viewport_rows": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "offset_from_bottom",
+            "max_offset_from_bottom",
+            "viewport_rows"
           ],
           "type": "object"
         },

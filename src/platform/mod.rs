@@ -25,6 +25,14 @@ pub enum Signal {
     Kill,
 }
 
+pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
+    detached_custom_command_process_platform(command)
+}
+
+pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::CommandBuilder {
+    pane_custom_command_pty_builder_platform(command)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
     pub(crate) live_handoff: bool,
@@ -197,6 +205,29 @@ impl PrefixInputSource for RealPrefixInputSource {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_custom_command_preserves_unix_login_shell_flag() {
+        let cmd = detached_custom_command_process("echo hello");
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("-lc"),
+                std::ffi::OsStr::new("echo hello")
+            ]
+        );
+    }
+
+    #[test]
+    fn pane_custom_command_builder_preserves_unix_shell_flag() {
+        let expected: Vec<std::ffi::OsString> =
+            vec!["/bin/sh".into(), "-c".into(), "echo hello".into()];
+        assert_eq!(
+            pane_custom_command_pty_builder("echo hello").get_argv(),
+            &expected
+        );
+    }
 
     #[test]
     fn read_limited_reader_returns_complete_data_under_limit() {

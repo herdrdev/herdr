@@ -34,7 +34,7 @@ pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<
     if key.kind == crossterm::event::KeyEventKind::Release && protocol.reports_event_types() {
         return Vec::new();
     }
-    encode_legacy(key.as_key_event())
+    encode_legacy(key)
 }
 
 #[allow(dead_code)] // exercised in input unit tests; production uses TerminalRuntime helpers
@@ -48,7 +48,7 @@ pub fn encode_cursor_key(code: KeyCode, application_cursor: bool) -> Vec<u8> {
         (KeyCode::Down, false) => b"\x1b[B".to_vec(),
         (KeyCode::Right, false) => b"\x1b[C".to_vec(),
         (KeyCode::Left, false) => b"\x1b[D".to_vec(),
-        _ => encode_legacy(KeyEvent::new(code, KeyModifiers::empty())),
+        _ => encode_legacy(KeyEvent::new(code, KeyModifiers::empty()).into()),
     }
 }
 
@@ -232,7 +232,7 @@ fn try_encode_csi_u(key: &TerminalKey, flags: u16) -> Option<Vec<u8>> {
 }
 
 /// Legacy terminal encoding (standard escape sequences).
-fn encode_legacy(key: KeyEvent) -> Vec<u8> {
+fn encode_legacy(key: TerminalKey) -> Vec<u8> {
     let mods = key.modifiers;
 
     // Modified special keys (arrows, home, end, etc.) use xterm format:
@@ -247,7 +247,10 @@ fn encode_legacy(key: KeyEvent) -> Vec<u8> {
 
     // Alt modifier on character keys: prefix with ESC
     if mods.contains(KeyModifiers::ALT) {
-        let inner = KeyEvent::new(key.code, mods.difference(KeyModifiers::ALT));
+        let inner = TerminalKey {
+            modifiers: mods.difference(KeyModifiers::ALT),
+            ..key
+        };
         let mut bytes = vec![0x1b];
         bytes.extend(encode_legacy_inner(inner));
         return bytes;
@@ -418,7 +421,7 @@ fn kitty_event_suffix(key: &TerminalKey, flags: u16) -> Option<u8> {
     })
 }
 
-fn encode_legacy_inner(key: KeyEvent) -> Vec<u8> {
+fn encode_legacy_inner(key: TerminalKey) -> Vec<u8> {
     match key.code {
         KeyCode::Char(ch) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -434,6 +437,11 @@ fn encode_legacy_inner(key: KeyEvent) -> Vec<u8> {
                     _ => vec![ch as u8],
                 }
             } else {
+                let ch = if key.modifiers == KeyModifiers::SHIFT {
+                    shifted_text_char(&key, ch).unwrap_or(ch)
+                } else {
+                    ch
+                };
                 let mut buf = [0u8; 4];
                 ch.encode_utf8(&mut buf).as_bytes().to_vec()
             }
@@ -560,6 +568,12 @@ mod tests {
     fn legacy_alt_char_still_esc_prefix() {
         let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
         assert_eq!(encode_key(key, KeyboardProtocol::Legacy), b"\x1ba");
+    }
+
+    #[test]
+    fn legacy_alt_shift_punctuation_uses_shifted_text() {
+        let key = parse_terminal_key_sequence("\x1b[44:60;4u").unwrap();
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"\x1b<");
     }
 
     #[test]

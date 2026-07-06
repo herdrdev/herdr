@@ -31,10 +31,22 @@ jobs:
               '### Environment',
             ];
             const requiredEnvironmentFields = [
-              /^\s*(?:-\s*)?Herdr version:[^\S\r\n]*\S.*$/m,
-              /^\s*(?:-\s*)?Update channel(?: \([^)]+\))?:[^\S\r\n]*\S.*$/im,
-              /^\s*(?:-\s*)?Operating system:[^\S\r\n]*\S.*$/m,
-              /^\s*(?:-\s*)?Terminal:[^\S\r\n]*\S.*$/m,
+              {
+                label: 'herdr version',
+                pattern: /^\s*(?:-\s*)?Herdr version:[^\S\r\n]*\S.*$/im,
+              },
+              {
+                label: 'update channel',
+                pattern: /^\s*(?:-\s*)?(?:Update channel(?: \([^)]+\))?|Channel):[^\S\r\n]*\S.*$/im,
+              },
+              {
+                label: 'operating system',
+                pattern: /^\s*(?:-\s*)?(?:Operating system|OS):[^\S\r\n]*\S.*$/im,
+              },
+              {
+                label: 'terminal',
+                pattern: /^\s*(?:-\s*)?Terminal:[^\S\r\n]*\S.*$/im,
+              },
             ];
 
             function escapeRegExp(value) {
@@ -108,6 +120,16 @@ jobs:
             }
 
             const body = issue.body || '';
+            const translationConfirmationPattern = /^\s*-\s*\[[xX]\]\s*I confirm this is a translation issue in the herdr docs, not a bug report, feature request, or question\.\s*$/m;
+            const translationSections = ['### Page', '### Language', '### What is wrong'];
+            if (
+              translationConfirmationPattern.test(body) &&
+              translationSections.every((section) => body.includes(section))
+            ) {
+              console.log(`#${issue.number} matches the translation issue template; leaving issue open`);
+              return;
+            }
+
             const hasBugConfirmation = bugConfirmationPattern.test(body);
             const hasBugTemplate = requiredSections.every((section) => body.includes(section));
             const allowedHeadings = new Set(requiredSections);
@@ -125,7 +147,12 @@ jobs:
               reproduction,
               impact,
             ].every(hasContent);
-            const hasEnvironmentFields = hasContent(environment) && requiredEnvironmentFields.every((pattern) => pattern.test(environment));
+            const missingEnvironmentFields = hasContent(environment)
+              ? requiredEnvironmentFields
+                .filter((field) => !field.pattern.test(environment))
+                .map((field) => field.label)
+              : requiredEnvironmentFields.map((field) => field.label);
+            const hasEnvironmentFields = missingEnvironmentFields.length === 0;
             if (hasBugConfirmation && hasBugTemplate && extraHeadings.length > 0) {
               const message = [
                 `hi @${author}, thanks for opening this.`,
@@ -135,7 +162,7 @@ jobs:
                 'please use the exact template sections only. bug reports should describe observed behavior, exact reproduction steps, impact, and environment. extra root-cause analysis, proposed fixes, implementation plans, or generated diagnosis make reports harder to triage.',
                 ...(hasEnvironmentFields ? [] : [
                   '',
-                  'this report is also missing required environment details: herdr version, update channel, operating system, and terminal.',
+                  `this report is also missing required environment details: ${missingEnvironmentFields.join(', ')}.`,
                 ]),
                 '',
                 'closing this so the issue tracker stays limited to concise, actionable bug reports.',
@@ -167,7 +194,7 @@ jobs:
               const message = [
                 `hi @${author}, thanks for opening this.`,
                 '',
-                'this bug report is missing required environment details. please edit the issue and fill in herdr version, update channel, operating system, and terminal.',
+                `this bug report is missing required environment details: ${missingEnvironmentFields.join(', ')}. please edit the issue and fill in the missing fields.`,
                 '',
                 'shell and relevant config are optional, but they help when they affect the bug.',
               ].join('\n');

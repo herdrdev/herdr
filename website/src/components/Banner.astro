@@ -1,0 +1,48 @@
+---
+const { entry, locale, isFallback } = Astro.locals.starlightRoute;
+const { banner } = entry.data;
+
+const issuesUrl = 'https://github.com/ogulcancelik/herdr/issues/new?template=translation.yml';
+const translationNotices = {
+  ja: `このページの翻訳は LLM によって生成されています。誤りに気づいた場合は <a href="${issuesUrl}">GitHub で issue を開いて</a>お知らせください。`,
+  'zh-cn': `本页面的翻译由 LLM 生成。如果你发现翻译有误,请<a href="${issuesUrl}">在 GitHub 上提交 issue</a> 告诉我们。`,
+};
+const translationNotice = locale && !isFallback ? translationNotices[locale] : undefined;
+---
+
+{banner && <div class="sl-banner" data-pagefind-ignore set:html={banner.content} />}
+{translationNotice && (
+  <div class="translation-notice" data-pagefind-ignore set:html={translationNotice} />
+)}
+
+<style>
+	@layer starlight.core {
+		.sl-banner {
+			--__sl-banner-text: var(--sl-color-banner-text, var(--sl-color-text-invert));
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			background-color: var(--sl-color-banner-bg, var(--sl-color-bg-accent));
+			color: var(--__sl-banner-text);
+			line-height: var(--sl-line-height-headings);
+			text-align: center;
+			text-wrap: balance;
+			box-shadow: var(--sl-shadow-sm);
+		}
+		.sl-banner :global(a) {
+			color: var(--__sl-banner-text);
+		}
+
+		.translation-notice {
+			padding: 0.5rem var(--sl-nav-pad-x);
+			background-color: var(--sl-color-bg-nav);
+			border-bottom: 1px solid var(--sl-color-hairline);
+			color: var(--sl-color-gray-2);
+			font-size: var(--sl-text-xs);
+			line-height: var(--sl-line-height-headings);
+			text-align: center;
+			text-wrap: balance;
+		}
+		.translation-notice :global(a) {
+			color: var(--sl-color-text-accent);
+		}
+	}
+</style>

@@ -1,7 +1,7 @@
 use std::{
     fs, io,
     io::Write,
-    process::{Command, Stdio},
+    process::Stdio,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -771,10 +771,8 @@ impl App {
         &self,
         binding: &crate::config::CustomCommandKeybind,
     ) -> std::io::Result<()> {
-        let mut command = Command::new("/bin/sh");
+        let mut command = crate::platform::detached_custom_command_process(&binding.command);
         command
-            .arg("-lc")
-            .arg(&binding.command)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

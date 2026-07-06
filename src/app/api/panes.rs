@@ -1877,6 +1877,22 @@ mod tests {
         (app, public_pane_id, rx)
     }
 
+    fn app_with_scrollback_runtime() -> (App, String, PaneId) {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let lines = (0..20)
+            .map(|line| format!("line {line:02}\n"))
+            .collect::<String>();
+        let runtime = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            20,
+            5,
+            1000,
+            lines.as_bytes(),
+        );
+        app.state.insert_test_runtime(pane_id, runtime);
+        (app, public_pane_id, pane_id)
+    }
+
     fn metadata_params(pane_id: String) -> PaneReportMetadataParams {
         PaneReportMetadataParams {
             pane_id,
@@ -1926,6 +1942,32 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), bytes::Bytes::from(vec![0x0b]));
         assert_eq!(rx.try_recv().unwrap(), bytes::Bytes::from(vec![0x0c]));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn api_pane_get_exposes_scroll_metrics() {
+        let (mut app, public_pane_id, pane_id) = app_with_scrollback_runtime();
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        runtime.scroll_up(3);
+
+        let response = app.handle_pane_get(
+            "req".into(),
+            PaneTarget {
+                pane_id: public_pane_id,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneInfo { pane } = success.result else {
+            panic!("expected pane info response");
+        };
+        let scroll = pane.scroll.expect("scroll metrics");
+        assert_eq!(scroll.offset_from_bottom, 3);
+        assert!(scroll.max_offset_from_bottom >= scroll.offset_from_bottom);
+        assert_eq!(scroll.viewport_rows, 5);
     }
 
     #[tokio::test]

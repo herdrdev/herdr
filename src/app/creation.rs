@@ -375,6 +375,15 @@ impl App {
         let pane = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
+        let scroll = self
+            .state
+            .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+            .and_then(|runtime| runtime.scroll_metrics())
+            .map(|metrics| crate::api::schema::PaneScrollInfo {
+                offset_from_bottom: metrics.offset_from_bottom as u64,
+                max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+                viewport_rows: metrics.viewport_rows as u64,
+            });
         let focused = self.state.active == Some(ws_idx)
             && ws.active_tab == tab_idx
             && ws
@@ -401,6 +410,7 @@ impl App {
             custom_status: presentation.custom_status,
             state_labels: presentation.state_labels,
             agent_session: terminal_agent_session_info(terminal),
+            scroll,
             revision: terminal.revision,
         })
     }
