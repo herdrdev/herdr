@@ -1,5 +1,34 @@
 use std::io;
 
+#[cfg(target_os = "android")]
+mod android_shims {
+    #[no_mangle]
+    pub extern "C" fn __errno_location() -> *mut std::os::raw::c_int {
+        unsafe { libc::__errno() }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn shm_open(
+        _name: *const std::os::raw::c_char,
+        _oflag: std::os::raw::c_int,
+        _mode: std::os::raw::c_int,
+    ) -> std::os::raw::c_int {
+        unsafe {
+            *libc::__errno() = libc::ENOSYS;
+        }
+        -1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn shm_unlink(_name: *const std::os::raw::c_char) -> std::os::raw::c_int {
+        unsafe {
+            *libc::__errno() = libc::ENOSYS;
+        }
+        -1
+    }
+}
+
+
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture,

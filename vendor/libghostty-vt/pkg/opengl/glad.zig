@@ -7,7 +7,7 @@ pub const Context = c.GladGLContext;
 /// any of this package's functions. I know its nasty to have a global but
 /// this makes it match OpenGL API styles where it also operates on a
 /// threadlocal global.
-pub threadlocal var context: Context = undefined;
+pub var context: Context = undefined;
 
 /// Initialize Glad. This is guaranteed to succeed if no errors are returned.
 /// The getProcAddress param is an anytype so that we can accept multiple

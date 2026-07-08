@@ -35,7 +35,7 @@ pub const ThreadState = struct {
 
 /// See ThreadState. This should only ever be set by the owner of the
 /// thread entry function.
-pub threadlocal var thread_state: ?ThreadState = null;
+pub var thread_state: ?ThreadState = null;
 
 /// Process-wide initialization of our Sentry client.
 ///
