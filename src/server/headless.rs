@@ -3705,7 +3705,7 @@ impl HeadlessServer {
             .session_save_deadline
             .is_some_and(|deadline| now >= deadline)
         {
-            self.app.save_session_now();
+            self.app.start_background_session_save();
         }
 
         if let Some(deadline) = self
@@ -7509,6 +7509,33 @@ next_tab = ""
         assert!(
             full.cells.iter().all(|cell| cell.hyperlink.is_none()),
             "full render should clear overwritten hyperlink cells"
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_pty_update_allows_dirty_row_that_creates_plain_url() {
+        let (mut server, client_rx, pane_id) = retained_test_server(b"plain");
+        server.render_and_stream();
+        let _ = client_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("initial frame");
+
+        let runtime = server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        runtime.test_process_pty_bytes(b"\rhttps://example.com/new");
+
+        assert!(server.render_retained_pty_update_and_stream());
+        let patched = read_server_frame(
+            client_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("retained frame after plain URL"),
+        );
+        assert!(
+            patched.hyperlinks.is_empty(),
+            "retained render should not synthesize plain URL hyperlink metadata"
         );
     }
 

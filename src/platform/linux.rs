@@ -14,6 +14,7 @@ use super::{
 };
 
 const FOREGROUND_MEMBERS_CACHE_TTL: Duration = Duration::from_millis(250);
+const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcGroupMember {
@@ -38,6 +39,30 @@ static FOREGROUND_MEMBERS_CACHE: Mutex<ForegroundMembersCache> =
     Mutex::new(ForegroundMembersCache { cached: None });
 
 pub fn raise_server_nofile_limit() {}
+
+pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+    running_inside_wsl()
+}
+
+fn running_inside_wsl() -> bool {
+    proc_file_indicates_wsl("/proc/sys/kernel/osrelease")
+        || proc_file_indicates_wsl("/proc/version")
+        || WSL_MARKER_ENV_VARS
+            .iter()
+            .any(|key| std::env::var_os(key).is_some())
+        || std::path::Path::new("/run/WSL").exists()
+}
+
+fn proc_file_indicates_wsl(path: &str) -> bool {
+    std::fs::read_to_string(path)
+        .map(|text| text_indicates_wsl(&text))
+        .unwrap_or(false)
+}
+
+fn text_indicates_wsl(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("microsoft") || text.contains("wsl")
+}
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
     vec!["/bin/sh".into(), flag.into(), command.into()]
@@ -710,6 +735,14 @@ mod tests {
             .into_iter()
             .map(|member| member.comm)
             .collect()
+    }
+
+    #[test]
+    fn wsl_marker_detection_matches_kernel_release_text() {
+        assert!(text_indicates_wsl("5.15.167.4-microsoft-standard-WSL2"));
+        assert!(text_indicates_wsl("4.4.0-19041-Microsoft"));
+        assert!(!text_indicates_wsl("6.8.0-64-generic"));
+        assert!(!text_indicates_wsl(""));
     }
 
     #[test]

@@ -62,9 +62,9 @@ Kitty graphics remains experimental and is not claimed as Windows-supported yet.
 
 ### Cursor rendering
 
-Windows terminals run Herdr through ConPTY, and native terminal cursors can flicker, jump, or briefly show stale positions during active full-screen redraws. Herdr's default `host_cursor = "auto"` draws Herdr's cursor as terminal cell content on Windows, while Linux and macOS keep using the native terminal cursor. The Windows trade-off is a steady non-blinking cursor inside Herdr instead of the outer terminal's native blink, shape, and cursor color.
+Windows terminals run Herdr through ConPTY, and native terminal cursors can flicker, jump, or briefly show stale positions during active full-screen redraws. Herdr's default `host_cursor = "auto"` draws Herdr's cursor as terminal cell content for native Windows builds and WSL, while other Linux and macOS clients keep using the native terminal cursor. The Windows trade-off is a steady non-blinking cursor inside Herdr instead of the outer terminal's native blink, shape, and cursor color.
 
-To opt back into the outer terminal cursor on Windows, set:
+To opt back into the outer terminal cursor on native Windows or WSL, set:
 
 ```toml
 [ui]

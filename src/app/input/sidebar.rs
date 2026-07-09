@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 
-use crate::app::state::{AppState, Mode, ViewLayout};
+use crate::app::state::{AppState, ViewLayout};
 
 use super::ScrollbarClickTarget;
 
@@ -330,24 +330,6 @@ impl AppState {
         (idx < self.workspaces.len()).then_some(idx)
     }
 
-    fn collapsed_detail_workspace_idx(&self) -> Option<usize> {
-        if matches!(
-            self.mode,
-            Mode::Navigate
-                | Mode::RenameWorkspace
-                | Mode::Resize
-                | Mode::ConfirmClose
-                | Mode::ContextMenu
-                | Mode::Settings
-                | Mode::GlobalMenu
-                | Mode::KeybindHelp
-        ) {
-            Some(self.selected)
-        } else {
-            self.active
-        }
-    }
-
     pub(super) fn collapsed_agent_detail_target_at(
         &self,
         row: u16,
@@ -370,12 +352,10 @@ impl AppState {
             return None;
         }
 
-        let ws_idx = self.collapsed_detail_workspace_idx()?;
-        let ws = self.workspaces.get(ws_idx)?;
         let detail_idx = (row - detail_content_area.y) as usize;
-        let details = ws.pane_details(&self.terminals);
+        let details = crate::ui::agent_panel_entries(self);
         let detail = details.get(detail_idx)?;
-        Some((ws_idx, detail.tab_idx, detail.pane_id))
+        Some((detail.ws_idx, detail.tab_idx, detail.pane_id))
     }
 
     pub(super) fn workspace_drop_index_at_row(&self, row: u16) -> Option<usize> {
@@ -498,7 +478,7 @@ mod tests {
     use crate::{
         app::state::{AgentPanelSort, DragTarget, Mode},
         config::SidebarCollapsedModeConfig,
-        detect::Agent,
+        detect::{Agent, AgentState},
         workspace::Workspace,
     };
 
@@ -950,6 +930,51 @@ mod tests {
             second_pane
         );
         assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn clicking_collapsed_priority_agent_row_switches_to_matching_workspace() {
+        let mut app = app_for_mouse_test();
+        let first = Workspace::test_new("one");
+        let first_pane = first.tabs[0].root_pane;
+        let second = Workspace::test_new("two");
+        let second_pane = second.tabs[0].root_pane;
+
+        app.state.workspaces = vec![first, second];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.sidebar_collapsed = true;
+        app.state.agent_panel_sort = AgentPanelSort::Priority;
+        app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
+        app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
+
+        let set_state = |app: &mut crate::app::App, ws_idx: usize, pane_id, state| {
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        };
+        set_state(&mut app, 0, first_pane, AgentState::Working);
+        set_state(&mut app, 1, second_pane, AgentState::Blocked);
+
+        let (_, _, detail_area) =
+            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            detail_area.x,
+            detail_area.y,
+        ));
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.selected, 1);
+        assert_eq!(
+            app.state.workspaces[1].tabs[0].layout.focused(),
+            second_pane
+        );
     }
 
     #[test]

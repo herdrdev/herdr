@@ -259,7 +259,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # mouse_capture = true
 
 # Host cursor policy: "auto", "native", or "drawn".
-# "auto" draws Herdr's own cursor on Windows to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
+# "auto" draws Herdr's own cursor on native Windows builds and WSL to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
 # "native" always uses the outer terminal cursor. "drawn" always draws Herdr's cursor as terminal cell content.
 # host_cursor = "auto"
 

@@ -453,7 +453,9 @@ fn write_terminal_restore_postlude(
 
 fn should_draw_host_cursor(mode: crate::config::HostCursorModeConfig) -> bool {
     match mode {
-        crate::config::HostCursorModeConfig::Auto => cfg!(windows),
+        crate::config::HostCursorModeConfig::Auto => {
+            crate::platform::should_draw_host_cursor_by_default()
+        }
         crate::config::HostCursorModeConfig::Native => false,
         crate::config::HostCursorModeConfig::Drawn => true,
     }
@@ -2198,10 +2200,10 @@ mod tests {
     }
 
     #[test]
-    fn host_cursor_policy_auto_uses_drawn_cursor_on_windows() {
+    fn host_cursor_policy_auto_uses_platform_default() {
         assert_eq!(
             should_draw_host_cursor(crate::config::HostCursorModeConfig::Auto),
-            cfg!(windows)
+            crate::platform::should_draw_host_cursor_by_default()
         );
     }
 

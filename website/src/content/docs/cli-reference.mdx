@@ -19,6 +19,7 @@ herdr --no-session            # single-process escape hatch
 herdr --default-config        # print default config
 herdr update                  # download and install from the configured channel
 herdr update --handoff        # opt into live handoff for supported running servers
+herdr completion zsh          # generate a zsh completion script
 herdr channel show            # print stable or preview
 herdr channel set preview     # opt into preview builds
 herdr channel set stable      # return Linux/macOS direct installs to stable
@@ -31,6 +32,52 @@ Status commands:
 herdr status
 herdr status server
 herdr status client
+```
+
+API schema commands:
+
+```bash
+herdr api schema
+herdr api schema --json
+herdr api schema --output herdr-api.schema.json
+```
+
+`herdr api schema` prints a short summary of the socket protocol schema bundled
+with the installed binary. Use `--json` for the full JSON Schema document, or
+`--output PATH` to write that document to a file.
+
+## Shell completions
+
+```bash
+herdr completion zsh
+herdr completions zsh
+herdr completion bash
+herdr completion fish
+herdr completion powershell
+herdr completion elvish
+```
+
+`completion` prints the script to stdout. `completions` is an alias. For a
+temporary zsh session, load the script directly:
+
+```bash
+source <(herdr completion zsh)
+```
+
+For a persistent zsh setup, write the generated `_herdr` function somewhere on
+your `fpath` before `compinit` runs:
+
+```bash
+mkdir -p ~/.zfunc
+herdr completion zsh > ~/.zfunc/_herdr
+```
+
+Then make sure your `.zshrc` contains:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
 ```
 
 ## Server
@@ -129,6 +176,11 @@ herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--f
 herdr pane close <pane_id>
 ```
 
+For pane commands that accept `--current`, Herdr uses the calling pane's
+`HERDR_PANE_ID` when the command runs inside a Herdr pane. For `pane split`,
+an explicit pane id or `--pane ID` splits that pane, `--current` splits the
+calling pane, and an omitted target keeps using the UI-focused pane.
+
 Read output:
 
 ```bash
@@ -171,6 +223,8 @@ herdr pane report-agent <pane_id> \
 `pane get`, `pane list`, `agent get`, and `agent list` include a read-only `agent_session` object when an official integration has reported a native session reference. If no native session reference is stored, the field is omitted.
 
 Those commands include `foreground_cwd` when Herdr can resolve the cwd of the foreground process controlling the pane. The existing `cwd` field remains the pane/workspace cwd used for labels and follow-cwd behavior.
+
+`pane get` and `pane list` include `scroll` when terminal scroll metrics are available. `scroll.offset_from_bottom == 0` means the pane is at the bottom of its scrollback.
 
 Report display-only pane metadata without taking over semantic state:
 
@@ -222,11 +276,24 @@ Use `pane send-text`, `pane send-keys`, `pane run`, and `terminal attach` for or
 
 ```bash
 herdr terminal attach <terminal_id> [--takeover]
+herdr terminal session control <target> [--takeover] [--cols N] [--rows N]
+herdr terminal session observe <target> [--cols N] [--rows N]
 herdr terminal title set <title>
 herdr terminal title clear
 ```
 
 Detach from direct attach with `ctrl+b q`. Send literal `ctrl+b` with `ctrl+b ctrl+b`.
+`terminal session control` opens a writable live terminal stream for a pane,
+terminal, or agent target. It prints the same newline-delimited
+`terminal.frame` and `terminal.closed` records as observe mode. It reads
+newline-delimited JSON commands on stdin: `terminal.input`, `terminal.resize`,
+`terminal.scroll`, and `terminal.release`. One controller can own a terminal at
+a time; use `--takeover` to replace it.
+`terminal session observe` opens a read-only live terminal stream for a pane,
+terminal, or agent target. It prints newline-delimited JSON `terminal.frame`
+records with base64-encoded ANSI bytes, then a `terminal.closed` record when
+the server closes the stream. Multiple observers can watch the same terminal
+without taking input, resize, scroll, or takeover authority.
 `terminal title clear` restores Herdr's default outer terminal window title.
 
 ## Waits
@@ -261,6 +328,7 @@ herdr integration install kilo
 herdr integration install hermes
 herdr integration install qodercli
 herdr integration install cursor
+herdr integration install mastracode
 herdr integration uninstall pi
 herdr integration uninstall omp
 herdr integration uninstall claude
@@ -274,6 +342,7 @@ herdr integration uninstall kilo
 herdr integration uninstall hermes
 herdr integration uninstall qodercli
 herdr integration uninstall cursor
+herdr integration uninstall mastracode
 herdr integration status [--outdated-only]
 ```
 

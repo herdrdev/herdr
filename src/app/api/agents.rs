@@ -202,3 +202,67 @@ fn agent_not_found(id: String, target: &str) -> String {
         format!("agent target {target} not found"),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        api::schema::{AgentStatus, SuccessResponse},
+        app::Mode,
+        config::Config,
+        detect::{Agent, AgentState},
+        workspace::Workspace,
+    };
+
+    fn app_with_agent() -> App {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("agent")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app
+    }
+
+    #[test]
+    fn agent_focus_marks_already_focused_done_agent_seen() {
+        let mut app = app_with_agent();
+        app.state.outer_terminal_focus = Some(false);
+
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .seen = false;
+        app.state.workspaces[0].tabs[0].layout.focus_pane(pane_id);
+
+        let response = app.handle_agent_focus(
+            "req".into(),
+            AgentTarget {
+                target: "pi".into(),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::AgentInfo { agent } = success.result else {
+            panic!("expected agent info response");
+        };
+        assert_eq!(agent.agent_status, AgentStatus::Idle);
+    }
+}

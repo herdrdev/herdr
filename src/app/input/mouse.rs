@@ -1444,7 +1444,7 @@ impl AppState {
 
         self.focus_pane_in_workspace(ws_idx, target.pane_id);
         self.toast = None;
-        self.mode = Mode::Terminal;
+        self.settle_terminal_mode_after_focus();
     }
 
     pub(crate) fn scroll_pane_up(
@@ -1736,11 +1736,13 @@ impl AppState {
         pane_id: crate::layout::PaneId,
         offset_from_bottom: usize,
     ) {
-        if let Some(ws_idx) = self.active {
-            if let Some(rt) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
-            {
-                rt.set_scroll_offset_from_bottom(offset_from_bottom);
-            }
+        for ws_idx in 0..self.workspaces.len() {
+            let Some(rt) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
+            else {
+                continue;
+            };
+            rt.set_scroll_offset_from_bottom(offset_from_bottom);
+            return;
         }
     }
 

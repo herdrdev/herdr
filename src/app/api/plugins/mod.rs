@@ -405,7 +405,7 @@ impl App {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         }
         self.state.focus_pane_in_workspace(ws_idx, pane_id);
-        self.state.mode = crate::app::Mode::Terminal;
+        self.state.settle_terminal_mode_after_focus();
         let Some(record) = self.state.plugin_panes.get(&pane_id).cloned() else {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         };

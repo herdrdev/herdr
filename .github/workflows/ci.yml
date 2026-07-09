@@ -111,6 +111,14 @@ jobs:
           cache-bin: false
           key: ${{ matrix.os }}
 
+      - name: Remove Zig caches
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
+
       - name: Run checks
         if: matrix.kind == 'unix'
         run: just ci '${{ matrix.nextest_filter }}'
