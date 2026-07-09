@@ -710,11 +710,6 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         }
     }
 
-    let detail_ws_idx = if is_navigating {
-        Some(app.selected)
-    } else {
-        app.active
-    };
     let detail_content_area = Rect::new(
         detail_area.x,
         detail_area.y,
@@ -722,29 +717,26 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         detail_area.height.saturating_sub(1),
     );
     if detail_content_area != Rect::default() {
-        if let Some(ws_idx) = detail_ws_idx {
-            if let Some(ws) = app.workspaces.get(ws_idx) {
-                for (detail_idx, detail) in ws.pane_details(&app.terminals).iter().enumerate() {
-                    let y = detail_content_area.y + detail_idx as u16;
-                    if y >= detail_content_area.y + detail_content_area.height {
-                        break;
-                    }
-                    let pane_num = ws
-                        .public_pane_number(detail.pane_id)
-                        .unwrap_or(detail_idx + 1);
-                    let pane_style = Style::default().fg(p.overlay0);
-                    let (icon, icon_style) =
-                        agent_icon(detail.state, detail.seen, app.spinner_tick, p);
-                    frame.render_widget(
-                        Paragraph::new(Line::from(vec![
-                            Span::styled(format!("{pane_num}"), pane_style),
-                            Span::styled(" ", pane_style),
-                            Span::styled(icon, icon_style),
-                        ])),
-                        Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
-                    );
-                }
+        for (detail_idx, detail) in agent_panel_entries(app).iter().enumerate() {
+            let y = detail_content_area.y + detail_idx as u16;
+            if y >= detail_content_area.y + detail_content_area.height {
+                break;
             }
+            let pane_num = app
+                .workspaces
+                .get(detail.ws_idx)
+                .and_then(|ws| ws.public_pane_number(detail.pane_id))
+                .unwrap_or(detail_idx + 1);
+            let pane_style = Style::default().fg(p.overlay0);
+            let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(format!("{pane_num}"), pane_style),
+                    Span::styled(" ", pane_style),
+                    Span::styled(icon, icon_style),
+                ])),
+                Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
+            );
         }
     }
 
@@ -1295,6 +1287,45 @@ mod tests {
             .collect();
 
         assert_eq!(labels, ["four", "two", "one", "three"]);
+    }
+
+    #[test]
+    fn collapsed_sidebar_uses_all_workspaces_agent_panel_order() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+        app.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
+
+        let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, state| {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        };
+        set_state(&mut app, 0, AgentState::Working);
+        set_state(&mut app, 1, AgentState::Blocked);
+
+        let area = Rect::new(0, 0, 5, 12);
+        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let first_detail_y = detail_area.y;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(detail_area.x + 2, first_detail_y)].symbol(), "◉");
+        assert_eq!(
+            buffer[(detail_area.x + 2, first_detail_y)].style().fg,
+            Some(app.palette.red)
+        );
     }
 
     #[cfg(unix)]

@@ -364,19 +364,14 @@ pub(crate) fn visible_hyperlinks(
     let Some(ws_idx) = app_state.active else {
         return Vec::new();
     };
-    let Some(tab) = app_state
-        .workspaces
-        .get(ws_idx)
-        .and_then(crate::workspace::Workspace::active_tab)
-    else {
+    if app_state.workspaces.get(ws_idx).is_none() {
         return Vec::new();
-    };
+    }
 
     let mut links = Vec::new();
     for info in &app_state.view.pane_infos {
-        if let Some(runtime) = tab
-            .terminal_id(info.id)
-            .and_then(|terminal_id| terminal_runtimes.get(terminal_id))
+        if let Some(runtime) =
+            app_state.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
         {
             links.extend(runtime.visible_hyperlinks(info.inner_rect));
         }

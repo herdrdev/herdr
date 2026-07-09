@@ -331,7 +331,7 @@ The agent panel shows all agents across all spaces. `agent_panel_sort` can be `s
 
 Set `mouse_capture = false` if you want your terminal to handle normal clicks, such as command-clicking URLs. With mouse capture enabled, Ctrl-click opens pane links when your terminal sends that modified click to Herdr. This includes macOS; Cmd-click is not reported separately from plain click while Herdr captures mouse input. Use Shift-Ctrl-click on Linux or Shift-Cmd-click on macOS for the terminal-native bypass path.
 
-`host_cursor` controls whether Herdr uses the outer terminal's native cursor or draws its own cursor as terminal cell content. The default, `auto`, draws Herdr's cursor on Windows to avoid ConPTY cursor flicker during active redraws, and uses the native cursor elsewhere. Set it to `native` to always use the outer terminal cursor, or `drawn` to always use Herdr's drawn cursor.
+`host_cursor` controls whether Herdr uses the outer terminal's native cursor or draws its own cursor as terminal cell content. The default, `auto`, draws Herdr's cursor on native Windows builds and WSL to avoid ConPTY cursor flicker during active redraws, and uses the native cursor elsewhere. Set it to `native` to always use the outer terminal cursor, or `drawn` to always use Herdr's drawn cursor.
 
 Set `right_click_passthrough_modifier = "ctrl"` if you want Ctrl-right-click, hold, and drag gestures inside mouse-reporting pane apps to reach the app instead of opening Herdr's pane menu. The default is empty, which disables this passthrough. Supported modifiers are `ctrl`, `alt`, `cmd`, `super`, `meta`, and `hyper`; `shift` is rejected because many terminals reserve Shift+mouse for their own mouse bypass.
 
@@ -469,7 +469,7 @@ Herdr can restart supported agent panes in their native conversation sessions af
 resume_agents_on_restore = true
 ```
 
-This is enabled by default. Herdr only resumes panes that reported a native session reference through an official Herdr integration. Supported resume targets are Claude Code, Codex, Cursor Agent CLI, GitHub Copilot CLI, Droid, Kimi Code CLI, Qoder CLI, Pi, Hermes Agent, OpenCode, Kilo Code CLI, and Antigravity CLI (agy). Unsupported, missing, invalid, duplicated, or stale session references restore as a normal shell in the saved pane directory.
+This is enabled by default. Herdr only resumes panes that reported a native session reference through an official Herdr integration. Supported resume targets are Claude Code, Codex, Cursor Agent CLI, GitHub Copilot CLI, Droid, Kimi Code CLI, Qoder CLI, Pi, Hermes Agent, OpenCode, Kilo Code CLI, Antigravity CLI (agy), and MastraCode. Unsupported, missing, invalid, duplicated, or stale session references restore as a normal shell in the saved pane directory.
 
 Session references are stored in the local Herdr session snapshot. They are not shown in normal pane, agent, status, or event output.
 

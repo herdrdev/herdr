@@ -379,7 +379,37 @@ fn shifted_text_char(key: &TerminalKey, ch: char) -> Option<char> {
         return Some(ch.to_ascii_uppercase());
     }
 
+    if is_shifted_ascii_punctuation(ch) {
+        return Some(ch);
+    }
+
     None
+}
+
+fn is_shifted_ascii_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '!' | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '^'
+            | '&'
+            | '*'
+            | '('
+            | ')'
+            | '_'
+            | '+'
+            | '{'
+            | '}'
+            | '|'
+            | ':'
+            | '"'
+            | '<'
+            | '>'
+            | '?'
+            | '~'
+    )
 }
 
 fn canonical_kitty_char(ch: char, mods: KeyModifiers) -> char {
@@ -846,6 +876,56 @@ mod tests {
             crossterm::event::KeyEventKind::Release,
         );
         assert_eq!(encode_key(key, KeyboardProtocol::Kitty { flags: 7 }), b"");
+    }
+
+    #[test]
+    fn kitty_shifted_punctuation_literals_send_text() {
+        for ch in "!@#$%^&*()_+{}|:\"<>?~".chars() {
+            let key = TerminalKey::new(KeyCode::Char(ch), KeyModifiers::SHIFT);
+            let encoded = encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 7 });
+            assert_eq!(encoded, ch.to_string().into_bytes(), "ch={ch}");
+        }
+    }
+
+    #[test]
+    fn kitty_shifted_punctuation_release_does_not_emit_text() {
+        let key = TerminalKey::new(KeyCode::Char('?'), KeyModifiers::SHIFT)
+            .with_kind(crossterm::event::KeyEventKind::Release);
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 7 }),
+            b""
+        );
+    }
+
+    #[test]
+    fn kitty_shifted_punctuation_does_not_infer_layout() {
+        let key = TerminalKey::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 7 }),
+            b"\x1b[49;2:1u"
+        );
+    }
+
+    #[test]
+    fn kitty_modified_shifted_punctuation_stays_modified_key() {
+        for (modifiers, expected) in [
+            (
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                b"\x1b[33;6:1u".as_slice(),
+            ),
+            (
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+                b"\x1b[33;4:1u".as_slice(),
+            ),
+            (
+                KeyModifiers::SUPER | KeyModifiers::SHIFT,
+                b"\x1b[33;10:1u".as_slice(),
+            ),
+        ] {
+            let key = TerminalKey::new(KeyCode::Char('!'), modifiers);
+            let encoded = encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 7 });
+            assert_eq!(encoded, expected, "modifiers={modifiers:?}");
+        }
     }
 
     #[test]

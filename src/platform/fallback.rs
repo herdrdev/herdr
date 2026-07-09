@@ -6,6 +6,10 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 /// Unsupported platform stub.
 pub fn raise_server_nofile_limit() {}
 
+pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+    false
+}
+
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
     vec!["/bin/sh".into(), flag.into(), command.into()]
 }

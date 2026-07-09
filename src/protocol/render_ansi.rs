@@ -427,16 +427,14 @@ fn blit_frame_to_with_cursor_memory_and_policy(
     let full_redraw =
         prev.is_none() || prev.is_some_and(|p| p.width != frame.width || p.height != frame.height);
 
-    // Hide cursor before any cell writes to avoid stray cursor artifacts
-    // on terminals that render the hardware cursor at intermediate CUP positions.
-    // Keep this outside synchronized output so terminals that defer sync-block
-    // side effects still hide the cursor before frame painting begins.
-    let _ = writer.write_all(b"\x1b[?25l");
-
     // Ask terminals that support synchronized output to apply the whole frame
     // atomically. This keeps IMEs and cursor trackers from observing the
     // intermediate CUP positions used while painting changed cells.
     let _ = writer.write_all(b"\x1b[?2026h");
+
+    // Hide cursor before any cell writes to avoid stray cursor artifacts
+    // on terminals that render the hardware cursor at intermediate CUP positions.
+    let _ = writer.write_all(b"\x1b[?25l");
 
     // Start each frame from a known OSC 8 state. If a previous write was
     // interrupted or the outer terminal had an active hyperlink, unlinked cells
@@ -926,8 +924,8 @@ mod tests {
 
         let output_str = String::from_utf8(output).unwrap();
         assert!(
-            output_str.starts_with("\x1b[?25l\x1b[?2026h"),
-            "should hide cursor before synchronized frame painting during full redraw"
+            output_str.starts_with("\x1b[?2026h\x1b[?25l"),
+            "should hide cursor inside synchronized frame painting during full redraw"
         );
     }
 
@@ -960,8 +958,8 @@ mod tests {
 
         let output_str = String::from_utf8(output).unwrap();
         assert!(
-            output_str.starts_with("\x1b[?25l\x1b[?2026h"),
-            "should hide cursor before synchronized frame painting during diff"
+            output_str.starts_with("\x1b[?2026h\x1b[?25l"),
+            "should hide cursor inside synchronized frame painting during diff"
         );
     }
 
@@ -974,7 +972,7 @@ mod tests {
 
         let output_str = String::from_utf8(output).unwrap();
         assert!(
-            output_str.starts_with("\x1b[?25l\x1b[?2026h"),
+            output_str.starts_with("\x1b[?2026h\x1b[?25l"),
             "should begin synchronized output before frame writes"
         );
         let sync_end = output_str
@@ -983,6 +981,73 @@ mod tests {
         assert!(
             sync_end > 0,
             "should end synchronized output after frame writes"
+        );
+    }
+
+    #[test]
+    fn blit_frame_begins_sync_before_hiding_cursor_after_visible_cursor_repeat() {
+        let visible = FrameData {
+            cells: vec![make_cell("A", 0, 0, 0); 9],
+            width: 3,
+            height: 3,
+            cursor: Some(CursorState {
+                x: 2,
+                y: 1,
+                visible: true,
+                shape: 0,
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let mut changed = visible.clone();
+        changed.cells[0] = make_cell("B", 0, 0, 0);
+
+        let mut last_visible_cursor = None;
+        let mut last_cursor_shape = 0;
+        let mut first_output = Vec::new();
+        blit_frame_to_with_cursor_memory_and_policy(
+            &mut first_output,
+            &visible,
+            None,
+            &mut last_visible_cursor,
+            &mut last_cursor_shape,
+            true,
+            false,
+        );
+
+        let mut second_output = Vec::new();
+        blit_frame_to_with_cursor_memory_and_policy(
+            &mut second_output,
+            &changed,
+            Some(&visible),
+            &mut last_visible_cursor,
+            &mut last_cursor_shape,
+            true,
+            false,
+        );
+
+        let second_output_str = std::str::from_utf8(&second_output).unwrap();
+        assert!(
+            second_output_str.starts_with("\x1b[?2026h\x1b[?25l"),
+            "next frame should enter synchronized output before hiding the cursor"
+        );
+
+        let hide = second_output_str
+            .find("\x1b[?25l")
+            .expect("second frame should hide cursor before painting");
+        let first_paint = second_output_str
+            .find("\x1b[1;1H")
+            .expect("second frame should paint changed cell");
+        assert!(
+            hide < first_paint,
+            "cursor should still hide before painting"
+        );
+
+        first_output.extend_from_slice(&second_output);
+        let combined = String::from_utf8(first_output).unwrap();
+        assert!(
+            combined.contains("\x1b[?2026l\x1b[2;3H\x1b[?25h\x1b[?2026h\x1b[?25l"),
+            "post-sync cursor repeat should be followed by a synchronized cursor hide"
         );
     }
 

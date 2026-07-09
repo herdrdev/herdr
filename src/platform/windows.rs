@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::c_void,
     mem::{size_of, MaybeUninit},
     path::PathBuf,
@@ -37,6 +37,10 @@ use windows_sys::{
 use super::{ClipboardImage, ForegroundJob, Signal};
 
 const STILL_ACTIVE: u32 = 259;
+
+pub(crate) fn should_draw_host_cursor_by_default() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsProcessEntry {
@@ -223,11 +227,15 @@ fn process_is_ancestor(
     parent_by_pid: &HashMap<u32, u32>,
 ) -> bool {
     let mut current = descendant_pid;
-    while let Some(parent) = parent_by_pid.get(&current).copied() {
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let Some(parent) = parent_by_pid.get(&current).copied() else {
+            return false;
+        };
         if parent == ancestor_pid {
             return true;
         }
-        if parent == 0 || parent == current {
+        if parent == 0 {
             return false;
         }
         current = parent;
@@ -244,13 +252,23 @@ fn descendant_entries(root_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<&Wi
 
     let mut output = Vec::new();
     let mut queue = VecDeque::new();
+    let mut visited = HashSet::new();
+    visited.insert(root_pid);
     if let Some(root_children) = children.get(&root_pid) {
-        queue.extend(root_children.iter().copied());
+        for entry in root_children.iter().copied() {
+            if visited.insert(entry.pid) {
+                queue.push_back(entry);
+            }
+        }
     }
     while let Some(entry) = queue.pop_front() {
         output.push(entry);
         if let Some(next) = children.get(&entry.pid) {
-            queue.extend(next.iter().copied());
+            for child in next.iter().copied() {
+                if visited.insert(child.pid) {
+                    queue.push_back(child);
+                }
+            }
         }
     }
     output
@@ -894,6 +912,40 @@ mod tests {
         pids.sort_unstable();
 
         assert_eq!(pids, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn windows_process_tree_ignores_pid_reuse_cycles() {
+        let entries = vec![
+            test_entry(10, 30, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+            test_entry(30, 20, "node.exe", &["node.exe"]),
+        ];
+
+        let descendants = super::descendant_entries(10, &entries);
+
+        assert_eq!(
+            descendants
+                .iter()
+                .map(|entry| entry.pid)
+                .collect::<Vec<_>>(),
+            vec![20, 30]
+        );
+    }
+
+    #[test]
+    fn windows_process_tree_returns_shell_when_candidate_parent_chain_cycles() {
+        let entries = vec![
+            test_entry(10, 40, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+            test_entry(30, 10, "codex.exe", &["codex.exe"]),
+            test_entry(40, 10, "node.exe", &["node.exe"]),
+        ];
+
+        let job = super::select_pane_foreground_job(10, &entries).unwrap();
+
+        assert_eq!(job.process_group_id, 10);
+        assert_eq!(job.processes[0].name, "powershell.exe");
     }
 
     #[test]

@@ -175,9 +175,7 @@ impl App {
             .unwrap_or_default();
         self.state.selected = index;
         self.state.close_selected_workspace();
-        for pane_id in pane_ids {
-            self.state.plugin_panes.remove(&pane_id);
-        }
+        self.state.remove_plugin_pane_records(pane_ids);
         self.shutdown_detached_terminal_runtimes();
         self.emit_event(EventEnvelope {
             event: EventKind::WorkspaceClosed,

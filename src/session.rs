@@ -325,7 +325,7 @@ fn send_stop_request(
         return Ok(None);
     };
     if let Err(err) = stream.set_send_timeout(Some(write_timeout)) {
-        if err.kind() != std::io::ErrorKind::InvalidInput {
+        if !stop_timeout_error_allows_wait(&err) {
             return Err(err.to_string());
         }
     }
@@ -354,7 +354,7 @@ fn send_stop_request_inner(
         return Ok(None);
     };
     if let Err(err) = stream.set_recv_timeout(Some(read_timeout)) {
-        if err.kind() == std::io::ErrorKind::InvalidInput {
+        if stop_timeout_error_allows_wait(&err) {
             return Ok(None);
         }
         return Err(err);
@@ -366,6 +366,11 @@ fn send_stop_request_inner(
         return Ok(None);
     }
     Ok(Some(line))
+}
+
+fn stop_timeout_error_allows_wait(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::InvalidInput
+        || (cfg!(windows) && err.kind() == std::io::ErrorKind::Unsupported)
 }
 
 fn stop_request_error_allows_wait(err: &std::io::Error) -> bool {
@@ -502,6 +507,20 @@ mod tests {
             let err = std::io::Error::from(kind);
             assert!(stop_request_error_allows_wait(&err), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn stop_timeout_invalid_input_waits_for_socket_state() {
+        let err = std::io::Error::from(std::io::ErrorKind::InvalidInput);
+
+        assert!(stop_timeout_error_allows_wait(&err));
+    }
+
+    #[test]
+    fn stop_timeout_unsupported_waits_for_socket_state_only_on_windows() {
+        let err = std::io::Error::from(std::io::ErrorKind::Unsupported);
+
+        assert_eq!(stop_timeout_error_allows_wait(&err), cfg!(windows));
     }
 
     #[test]

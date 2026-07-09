@@ -73,7 +73,11 @@ fn parse_legacy_key_sequence(data: &str) -> Option<TerminalKey> {
             let rest = data.strip_prefix('\x1b')?;
             if rest.chars().count() == 1 {
                 let ch = rest.chars().next()?;
-                Some(TerminalKey::new(KeyCode::Char(ch), KeyModifiers::ALT))
+                let mut modifiers = KeyModifiers::ALT;
+                if ch.is_ascii_uppercase() {
+                    modifiers |= KeyModifiers::SHIFT;
+                }
+                Some(TerminalKey::new(KeyCode::Char(ch), modifiers))
             } else {
                 None
             }
@@ -515,6 +519,19 @@ mod tests {
                 None,
             );
         }
+    }
+
+    #[test]
+    fn parse_legacy_alt_shift_letter_preserves_shift() {
+        let key = parse_terminal_key_sequence("\x1bA").expect("alt-shift letter should parse");
+        assert_terminal_key_eq(
+            key,
+            KeyCode::Char('A'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+            crossterm::event::KeyEventKind::Press,
+            None,
+        );
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"\x1bA");
     }
 
     #[test]

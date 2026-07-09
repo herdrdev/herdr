@@ -285,7 +285,7 @@ impl App {
             .session_save_deadline
             .is_some_and(|deadline| now >= deadline)
         {
-            self.save_session_now();
+            self.start_background_session_save();
         }
 
         if let Some(deadline) = self
