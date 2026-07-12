@@ -117,6 +117,87 @@ pub(crate) fn take_terminal_resize_signal() -> bool {
     false
 }
 
+/// The invoking user's login shell from the OS user database.
+///
+/// Used to resolve a new pane's shell when `$SHELL` is absent from the
+/// server's environment (for example when the server was started by a service
+/// manager or container init that does not export `SHELL`). Returns `None`
+/// when there is no entry, the shell field is empty, or it is not valid UTF-8;
+/// callers then supply their own fallback chain.
+///
+/// Uses the reentrant `getpwuid_r` so concurrent pane spawns (such as session
+/// restore) do not race on libc's shared static `passwd` buffer.
+#[cfg(unix)]
+pub(crate) fn login_shell() -> Option<String> {
+    use std::ffi::CStr;
+
+    // `_SC_GETPW_R_SIZE_MAX` is only a hint and may be unavailable (-1); start
+    // from a sane size and grow on ERANGE up to a 1 MiB ceiling.
+    let mut buf_len = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
+        hint if hint > 0 => hint as usize,
+        _ => 1024,
+    };
+
+    loop {
+        let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; buf_len];
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+
+        // SAFETY: `passwd`, `buf`, and `result` are valid for the duration of
+        // the call and libc writes the entry into them. On success
+        // `passwd.pw_shell` points into `buf`, which outlives the owned copy
+        // taken below.
+        let ret = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut passwd,
+                buf.as_mut_ptr(),
+                buf_len,
+                &mut result,
+            )
+        };
+
+        // Buffer too small: double and retry, but never allocate past the
+        // 1 MiB ceiling (check the grown size *before* allocating it).
+        if ret == libc::ERANGE {
+            let next = buf_len.saturating_mul(2);
+            if next > (1 << 20) {
+                tracing::warn!(
+                    "getpwuid_r still reports ERANGE at the 1 MiB buffer ceiling; skipping login-shell lookup"
+                );
+                return None;
+            }
+            buf_len = next;
+            continue;
+        }
+
+        // Interrupted by a signal: retry the call.
+        if ret == libc::EINTR {
+            continue;
+        }
+
+        // A non-zero return is an error; a null result means "no such entry".
+        if ret != 0 || result.is_null() || passwd.pw_shell.is_null() {
+            return None;
+        }
+
+        // SAFETY: on success `pw_shell` is a valid NUL-terminated C string in `buf`.
+        let shell = unsafe { CStr::from_ptr(passwd.pw_shell) }.to_owned();
+        let shell = shell.to_str().ok()?.trim();
+        return if shell.is_empty() {
+            None
+        } else {
+            Some(shell.to_string())
+        };
+    }
+}
+
+/// No user-database lookup on non-Unix targets (for example Windows).
+#[cfg(not(unix))]
+pub(crate) fn login_shell() -> Option<String> {
+    None
+}
+
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCommand {
@@ -350,6 +431,18 @@ impl PrefixInputSource for RealPrefixInputSource {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn login_shell_wiring_does_not_panic_and_returns_plausible_value() {
+        // Smoke-test the real getpwuid_r wiring on Unix CI runners. The value
+        // depends on the CI account, so we only assert the unsafe block does
+        // not panic and, when present, yields a non-empty trimmed shell.
+        if let Some(shell) = login_shell() {
+            assert!(!shell.is_empty());
+            assert_eq!(shell, shell.trim());
+        }
+    }
 
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {

@@ -1263,10 +1263,48 @@ fn truncate_handoff_history(history: String, max_bytes: usize) -> String {
 }
 
 fn pane_shell(configured_shell: &str) -> String {
-    pane_shell_from(configured_shell, std::env::var("SHELL").ok())
+    let resolve = |candidate: &str| resolve_shell_for_login_mode(candidate).ok();
+    // `default_shell` is honored verbatim (the always-wins override), but warn
+    // when it does not resolve so a stale config is attributable rather than
+    // surfacing later as an opaque spawn failure in non-login mode.
+    let configured = configured_shell.trim();
+    if !configured.is_empty() && resolve(configured).is_none() {
+        warn!(
+            shell = configured,
+            "configured default_shell was not found on PATH or as an executable; using it anyway"
+        );
+    }
+    pane_shell_from(
+        configured_shell,
+        std::env::var("SHELL").ok(),
+        crate::platform::login_shell,
+        resolve,
+    )
 }
 
-fn pane_shell_from(configured_shell: &str, env_shell: Option<String>) -> String {
+/// Resolve the executable for a new interactive pane.
+///
+/// Resolution order, taking the first candidate that resolves to an existing
+/// executable on this host:
+///   1. the explicit `default_shell` config (honored verbatim — the
+///      always-wins manual override),
+///   2. `$SHELL` from the server environment,
+///   3. the account's login shell from the OS user database,
+///   4. `bash` on `PATH`,
+///   5. `/bin/sh` (the POSIX-guaranteed floor).
+///
+/// Steps 2–4 are existence-checked and fall through when the shell is missing,
+/// so a stale `$SHELL`/passwd entry (say `zsh` on a host that lacks it, or a
+/// server started by a service manager/container init with no `$SHELL`) can
+/// never leave a pane pointing at a shell that does not exist. `login_shell`
+/// and `resolve` are injected so the ordering is unit-testable without touching
+/// the real environment or filesystem.
+fn pane_shell_from(
+    configured_shell: &str,
+    env_shell: Option<String>,
+    login_shell: impl FnOnce() -> Option<String>,
+    resolve: impl Fn(&str) -> Option<String>,
+) -> String {
     let configured_shell = configured_shell.trim();
     if !configured_shell.is_empty() {
         return configured_shell.to_string();
@@ -1275,14 +1313,33 @@ fn pane_shell_from(configured_shell: &str, env_shell: Option<String>) -> String 
     #[cfg(windows)]
     {
         let _ = env_shell;
+        let _ = login_shell;
+        let _ = resolve;
         default_pane_shell()
     }
 
     #[cfg(not(windows))]
-    env_shell
-        .map(|shell| shell.trim().to_string())
-        .filter(|shell| !shell.is_empty())
-        .unwrap_or_else(default_pane_shell)
+    {
+        fn non_empty(shell: String) -> Option<String> {
+            let shell = shell.trim();
+            if shell.is_empty() {
+                None
+            } else {
+                Some(shell.to_string())
+            }
+        }
+
+        env_shell
+            .and_then(non_empty)
+            .and_then(|shell| resolve(&shell))
+            .or_else(|| {
+                login_shell()
+                    .and_then(non_empty)
+                    .and_then(|shell| resolve(&shell))
+            })
+            .or_else(|| resolve("bash"))
+            .unwrap_or_else(default_pane_shell)
+    }
 }
 
 #[cfg(windows)]
@@ -2999,39 +3056,148 @@ mod tests {
         output
     }
 
+    /// A fake shell resolver: reports the listed paths/names as the only
+    /// executables present on the host, echoing the candidate back when found.
+    fn installed(present: &'static [&'static str]) -> impl Fn(&str) -> Option<String> {
+        move |candidate: &str| present.contains(&candidate).then(|| candidate.to_string())
+    }
+
     #[test]
     fn pane_shell_prefers_configured_shell() {
+        // Explicit config always wins, verbatim, even if nothing else resolves.
         assert_eq!(
-            pane_shell_from("/usr/bin/nu", Some("/bin/bash".to_string())),
+            pane_shell_from(
+                "/usr/bin/nu",
+                Some("/bin/bash".to_string()),
+                || Some("/usr/bin/zsh".to_string()),
+                installed(&[]),
+            ),
             "/usr/bin/nu"
         );
     }
 
     #[cfg(not(windows))]
     #[test]
-    fn pane_shell_falls_back_to_shell_env() {
+    fn pane_shell_uses_env_shell_when_installed() {
         assert_eq!(
-            pane_shell_from("", Some("/bin/bash".to_string())),
+            pane_shell_from(
+                "",
+                Some("/bin/bash".to_string()),
+                || Some("/usr/bin/zsh".to_string()),
+                installed(&["/bin/bash", "/usr/bin/zsh"]),
+            ),
             "/bin/bash"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_skips_missing_env_shell_and_uses_login_shell() {
+        // $SHELL points at a shell that is not installed on this host, so it is
+        // skipped in favor of the account's (installed) login shell.
+        assert_eq!(
+            pane_shell_from(
+                "",
+                Some("/usr/bin/zsh".to_string()),
+                || Some("/bin/bash".to_string()),
+                installed(&["/bin/bash"]),
+            ),
+            "/bin/bash"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_uses_login_shell_when_env_missing() {
+        assert_eq!(
+            pane_shell_from(
+                "",
+                None,
+                || Some("/usr/bin/zsh".to_string()),
+                installed(&["/usr/bin/zsh"]),
+            ),
+            "/usr/bin/zsh"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_falls_back_to_bash_then_sh() {
+        // No config, no $SHELL, no passwd shell: prefer bash on PATH...
+        assert_eq!(
+            pane_shell_from("", None, || None, installed(&["bash"])),
+            "bash"
+        );
+        // ...and drop to the /bin/sh floor when bash is absent too.
+        assert_eq!(
+            pane_shell_from("", None, || None, installed(&[])),
+            default_pane_shell()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_skips_missing_login_shell_and_uses_bash() {
+        // $SHELL unset, the account login shell is named but not installed, and
+        // bash is present: the login-shell existence check must fall through to
+        // bash rather than launching a shell that does not exist.
+        assert_eq!(
+            pane_shell_from(
+                "",
+                None,
+                || Some("/usr/bin/zsh".to_string()),
+                installed(&["bash"]),
+            ),
+            "bash"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pane_shell_falls_to_sh_when_no_candidate_is_installed() {
+        // Every source names a shell, but none exist on the host → /bin/sh.
+        assert_eq!(
+            pane_shell_from(
+                "",
+                Some("/opt/a".to_string()),
+                || Some("/opt/b".to_string()),
+                installed(&[]),
+            ),
+            default_pane_shell()
         );
     }
 
     #[cfg(windows)]
     #[test]
-    fn pane_shell_ignores_shell_env_on_windows() {
+    fn pane_shell_ignores_env_and_login_shell_on_windows() {
         assert_eq!(
-            pane_shell_from("", Some("c:\\windows\\system32\\cmd.exe".to_string())),
+            pane_shell_from(
+                "",
+                Some("c:\\windows\\system32\\cmd.exe".to_string()),
+                || Some("/usr/bin/zsh".to_string()),
+                installed(&["c:\\windows\\system32\\cmd.exe", "/usr/bin/zsh"]),
+            ),
             default_pane_shell()
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn pane_shell_ignores_empty_values() {
+        // Blank config/$SHELL/login are all skipped; blind fallback finds bash.
         assert_eq!(
-            pane_shell_from("   ", Some("  ".to_string())),
+            pane_shell_from(
+                "   ",
+                Some("  ".to_string()),
+                || Some("  ".to_string()),
+                installed(&["bash"]),
+            ),
+            "bash"
+        );
+        assert_eq!(
+            pane_shell_from("", None, || None, installed(&[])),
             default_pane_shell()
         );
-        assert_eq!(pane_shell_from("", None), default_pane_shell());
     }
 
     #[test]
