@@ -43,7 +43,7 @@
         <link rel="apple-touch-icon" href="/assets/logo.png" />
         <link
             rel="preload"
-            href="/assets/jbm.woff2"
+            href="/assets/jbm.woff2?v=2"
             as="font"
             type="font/woff2"
             crossorigin
@@ -57,7 +57,7 @@
                 document.documentElement.setAttribute("data-palette", saved || system);
             })();
         </script>
-        <link rel="stylesheet" href="/css/style.css?v=42" />
+        <link rel="stylesheet" href="/css/style.css?v=59" />
     </head>
     <body>
         <header class="site-header">
@@ -96,10 +96,11 @@
                     <a href="/docs/socket-api/">API</a>
                 </div>
                 <div class="nav-tools">
-                    <a class="nav-icon-link" href="https://github.com/ogulcancelik/herdr" aria-label="Herdr on GitHub">
+                    <a class="nav-icon-link has-count" href="https://github.com/ogulcancelik/herdr" aria-label="Herdr on GitHub">
                         <svg viewBox="0 0 16 16" aria-hidden="true">
                             <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
                         </svg>
+                        <span class="nav-star-count" data-stat-stars></span>
                     </a>
                     <a class="nav-icon-link" href="https://x.com/herdrdev" aria-label="Herdr on X">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -184,7 +185,7 @@
                             </div>
                         </div>
                     </div>
-                    <p class="hero-note">Stable Linux/macOS · Windows preview beta · no Electron, no account, no telemetry</p>
+                    <p class="hero-note">Stable Linux/macOS · Windows preview beta · no Electron, no account, no telemetry · <a href="/stats/">live stats</a></p>
                 </div>
                 </div>
 
@@ -197,6 +198,7 @@
                         aria-label="Interactive Herdr session mock with workspaces, tabs, agent states, and terminal panes running Claude Code and Codex"
                     >
                         <aside class="mock-sidebar">
+                            <div class="mock-sidebar-half">
                             <div class="mock-sidebar-title">spaces</div>
                             <div class="mock-space active" data-ws="herdr">
                                 <span class="mock-dot dot-working"></span>
@@ -210,12 +212,14 @@
                                 <span class="mock-dot dot-done"></span>
                                 <div><strong>qmp</strong><small>autoresearch/qmp-ra…</small></div>
                             </div>
-                            <div class="mock-sidebar-spacer"></div>
-                            <div class="mock-agent-title"><span>agents</span><span>all</span></div>
-                            <div class="mock-agent working" data-agent="herdr" data-kind="claude" data-ws-link="herdr" data-tab-link="main"><span class="braille-spinner"></span><div><strong>herdr</strong><small>working · claude</small></div></div>
+                            </div>
+                            <div class="mock-sidebar-half mock-sidebar-agents">
+                            <div class="mock-agent-title"><span>agents</span><span>grouped</span></div>
+                            <div class="mock-agent working active" data-agent="herdr" data-kind="claude" data-ws-link="herdr" data-tab-link="main"><span class="braille-spinner"></span><div><strong>herdr</strong><small>working · claude</small></div></div>
                             <div class="mock-agent" data-agent="explore" data-kind="opencode" data-ws-link="herdr" data-tab-link="opencode"><span>✓</span><div><strong>explore</strong><small>idle · opencode</small></div></div>
                             <div class="mock-agent blocked" data-agent="llm-proxy" data-kind="claude" data-ws-link="llm-proxy" data-tab-link="main"><span>◉</span><div><strong>llm-proxy</strong><small>blocked · claude</small></div></div>
                             <div class="mock-agent done" data-agent="qmp" data-kind="codex" data-ws-link="qmp" data-tab-link="main"><span>●</span><div><strong>qmp</strong><small>done · codex</small></div></div>
+                            </div>
                         </aside>
                         <section class="mock-main">
                             <div class="mock-view active" data-view="herdr">
@@ -223,30 +227,38 @@
                                     <span data-tab="opencode">opencode</span><span class="active" data-tab="main">herdr</span><span>+</span>
                                 </div>
                                 <div class="mock-panes active" data-tab="main">
-                                    <div class="mock-pane focused tui">
-                                        <div class="cc-head"><span class="cc-mark">✻</span> <b>Claude Code</b> <span class="dim">v2.1.168</span></div>
-                                        <div class="dim">&nbsp;&nbsp;~/Projects/herdr · master</div>
+                                    <div class="mock-pane focused tui" data-title="claude">
+                                        <div class="cc-header">
+                                            <pre class="cc-logo-art"> ▐▛███▜▌
+▝▜█████▛▘
+  ▘▘ ▝▝</pre>
+                                            <div class="cc-header-text">
+                                                <div><b>Claude Code</b> <span class="dim">v2.1.198</span></div>
+                                                <div class="dim">Fable 5 with high effort · Claude Max</div>
+                                                <div class="dim">~/Projects/herdr/website</div>
+                                            </div>
+                                        </div>
                                         <br />
-                                        <div><b>❯</b> the sidebar flickers when an agent flips state fast</div>
+                                        <div><b>❯</b> make the herdr.dev hero mock look exactly like real claude code</div>
                                         <br />
-                                        <div><span class="cc-bullet">●</span> Found it. The rollup recomputes on every PTY chunk, so a double state flip repaints the dot mid-frame.</div>
+                                        <div><span class="cc-bullet">●</span> Ha. I read the real pane over the socket — the mock was on v2.1.168, Claude Code is <span class="cc-file">v2.1.198</span> now. Missing the logo block and the whole rate-limit row.</div>
                                         <br />
                                         <div><span class="cc-bullet">●</span> Plan:</div>
-                                        <div class="dim">&nbsp;&nbsp;· src/app/state.rs — buffer state events per tick</div>
-                                        <div class="dim">&nbsp;&nbsp;· src/ui/sidebar.rs — repaint rollups once per frame</div>
+                                        <div class="dim">&nbsp;&nbsp;· index.html — swap ✻ for the real ▐▛███▜▌ mark, bump the version</div>
+                                        <div class="dim">&nbsp;&nbsp;· css/style.css — coral bypass line, add the 5h / Week bars</div>
                                         <br />
-                                        <div><b>❯</b> go, and add a regression test</div>
+                                        <div><b>❯</b> perfect. and make the dialogue about this, obviously</div>
                                         <br />
-                                        <div><span class="cc-working"><span class="braille-spinner">⠋</span> Working…</span> <span class="dim">(<span id="cc-timer">13m 36s</span> · esc to interrupt)</span></div>
+                                        <div><span class="cc-working"><span class="braille-spinner">⠋</span> Baking…</span> <span class="dim">(<span id="cc-timer">13m 36s</span> · esc to interrupt)</span></div>
                                         <div class="tui-bottom">
                                             <div class="cc-rule"></div>
                                             <div><b>❯</b> <span class="cursor"></span></div>
                                             <div class="cc-rule"></div>
-                                            <div class="dim">~/Projects/herdr &gt; master &gt; ctx ─── 3% 34k/1M</div>
-                                            <div class="dim">&gt;&gt; bypass permissions on (shift+tab to cycle)</div>
+                                            <div class="cc-status">&nbsp;&nbsp;<span class="cc-cyan">~/Projects/herdr/website</span><span class="cc-gy"> &gt; </span><span class="cc-yellow">master *</span><span class="green"> ↑1</span><span class="cc-gy"> &gt; ctx ──────── </span><span class="green">3%</span><span class="cc-gy"> 31k/1M</span></div>
+                                            <div class="cc-status">&nbsp;&nbsp;<span class="cc-coral">⏵⏵ bypass permissions on</span> <span class="dim">(shift+tab to cycle)</span></div>
                                         </div>
                                     </div>
-                                    <div class="mock-pane">
+                                    <div class="mock-pane" data-title="bun">
                                         <div class="mock-prompt"><span>~/Projects/herdr</span> <em>master</em></div>
                                         <div><b>❯</b> <span class="cmd">bun</span> run dev</div>
                                         <div class="dim">$ node scripts/prepare-docs.mjs && astro dev</div>
@@ -292,8 +304,16 @@
                                 </div>
                                 <div class="mock-panes single active" data-tab="main">
                                     <div class="mock-pane focused tui">
-                                        <div class="cc-head"><span class="cc-mark">✻</span> <b>Claude Code</b> <span class="dim">v2.1.168</span></div>
-                                        <div class="dim">&nbsp;&nbsp;~/Projects/llm-proxy · master</div>
+                                        <div class="cc-header">
+                                            <pre class="cc-logo-art"> ▐▛███▜▌
+▝▜█████▛▘
+  ▘▘ ▝▝</pre>
+                                            <div class="cc-header-text">
+                                                <div><b>Claude Code</b> <span class="dim">v2.1.198</span></div>
+                                                <div class="dim">Fable 5 with high effort · Claude Max</div>
+                                                <div class="dim">~/Projects/llm-proxy</div>
+                                            </div>
+                                        </div>
                                         <br />
                                         <div><b>❯</b> prep the request-log migration and run it</div>
                                         <br />
@@ -375,54 +395,6 @@
                         The whole herd in one terminal. Click the sidebar, it's a real layout.
                     </figcaption>
                 </figure>
-                </div>
-            </section>
-
-            <section class="logo-cloud" aria-labelledby="logo-cloud-title">
-                <div class="logo-cloud-heading">
-                    <p class="section-kicker"># used in the wild</p>
-                    <h2 id="logo-cloud-title">Popular with engineers from</h2>
-                    <p class="logo-cloud-note">Individual engineers, not company endorsements.</p>
-                </div>
-                <div class="logo-marquee" aria-label="Company logos">
-                    <div class="logo-track">
-                        <div class="logo-row">
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/jetbrains.svg" alt="JetBrains" /><span>JetBrains</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/docker.svg" alt="Docker" /><span>Docker</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/vercel.svg" alt="Vercel" /><span>Vercel</span></div>
-                            <div class="logo-card"><img width="94" height="32" src="/assets/company-logos/kimi-with-icon-light.svg" alt="Kimi" /><span>Kimi</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/sentry.svg" alt="Sentry" /><span>Sentry</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/google.svg" alt="Google" /><span>Google</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/nvidia.svg" alt="NVIDIA" /><span>NVIDIA</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/aws.svg" alt="AWS" /><span>AWS</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/bytedance.svg" alt="ByteDance" /><span>ByteDance</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/tencent.svg" alt="Tencent" /><span>Tencent</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/alibaba.svg" alt="Alibaba" /><span>Alibaba</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/salesforce.svg" alt="Salesforce" /><span>Salesforce</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/ibm.svg" alt="IBM" /><span>IBM</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/atlassian.svg" alt="Atlassian" /><span>Atlassian</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/whop.svg?v=2" alt="Whop" /><span>Whop</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/automattic.svg" alt="Automattic" /><span>Automattic</span></div>
-                        </div>
-                        <div class="logo-row" aria-hidden="true">
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/jetbrains.svg" alt="" /><span>JetBrains</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/docker.svg" alt="" /><span>Docker</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/vercel.svg" alt="" /><span>Vercel</span></div>
-                            <div class="logo-card"><img width="94" height="32" src="/assets/company-logos/kimi-with-icon-light.svg" alt="" /><span>Kimi</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/sentry.svg" alt="" /><span>Sentry</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/google.svg" alt="" /><span>Google</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/nvidia.svg" alt="" /><span>NVIDIA</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/aws.svg" alt="" /><span>AWS</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/bytedance.svg" alt="" /><span>ByteDance</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/tencent.svg" alt="" /><span>Tencent</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/alibaba.svg" alt="" /><span>Alibaba</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/salesforce.svg" alt="" /><span>Salesforce</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/ibm.svg" alt="" /><span>IBM</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/atlassian.svg" alt="" /><span>Atlassian</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/whop.svg?v=2" alt="" /><span>Whop</span></div>
-                            <div class="logo-card"><img width="82" height="22" src="/assets/company-logos/automattic.svg" alt="" /><span>Automattic</span></div>
-                        </div>
-                    </div>
                 </div>
             </section>
 
@@ -694,6 +666,68 @@ $ herdr</code></pre>
                 </div>
             </section>
 
+            <section class="section marketplace-teaser" id="marketplace">
+                <div class="marketplace-teaser-top">
+                    <div class="marketplace-teaser-copy">
+                        <p class="section-kicker"># marketplace</p>
+                        <h2>Make it yours.</h2>
+                        <p class="marketplace-teaser-lede">
+                            Review diffs beside the agent. Approve from your phone.
+                            Navigate like vim. Watch your agents graze as pixel-art
+                            sheep. If herdr doesn't do it, one of
+                            <span data-plugin-count>150+</span> community plugins
+                            does, or you publish your own with one GitHub topic.
+                        </p>
+                        <div class="hero-actions">
+                            <a class="button button-primary" href="/plugins/">Browse plugins</a>
+                            <a class="button button-secondary" href="/docs/plugins/">Build a plugin</a>
+                        </div>
+                    </div>
+                    <div class="marketplace-teaser-install">
+                        <div class="install-card" aria-label="Plugin install command">
+                            <span class="prompt">$</span>
+                            <code>herdr plugin install &lt;owner&gt;/&lt;repo&gt;</code>
+                        </div>
+                        <p class="marketplace-install-output"># any public repo tagged herdr-plugin</p>
+                        <p class="marketplace-install-note">
+                            <span data-plugin-count>150+</span> community plugins, auto-discovered from GitHub
+                        </p>
+                    </div>
+                </div>
+                <div class="marketplace-teaser-grid">
+                    <a class="mp-chip" href="https://github.com/smarzban/herdr-file-viewer" target="_blank" rel="noopener" data-repo="smarzban/herdr-file-viewer">
+                        <span class="mp-chip-name">smarzban/<b>herdr-file-viewer</b></span>
+                        <span class="mp-chip-desc">Git-aware file tree, diffs, and rendered markdown in a side pane.</span>
+                        <span class="mp-chip-meta">Rust</span>
+                    </a>
+                    <a class="mp-chip" href="https://github.com/persiyanov/herdr-reviewr" target="_blank" rel="noopener" data-repo="persiyanov/herdr-reviewr">
+                        <span class="mp-chip-name">persiyanov/<b>herdr-reviewr</b></span>
+                        <span class="mp-chip-desc">Review the agent's diff, comment on lines, send notes back to its prompt.</span>
+                        <span class="mp-chip-meta">Rust</span>
+                    </a>
+                    <a class="mp-chip" href="https://github.com/paulbkim-dev/vim-herdr-navigation" target="_blank" rel="noopener" data-repo="paulbkim-dev/vim-herdr-navigation">
+                        <span class="mp-chip-name">paulbkim-dev/<b>vim-herdr-navigation</b></span>
+                        <span class="mp-chip-desc">Ctrl+h/j/k/l moves seamlessly across herdr panes and vim splits.</span>
+                        <span class="mp-chip-meta">Shell</span>
+                    </a>
+                    <a class="mp-chip" href="https://github.com/yuk1ty/herdr-spreader" target="_blank" rel="noopener" data-repo="yuk1ty/herdr-spreader">
+                        <span class="mp-chip-name">yuk1ty/<b>herdr-spreader</b></span>
+                        <span class="mp-chip-desc">Whole workspace layouts, tabs, panes and commands, from one YAML file.</span>
+                        <span class="mp-chip-meta">Rust</span>
+                    </a>
+                    <a class="mp-chip" href="https://github.com/AltanS/collie" target="_blank" rel="noopener" data-repo="AltanS/collie">
+                        <span class="mp-chip-name">AltanS/<b>collie</b></span>
+                        <span class="mp-chip-desc">A phone PWA for your herd over Tailscale, with push when an agent needs you.</span>
+                        <span class="mp-chip-meta">TypeScript</span>
+                    </a>
+                    <a class="mp-chip" href="https://github.com/ragamo/herdr-flock" target="_blank" rel="noopener" data-repo="ragamo/herdr-flock">
+                        <span class="mp-chip-name">ragamo/<b>herdr-flock</b></span>
+                        <span class="mp-chip-desc">Your agents as pixel-art sheep on a farm. Ended sessions rest in the graveyard.</span>
+                        <span class="mp-chip-meta">Rust</span>
+                    </a>
+                </div>
+            </section>
+
             <section class="section capability-section">
                 <div class="section-heading-wide">
                     <div>
@@ -774,37 +808,6 @@ $ herdr</code></pre>
                     <a href="/docs/integrations/">Integrations</a> add richer
                     state and session resume.
                 </p>
-            </section>
-
-            <section class="section marketplace-teaser" id="marketplace">
-                <div class="marketplace-teaser-copy">
-                    <p class="section-kicker"># marketplace</p>
-                    <h2>Built on, not just with.</h2>
-                    <p class="marketplace-teaser-lede">
-                        Herdr's CLI and socket API are the plugin surface, so
-                        community plugins drive it like an agent does: notifiers,
-                        layout presets, link handlers, release checks. Browse what
-                        people built, or publish your own with one GitHub topic.
-                    </p>
-                    <div class="hero-actions">
-                        <a class="button button-primary" href="/plugins/">Browse plugins</a>
-                        <a class="button button-secondary" href="/docs/plugins/">Build a plugin</a>
-                    </div>
-                </div>
-                <div class="marketplace-teaser-grid">
-                    <a class="mp-chip" href="https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify" target="_blank" rel="noopener">
-                        <span class="mp-chip-name">Agent Telegram Notify</span>
-                        <span class="mp-chip-desc">Telegram message when an agent finishes.</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/github-link-preview" target="_blank" rel="noopener">
-                        <span class="mp-chip-name">GitHub Link Preview</span>
-                        <span class="mp-chip-desc">Open clicked issue and PR links in a side pane.</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/dev-layout-bootstrap" target="_blank" rel="noopener">
-                        <span class="mp-chip-name">Dev Layout Bootstrap</span>
-                        <span class="mp-chip-desc">A three-pane dev layout around the current pane.</span>
-                    </a>
-                </div>
             </section>
 
             <section class="final-cta">
@@ -901,6 +904,48 @@ $ herdr</code></pre>
             </div>
         </div>
 
+        <script>
+            (function () {
+                fetch("https://assets.herdr.dev/plugins/index.json")
+                    .then(function (res) {
+                        return res.ok ? res.json() : null;
+                    })
+                    .then(function (data) {
+                        if (!data || !Array.isArray(data.plugins)) return;
+                        document.querySelectorAll("[data-plugin-count]").forEach(function (el) {
+                            el.textContent = String(data.plugins.length);
+                        });
+                        var byName = {};
+                        data.plugins.forEach(function (p) {
+                            byName[p.fullName] = p;
+                        });
+                        document.querySelectorAll(".mp-chip[data-repo]").forEach(function (chip) {
+                            var p = byName[chip.getAttribute("data-repo")];
+                            if (!p || typeof p.stars !== "number") return;
+                            var meta = chip.querySelector(".mp-chip-meta");
+                            if (meta) meta.textContent = "★ " + p.stars + " · " + meta.textContent;
+                        });
+                    })
+                    .catch(function () {});
+
+                fetch("https://assets.herdr.dev/stats/stats.json")
+                    .then(function (res) {
+                        return res.ok ? res.json() : null;
+                    })
+                    .then(function (data) {
+                        var stars = data && data.stars && data.stars.total;
+                        if (typeof stars !== "number") return;
+                        var compact =
+                            stars >= 1000
+                                ? (stars / 1000).toFixed(1).replace(/\.0$/, "") + "k"
+                                : String(stars);
+                        document.querySelectorAll("[data-stat-stars]").forEach(function (el) {
+                            el.textContent = compact;
+                        });
+                    })
+                    .catch(function () {});
+            })();
+        </script>
         <script>
             (function () {
                 var overlay = document.getElementById("theme-overlay");
@@ -1080,38 +1125,6 @@ $ herdr</code></pre>
             })();
 
             (function () {
-                var reduceMotion = window.matchMedia(
-                    "(prefers-reduced-motion: reduce)",
-                ).matches;
-                if (reduceMotion) return;
-
-                document.querySelectorAll(".logo-marquee").forEach(function (marquee) {
-                    var track = marquee.querySelector(".logo-track");
-                    if (!track || !track.getAnimations) return;
-
-                    function setPlaybackRate(rate) {
-                        var animation = track.getAnimations().find(function (candidate) {
-                            return candidate.animationName === "logo-marquee";
-                        });
-                        if (!animation) return;
-
-                        if (animation.updatePlaybackRate) {
-                            animation.updatePlaybackRate(rate);
-                        } else {
-                            animation.playbackRate = rate;
-                        }
-                    }
-
-                    marquee.addEventListener("mouseenter", function () {
-                        setPlaybackRate(0.6);
-                    });
-                    marquee.addEventListener("mouseleave", function () {
-                        setPlaybackRate(1);
-                    });
-                });
-            })();
-
-            (function () {
                 var copyButton = document.getElementById("copy-btn");
                 var command = document.getElementById("install-cmd");
                 var methods = Array.prototype.slice.call(
@@ -1172,6 +1185,20 @@ $ herdr</code></pre>
                 var mock = document.getElementById("herd-mock");
                 if (!mock) return;
 
+                function syncAgents() {
+                    var view = mock.querySelector(".mock-view.active");
+                    var tab = view && view.querySelector(".mock-tabs span.active");
+                    var ws = view && view.getAttribute("data-view");
+                    var tabId = tab && tab.getAttribute("data-tab");
+                    mock.querySelectorAll(".mock-agent").forEach(function (a) {
+                        a.classList.toggle(
+                            "active",
+                            a.getAttribute("data-ws-link") === ws &&
+                                a.getAttribute("data-tab-link") === tabId
+                        );
+                    });
+                }
+
                 function selectTab(tab) {
                     var target = tab.getAttribute("data-tab");
                     if (!target) return;
@@ -1183,6 +1210,7 @@ $ herdr</code></pre>
                     view.querySelectorAll(".mock-panes").forEach(function (panes) {
                         panes.classList.toggle("active", panes.getAttribute("data-tab") === target);
                     });
+                    syncAgents();
                 }
 
                 function activateWorkspace(id, tabId) {
@@ -1197,6 +1225,7 @@ $ herdr</code></pre>
                         var tab = view && view.querySelector('.mock-tabs span[data-tab="' + tabId + '"]');
                         if (tab) selectTab(tab);
                     }
+                    syncAgents();
                 }
 
                 mock.querySelectorAll(".mock-space").forEach(function (ws) {

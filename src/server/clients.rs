@@ -20,6 +20,14 @@ pub(crate) type RenderTarget = (
     ClientConnectionMode,
 );
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DeferredRender {
+    #[default]
+    None,
+    Graphics,
+    Full,
+}
+
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
     /// Whether this connection is the full app client or a direct terminal attach.
@@ -50,8 +58,10 @@ pub(crate) struct ClientConnection {
     pub(crate) graphics_cache: crate::kitty_graphics::HostGraphicsCache,
     /// Whether the next graphics frame must clear and rebuild host-side Kitty state.
     pub(crate) graphics_surface_reset_pending: bool,
-    /// Whether a render was skipped because the render channel was full.
+    /// Whether an ordinary render was skipped because the render channel was full.
     pub(crate) render_pending: bool,
+    /// Whether a pane-graphics-only render was skipped because the channel was full.
+    pane_graphics_render_pending: bool,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Temporary files staged from this client's local clipboard image pastes.
@@ -115,6 +125,7 @@ impl ClientConnection {
             graphics_cache: crate::kitty_graphics::HostGraphicsCache::default(),
             graphics_surface_reset_pending: false,
             render_pending: false,
+            pane_graphics_render_pending: false,
             host_mouse_capture_active: None,
             staged_clipboard_files: Vec::new(),
             writer,
@@ -124,6 +135,39 @@ impl ClientConnection {
     pub(crate) fn request_full_redraw(&mut self) {
         self.render_state.reset_baseline();
         self.graphics_surface_reset_pending = true;
+        self.pane_graphics_render_pending = false;
+    }
+
+    pub(crate) fn deferred_render(&self) -> DeferredRender {
+        if self.render_pending {
+            DeferredRender::Full
+        } else if self.pane_graphics_render_pending {
+            DeferredRender::Graphics
+        } else {
+            DeferredRender::None
+        }
+    }
+
+    pub(crate) fn clear_deferred_render(&mut self) {
+        self.render_pending = false;
+        self.pane_graphics_render_pending = false;
+    }
+
+    pub(crate) fn defer_full_render(&mut self) {
+        self.render_pending = true;
+        self.pane_graphics_render_pending = false;
+    }
+
+    pub(crate) fn defer_pane_graphics_render(&mut self) {
+        if !self.render_pending {
+            self.pane_graphics_render_pending = true;
+        }
+    }
+
+    pub(crate) fn take_deferred_render(&mut self) -> DeferredRender {
+        let deferred = self.deferred_render();
+        self.clear_deferred_render();
+        deferred
     }
 
     pub(crate) fn is_full_app_client(&self) -> bool {

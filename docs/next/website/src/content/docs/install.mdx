@@ -19,7 +19,7 @@ On Windows preview beta, install the preview channel:
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
-The installer downloads the right release binary for your platform and places it on your PATH. The Windows installer defaults to preview, writes that channel to Herdr's config, uses versioned install folders, and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
+The installer downloads the right release binary for your platform and places it on your PATH. Herdr defaults to preview on Windows without changing your config. The installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
 
 ## Install with Homebrew
 

@@ -3,10 +3,12 @@
     font-style: normal;
     font-weight: 400 700;
     font-display: swap;
-    src: url("/assets/jbm.woff2") format("woff2");
+    src: url("/assets/jbm.woff2?v=2") format("woff2");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC,
         U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F,
-        U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+        U+20AC, U+2122, U+2190-2193, U+2212, U+2215, U+2500-2503,
+        U+2514, U+2580-259F, U+25C9, U+25CF, U+2713, U+276F,
+        U+FEFF, U+FFFD;
 }
 
 :root {
@@ -1278,14 +1280,15 @@ samp {
     border-radius: 50%;
 }
 
-.mock-sidebar-spacer {
-    flex: 1;
-    min-height: 4rem;
+/* Two equal halves, like the TUI's default sidebar_section_split of 0.5. */
+.mock-sidebar-half {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
-.herdr-ui-mock .mock-sidebar-spacer {
-    flex: 1 1 0;
-    min-height: 0.5rem;
+.mock-sidebar-agents {
+    border-top: 1px solid var(--term-border);
 }
 
 .mock-sidebar-row,
@@ -1311,6 +1314,10 @@ samp {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 0.4rem;
     padding: 0.38rem 0.7rem;
+}
+
+.mock-agent.active {
+    background: var(--term-active-bg);
 }
 
 .mock-agent > span {
@@ -1370,22 +1377,63 @@ samp {
 .mock-panes {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 0.45rem;
+    gap: 1ch;
     min-height: 0;
-    padding: 0.45rem;
+    padding: 0;
 }
 
 .mock-pane {
+    position: relative;
     min-width: 0;
     overflow: hidden;
-    border: 1px solid var(--term-border);
     background: var(--term-bg);
-    padding: 0.75rem;
+    padding: 1lh 1.4ch;
 }
 
-.mock-pane.focused {
-    border: 2px solid var(--term-tab-active-bg);
-    padding: calc(0.75rem - 1px);
+/* Border line runs through the middle of the edge cell, like a box-drawing glyph. */
+.mock-pane::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    translate: -50% -50%;
+    width: calc(100% - 1ch);
+    height: calc(100% - 1lh);
+    border: 1px solid var(--term-border);
+    pointer-events: none;
+}
+
+.mock-pane.focused::before {
+    border-color: var(--accent);
+}
+
+/* Pane title embedded in the top border, one cell in from the left. */
+.mock-pane[data-title]::after {
+    content: attr(data-title);
+    position: absolute;
+    top: 0.5lh;
+    left: 2ch;
+    translate: 0 -50%;
+    padding: 0 0.6ch;
+    background: var(--term-bg);
+    color: var(--term-muted);
+    line-height: 1.1;
+    pointer-events: none;
+}
+
+.mock-pane.focused[data-title]::after {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+/* Single-pane tabs draw no pane chrome, matching the TUI's multi-pane gate. */
+.mock-panes.single .mock-pane::before,
+.mock-panes.single .mock-pane::after {
+    content: none;
+}
+
+.mock-panes.single .mock-pane {
+    padding: 0.5lh 1.4ch;
 }
 
 .mock-prompt {
@@ -1464,90 +1512,41 @@ samp {
     border: 1px solid var(--line-strong);
 }
 
-.logo-cloud {
-    max-width: var(--max);
-    margin: 0 auto;
-    padding: 2.5rem 1.25rem 3rem;
-    overflow: hidden;
-}
-
-.logo-cloud-heading {
-    margin-bottom: 0.8rem;
-    text-align: center;
-}
-
-.logo-cloud-heading .section-kicker {
-    margin-bottom: 0.4rem;
-}
-
-.logo-cloud-heading h2 {
-    margin: 0;
-    color: var(--muted);
-    font-size: clamp(1rem, 2vw, 1.25rem);
-    line-height: 1.25;
-    letter-spacing: -0.02em;
-    font-family: var(--body);
-    font-weight: 400;
-}
-
-.logo-cloud-note {
-    margin: 0.35rem 0 0;
-    color: var(--muted-2);
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    line-height: 1.4;
-}
-
-.logo-marquee {
-    position: relative;
-    overflow: hidden;
-    border-top: 1px solid var(--line);
-    border-bottom: 1px solid var(--line);
-    padding: 0.5rem 0;
-}
-
-.logo-track {
-    display: flex;
-    width: max-content;
-    animation: logo-marquee 24s linear infinite;
-}
-
-.logo-row {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 0.5rem;
-    padding: 0.25rem 0.25rem;
-}
-
-.logo-card {
-    width: 140px;
-    height: 50px;
-    display: grid;
-    place-items: center;
-    padding: 0.4rem 0.75rem;
-    color: var(--muted);
-}
-
-.logo-card img {
+.nav-icon-link.has-count {
     width: auto;
-    height: 26px;
-    max-width: 110px;
-    object-fit: contain;
-    opacity: var(--logo-opacity);
-    filter: var(--logo-filter);
-    transition: opacity 0.2s, filter 0.2s;
+    padding-inline: 0.55rem;
+    gap: 0.35rem;
 }
 
-.logo-card img:hover {
-    opacity: 0.95;
+.nav-icon-link.has-count:has(.nav-star-count:empty) {
+    width: 2.1rem;
+    padding-inline: 0;
+    gap: 0;
 }
 
-.logo-card span {
-    display: none;
+.nav-star-count {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1;
+}
+
+.hero-note a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.12s ease;
+}
+
+.hero-note a:hover {
+    color: var(--accent);
 }
 
 .community-section {
     padding-top: 4.25rem;
+}
+
+.section.community-section {
+    border-top: none;
 }
 
 .community-video-grid {
@@ -1654,12 +1653,6 @@ samp {
     color: var(--muted);
     font-size: 0.9rem;
     line-height: 1.55;
-}
-
-@keyframes logo-marquee {
-    to {
-        transform: translateX(-50%);
-    }
 }
 
 @keyframes theme-hint-pulse {
@@ -2494,7 +2487,6 @@ td:last-child {
 
     .section,
     .demo-section,
-    .logo-cloud,
     .footer,
     .final-cta {
         padding-inline: 1rem;
@@ -2536,20 +2528,6 @@ td:last-child {
 
     .demo-video {
         border-radius: var(--radius-md);
-    }
-
-    .logo-cloud {
-        padding-bottom: 2.5rem;
-    }
-
-    .logo-card {
-        width: 120px;
-        height: 46px;
-    }
-
-    .logo-card img {
-        height: 24px;
-        max-width: 92px;
     }
 
     .section {
@@ -2665,9 +2643,14 @@ td:last-child {
     .footer {
         flex-direction: column;
         align-items: flex-start;
+        padding-bottom: 4.5rem;
     }
 
     .footer div {
+        justify-content: flex-start;
+    }
+
+    .footer .footer-social {
         justify-content: flex-start;
     }
 }
@@ -2726,10 +2709,6 @@ td:last-child {
         padding: 0.24rem 0.45rem;
     }
 
-    .herdr-ui-mock .mock-sidebar-spacer {
-        flex: 0 0 0.35rem;
-    }
-
     .mock-tabs {
         height: 1.05rem;
     }
@@ -2742,15 +2721,7 @@ td:last-child {
     .mock-panes {
         grid-template-columns: 1fr;
         gap: 0;
-        padding: 0.35rem;
-    }
-
-    .mock-pane {
-        padding: 0.45rem;
-    }
-
-    .mock-pane.focused {
-        padding: calc(0.45rem - 1px);
+        padding: 0;
     }
 
     .mock-pane:nth-child(2) {
@@ -2759,15 +2730,6 @@ td:last-child {
 
     .mock-pane pre {
         margin: 0.35rem 0 0.45rem;
-    }
-
-    .logo-card {
-        width: 110px;
-    }
-
-    .logo-card img {
-        height: 22px;
-        max-width: 88px;
     }
 
     .mobile-proof,
@@ -3336,6 +3298,57 @@ td:last-child {
     color: #d97757;
 }
 
+/* Claude Code header logo + status footer — colors hardcoded to match the
+   real agent UI, not the site theme (the pane renders the agent, not herdr) */
+.cc-header {
+    display: flex;
+    gap: 0.6em;
+    align-items: center;
+}
+
+.herdr-ui-mock .cc-logo-art {
+    margin: 0;
+    color: #d97757;
+    line-height: 1;
+    white-space: pre;
+    font-family: var(--mono);
+}
+
+.cc-header-text {
+    min-width: 0;
+}
+
+.cc-header-text > div {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cc-status {
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.cc-file {
+    color: #b1b9f9;
+}
+
+.cc-cyan {
+    color: #4ec9d4;
+}
+
+.cc-yellow {
+    color: #d7ba7d;
+}
+
+.cc-coral {
+    color: #ff6b80;
+}
+
+.cc-gy {
+    color: var(--term-dim);
+}
+
 .cx-bullet {
     color: var(--accent);
 }
@@ -3422,10 +3435,6 @@ td:last-child {
     margin-top: 0.18em;
 }
 
-.herdr-ui-mock .mock-sidebar-spacer {
-    min-height: 0.2rem;
-}
-
 /* attach: sidebar populates once on load; view switches fade without movement */
 @keyframes mock-attach {
     from {
@@ -3477,12 +3486,45 @@ td:last-child {
 
 /* Homepage marketplace teaser */
 .marketplace-teaser {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 3rem;
-    align-items: center;
+    display: block;
     padding-block: 4.5rem;
     border-bottom: 1px solid var(--line);
+}
+
+.marketplace-teaser-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: 3rem;
+    align-items: center;
+}
+
+.marketplace-teaser-install {
+    display: grid;
+    gap: 0.55rem;
+    align-content: center;
+}
+
+.marketplace-install-output {
+    margin: 0;
+    padding-inline: 0.9rem;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.82rem;
+}
+
+.marketplace-install-note {
+    margin: 0;
+    padding-inline: 0.9rem;
+    color: var(--muted-2);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+}
+
+@media (max-width: 50rem) {
+    .marketplace-teaser-top {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+    }
 }
 
 .marketplace-teaser-copy h2 {
@@ -3505,7 +3547,15 @@ td:last-child {
 
 .marketplace-teaser-grid {
     display: grid;
+    grid-template-columns: repeat(3, 1fr);
     gap: 0.75rem;
+    margin-top: 2.5rem;
+}
+
+@media (max-width: 68rem) {
+    .marketplace-teaser-grid {
+        grid-template-columns: 1fr 1fr;
+    }
 }
 
 .mp-chip {
@@ -3545,9 +3595,11 @@ td:last-child {
 
 @media (max-width: 50rem) {
     .marketplace-teaser {
-        grid-template-columns: 1fr;
-        gap: 2rem;
         padding-block: 3.5rem;
+    }
+
+    .marketplace-teaser-grid {
+        grid-template-columns: 1fr;
     }
 }
 

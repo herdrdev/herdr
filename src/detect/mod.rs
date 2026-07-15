@@ -61,10 +61,11 @@ pub enum Agent {
     Hermes,
     Kilo,
     Qodercli,
+    Maki,
 }
 
 impl Agent {
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 18] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 19] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -83,6 +84,7 @@ impl Agent {
         Self::Hermes,
         Self::Kilo,
         Self::Qodercli,
+        Self::Maki,
     ];
 }
 
@@ -108,12 +110,22 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
+        Agent::Maki => "maki",
     }
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
     let name = normalized_agent_lookup_name(agent);
-    match name.as_str() {
+    parse_canonical_agent_label(&name).or_else(|| lookup_agent(&name))
+}
+
+pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
+    let agent = lookup_agent(label)?;
+    (agent_label(agent) == label).then_some(agent)
+}
+
+fn lookup_agent(name: &str) -> Option<Agent> {
+    match name {
         "pi" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
         "codex" => Some(Agent::Codex),
@@ -134,6 +146,7 @@ pub fn parse_agent_label(agent: &str) -> Option<Agent> {
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
+        "maki" => Some(Agent::Maki),
         _ => None,
     }
 }
@@ -141,31 +154,7 @@ pub fn parse_agent_label(agent: &str) -> Option<Agent> {
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.
 pub fn identify_agent(process_name: &str) -> Option<Agent> {
-    let name = normalized_agent_lookup_name(process_name);
-    // Match against known binary names
-    match name.as_str() {
-        "pi" => Some(Agent::Pi),
-        "claude" | "claude-code" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
-        "gemini" => Some(Agent::Gemini),
-        "cursor" | "cursor-agent" => Some(Agent::Cursor),
-        "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
-        "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
-        "cline" => Some(Agent::Cline),
-        "omp" => Some(Agent::Omp),
-        "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
-        "opencode" | "open-code" => Some(Agent::OpenCode),
-        "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
-        "kimi" | "kimi-code" | "kimi code" => Some(Agent::Kimi),
-        "kiro" | "kiro-cli" => Some(Agent::Kiro),
-        "droid" => Some(Agent::Droid),
-        "amp" | "amp-local" => Some(Agent::Amp),
-        "grok" | "grok-build" => Some(Agent::Grok),
-        "hermes" | "hermes-agent" => Some(Agent::Hermes),
-        "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
-        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
-        _ => None,
-    }
+    parse_agent_label(process_name)
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
@@ -642,6 +631,7 @@ mod tests {
         assert_eq!(identify_agent("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(identify_agent("maki"), Some(Agent::Maki));
     }
 
     #[test]
@@ -666,22 +656,49 @@ mod tests {
         assert_eq!(parse_agent_label("kiro-cli"), Some(Agent::Kiro));
         assert_eq!(parse_agent_label("grok-build"), Some(Agent::Grok));
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
+        assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
     }
 
     #[test]
-    fn agent_labels_use_display_names() {
-        assert_eq!(agent_label(Agent::Pi), "pi");
-        assert_eq!(agent_label(Agent::GithubCopilot), "copilot");
-        assert_eq!(agent_label(Agent::OpenCode), "opencode");
-        assert_eq!(agent_label(Agent::Devin), "devin");
-        assert_eq!(agent_label(Agent::Antigravity), "agy");
-        assert_eq!(agent_label(Agent::Omp), "omp");
-        assert_eq!(agent_label(Agent::Mastracode), "mastracode");
-        assert_eq!(agent_label(Agent::Kiro), "kiro");
-        assert_eq!(agent_label(Agent::Grok), "grok");
-        assert_eq!(agent_label(Agent::Hermes), "hermes");
-        assert_eq!(agent_label(Agent::Kilo), "kilo");
+    fn every_agent_label_round_trips_through_canonical_and_alias_parsers() {
+        let agents = [
+            Agent::Pi,
+            Agent::Claude,
+            Agent::Codex,
+            Agent::Gemini,
+            Agent::Cursor,
+            Agent::Devin,
+            Agent::Antigravity,
+            Agent::Cline,
+            Agent::Omp,
+            Agent::Mastracode,
+            Agent::OpenCode,
+            Agent::GithubCopilot,
+            Agent::Kimi,
+            Agent::Kiro,
+            Agent::Droid,
+            Agent::Amp,
+            Agent::Grok,
+            Agent::Hermes,
+            Agent::Kilo,
+            Agent::Qodercli,
+            Agent::Maki,
+        ];
+
+        for agent in agents {
+            let label = agent_label(agent);
+            assert_eq!(parse_canonical_agent_label(label), Some(agent));
+            assert_eq!(parse_agent_label(label), Some(agent));
+        }
+    }
+
+    #[test]
+    fn canonical_agent_labels_are_strict() {
+        assert_eq!(parse_canonical_agent_label("claude-code"), None);
+        assert_eq!(parse_canonical_agent_label("Pi"), None);
+        assert_eq!(parse_canonical_agent_label(" pi "), None);
+        assert_eq!(parse_canonical_agent_label("opencode.exe"), None);
     }
 
     #[test]
@@ -1081,19 +1098,23 @@ mod tests {
     // ---- Process identification (real PTY) ----
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn foreground_job_detects_sleep() {
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
+    fn open_test_pty() -> portable_pty::PtyPair {
+        portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize {
                 rows: 24,
                 cols: 80,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .expect("failed to open pty");
+            .expect("failed to open pty")
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_job_detects_sleep() {
+        use portable_pty::CommandBuilder;
+
+        let pair = open_test_pty();
 
         // Spawn "sleep 999" — a known, deterministic process
         let mut cmd = CommandBuilder::new("sleep");
@@ -1123,18 +1144,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn foreground_job_detects_shell_running_command() {
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use portable_pty::CommandBuilder;
         use std::io::Write;
 
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("failed to open pty");
+        let pair = open_test_pty();
 
         // Spawn a shell, then run a command inside it
         let cmd = CommandBuilder::new("sh");
@@ -1162,6 +1175,46 @@ mod tests {
 
         child.kill().ok();
         child.wait().ok();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_job_detects_agent_behind_shell_wrapper() {
+        use portable_pty::CommandBuilder;
+
+        let pair = open_test_pty();
+
+        let mut cmd = CommandBuilder::new("bash");
+        cmd.arg("-c");
+        cmd.arg("bash -c 'exec -a codex sleep 999' & wait");
+        let mut child = pair.slave.spawn_command(cmd).expect("failed to spawn");
+        let pid = child.process_id().expect("no pid");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let job = foreground_job(pid);
+        let process_group_id = job.as_ref().map(|job| job.process_group_id).unwrap_or(pid);
+        unsafe {
+            libc::kill(-(process_group_id as i32), libc::SIGKILL);
+        }
+        child.wait().ok();
+
+        let job = job.expect("expected foreground job");
+        assert!(
+            job.processes.iter().any(|process| process.name == "bash")
+                && job.processes.iter().any(|process| {
+                    process.name == "sleep"
+                        && process
+                            .argv
+                            .as_deref()
+                            .and_then(|argv| argv.first())
+                            .is_some_and(|argv0| argv0 == "codex")
+                }),
+            "expected wrapper and agent child in {job:?}"
+        );
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Codex, "codex".to_string()))
+        );
     }
 
     #[cfg(target_os = "linux")]

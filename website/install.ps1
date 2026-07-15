@@ -322,64 +322,6 @@ function Resolve-HerdrVersion {
     return [string]$Manifest.version
 }
 
-function Get-HerdrConfigPath {
-    if (-not [string]::IsNullOrWhiteSpace($env:HERDR_CONFIG_PATH)) {
-        return $env:HERDR_CONFIG_PATH
-    }
-
-    $appDir = "herdr"
-    if (-not [string]::IsNullOrWhiteSpace($env:XDG_CONFIG_HOME)) {
-        return Join-Path (Join-Path $env:XDG_CONFIG_HOME $appDir) "config.toml"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
-        return Join-Path (Join-Path $env:APPDATA $appDir) "config.toml"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-        return Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE "AppData") "Roaming") $appDir) "config.toml"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) {
-        return Join-Path (Join-Path (Join-Path $env:HOME ".config") $appDir) "config.toml"
-    }
-
-    return Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) $appDir) "config.toml"
-}
-
-function Set-HerdrUpdateChannelConfig {
-    param([string]$SelectedChannel)
-
-    $configPath = Get-HerdrConfigPath
-    $configDir = Split-Path -Parent $configPath
-    if (-not [string]::IsNullOrWhiteSpace($configDir)) {
-        New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-    }
-
-    $content = if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-        Get-Content -LiteralPath $configPath -Raw
-    } else {
-        ""
-    }
-
-    $valueLine = "channel = `"$SelectedChannel`""
-    $match = [regex]::Match($content, "(?ms)^(\s*\[update\]\s*)(.*?)(?=^\s*\[|\z)")
-    if ($match.Success) {
-        $body = $match.Groups[2].Value
-        if ($body -match "(?m)^\s*channel\s*=") {
-            $updatedBody = [regex]::Replace($body, "(?m)^\s*channel\s*=.*$", $valueLine, 1)
-        } else {
-            $updatedBody = $body.TrimEnd() + "`r`n$valueLine`r`n"
-        }
-        $bodyStart = $match.Groups[2].Index
-        $updated = $content.Substring(0, $bodyStart) + $updatedBody + $content.Substring($bodyStart + $body.Length)
-    } elseif ([string]::IsNullOrWhiteSpace($content)) {
-        $updated = "[update]`r`n$valueLine`r`n"
-    } else {
-        $updated = $content.TrimEnd() + "`r`n`r`n[update]`r`n$valueLine`r`n"
-    }
-
-    Set-Content -LiteralPath $configPath -Value $updated -NoNewline
-    Write-Step "Herdr update channel set to $SelectedChannel in $configPath."
-}
-
 if ($env:OS -ne "Windows_NT") {
     Write-Error "install.ps1 supports Windows only. Use install.sh on Linux or macOS."
     exit 1
@@ -498,8 +440,6 @@ try {
 } finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-Set-HerdrUpdateChannelConfig -SelectedChannel $Channel
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $newUserPath = Prepend-PathEntry -PathValue $userPath -Entry $visibleBinDir

@@ -1,0 +1,9 @@
+---
+import { docsChannel } from '../docs-path';
+
+const { head } = Astro.locals.starlightRoute;
+const channel = docsChannel(Astro.url.pathname);
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+<meta data-pagefind-filter="channel[content]" content={channel} />

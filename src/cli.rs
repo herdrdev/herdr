@@ -30,6 +30,16 @@ const TERMINAL_SESSION_OBSERVE_USAGE: &str =
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
     "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
 
+pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
+    let Some((key, value)) = raw.split_once('=') else {
+        return Err("token must use NAME=VALUE".into());
+    };
+    if key.is_empty() {
+        return Err("token name must not be empty".into());
+    }
+    Ok((key.to_string(), Some(value.to_string())))
+}
+
 pub(crate) fn parse_env_assignment(raw: &str) -> Result<(String, String), String> {
     let Some((key, value)) = raw.split_once('=') else {
         return Err("env must use KEY=VALUE".into());
@@ -224,6 +234,7 @@ fn run_config_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
+        "check" => config_check(&args[1..]),
         "reset-keys" => config_reset_keys(&args[1..]),
         "help" | "--help" | "-h" => {
             print_config_help();
@@ -234,6 +245,32 @@ fn run_config_command(args: &[String]) -> std::io::Result<i32> {
             Ok(2)
         }
     }
+}
+
+fn config_check(args: &[String]) -> std::io::Result<i32> {
+    match args {
+        [] => {}
+        [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
+            eprintln!("usage: herdr config check");
+            return Ok(0);
+        }
+        _ => {
+            eprintln!("usage: herdr config check");
+            return Ok(2);
+        }
+    }
+
+    let diagnostics = crate::config::Config::load().diagnostics;
+    if diagnostics.is_empty() {
+        println!("config: ok");
+    } else {
+        println!("config: issues found");
+        for diagnostic in &diagnostics {
+            println!("{diagnostic}");
+        }
+    }
+
+    Ok(i32::from(!diagnostics.is_empty()))
 }
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
@@ -854,7 +891,6 @@ fn wait_for_agent_status_change(
                 agent,
                 title,
                 display_agent,
-                custom_status,
                 state_labels,
             } = event.data
             else {
@@ -868,7 +904,6 @@ fn wait_for_agent_status_change(
                         workspace_id,
                         agent_status,
                         agent,
-                        custom_status,
                         title,
                         display_agent,
                         state_labels,
@@ -1119,6 +1154,7 @@ fn print_session_error(code: &str, message: &str) {
 
 fn print_config_help() {
     eprintln!("herdr config commands:");
+    eprintln!("  herdr config check  validate config.toml and print diagnostics");
     eprintln!("  herdr config reset-keys  back up config.toml and remove custom keybindings");
 }
 

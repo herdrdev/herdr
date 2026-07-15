@@ -65,7 +65,7 @@ Press `ctrl+b q` to detach the client. The server and pane processes keep runnin
 
 **Workspaces, tabs, panes.** A workspace is the project-level container. Tabs group panes inside a workspace. Panes are real terminal processes, not rewritten agent views.
 
-**Copy.** Herdr copies pane text, not the sidebar. Drag-select inside a pane, double-click a word or token, or press `prefix+[` for keyboard copy mode. In copy mode, move with `h/j/k/l`, `w/b/e`, and `{`/`}`, start selection with `v` or Space, copy with `y` or Enter, and leave with `q` or Esc. In PuTTY and some SSH terminals, hold `Shift` while dragging to use the terminal's own selection, and `Shift` + right click to paste.
+**Copy.** Herdr copies pane text, not the sidebar. Drag-select inside a pane, double-click a word or token, or press `prefix+[` for keyboard copy mode. In copy mode, move with `h/j/k/l`, `w/b/e`, and `{`/`}`, search forward or backward with `/` or `?`, repeat with `n` or `N`, start selection with `v` or Space, copy with `y` or Enter, and leave with `q` or Esc. Esc clears an active selection or search before exiting. In PuTTY and some SSH terminals, hold `Shift` while dragging to use the terminal's own selection, and `Shift` + right click to paste.
 
 **Update and restore.** `herdr update` installs a new binary, but a running server keeps using the old process until it is stopped or handed off. Stop the old server to use the new version. Stopping exits pane processes. Run `herdr server stop`, then run `herdr` again for the default session. For a named session, run `herdr session stop <name>`, then run `herdr session attach <name>` again. `herdr update --handoff` is experimental and tries to move live panes, including foreground processes such as dev servers, from the old server to the new one. With current official integrations installed, supported agent panes can restart from their native agent sessions after a server restart or update.
 
@@ -199,6 +199,7 @@ automatic detection works out of the box. process name matching plus terminal ou
 | kimi code cli | ✓ | ✓ | ✓ |
 | [github copilot cli](https://github.com/features/copilot) | ✓ | ✓ | ✓ |
 | [qodercli](https://qoder.com/cli) | ✓ | ✓ | ✓ |
+| [maki](https://github.com/tontinton/maki) | ✓ | ✓ | ✓ |
 | [kiro cli](https://kiro.dev/docs/cli/) | ✓ | ✓ | — |
 
 detected but not fully tested: gemini cli, cline.

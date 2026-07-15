@@ -88,6 +88,7 @@ fn status_command() -> Command {
 fn config_command() -> Command {
     Command::new("config")
         .about("Manage local configuration")
+        .subcommand(Command::new("check").about("Validate config.toml and print diagnostics"))
         .subcommand(Command::new("reset-keys").about("Reset custom keybindings"))
 }
 
@@ -158,6 +159,16 @@ fn workspace_command() -> Command {
                 .about("Rename a workspace")
                 .arg(required("workspace_id", "WORKSPACE_ID"))
                 .arg(required("label", "LABEL").num_args(1..)),
+        )
+        .subcommand(
+            Command::new("report-metadata")
+                .about("Report display-only workspace metadata")
+                .arg(required("workspace_id", "WORKSPACE_ID"))
+                .arg(option("source", "ID"))
+                .arg(repeatable_option("token", "NAME=VALUE"))
+                .arg(repeatable_option("clear-token", "NAME"))
+                .arg(option("seq", "N"))
+                .arg(option("ttl-ms", "N")),
         )
         .subcommand(id_command("close", "workspace_id", "Close a workspace"))
 }
@@ -466,7 +477,6 @@ fn report_agent_command() -> Command {
         .arg(option("agent", "LABEL"))
         .arg(pane_agent_state_option("state"))
         .arg(option("message", "TEXT"))
-        .arg(option("custom-status", "TEXT"))
         .arg(option("seq", "N"))
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
@@ -504,10 +514,10 @@ fn report_metadata_command() -> Command {
         .arg(flag("clear-title"))
         .arg(option("display-agent", "TEXT"))
         .arg(flag("clear-display-agent"))
-        .arg(option("custom-status", "TEXT"))
-        .arg(flag("clear-custom-status"))
         .arg(option("state-label", "STATUS=TEXT"))
         .arg(flag("clear-state-labels"))
+        .arg(repeatable_option("token", "NAME=VALUE"))
+        .arg(repeatable_option("clear-token", "NAME"))
         .arg(option("seq", "N"))
         .arg(option("ttl-ms", "N"))
 }
@@ -814,6 +824,10 @@ fn option(name: &'static str, value_name: &'static str) -> Arg {
         .long(name)
         .value_name(value_name)
         .action(ArgAction::Set)
+}
+
+fn repeatable_option(name: &'static str, value_name: &'static str) -> Arg {
+    option(name, value_name).action(ArgAction::Append)
 }
 
 fn path_option(name: &'static str, value_name: &'static str) -> Arg {

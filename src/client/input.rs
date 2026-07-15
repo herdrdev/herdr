@@ -133,8 +133,10 @@ fn idle_flush_timeout_ms(
     framer: &crate::raw_input::RawInputByteFramer,
     host_mouse_capture_active: bool,
 ) -> i32 {
-    if host_mouse_capture_active && framer.has_pending_lone_escape() {
-        crate::raw_input::MOUSE_ACTIVE_LONE_ESCAPE_FLUSH_TIMEOUT_MS
+    if host_mouse_capture_active
+        && (framer.has_pending_lone_escape() || framer.has_pending_incomplete_sgr_mouse_sequence())
+    {
+        crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
     } else {
         crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
     }
@@ -402,20 +404,33 @@ mod tests {
     }
 
     #[test]
-    fn mouse_active_lone_escape_gets_longer_reassembly_window() {
-        let mut framer = crate::raw_input::RawInputByteFramer::default();
-        assert!(framer.push(b"\x1b").is_empty());
+    fn mouse_active_escape_sequences_get_longer_reassembly_window() {
+        let mut escape = crate::raw_input::RawInputByteFramer::default();
+        assert!(escape.push(b"\x1b").is_empty());
+        let mut mouse = crate::raw_input::RawInputByteFramer::default();
+        assert!(mouse.push(b"\x1b[<3").is_empty());
+        let mut unrelated = crate::raw_input::RawInputByteFramer::default();
+        assert!(unrelated.push(b"\x1b[49:33;2:").is_empty());
 
+        for framer in [&escape, &mouse, &unrelated] {
+            assert_eq!(
+                idle_flush_timeout_ms(framer, false),
+                crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
+            );
+        }
+        for framer in [&escape, &mouse] {
+            assert_eq!(
+                idle_flush_timeout_ms(framer, true),
+                crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+            );
+        }
         assert_eq!(
-            idle_flush_timeout_ms(&framer, false),
+            idle_flush_timeout_ms(&unrelated, true),
             crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
         );
-        assert_eq!(
-            idle_flush_timeout_ms(&framer, true),
-            crate::raw_input::MOUSE_ACTIVE_LONE_ESCAPE_FLUSH_TIMEOUT_MS
-        );
+
         let mouse_timeout_ms =
-            std::hint::black_box(crate::raw_input::MOUSE_ACTIVE_LONE_ESCAPE_FLUSH_TIMEOUT_MS);
+            std::hint::black_box(crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS);
         assert!(mouse_timeout_ms > 100);
     }
 }

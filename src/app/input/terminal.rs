@@ -13,12 +13,31 @@ struct PreparedPaneInput {
     bytes: Bytes,
 }
 
+enum PreparedPopupInput {
+    NotOpen,
+    Consumed,
+    Bytes(Bytes),
+}
+
 fn is_modifier_only_key(code: &KeyCode) -> bool {
     matches!(code, KeyCode::Modifier(_))
 }
 
 impl App {
     pub(crate) fn handle_terminal_key_headless(&mut self, key: TerminalKey) {
+        match self.prepare_popup_key_forward(key) {
+            PreparedPopupInput::NotOpen => {}
+            PreparedPopupInput::Consumed => return,
+            PreparedPopupInput::Bytes(bytes) => {
+                let Some(runtime) = self.popup_runtime() else {
+                    self.close_popup_pane();
+                    return;
+                };
+                let _ = runtime.try_send_bytes(bytes);
+                return;
+            }
+        }
+
         let Some(input) = self.prepare_terminal_key_forward(key) else {
             return;
         };
@@ -192,7 +211,38 @@ impl App {
         })
     }
 
+    fn prepare_popup_key_forward(&mut self, key: TerminalKey) -> PreparedPopupInput {
+        if self.state.popup_pane.is_none() {
+            return PreparedPopupInput::NotOpen;
+        }
+        let Some(rt) = self.popup_runtime() else {
+            self.close_popup_pane();
+            return PreparedPopupInput::Consumed;
+        };
+        rt.scroll_reset();
+        let bytes = rt.encode_terminal_key(key);
+        self.state.mode = Mode::Terminal;
+        if bytes.is_empty() {
+            PreparedPopupInput::Consumed
+        } else {
+            PreparedPopupInput::Bytes(Bytes::from(bytes))
+        }
+    }
+
     pub(super) async fn handle_terminal_key(&mut self, key: TerminalKey) {
+        match self.prepare_popup_key_forward(key) {
+            PreparedPopupInput::NotOpen => {}
+            PreparedPopupInput::Consumed => return,
+            PreparedPopupInput::Bytes(bytes) => {
+                let Some(runtime) = self.popup_runtime() else {
+                    self.close_popup_pane();
+                    return;
+                };
+                let _ = runtime.send_bytes(bytes).await;
+                return;
+            }
+        }
+
         let Some(input) = self.prepare_terminal_key_forward(key) else {
             return;
         };
@@ -212,6 +262,45 @@ mod tests {
     use super::super::{unique_temp_path, wait_for_file};
     use super::*;
     use crate::{config::Config, events::AppEvent, workspace::Workspace};
+
+    #[cfg(unix)]
+    fn app_with_spawned_workspace() -> App {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.default_shell = "/bin/sh".into();
+        let (workspace, terminal, runtime) = Workspace::new(
+            std::env::current_dir().unwrap_or_else(|_| "/".into()),
+            24,
+            80,
+            app.state.pane_scrollback_limit_bytes,
+            app.state.host_terminal_theme,
+            crate::pane::PaneShellConfig::new(&app.state.default_shell, app.state.shell_mode),
+            app.event_tx.clone(),
+            app.render_notify.clone(),
+            app.render_dirty.clone(),
+        )
+        .expect("workspace should spawn");
+        app.state.workspaces = vec![workspace];
+        app.terminal_runtimes.insert(terminal.id.clone(), runtime);
+        app.state.terminals.insert(terminal.id.clone(), terminal);
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app
+    }
+
+    #[cfg(unix)]
+    fn shutdown_test_runtimes(app: &mut App) {
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
 
     fn app_with_screen_bytes(bytes: &[u8]) -> (App, crate::layout::PaneInfo) {
         let mut app = app_for_mouse_test();
@@ -456,6 +545,34 @@ mod tests {
 
         assert_eq!(clipboard_write_content(&mut app), b"beta-gamma_delta@omega");
         assert_visible_selection(&app);
+    }
+
+    #[tokio::test]
+    async fn copy_on_select_disabled_ignores_drag_and_double_click_selection() {
+        let (mut app, info) = app_with_screen_bytes(b"alpha beta");
+        app.state.copy_on_select = false;
+        let row = info.inner_rect.y;
+        let start_col = info.inner_rect.x;
+        let end_col = info.inner_rect.x + 4;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            start_col,
+            row,
+        ));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), end_col, row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), end_col, row));
+
+        assert!(app.state.selection.is_none());
+        assert!(app.state.selection_autoscroll.is_none());
+        assert!(app.event_rx.try_recv().is_err());
+
+        double_click(&mut app, start_col, row);
+
+        assert!(app.state.selection.is_none());
+        assert!(app.last_pane_click.is_none());
+        assert!(app.selection_highlight_clear_deadline.is_none());
+        assert!(app.event_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -730,15 +847,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn double_click_is_forwarded_when_mouse_reporting_is_enabled() {
-        let (mut app, info) = app_with_screen_bytes(b"\x1b[?1002halpha beta");
-        let col = info.inner_rect.x + 8;
-        let row = info.inner_rect.y;
-        double_click(&mut app, col, row);
+    async fn copy_on_select_disabled_still_forwards_mouse_reporting_gestures() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                b"\x1b[?1002h\x1b[?1006h",
+                4,
+            );
+        ws.insert_test_runtime(pane_id, runtime);
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+        app.state.copy_on_select = false;
+
+        let col = info.inner_rect.x + 2;
+        let row = info.inner_rect.y + 3;
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            col + 1,
+            row + 1,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            col + 1,
+            row + 1,
+        ));
 
         assert!(app.event_rx.try_recv().is_err());
         assert!(app.state.selection.is_none());
         assert!(app.selection_highlight_clear_deadline.is_none());
+        assert_eq!(
+            input_rx.try_recv().expect("forwarded left mouse down"),
+            Bytes::from_static(b"\x1b[<0;3;4M")
+        );
+        assert_eq!(
+            input_rx.try_recv().expect("forwarded left mouse drag"),
+            Bytes::from_static(b"\x1b[<32;4;5M")
+        );
+        assert_eq!(
+            input_rx.try_recv().expect("forwarded left mouse up"),
+            Bytes::from_static(b"\x1b[<0;4;5m")
+        );
+        assert!(input_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1022,6 +1182,8 @@ mod tests {
             command,
             action: crate::config::CustomCommandAction::Shell,
             description: None,
+            width: None,
+            height: None,
         }];
 
         app.handle_terminal_key(TerminalKey::new(
@@ -1038,33 +1200,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn direct_custom_pane_command_opens_overlay_pane() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            true,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.default_shell = "/usr/bin/true".into();
-        let (workspace, terminal, runtime) = Workspace::new(
-            std::env::current_dir().unwrap_or_else(|_| "/".into()),
-            24,
-            80,
-            app.state.pane_scrollback_limit_bytes,
-            app.state.host_terminal_theme,
-            crate::pane::PaneShellConfig::new(&app.state.default_shell, app.state.shell_mode),
-            app.event_tx.clone(),
-            app.render_notify.clone(),
-            app.render_dirty.clone(),
-        )
-        .expect("workspace should spawn");
-        app.state.workspaces = vec![workspace];
-        app.terminal_runtimes.insert(terminal.id.clone(), runtime);
-        app.state.terminals.insert(terminal.id.clone(), terminal);
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
+        let mut app = app_with_spawned_workspace();
 
         app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
             bindings: crate::config::ActionKeybinds::direct("ctrl+alt+g"),
@@ -1072,6 +1208,8 @@ mod tests {
             command: "printf direct-pane".into(),
             action: crate::config::CustomCommandAction::Pane,
             description: None,
+            width: None,
+            height: None,
         }];
 
         app.handle_terminal_key(TerminalKey::new(
@@ -1084,10 +1222,157 @@ mod tests {
         assert!(app.state.workspaces[0].tabs[0].zoomed);
         assert_eq!(app.state.mode, Mode::Terminal);
 
-        let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
-        for (_terminal_id, runtime) in runtimes {
-            runtime.shutdown();
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_custom_popup_command_opens_layout_neutral_popup() {
+        let mut app = app_with_spawned_workspace();
+
+        app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
+            bindings: crate::config::ActionKeybinds::direct("ctrl+alt+g"),
+            label: "ctrl+alt+g".into(),
+            command: "sleep 1".into(),
+            action: crate::config::CustomCommandAction::Popup,
+            description: None,
+            width: Some(crate::popup_size::PopupSize::Cells(60)),
+            height: Some(crate::popup_size::PopupSize::Cells(12)),
+        }];
+
+        app.handle_terminal_key(TerminalKey::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ))
+        .await;
+
+        assert!(app.state.popup_pane.is_some());
+        assert!(!app
+            .popup_runtime()
+            .unwrap()
+            .agent_detection_enabled_for_test());
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
+        assert!(!app.state.workspaces[0].tabs[0].zoomed);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+            app.state.sidebar_width,
+            app.state.sidebar_section_split,
+            app.state.collapsed_space_keys.clone(),
+        );
+        assert_eq!(snapshot.workspaces[0].tabs[0].panes.len(), 1);
+        assert!(matches!(
+            snapshot.workspaces[0].tabs[0].layout,
+            crate::persist::LayoutSnapshot::Pane(_)
+        ));
+
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_custom_popup_command_closes_after_exit() {
+        let mut app = app_with_spawned_workspace();
+        let focused_pane = app.state.workspaces[0].focused_pane_id().unwrap();
+        let focused_pane_id = app.public_pane_id(0, focused_pane).unwrap();
+
+        let output_path = unique_temp_path("custom-popup-command");
+        let command = format!(
+            "printf '%s|%s' \"${{HERDR_PANE_ID-unset}}\" \"$HERDR_ACTIVE_PANE_ID\" > '{}'",
+            output_path.display()
+        );
+        app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
+            bindings: crate::config::ActionKeybinds::direct("ctrl+alt+g"),
+            label: "ctrl+alt+g".into(),
+            command,
+            action: crate::config::CustomCommandAction::Popup,
+            description: None,
+            width: None,
+            height: None,
+        }];
+
+        app.handle_terminal_key(TerminalKey::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ))
+        .await;
+
+        assert_eq!(
+            wait_for_file(&output_path),
+            format!("unset|{focused_pane_id}")
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            app.drain_internal_events();
+            if app.state.popup_pane.is_none() {
+                break;
+            }
         }
+
+        assert!(app.state.popup_pane.is_none());
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
+
+        shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_file(output_path);
+    }
+
+    #[tokio::test]
+    async fn popup_forwards_escape_instead_of_closing() {
+        let mut app = app_for_mouse_test();
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                40,
+                2,
+                1024,
+                b"one\r\ntwo\r\nthree\r\n",
+                4,
+            );
+        runtime.scroll_up(1);
+        assert!(runtime
+            .scroll_metrics()
+            .is_some_and(|metrics| metrics.offset_from_bottom > 0));
+        app.install_test_popup_runtime(runtime);
+        app.state.mode = Mode::Settings;
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert_eq!(rx.try_recv().unwrap().as_ref(), b"\x1b");
+        assert!(app.state.popup_pane.is_some());
+        assert_eq!(
+            app.popup_runtime()
+                .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
+                .map(|metrics| metrics.offset_from_bottom),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn local_popup_input_waits_for_channel_capacity() {
+        let mut app = app_for_mouse_test();
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(40, 2, 1);
+        runtime
+            .try_send_bytes(Bytes::from_static(b"queued"))
+            .unwrap();
+        app.install_test_popup_runtime(runtime);
+        app.state.mode = Mode::Settings;
+
+        let mut send = Box::pin(
+            app.handle_terminal_key(TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())),
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut send)
+                .await
+                .is_err()
+        );
+
+        assert_eq!(rx.recv().await.unwrap().as_ref(), b"queued");
+        send.await;
+        assert_eq!(rx.recv().await.unwrap().as_ref(), b"x");
     }
 
     #[tokio::test]

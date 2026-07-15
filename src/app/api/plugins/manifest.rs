@@ -3,6 +3,7 @@ use crate::api::schema::{
     PluginManifestLinkHandler, PluginManifestPane, PluginPanePlacement, PluginPlatform,
     PluginSourceInfo, PluginSourceKind,
 };
+use crate::popup_size::PopupSize;
 
 const PLUGIN_ID_MAX_CHARS: usize = 120;
 const PLUGIN_ACTION_ID_MAX_CHARS: usize = 120;
@@ -68,6 +69,10 @@ struct RawPluginManifestPane {
     platforms: Option<Vec<RawPlatform>>,
     #[serde(default)]
     placement: PluginPanePlacement,
+    #[serde(default)]
+    width: Option<PopupSize>,
+    #[serde(default)]
+    height: Option<PopupSize>,
     command: Vec<String>,
 }
 
@@ -392,12 +397,22 @@ fn normalize_manifest_pane(
         .filter(|description| !description.is_empty());
     let platforms = normalize_platforms(pane.platforms)?;
     let command = normalize_command(pane.command)?;
+    if pane.placement != PluginPanePlacement::Popup
+        && (pane.width.is_some() || pane.height.is_some())
+    {
+        return Err((
+            "invalid_plugin_pane_size",
+            "pane width and height are only supported when placement is popup".to_string(),
+        ));
+    }
     Ok(PluginManifestPane {
         id,
         title,
         description,
         platforms,
         placement: pane.placement,
+        width: pane.width,
+        height: pane.height,
         command,
     })
 }

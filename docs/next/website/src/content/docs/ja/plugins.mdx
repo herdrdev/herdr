@@ -264,12 +264,35 @@ Windows クライアントは名前付きパイプに接続します。`HERDR_BI
 マニフェストのペイン `placement` のデフォルトは `overlay` で、アクティブなペインの
 上に一時的なズームオーバーレイを開き、閉じるときに以前のフォーカスとズームを
 復元します。`plugin.pane.open` リクエストは、マニフェストの placement を
-`overlay`、`split`、`tab`、`zoomed` で上書きできます。
+`overlay`、`popup`、`split`、`tab`、`zoomed` で上書きできます。
 
-プラグインペインは、開いた後は通常の Herdr ペインです。プラグインはソケットや CLI を
+`placement = "popup"` は、タイルレイアウトを変更せずにセッションモーダルなターミナルポップアップを開きます。
+マニフェストまたは open リクエストで任意の `width` と `height` を指定できます。
+省略するとデフォルトの半分のサイズになり、数値なら外側のターミナルセル数、`"80%"` のような文字列ならターミナル領域に対する割合になります。
+Escape を含むすべてのターミナル入力を受け取り、コマンドが終了するか `popup.close` リクエストが送られると閉じます。
+最小サイズより小さい寸法は最小値に制限されます。
+
+ペインを常に一時的にしたい場合は、プラグインペインのエントリーポイントに placement を直接宣言します:
+
+```toml
+[[panes]]
+id = "picker"
+title = "Picker"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = 20
+command = ["sh", "picker.sh"]
+```
+
+split、tab、zoomed、overlay のプラグインペインは、開いた後は通常の Herdr ペインです。プラグインはソケットや CLI を
 通じて `pane.move`、`pane.swap`、`pane.resize`、`pane.zoom` といった標準のペイン
 API を呼び出せます。ペインがタブやワークスペースをまたいで移動しても、Herdr は
 プラグインペインの所有権を元のペインに結び付けたまま維持します。
+ポップアップは Herdr ペインではなく、セッションに 1 つだけ存在できるリソースです。
+ペイン id を持たず、プラグインのフォーカスコンテキストを変更せず、ペインのライフサイクルイベントを発行せず、pane、layout、永続化、エージェント API に参加しません。
+そのプロセスには `HERDR_PANE_ID` が渡されず、背後のタイルペインは `HERDR_PLUGIN_CONTEXT_JSON` から参照できます。
+Settings、コピーモード、または別の Herdr モーダルが開いている間にポップアップを開くと `ui_busy` が返り、起動後の `plugin.pane.open` は `ok` を返します。
 
 Windows では、ビルドコマンド、アクションコマンド、イベントコマンドは、素の
 コマンドが `PATH` にあれば `npm.cmd`、`bun.cmd`、`pnpm.cmd` のような一般的な

@@ -640,12 +640,14 @@ impl AppState {
                         mouse.row - info.inner_rect.y,
                         mouse.column - info.inner_rect.x,
                     );
-                    self.selection = Some(Selection::anchor(
-                        info.id,
-                        row,
-                        col,
-                        self.pane_scroll_metrics(terminal_runtimes, info.id),
-                    ));
+                    if self.copy_on_select {
+                        self.selection = Some(Selection::anchor(
+                            info.id,
+                            row,
+                            col,
+                            self.pane_scroll_metrics(terminal_runtimes, info.id),
+                        ));
+                    }
                     if let Some(ws_idx) = self.active {
                         return Some(MouseAction::FocusPane {
                             ws_idx,
@@ -937,6 +939,14 @@ impl AppState {
                 self.selection = None;
                 self.selection_autoscroll = None;
                 self.handle_terminal_wheel(terminal_runtimes, mouse);
+            }
+
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+                if self.mode == Mode::Terminal && !in_sidebar =>
+            {
+                if let Some(info) = self.pane_at(mouse.column, mouse.row).cloned() {
+                    self.forward_pane_reported_wheel(terminal_runtimes, &info, mouse);
+                }
             }
 
             MouseEventKind::ScrollUp if in_sidebar => {
@@ -1897,6 +1907,103 @@ mod tests {
             .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
             .expect("scroll metrics after wheel");
         assert_eq!(metrics.offset_from_bottom, 7);
+    }
+
+    #[tokio::test]
+    async fn mouse_dispatcher_forwards_horizontal_wheel_to_mouse_reporting_pane() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                b"\x1b[?1000h\x1b[?1006h",
+                4,
+            );
+        ws.insert_test_runtime(pane_id, runtime);
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+        assert!(
+            app.state.mouse_capture,
+            "reproduction must use the default Herdr mouse dispatcher"
+        );
+
+        let outer_column = info.inner_rect.x + 2;
+        let outer_row = info.inner_rect.y + 3;
+        for (button, expected_kind, ingress) in [
+            (66, MouseEventKind::ScrollLeft, "monolithic"),
+            (67, MouseEventKind::ScrollRight, "headless"),
+        ] {
+            let input = format!("\x1b[<{button};{};{}M", outer_column + 1, outer_row + 1);
+            let mut events = crate::raw_input::parse_raw_input_bytes_sync(input.as_bytes());
+            let event = events
+                .pop()
+                .expect("horizontal SGR wheel input should parse");
+            let crate::raw_input::RawInputEvent::Mouse(mouse) = &event else {
+                panic!("expected parsed mouse event");
+            };
+            assert!(events.is_empty(), "expected one parsed mouse event");
+            assert_eq!(mouse.kind, expected_kind);
+
+            if ingress == "monolithic" {
+                assert!(app.handle_raw_input_event(event).await);
+            } else {
+                app.route_client_events(vec![event], false);
+            }
+
+            assert_eq!(
+                input_rx
+                    .try_recv()
+                    .expect("horizontal wheel should reach pane"),
+                Bytes::from(format!("\x1b[<{button};3;4M"))
+            );
+        }
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn horizontal_wheel_stays_inert_for_non_mouse_reporting_pane() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                b"",
+                1,
+            );
+        ws.insert_test_runtime(pane_id, runtime);
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        let input = format!(
+            "\x1b[<66;{};{}M",
+            info.inner_rect.x + 3,
+            info.inner_rect.y + 4
+        );
+        let event = crate::raw_input::parse_raw_input_bytes_sync(input.as_bytes())
+            .pop()
+            .expect("horizontal SGR wheel input should parse");
+
+        assert!(app.handle_raw_input_event(event).await);
+
+        assert!(input_rx.try_recv().is_err());
     }
 
     #[tokio::test]

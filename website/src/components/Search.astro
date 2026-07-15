@@ -1,0 +1,52 @@
+---
+import StarlightSearch from '@astrojs/starlight/components/Search.astro';
+import { docsChannel } from '../docs-path';
+
+const channel = docsChannel(Astro.url.pathname);
+---
+
+<channel-search data-channel={channel}>
+  <StarlightSearch />
+</channel-search>
+
+<script>
+  class ChannelSearch extends HTMLElement {
+    observer?: MutationObserver;
+
+    connectedCallback() {
+      const channel = this.dataset.channel;
+      if (!channel) return;
+
+      const selectChannel = () => {
+        const checkbox = this.querySelector<HTMLInputElement>(
+          `.pagefind-ui__filter-checkbox[name="channel"][value="${channel}"]`,
+        );
+        if (!checkbox) return false;
+        if (!checkbox.checked) checkbox.click();
+        this.observer?.disconnect();
+        return true;
+      };
+
+      if (selectChannel()) return;
+      // Starlight does not expose its PagefindUI instance, so wait for Pagefind's filter control.
+      this.observer = new MutationObserver(selectChannel);
+      this.observer.observe(this, { childList: true, subtree: true });
+    }
+
+    disconnectedCallback() {
+      this.observer?.disconnect();
+    }
+  }
+
+  customElements.define('channel-search', ChannelSearch);
+</script>
+
+<style>
+  channel-search {
+    display: contents;
+  }
+
+  channel-search :global(.pagefind-ui__filter-panel) {
+    display: none;
+  }
+</style>

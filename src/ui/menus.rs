@@ -70,26 +70,57 @@ pub(super) fn render_copy_mode_overlay(app: &AppState, frame: &mut Frame, area: 
         .bg(app.palette.accent)
         .add_modifier(Modifier::BOLD);
 
-    let select = if app
-        .copy_mode
-        .is_some_and(|copy_mode| copy_mode.selection.is_some())
-    {
-        "selecting"
-    } else {
-        "select"
+    let Some(copy_mode) = app.copy_mode.as_ref() else {
+        return;
     };
-    let line = Line::from(vec![
-        Span::styled(" COPY ", mode_style),
-        Span::raw(" "),
-        Span::styled("h/j/k/l w/b/e { }", key),
-        Span::styled(" move  ", dim),
-        Span::styled("v/space", key),
-        Span::styled(format!(" {select}  "), dim),
-        Span::styled("y/enter", key),
-        Span::styled(" copy  ", dim),
-        Span::styled("q/esc", key),
-        Span::styled(" exit", dim),
-    ]);
+    let line = if let Some(prompt) = copy_mode.search.prompt.as_ref() {
+        let marker = match prompt.direction {
+            crate::app::state::CopyModeSearchDirection::Forward => "/",
+            crate::app::state::CopyModeSearchDirection::Backward => "?",
+        };
+        Line::from(vec![
+            Span::styled(" COPY ", mode_style),
+            Span::raw(" "),
+            Span::styled(marker, key),
+            Span::styled(prompt.query.clone(), Style::default().fg(app.palette.text)),
+            Span::styled("█", key),
+            Span::styled("  enter search  esc cancel", dim),
+        ])
+    } else {
+        let select = if copy_mode.selection.is_some() {
+            "selecting"
+        } else {
+            "select"
+        };
+        let match_status = copy_mode
+            .search
+            .current
+            .map(|current| format!(" {}/{}", current + 1, copy_mode.search.matches.len()))
+            .or_else(|| (!copy_mode.search.query.is_empty()).then(|| " 0/0".to_string()))
+            .unwrap_or_default();
+        let (exit_keys, exit_label) =
+            if copy_mode.search.query.is_empty() && copy_mode.selection.is_none() {
+                ("q/esc", " exit")
+            } else {
+                ("esc", " clear  q exit")
+            };
+        Line::from(vec![
+            Span::styled(" COPY ", mode_style),
+            Span::raw(" "),
+            Span::styled("h/j/k/l w/b/e { }", key),
+            Span::styled(" move  ", dim),
+            Span::styled("/ ?", key),
+            Span::styled(" search  ", dim),
+            Span::styled("n/N", key),
+            Span::styled(format!(" repeat{match_status}  "), dim),
+            Span::styled("v/space", key),
+            Span::styled(format!(" {select}  "), dim),
+            Span::styled("y/enter", key),
+            Span::styled(" copy  ", dim),
+            Span::styled(exit_keys, key),
+            Span::styled(exit_label, dim),
+        ])
+    };
 
     let overlay_y = area.y + area.height.saturating_sub(1);
     let overlay_area = Rect::new(area.x, overlay_y, area.width, 1);

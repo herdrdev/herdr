@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) const PANE_GRAPHICS_SET_MAX_BYTES: usize = 512 * 1024;
+pub(crate) const PANE_GRAPHICS_STREAM_MAX_BYTES: usize = 16 * 1024 * 1024;
+
 use super::agents::AgentSessionInfo;
 use super::common::{AgentStatus, PaneAgentState, ReadFormat, ReadSource, SplitDirection};
 
@@ -257,6 +260,58 @@ pub struct PaneReadParams {
     pub strip_ansi: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneGraphicsFormat {
+    Png,
+    Rgb,
+    Rgba,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneGraphicsSetParams {
+    pub pane_id: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub owner: String,
+    pub format: PaneGraphicsFormat,
+    pub image_width: u32,
+    pub image_height: u32,
+    #[serde(skip)]
+    pub data: Option<Vec<u8>>,
+    #[serde(default)]
+    pub data_base64: String,
+    #[serde(default)]
+    pub placement: PaneGraphicsPlacementParams,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
+)]
+pub struct PaneGraphicsPlacementParams {
+    #[serde(default)]
+    pub viewport_col: i32,
+    #[serde(default)]
+    pub viewport_row: i32,
+    #[serde(default)]
+    pub grid_cols: u32,
+    #[serde(default)]
+    pub grid_rows: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneGraphicsClearParams {
+    pub pane_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneGraphicsStreamParams {
+    pub pane_id: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub owner: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneReportAgentParams {
     pub pane_id: String,
@@ -265,8 +320,6 @@ pub struct PaneReportAgentParams {
     pub state: PaneAgentState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -302,21 +355,21 @@ pub struct PaneReportMetadataParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_status: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(schema_with = "super::common::metadata_token_patch_schema")]
+    pub tokens: HashMap<String, Option<String>>,
     #[serde(default)]
     pub clear_title: bool,
     #[serde(default)]
     pub clear_display_agent: bool,
     #[serde(default)]
-    pub clear_custom_status: bool,
-    #[serde(default)]
     pub clear_state_labels: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 86_400_000))]
     pub ttl_ms: Option<u64>,
 }
 
@@ -356,12 +409,17 @@ pub struct PaneInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_title_stripped: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_agent: Option<String>,
     pub agent_status: AgentStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_status: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(schema_with = "super::common::metadata_token_values_schema")]
+    pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<AgentSessionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

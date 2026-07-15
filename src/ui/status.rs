@@ -179,7 +179,7 @@ pub(super) fn render_config_diagnostic(frame: &mut Frame, area: Rect, message: &
         .take(area.height as usize)
         .enumerate()
     {
-        let text = format!(" config warning: {line} ");
+        let text = format!(" {line} ");
         let width = (text.len() as u16).min(area.width);
         let notif_area = Rect::new(
             area.x + area.width.saturating_sub(width),

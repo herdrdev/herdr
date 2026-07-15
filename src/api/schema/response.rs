@@ -152,6 +152,10 @@ pub enum ResponseResult {
     PaneRead {
         read: PaneReadResult,
     },
+    PaneGraphicsInfo {
+        cell_width_px: u32,
+        cell_height_px: u32,
+    },
     AgentExplain {
         explain: serde_json::Value,
     },

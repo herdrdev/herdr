@@ -8,6 +8,39 @@ use crate::api::schema::{
 use crate::app::App;
 
 impl App {
+    pub(super) fn open_plugin_popup_pane(
+        &mut self,
+        id: String,
+        params: PluginPaneOpenParams,
+        plugin: &InstalledPluginInfo,
+        pane: PluginManifestPane,
+    ) -> String {
+        let context = self.current_plugin_context("plugin-pane");
+        let extra_env =
+            match self.plugin_pane_launch_env(plugin, &pane.id, params.env.clone(), &context) {
+                Ok(env) => env,
+                Err((code, message)) => return encode_error(id, &code, message),
+            };
+        let cwd = Some(self.plugin_pane_cwd(plugin, params.cwd));
+        let width = params.width.or(pane.width);
+        let height = params.height.or(pane.height);
+        if let Err(err) = self.spawn_popup_argv_command(
+            &pane.command,
+            cwd,
+            extra_env,
+            crate::app::popup::PopupGeometry { width, height },
+        ) {
+            return encode_error(id, "plugin_pane_open_failed", err.to_string());
+        }
+        let Some(popup) = self.state.popup_pane.as_ref() else {
+            return encode_error(id, "plugin_pane_open_failed", "plugin popup disappeared");
+        };
+        if let Some(terminal) = self.state.terminals.get_mut(&popup.terminal_id) {
+            terminal.set_manual_label(pane.title);
+        }
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn open_plugin_overlay_pane(
         &mut self,
         id: String,

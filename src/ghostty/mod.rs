@@ -417,6 +417,19 @@ pub enum CellWide {
     SpacerHead,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScreenTextCell {
+    pub wide: CellWide,
+    pub graphemes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScreenTextRow {
+    pub cells: Vec<ScreenTextCell>,
+    pub soft_wrapped: bool,
+    pub wrap_continuation: bool,
+}
+
 impl CellWide {
     fn from_raw(value: ffi::GhosttyCellWide) -> Self {
         match value {
@@ -766,6 +779,43 @@ impl Terminal {
         let wide = grid_ref_wide(&grid_ref)?;
         let graphemes = grid_ref_graphemes(&grid_ref)?;
         Ok((wide, graphemes))
+    }
+
+    pub(crate) fn screen_text_rows(&self) -> Result<Vec<ScreenTextRow>, Error> {
+        self.screen_text_rows_range(0, usize::MAX)
+    }
+
+    pub(crate) fn screen_text_rows_range(
+        &self,
+        start_row: usize,
+        end_row_exclusive: usize,
+    ) -> Result<Vec<ScreenTextRow>, Error> {
+        let total_rows = self.total_rows()?;
+        let start_row = start_row.min(total_rows);
+        let end_row_exclusive = end_row_exclusive.min(total_rows).max(start_row);
+        let cols = self.cols()?;
+        let mut rows = Vec::with_capacity(end_row_exclusive.saturating_sub(start_row));
+        for y in start_row..end_row_exclusive {
+            let Some(y) = u32::try_from(y).ok() else {
+                break;
+            };
+            let mut grid_ref = self.grid_ref(ghostty_screen_point(0, y))?;
+            let (soft_wrapped, wrap_continuation) = grid_ref_wrap_state(&grid_ref)?;
+            let mut cells = Vec::with_capacity(usize::from(cols));
+            for x in 0..cols {
+                grid_ref.x = x;
+                cells.push(ScreenTextCell {
+                    wide: grid_ref_wide(&grid_ref)?,
+                    graphemes: grid_ref_graphemes(&grid_ref)?,
+                });
+            }
+            rows.push(ScreenTextRow {
+                cells,
+                soft_wrapped,
+                wrap_continuation,
+            });
+        }
+        Ok(rows)
     }
 
     fn viewport_graphemes_and_style(&self, x: u16, y: u32) -> Result<(Vec<u32>, CellStyle), Error> {
@@ -1529,6 +1579,30 @@ fn grid_ref_wide(grid_ref: &ffi::GhosttyGridRef) -> Result<CellWide, Error> {
         .into_result()?;
     }
     Ok(CellWide::from_raw(wide))
+}
+
+fn grid_ref_wrap_state(grid_ref: &ffi::GhosttyGridRef) -> Result<(bool, bool), Error> {
+    let mut row = 0;
+    unsafe {
+        ffi::ghostty_grid_ref_row(grid_ref, &mut row).into_result()?;
+    }
+    let mut soft_wrapped = false;
+    let mut wrap_continuation = false;
+    unsafe {
+        ffi::ghostty_row_get(
+            row,
+            ffi::GhosttyRowData_GHOSTTY_ROW_DATA_WRAP,
+            (&mut soft_wrapped as *mut bool).cast(),
+        )
+        .into_result()?;
+        ffi::ghostty_row_get(
+            row,
+            ffi::GhosttyRowData_GHOSTTY_ROW_DATA_WRAP_CONTINUATION,
+            (&mut wrap_continuation as *mut bool).cast(),
+        )
+        .into_result()?;
+    }
+    Ok((soft_wrapped, wrap_continuation))
 }
 
 fn kitty_placement_u32(
@@ -3237,6 +3311,25 @@ mod tests {
         terminal.write(b"\x1bc");
 
         assert!(terminal.mode_get(MODE_GRAPHEME_CLUSTER).unwrap());
+    }
+
+    #[test]
+    fn screen_text_rows_preserve_wrap_and_grapheme_cells() {
+        let mut terminal = Terminal::new(5, 3, 100).unwrap();
+        terminal.write("abcdef\r\n界e\u{301}".as_bytes());
+
+        let rows = terminal.screen_text_rows().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].soft_wrapped);
+        assert!(!rows[0].wrap_continuation);
+        assert!(!rows[1].soft_wrapped);
+        assert!(rows[1].wrap_continuation);
+        assert!(!rows[2].wrap_continuation);
+        assert_eq!(rows[2].cells[0].wide, CellWide::Wide);
+        assert_eq!(rows[2].cells[0].graphemes, vec!['界' as u32]);
+        assert_eq!(rows[2].cells[1].wide, CellWide::SpacerTail);
+        assert_eq!(rows[2].cells[2].graphemes, vec!['e' as u32, 0x301]);
     }
 
     #[test]

@@ -4,8 +4,8 @@ use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SoundConfig,
-    ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
+    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
+    SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
     DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
@@ -786,6 +786,8 @@ pub struct UiConfig {
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
     pub mouse_capture: bool,
+    /// Copy text selected with the mouse. Default: true.
+    pub copy_on_select: bool,
     /// Host cursor policy. Default: auto.
     pub host_cursor: HostCursorModeConfig,
     /// Modifier that lets right-click gestures pass through to pane apps. Empty disables it.
@@ -808,6 +810,8 @@ pub struct UiConfig {
     pub hide_tab_bar_when_single_tab: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
+    /// Expanded sidebar row composition.
+    pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
     /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).
     pub accent: String,
@@ -895,7 +899,7 @@ pub struct ExperimentalConfig {
     /// if the list contains no valid names, the reveal does not apply.
     /// Accepted names: pi, claude, codex, gemini, cursor, devin, cline,
     /// opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo,
-    /// qodercli, qoder.
+    /// qodercli, qoder, maki.
     /// Default: empty.
     pub cjk_ime_agents: Vec<String>,
     /// Cursor shape rendered for the IME anchor when
@@ -989,6 +993,7 @@ impl Default for UiConfig {
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
+            copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
             redraw_on_focus_gained: true,
@@ -1000,6 +1005,7 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
+            sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
             sound: SoundConfig::default(),
@@ -1114,6 +1120,24 @@ manifest_check = false
         assert_eq!(config.update.channel.as_str(), "preview");
         assert!(!config.update.version_check);
         assert!(!config.update.manifest_check);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_update_config_defaults_to_preview() {
+        let empty: Config = toml::from_str("").unwrap();
+        let without_update_channel: Config =
+            toml::from_str("[update]\nversion_check = false").unwrap();
+
+        assert_eq!(
+            Config::default().update.channel,
+            UpdateChannelConfig::Preview
+        );
+        assert_eq!(empty.update.channel, UpdateChannelConfig::Preview);
+        assert_eq!(
+            without_update_channel.update.channel,
+            UpdateChannelConfig::Preview
+        );
     }
 
     #[test]
@@ -1378,6 +1402,19 @@ mouse_capture = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.mouse_capture);
+    }
+
+    #[test]
+    fn copy_on_select_default_on_and_parse() {
+        let default_config = Config::default();
+        assert!(default_config.ui.copy_on_select);
+
+        let toml = r#"
+[ui]
+copy_on_select = false
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.ui.copy_on_select);
     }
 
     #[test]

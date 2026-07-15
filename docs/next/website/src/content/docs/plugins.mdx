@@ -259,12 +259,41 @@ while Windows clients connect to a named pipe. CLI calls through
 Manifest pane `placement` defaults to `overlay`, which opens a temporary zoomed
 overlay over the active pane and restores the previous focus and zoom when it
 closes. A `plugin.pane.open` request can override the manifest placement with
-`overlay`, `split`, `tab`, or `zoomed`.
+`overlay`, `popup`, `split`, `tab`, or `zoomed`.
 
-Plugin panes are normal Herdr panes after they open. Plugins can call standard
-pane APIs such as `pane.move`, `pane.swap`, `pane.resize`, and `pane.zoom`
-through the socket or CLI; Herdr keeps plugin pane ownership attached to the
-underlying pane when it moves across tabs or workspaces.
+`placement = "popup"` opens a session-modal terminal popup without changing the
+tiled layout. It accepts optional `width` and `height` fields in the manifest or
+open request; omit them for the default half-size popup, use numbers for outer
+terminal-cell dimensions, or use strings like `"80%"` for a percentage of the
+terminal area. It receives all terminal input, including Escape, and closes
+when the command exits or a `popup.close` request is sent. Dimensions smaller
+than the popup minimum are clamped.
+
+Declare the placement directly on a plugin pane entrypoint when the pane should
+always be transient:
+
+```toml
+[[panes]]
+id = "picker"
+title = "Picker"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = 20
+command = ["sh", "picker.sh"]
+```
+
+Split, tab, zoomed, and overlay plugin panes are normal Herdr panes after they
+open. Plugins can call standard pane APIs such as `pane.move`, `pane.swap`,
+`pane.resize`, and `pane.zoom` through the socket or CLI; Herdr keeps plugin
+pane ownership attached to the underlying pane when it moves across tabs or
+workspaces. A popup is a singleton session resource rather than a Herdr pane:
+it has no pane ID, does not change plugin focus context, emits no pane lifecycle
+events, and does not participate in pane, layout, persistence, or agent APIs.
+Its process does not receive `HERDR_PANE_ID`; the underlying tiled pane remains
+available through `HERDR_PLUGIN_CONTEXT_JSON`.
+Opening a popup returns `ui_busy` while Settings, Copy mode, or another Herdr
+modal is active, and `plugin.pane.open` returns an `ok` result after launch.
 
 On Windows, build commands, action commands, and event commands resolve common
 `PATHEXT` shims such as `npm.cmd`, `bun.cmd`, and `pnpm.cmd` when the bare

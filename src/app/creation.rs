@@ -38,21 +38,23 @@ impl App {
             .resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
     }
 
-    pub(super) fn cwd_for_pane_in_workspace(
+    pub(super) fn follow_cwd_for_pane_in_workspace(
         &self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     ) -> Option<PathBuf> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
-        ws.tabs
-            .get(tab_idx)?
-            .cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
+        ws.tabs.get(tab_idx)?.follow_cwd_for_pane(
+            pane_id,
+            &self.state.terminals,
+            &self.terminal_runtimes,
+        )
     }
 
     pub(super) fn focused_pane_cwd_in_workspace(&self, ws_idx: usize) -> Option<PathBuf> {
         let pane_id = self.state.workspaces.get(ws_idx)?.focused_pane_id()?;
-        self.cwd_for_pane_in_workspace(ws_idx, pane_id)
+        self.follow_cwd_for_pane_in_workspace(ws_idx, pane_id)
     }
 
     pub(super) fn resolve_new_terminal_cwd(&self, follow_cwd: Option<PathBuf>) -> PathBuf {
@@ -77,9 +79,10 @@ impl App {
     /// Create a workspace with a real PTY (needs event_tx).
     #[cfg(test)]
     pub(crate) fn create_workspace(&mut self) {
-        let follow_cwd = self
-            .workspace_creation_source()
-            .and_then(|ws_idx| self.seed_cwd_from_workspace(ws_idx));
+        let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
+            self.focused_pane_cwd_in_workspace(ws_idx)
+                .or_else(|| self.seed_cwd_from_workspace(ws_idx))
+        });
         let initial_cwd = self.resolve_new_terminal_cwd(follow_cwd);
         if let Err(e) = self.create_workspace_with_events(initial_cwd, true) {
             error!(err = %e, "failed to create workspace");
@@ -91,10 +94,10 @@ impl App {
     pub(crate) fn create_tab(&mut self) {
         let custom_name = self.state.requested_new_tab_name.take();
         let active_before = self.state.active;
-        let follow_cwd = self
-            .state
-            .active
-            .and_then(|ws_idx| self.seed_cwd_from_workspace(ws_idx));
+        let follow_cwd = self.state.active.and_then(|ws_idx| {
+            self.focused_pane_cwd_in_workspace(ws_idx)
+                .or_else(|| self.seed_cwd_from_workspace(ws_idx))
+        });
         let initial_cwd = self.resolve_new_terminal_cwd(follow_cwd);
         match self.create_tab_with_options(initial_cwd, true) {
             Ok(created_idx) => {
@@ -405,10 +408,12 @@ impl App {
             label: terminal.manual_label.clone(),
             agent: terminal.effective_agent_label().map(str::to_string),
             title: presentation.title,
+            terminal_title: terminal.terminal_title.clone(),
+            terminal_title_stripped: terminal.terminal_title_stripped(),
             display_agent: presentation.display_agent,
             agent_status: pane_agent_status(terminal.state, pane.seen),
-            custom_status: presentation.custom_status,
             state_labels: presentation.state_labels,
+            tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
             scroll,
             revision: terminal.revision,
@@ -449,6 +454,7 @@ impl App {
                 crate::workspace::public_tab_id_for_number(&ws.id, ws.active_tab + 1)
             }),
             agent_status: pane_agent_status(agg_state, seen),
+            tokens: ws.metadata_tokens.values(),
             worktree: ws
                 .worktree_space()
                 .map(|space| crate::api::schema::WorkspaceWorktreeInfo {

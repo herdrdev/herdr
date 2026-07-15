@@ -5,13 +5,18 @@ description: Configure Herdr keybindings, themes, sidebar behavior, notification
 
 Herdr works without a config file. Add one when you want custom keys, themes, sidebar settings, notifications, or advanced behavior.
 
+Looking for a specific key? The [Config reference](/docs/config-reference/) lists every key with its type, default, and allowed values.
+
 ## Config file
 
 Herdr reads config from:
 
 ```text
-~/.config/herdr/config.toml
+Linux and macOS: ~/.config/herdr/config.toml
+Windows:          %APPDATA%\herdr\config.toml
 ```
+
+Run `herdr --help` to see the resolved config path for your system.
 
 Print the full default config:
 

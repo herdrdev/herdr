@@ -38,7 +38,27 @@ pub(crate) struct WorkspaceGitRefreshOutput {
     pub(crate) cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
 }
 
+fn retain_custom_command_after_wait(
+    pid: u32,
+    result: std::io::Result<Option<std::process::ExitStatus>>,
+) -> bool {
+    match result {
+        Ok(None) => true,
+        Ok(Some(_)) => false,
+        Err(err) if err.kind() == std::io::ErrorKind::Interrupted => true,
+        Err(err) => {
+            tracing::warn!(pid, err = %err, "failed to reap detached custom command");
+            false
+        }
+    }
+}
+
 impl App {
+    pub(crate) fn reap_finished_custom_commands(&mut self) {
+        self.detached_custom_command_children
+            .retain_mut(|child| retain_custom_command_after_wait(child.id(), child.try_wait()));
+    }
+
     pub(crate) fn shutdown_detached_terminal_runtimes(&mut self) {
         let terminal_ids = std::mem::take(&mut self.state.terminal_runtime_shutdowns);
         for terminal_id in terminal_ids {
@@ -62,7 +82,8 @@ impl App {
         msg: crate::api::ApiRequestMessage,
     ) -> bool {
         let previous_mode = self.state.mode;
-        let mut changed = crate::api::request_changes_ui(&msg.request);
+        let mut changed = self.expire_due_metadata(Instant::now());
+        changed |= crate::api::request_changes_ui(&msg.request);
         let skip_default_workspace = matches!(
             &msg.request.method,
             crate::api::schema::Method::ServerStop(_)
@@ -121,7 +142,7 @@ impl App {
                 let key_id = repeat_key_identity(&key);
                 match key.kind {
                     crossterm::event::KeyEventKind::Press => {
-                        if self.state.mode == Mode::Terminal {
+                        if self.state.popup_pane.is_some() || self.state.mode == Mode::Terminal {
                             self.suppressed_repeat_keys.remove(&key_id);
                         } else {
                             self.suppressed_repeat_keys.insert(key_id);
@@ -130,7 +151,7 @@ impl App {
                         true
                     }
                     crossterm::event::KeyEventKind::Repeat => {
-                        if self.state.mode == Mode::Terminal
+                        if (self.state.popup_pane.is_some() || self.state.mode == Mode::Terminal)
                             && !self.suppressed_repeat_keys.contains(&key_id)
                         {
                             self.handle_key(key).await;
@@ -150,7 +171,7 @@ impl App {
                 true
             }
             crate::raw_input::RawInputEvent::Mouse(mouse) => {
-                if self.state.mouse_capture {
+                if self.state.popup_pane.is_some() || self.state.mouse_capture {
                     self.handle_mouse(mouse);
                 } else {
                     self.state
@@ -159,6 +180,7 @@ impl App {
                 true
             }
             crate::raw_input::RawInputEvent::OuterFocusGained => {
+                self.send_outer_focus_event(crate::ghostty::FocusEvent::Gained);
                 if self.state.redraw_on_focus_gained {
                     self.request_full_redraw();
                 }
@@ -167,6 +189,7 @@ impl App {
                 true
             }
             crate::raw_input::RawInputEvent::OuterFocusLost => {
+                self.send_outer_focus_event(crate::ghostty::FocusEvent::Lost);
                 self.state.outer_terminal_focus = Some(false);
                 false
             }
@@ -288,18 +311,7 @@ impl App {
             self.start_background_session_save();
         }
 
-        if let Some(deadline) = self
-            .agent_metadata_deadline
-            .filter(|deadline| now >= *deadline)
-        {
-            let previous_toast = self.state.toast.clone();
-            for update in self.state.expire_agent_metadata_at(deadline, now) {
-                self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
-                self.emit_pane_state_update(&update);
-            }
-            self.sync_agent_metadata_deadline();
-            changed = true;
-        }
+        changed |= self.expire_due_metadata(now);
 
         if geometry_dirty || resized {
             self.pending_agent_resume_deadline = None;
@@ -335,6 +347,33 @@ impl App {
 
     pub(crate) fn sync_agent_metadata_deadline(&mut self) {
         self.agent_metadata_deadline = self.state.next_agent_metadata_expiry();
+    }
+
+    pub(crate) fn expire_due_metadata(&mut self, now: Instant) -> bool {
+        let Some(deadline) = self
+            .agent_metadata_deadline
+            .filter(|deadline| now >= *deadline)
+        else {
+            return false;
+        };
+        self.expire_metadata_at(deadline, now);
+        true
+    }
+
+    pub(crate) fn expire_metadata_at(&mut self, deadline: Instant, now: Instant) {
+        let previous_toast = self.state.toast.clone();
+        for update in self.state.expire_agent_metadata_at(deadline, now) {
+            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+            self.emit_pane_state_update(&update);
+        }
+        let (panes, workspaces) = self.state.expire_metadata_tokens(now);
+        for (ws_idx, pane_id) in panes {
+            self.emit_pane_updated(ws_idx, pane_id);
+        }
+        for ws_idx in workspaces {
+            self.emit_workspace_token_updated(ws_idx);
+        }
+        self.sync_agent_metadata_deadline();
     }
 
     pub(crate) fn sync_animation_timer(&mut self, now: Instant) {
@@ -679,6 +718,13 @@ mod tests {
     use crate::app::state;
     use crate::workspace::Workspace;
     use std::path::PathBuf;
+
+    #[test]
+    fn interrupted_custom_command_wait_keeps_child_for_retry() {
+        let interrupted = std::io::Error::new(std::io::ErrorKind::Interrupted, "test interrupt");
+
+        assert!(retain_custom_command_after_wait(42, Err(interrupted)));
+    }
 
     fn test_app_with_pane() -> (super::super::App, crate::layout::PaneId) {
         let mut app = super::super::App::new(

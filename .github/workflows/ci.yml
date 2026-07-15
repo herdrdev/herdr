@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -59,12 +62,17 @@ jobs:
 
       - name: Install Rust
         if: matrix.kind == 'unix'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          components: rustfmt,clippy
 
       - name: Install Rust
         if: matrix.kind == 'windows'
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          components: rustfmt,clippy
           targets: x86_64-pc-windows-msvc
 
       - name: Install Rust tools
@@ -84,6 +92,7 @@ jobs:
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
+          use-cache: ${{ matrix.kind != 'windows' }}
 
       - name: Restore Homebrew Zig cache
         if: runner.os == 'macOS'
@@ -99,7 +108,18 @@ jobs:
         run: |
           HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
           echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
+          echo "ZIG_GLOBAL_CACHE_DIR=$GITHUB_WORKSPACE/.zig-cache" >> "$GITHUB_ENV"
+          echo "ZIG_LOCAL_CACHE_DIR=$GITHUB_WORKSPACE/.zig-cache" >> "$GITHUB_ENV"
           "$(brew --prefix zig@0.15)/bin/zig" version
+
+      - name: Restore Zig build cache
+        if: runner.os == 'macOS' || matrix.kind == 'windows'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .zig-cache
+          key: zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.15.2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.15.2-
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'
@@ -110,14 +130,6 @@ jobs:
         with:
           cache-bin: false
           key: ${{ matrix.os }}
-
-      - name: Remove Zig caches
-        if: matrix.kind == 'windows'
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
 
       - name: Run checks
         if: matrix.kind == 'unix'
@@ -135,8 +147,21 @@ jobs:
               throw "command failed with exit code $LASTEXITCODE`: $Command $($Arguments -join ' ')"
             }
           }
+          function Invoke-CargoWithZigCacheRecovery {
+            param([string[]]$Arguments)
+            & cargo @Arguments
+            if ($LASTEXITCODE -eq 0) {
+              return
+            }
+
+            Write-Warning "cargo compile failed; clearing Zig build caches and retrying once"
+            Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
+            Invoke-Checked cargo $Arguments
+          }
           Invoke-Checked cargo @("fmt", "--check")
-          Invoke-Checked cargo @("clippy", "--bin", "herdr", "--locked", "--target", "x86_64-pc-windows-msvc", "--", "-D", "warnings")
+          Invoke-CargoWithZigCacheRecovery @("clippy", "--bin", "herdr", "--locked", "--target", "x86_64-pc-windows-msvc", "--", "-D", "warnings")
           Invoke-Checked cargo @("test", "--locked", "--target", "x86_64-pc-windows-msvc", "--bin", "herdr", "windows_")
           Invoke-Checked cargo @("test", "--locked", "--target", "x86_64-pc-windows-msvc", "--bin", "herdr", "server::client_transport::tests")
           Invoke-Checked cargo @("build", "--locked", "--target", "x86_64-pc-windows-msvc")

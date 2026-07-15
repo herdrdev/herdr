@@ -6,6 +6,7 @@ use super::common::AgentStatus;
 use super::common::SplitDirection;
 use super::panes::PaneInfo;
 use super::workspaces::WorkspaceWorktreeInfo;
+use crate::popup_size::PopupSize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginLinkParams {
@@ -261,6 +262,10 @@ pub struct PluginManifestPane {
     pub platforms: Option<Vec<PluginPlatform>>,
     #[serde(default)]
     pub placement: PluginPanePlacement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<PopupSize>,
     pub command: Vec<String>,
 }
 
@@ -407,6 +412,10 @@ pub struct PluginPaneOpenParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<PluginPanePlacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_pane_id: Option<String>,
@@ -427,6 +436,7 @@ pub struct PluginPaneOpenParams {
 pub enum PluginPanePlacement {
     #[default]
     Overlay,
+    Popup,
     Split,
     Tab,
     Zoomed,

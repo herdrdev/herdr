@@ -19,7 +19,7 @@ curl -fsSL https://herdr.dev/install.sh | sh
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
-安装器会下载适合你平台的发布二进制文件并放到 PATH 上。Windows 安装器默认使用预览通道,把该通道写入 Herdr 配置,使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
+安装器会下载适合你平台的发布二进制文件并放到 PATH 上。在 Windows 上,Herdr 默认使用预览通道,且不会修改你的配置。安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
 
 ## 用 Homebrew 安装
 

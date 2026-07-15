@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
+  HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 };
@@ -256,8 +257,8 @@ test("Pi waits for a replacement session report before publishing state", async 
   ]);
 });
 
-test("Pi retries working state after an unanswered socket attempt", async () => {
-  const recordingSocketPath = join(tmpdir(), `herdr-pi-retry-${process.pid}.sock`);
+async function startDroppedFirstResponseServer(name: string) {
+  const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
@@ -291,6 +292,46 @@ test("Pi retries working state after an unanswered socket attempt", async () => 
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
+  return {
+    attemptedRequests,
+    deliveredRequests,
+    connectionCount: () => connectionCount,
+  };
+}
+
+test("Oh My Pi retries working before a queued idle state", async () => {
+  const { attemptedRequests } = await startDroppedFirstResponseServer("omp-retry");
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
+  const { handlers, pi } = createExtensionHarness();
+
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    hasUI: true,
+    isIdle: () => false,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("agent_end")?.({ messages: [] }, context);
+
+  const deadline = Date.now() + 2_500;
+  while (Date.now() < deadline && attemptedRequests.length < 3) {
+    await Bun.sleep(5);
+  }
+
+  expect(attemptedRequests).toHaveLength(3);
+  expect(attemptedRequests[1]).toEqual(attemptedRequests[0]);
+  expect(requestState(attemptedRequests[0])).toBe("working");
+  expect(requestState(attemptedRequests[2])).toBe("idle");
+});
+
+test("Pi retries working state after an unanswered socket attempt", async () => {
+  const { attemptedRequests, deliveredRequests, connectionCount } =
+    await startDroppedFirstResponseServer("pi-retry");
   const { handlers, pi } = createExtensionHarness();
 
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
@@ -324,11 +365,18 @@ test("Pi retries working state after an unanswered socket attempt", async () => 
     await Bun.sleep(5);
   }
 
-  expect(connectionCount).toBeGreaterThanOrEqual(2);
+  expect(connectionCount()).toBeGreaterThanOrEqual(2);
   expect(attemptedRequests.length).toBeGreaterThanOrEqual(2);
   expect(attemptedRequests[1]).toEqual(attemptedRequests[0]);
   expect(reportedWorking()).toBe(true);
 });
+
+function requestState(request: unknown): unknown {
+  if (!isRecord(request) || !isRecord(request.params)) {
+    return undefined;
+  }
+  return request.params.state;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

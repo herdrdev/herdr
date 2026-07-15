@@ -92,45 +92,54 @@ fn platform_state_dir() -> PathBuf {
     }
 }
 
+fn read_optional_config(path: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 impl Config {
     pub fn load() -> LoadedConfig {
         let path = config_path();
-        if path.exists() {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => match toml::from_str::<Config>(&content) {
-                    Ok(config) => {
-                        let mut diagnostics =
-                            unknown_top_level_section_diagnostics_from_str(&content);
-                        diagnostics.extend(config.collect_diagnostics());
-                        return LoadedConfig {
-                            config,
-                            diagnostics,
-                            invalid_sections: Vec::new(),
-                        };
-                    }
-                    Err(err) => {
-                        warn!(err = %err, "config parse error, using defaults");
-                        return LoadedConfig {
-                            config: Self::default(),
-                            diagnostics: vec![format!("config parse error: {err}; using defaults")],
-                            invalid_sections: Vec::new(),
-                        };
-                    }
-                },
-                Err(err) => {
-                    warn!(err = %err, "config read error, using defaults");
-                    return LoadedConfig {
-                        config: Self::default(),
-                        diagnostics: vec![format!("config read error: {err}; using defaults")],
-                        invalid_sections: Vec::new(),
-                    };
+        let content = match read_optional_config(&path) {
+            Ok(Some(content)) => content,
+            Ok(None) => {
+                return LoadedConfig {
+                    config: Self::default(),
+                    diagnostics: Vec::new(),
+                    invalid_sections: Vec::new(),
+                };
+            }
+            Err(err) => {
+                warn!(err = %err, "config read error, using defaults");
+                return LoadedConfig {
+                    config: Self::default(),
+                    diagnostics: vec![format!("config read error: {err}; using defaults")],
+                    invalid_sections: Vec::new(),
+                };
+            }
+        };
+
+        match toml::from_str::<Config>(&content) {
+            Ok(config) => {
+                let mut diagnostics = unknown_top_level_section_diagnostics_from_str(&content);
+                diagnostics.extend(config.collect_diagnostics());
+                LoadedConfig {
+                    config,
+                    diagnostics,
+                    invalid_sections: Vec::new(),
                 }
             }
-        }
-        LoadedConfig {
-            config: Self::default(),
-            diagnostics: Vec::new(),
-            invalid_sections: Vec::new(),
+            Err(err) => {
+                warn!(err = %err, "config parse error, using defaults");
+                LoadedConfig {
+                    config: Self::default(),
+                    diagnostics: vec![format!("config parse error: {err}; using defaults")],
+                    invalid_sections: Vec::new(),
+                }
+            }
         }
     }
 }
@@ -154,36 +163,60 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
-    const MAX_VISIBLE_DIAGNOSTICS: usize = 4;
-
     if diagnostics.is_empty() {
         return None;
     }
 
-    let mut lines: Vec<String> = diagnostics
+    let target = config_path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml")
+        .to_string();
+    let read_error = diagnostics
         .iter()
-        .take(MAX_VISIBLE_DIAGNOSTICS)
-        .map(|diagnostic| diagnostic.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect();
-    let hidden = diagnostics.len().saturating_sub(MAX_VISIBLE_DIAGNOSTICS);
-    if hidden > 0 {
-        lines.push(format!("and {hidden} more config warnings"));
-    }
-    Some(lines.join("\n"))
+        .any(|diagnostic| diagnostic.starts_with("config read error:"));
+    let impact = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("using defaults"))
+    {
+        if read_error {
+            " unreadable; using defaults"
+        } else {
+            " invalid; using defaults"
+        }
+    } else if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("keeping current config"))
+    {
+        if read_error {
+            " unreadable; keeping current config"
+        } else {
+            " invalid; keeping current config"
+        }
+    } else {
+        ""
+    };
+
+    Some(format!("{target}{impact}; herdr config check"))
 }
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
     let path = config_path();
-    if !path.exists() {
-        return Ok(LoadedConfig {
-            config: Config::default(),
-            diagnostics: Vec::new(),
-            invalid_sections: Vec::new(),
-        });
-    }
-
-    let content = std::fs::read_to_string(&path)
-        .map_err(|err| vec![format!("config read error: {err}; keeping current config")])?;
+    let content = match read_optional_config(&path) {
+        Ok(Some(content)) => content,
+        Ok(None) => {
+            return Ok(LoadedConfig {
+                config: Config::default(),
+                diagnostics: Vec::new(),
+                invalid_sections: Vec::new(),
+            });
+        }
+        Err(err) => {
+            return Err(vec![format!(
+                "config read error: {err}; keeping current config"
+            )]);
+        }
+    };
     load_live_config_from_str(&content)
 }
 
@@ -576,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn config_diagnostic_summary_keeps_multiple_warnings_visible() {
+    fn config_diagnostic_summary_uses_compact_actionable_banner() {
         let diagnostics = vec![
             "one".to_string(),
             "two".to_string(),
@@ -587,8 +620,75 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("one\ntwo\nthree\nfour\nand 1 more config warnings")
+            Some("config.toml; herdr config check")
         );
+    }
+
+    #[test]
+    fn config_diagnostic_summary_reports_default_fallback() {
+        let diagnostics = vec![
+            "config parse error: TOML parse error at line 33, column 8\n   |\n33 | type = \"popup\"\n   |        ^^^^^^^\nunknown variant `popup`; using defaults"
+                .to_string(),
+        ];
+
+        assert_eq!(
+            config_diagnostic_summary(&diagnostics).as_deref(),
+            Some("config.toml invalid; using defaults; herdr config check")
+        );
+    }
+
+    #[test]
+    fn config_diagnostic_summary_reports_unreadable_config_impact() {
+        let startup = vec!["config read error: permission denied; using defaults".to_string()];
+        assert_eq!(
+            config_diagnostic_summary(&startup).as_deref(),
+            Some("config.toml unreadable; using defaults; herdr config check")
+        );
+
+        let reload =
+            vec!["config read error: permission denied; keeping current config".to_string()];
+        assert_eq!(
+            config_diagnostic_summary(&reload).as_deref(),
+            Some("config.toml unreadable; keeping current config; herdr config check")
+        );
+    }
+
+    #[test]
+    fn config_diagnostic_summary_reports_retained_live_config() {
+        let diagnostics = vec![
+            "config parse error: TOML parse error at line 7, column 4; keeping current config"
+                .to_string(),
+        ];
+
+        assert_eq!(
+            config_diagnostic_summary(&diagnostics).as_deref(),
+            Some("config.toml invalid; keeping current config; herdr config check")
+        );
+    }
+
+    #[test]
+    fn config_loaders_report_unreadable_path() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let path =
+            std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
+
+        let startup = Config::load();
+        assert!(startup
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("config read error")
+                && diagnostic.contains("using defaults")));
+
+        let reload = load_live_config().unwrap_err();
+        assert!(reload.iter().any(|diagnostic| {
+            diagnostic.contains("config read error")
+                && diagnostic.contains("keeping current config")
+        }));
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path);
     }
 
     #[test]

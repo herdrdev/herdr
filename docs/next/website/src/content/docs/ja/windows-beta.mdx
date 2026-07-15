@@ -15,7 +15,7 @@ Windows 上の Herdr は、Herdr が本来前提としていた Unix の PTY モ
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
-Windows ベータビルドはプレビューチャンネルでのみ提供されます。Windows インストーラーはデフォルトでプレビューを使い、Herdr の設定に `channel = "preview"` を書き込み、リリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
+Windows ベータビルドはプレビューチャンネルでのみ提供されます。Windows では Herdr が設定を変更せずにデフォルトでプレビューを使います。インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。
 
 内部ベータテスト向けに、`HERDR_MANIFEST_URL` でインストーラーを Herdr の安定版/プレビューマニフェストではなくカスタムマニフェストに向けられます。
 

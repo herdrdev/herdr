@@ -764,6 +764,36 @@ fn outdated_integrations_detect_previous_pi_version() {
 }
 
 #[test]
+fn outdated_integrations_detect_previous_omp_version() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let ext_dir = home.join(".omp/agent/extensions");
+    fs::create_dir_all(&ext_dir).unwrap();
+    let extension_path = ext_dir.join(OMP_EXTENSION_INSTALL_NAME);
+    fs::write(
+        &extension_path,
+        "// HERDR_INTEGRATION_ID=omp\n// HERDR_INTEGRATION_VERSION=4\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let outdated = outdated_installed_integrations();
+
+    assert_eq!(outdated.len(), 1);
+    assert_eq!(
+        outdated[0].target,
+        crate::api::schema::IntegrationTarget::Omp
+    );
+    assert_eq!(outdated[0].path, extension_path);
+    assert_eq!(outdated[0].installed_version, Some(4));
+    assert_eq!(outdated[0].expected_version, OMP_INTEGRATION_VERSION);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn outdated_integrations_accept_current_version_marker() {
     let _lock = integration_env_lock();
     let base = unique_base();

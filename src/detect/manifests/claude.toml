@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.06.10.3"
+version = "2026.07.13.1"
 min_engine_version = 2
-updated_at = "2026-06-10T00:00:00Z"
+updated_at = "2026-07-13T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -11,6 +11,17 @@ priority = 1100
 region = "osc_title"
 visible_working = true
 regex = ['^[\x{2800}-\x{28FF}] ']
+
+[[rules]]
+id = "btw_overlay_working"
+state = "working"
+priority = 975
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = [
+  '^\s*/btw(?:\s|$)',
+  '(?i)esc to close\s*$',
+]
 
 [[rules]]
 id = "transcript_viewer"

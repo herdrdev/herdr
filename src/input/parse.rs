@@ -13,15 +13,16 @@ pub fn parse_terminal_key_sequence(data: &str) -> Option<TerminalKey> {
 fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     let body = data.strip_prefix("\x1b[")?.strip_suffix('u')?;
 
-    let (main, event_type) = match body.rsplit_once(':') {
-        Some((head, tail)) if tail.chars().all(|ch| ch.is_ascii_digit()) && head.contains(';') => {
-            (head, Some(tail))
-        }
-        _ => (body, None),
-    };
+    let mut fields = body.split(';');
+    let key_part = fields.next()?;
+    let modifier_part = fields.next().unwrap_or("1");
+    let associated_text = fields.next();
+    if fields.next().is_some() {
+        return None;
+    }
 
-    let (key_part, modifier_part) = main.rsplit_once(';').unwrap_or((main, "1"));
-    let modifier = modifier_part.parse::<u8>().ok()?.checked_sub(1)?;
+    let (modifier_text, event_type) = split_modifier_and_event(modifier_part);
+    let modifier = modifier_text.parse::<u8>().ok()?.checked_sub(1)?;
 
     let mut key_fields = key_part.split(':');
     let codepoint = key_fields.next()?.parse::<u32>().ok()?;
@@ -29,6 +30,12 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .next()
         .filter(|field| !field.is_empty())
         .and_then(|field| field.parse::<u32>().ok());
+
+    if let Some(text) = associated_text {
+        if text.parse::<u32>().ok()? != codepoint {
+            return None;
+        }
+    }
 
     let code = kitty_codepoint_to_keycode(codepoint)?;
     let kind = parse_kitty_event_type(event_type)?;
@@ -590,6 +597,27 @@ mod tests {
         assert_eq!(key.modifiers, KeyModifiers::SHIFT);
         assert_eq!(key.kind, crossterm::event::KeyEventKind::Release);
         assert_eq!(key.shifted_codepoint, Some('L' as u32));
+    }
+
+    #[test]
+    fn parse_kitty_sequence_with_associated_emoji_text() {
+        let key = parse_terminal_key_sequence("\x1b[128512;1;128512u").unwrap();
+        assert_terminal_key_eq(
+            key,
+            KeyCode::Char('😀'),
+            KeyModifiers::empty(),
+            crossterm::event::KeyEventKind::Press,
+            None,
+        );
+    }
+
+    #[test]
+    fn reject_unmodeled_kitty_associated_text() {
+        assert_eq!(parse_terminal_key_sequence("\x1b[128512;1;128513u"), None);
+        assert_eq!(
+            parse_terminal_key_sequence("\x1b[128512;1;128512:65039u"),
+            None
+        );
     }
 
     #[test]
