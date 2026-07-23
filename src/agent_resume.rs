@@ -89,6 +89,7 @@ pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
             | ("herdr:qodercli", "qodercli")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
+            | ("herdr:agy", "agy")
     )
 }
 
@@ -190,6 +191,14 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:agy", "agy", AgentSessionRefKind::Id) => {
+            vec![
+                "agy".into(),
+                "--conversation".into(),
+                session_ref.value.clone(),
+            ]
+        }
+        }
         _ => return None,
     };
 
@@ -225,6 +234,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:kilo", "kilo")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
+            | ("herdr:agy", "agy")
     )
 }
 
@@ -256,6 +266,7 @@ mod tests {
         assert!(is_reserved_native_state_source("herdr:claude", "claude"));
         assert!(is_reserved_native_state_source("herdr:codex", "codex"));
         assert!(is_reserved_native_state_source("herdr:devin", "devin"));
+        assert!(is_reserved_native_state_source("herdr:agy", "agy"));
         assert!(!is_reserved_native_state_source("herdr:kimi", "kimi"));
         assert!(!is_reserved_native_state_source(
             "herdr:opencode",
@@ -416,6 +427,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["grok", "--resume", "grok-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:agy",
+                "agy",
+                &AgentSessionRef::id("agy-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["agy", "--conversation", "agy-session"]
         );
     }
 
