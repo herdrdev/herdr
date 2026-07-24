@@ -379,47 +379,17 @@ pub(crate) fn print_outdated_update_notice() -> bool {
     true
 }
 
-/// Whether the herdr-owned grok hook config next to the installed hook
-/// script still registers it: `hooks/herdr.json` must exist, parse as JSON,
-/// and carry a SessionStart command entry that references the hook script.
+/// Whether the Herdr-owned Grok hook config exactly matches the installed
+/// integration. JSON formatting and object key order do not affect validity.
 fn grok_hook_config_is_valid(hook_path: &Path) -> bool {
     let Some(hooks_dir) = hook_path.parent() else {
         return false;
     };
     let config_path = hooks_dir.join(super::GROK_HOOK_CONFIG_INSTALL_NAME);
-    let Ok(content) = fs::read_to_string(&config_path) else {
-        return false;
-    };
-    let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let Some(entries) = config
-        .get("hooks")
-        .and_then(|hooks| hooks.get("SessionStart"))
-        .and_then(|entries| entries.as_array())
-    else {
-        return false;
-    };
-    entries.iter().any(|entry| {
-        entry
-            .get("hooks")
-            .and_then(|hooks| hooks.as_array())
-            .is_some_and(|hooks| {
-                hooks.iter().any(|hook| {
-                    let is_command_hook = hook
-                        .get("type")
-                        .and_then(|hook_type| hook_type.as_str())
-                        .is_some_and(|hook_type| hook_type == "command");
-                    is_command_hook
-                        && hook
-                            .get("command")
-                            .and_then(|command| command.as_str())
-                            .is_some_and(|command| {
-                                command == super::targets::grok_session_hook_command(hook_path)
-                            })
-                })
-            })
-    })
+    fs::read_to_string(config_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .is_some_and(|config| config == super::targets::grok_hook_config(hook_path))
 }
 
 pub(crate) fn integration_status_at(

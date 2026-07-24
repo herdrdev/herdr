@@ -1203,12 +1203,26 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
     })
 }
 
-/// The exact SessionStart command the grok hook config registers. Shared
-/// with integration-status validation so a config that does not invoke the
-/// installed script with the `session` action is reported as outdated.
-pub(crate) fn grok_session_hook_command(hook_path: &Path) -> String {
+/// The complete Herdr-owned Grok hook config. Installation and status share
+/// this value so any config drift is reported as outdated.
+pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
     let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
-    format!("sh {quoted_hook_path} session")
+    let session_command = format!("sh {quoted_hook_path} session");
+    json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": session_command,
+                            "timeout": 10,
+                        }
+                    ]
+                }
+            ]
+        }
+    })
 }
 
 pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
@@ -1231,23 +1245,10 @@ pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
     make_executable(&hook_path)?;
 
     let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
-    let session_command = grok_session_hook_command(&hook_path);
-    let config = json!({
-        "hooks": {
-            "SessionStart": [
-                {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": session_command,
-                            "timeout": 10,
-                        }
-                    ]
-                }
-            ]
-        }
-    });
-    fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&grok_hook_config(&hook_path))?,
+    )?;
 
     Ok(GrokInstallPaths {
         hook_path,

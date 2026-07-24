@@ -3371,6 +3371,7 @@ fn install_grok_writes_hook_and_config() {
 
     let config: Value =
         serde_json::from_str(&fs::read_to_string(&installed.config_path).unwrap()).unwrap();
+    assert_eq!(config, grok_hook_config(&installed.hook_path));
     let session_start = config["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(session_start.len(), 1);
     let command = grok_session_command(&config);
@@ -3727,7 +3728,7 @@ fn grok_status_reports_outdated_when_hook_config_missing_or_broken() {
     assert_eq!(grok_state(), IntegrationStatusKind::Outdated);
 
     // Correct command but not a command-type hook: grok will not execute it.
-    let session_command = grok_session_hook_command(&hook_path);
+    let session_command = grok_session_command(&grok_hook_config(&hook_path));
     fs::write(
         &config_path,
         format!(
@@ -3736,6 +3737,21 @@ fn grok_status_reports_outdated_when_hook_config_missing_or_broken() {
         ),
     )
     .unwrap();
+    assert_eq!(grok_state(), IntegrationStatusKind::Outdated);
+
+    // A matcher can prevent the expected hook from running.
+    let mut config = grok_hook_config(&hook_path);
+    config["hooks"]["SessionStart"][0]["matcher"] = json!("(");
+    fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+    assert_eq!(grok_state(), IntegrationStatusKind::Outdated);
+
+    // A malformed sibling group makes grok reject the event's hook groups.
+    let mut config = grok_hook_config(&hook_path);
+    config["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({}));
+    fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
     assert_eq!(grok_state(), IntegrationStatusKind::Outdated);
 
     // Reinstall repairs both files.

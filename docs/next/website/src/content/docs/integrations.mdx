@@ -268,7 +268,7 @@ herdr integration install grok
 
 The hook reports session identity through Grok's `SessionStart` hook while Grok CLI runs inside a Herdr pane. Grok state comes from Herdr's screen manifest detection.
 
-Herdr uses `~/.grok`. The Grok config directory must already exist. Grok merges every `~/.grok/hooks/*.json` file, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to the `hooks/herdr-agent-state.sh` script, and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
+Herdr uses `~/.grok` by default, or `GROK_HOME` when set. The Grok config directory must already exist. Grok merges every `hooks/*.json` file in that directory, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to the `hooks/herdr-agent-state.sh` script, and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
 
 After Grok emits a session start event, Herdr can use the reported session id to resume the pane with `grok --resume <id>`.
 
