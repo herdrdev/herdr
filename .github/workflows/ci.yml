@@ -36,7 +36,9 @@ jobs:
 
       - name: Validate PR title
         if: github.event_name == 'pull_request'
-        run: python3 scripts/conventional_commits.py "${{ github.event.pull_request.title }}"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 scripts/conventional_commits.py "$PR_TITLE"
 
   check:
     name: check (${{ matrix.os }})

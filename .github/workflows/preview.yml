@@ -43,10 +43,12 @@ jobs:
       - name: Select preview commit
         id: plan
         shell: bash
+        env:
+          INPUT_COMMIT: ${{ github.event.inputs.commit }}
         run: |
           set -euo pipefail
           git fetch origin master --tags
-          requested="${{ github.event.inputs.commit || '' }}"
+          requested="${INPUT_COMMIT:-}"
           if [ -n "$requested" ]; then
             commit="$(git rev-parse "$requested^{commit}")"
             if ! git merge-base --is-ancestor "$commit" origin/master; then
@@ -297,6 +299,8 @@ jobs:
       - name: Record previous preview commit
         id: previous-preview
         shell: bash
+        env:
+          PREFLIGHT_COMMIT: ${{ needs.preflight.outputs.commit }}
         run: |
           set -euo pipefail
           previous="$(python3 scripts/preview.py current-commit --manifest website/preview.json || true)"
@@ -305,19 +309,24 @@ jobs:
           fi
           range_base="$(python3 scripts/preview.py range-base \
             --previous "$previous" \
-            --commit '${{ needs.preflight.outputs.commit }}')"
+            --commit "$PREFLIGHT_COMMIT")"
           echo "commit=$previous" >> "$GITHUB_OUTPUT"
           echo "range_base=$range_base" >> "$GITHUB_OUTPUT"
 
       - name: Generate notes and checksums
         shell: bash
+        env:
+          PREFLIGHT_COMMIT: ${{ needs.preflight.outputs.commit }}
+          PREFLIGHT_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+          PREFLIGHT_BASE_VERSION: ${{ needs.preflight.outputs.base_version }}
+          PREVIOUS_RANGE_BASE: ${{ steps.previous-preview.outputs.range_base }}
         run: |
           set -euo pipefail
           python3 scripts/preview.py notes \
-            --previous '${{ steps.previous-preview.outputs.range_base }}' \
-            --commit '${{ needs.preflight.outputs.commit }}' \
-            --build-id '${{ needs.preflight.outputs.build_id }}' \
-            --base-version '${{ needs.preflight.outputs.base_version }}' \
+            --previous "$PREVIOUS_RANGE_BASE" \
+            --commit "$PREFLIGHT_COMMIT" \
+            --build-id "$PREFLIGHT_BUILD_ID" \
+            --base-version "$PREFLIGHT_BASE_VERSION" \
             --output PREVIEW_NOTES.md
           python3 - <<'PY'
           import json, pathlib
@@ -347,15 +356,22 @@ jobs:
             artifacts/herdr-windows-x86_64.exe/herdr-windows-x86_64.exe
 
       - name: Update preview manifest
+        env:
+          PREFLIGHT_TAG: ${{ needs.preflight.outputs.tag }}
+          PREFLIGHT_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+          PREFLIGHT_COMMIT: ${{ needs.preflight.outputs.commit }}
+          PREFLIGHT_BUILT_AT: ${{ needs.preflight.outputs.built_at }}
+          PREFLIGHT_BASE_VERSION: ${{ needs.preflight.outputs.base_version }}
+          PREFLIGHT_PROTOCOL: ${{ needs.preflight.outputs.protocol }}
         run: |
           python3 scripts/preview.py manifest \
             --output website/preview.json \
-            --tag '${{ needs.preflight.outputs.tag }}' \
-            --build-id '${{ needs.preflight.outputs.build_id }}' \
-            --commit '${{ needs.preflight.outputs.commit }}' \
-            --built-at '${{ needs.preflight.outputs.built_at }}' \
-            --base-version '${{ needs.preflight.outputs.base_version }}' \
-            --protocol '${{ needs.preflight.outputs.protocol }}' \
+            --tag "$PREFLIGHT_TAG" \
+            --build-id "$PREFLIGHT_BUILD_ID" \
+            --commit "$PREFLIGHT_COMMIT" \
+            --built-at "$PREFLIGHT_BUILT_AT" \
+            --base-version "$PREFLIGHT_BASE_VERSION" \
+            --protocol "$PREFLIGHT_PROTOCOL" \
             --notes PREVIEW_NOTES.md \
             --sha-file preview-sha256.json \
             --retain 30
@@ -388,16 +404,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.KANGAL_GITHUB_TOKEN }}
           PREVIEW_RELEASED_LABEL: preview-released
+          PREVIEW_COMMIT: ${{ needs.preflight.outputs.commit }}
+          PREVIEW_TAG: ${{ needs.preflight.outputs.tag }}
+          PREVIEW_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+          PREVIOUS_PREVIEW_COMMIT: ${{ steps.previous-preview.outputs.commit }}
+          PREVIEW_RANGE_BASE: ${{ steps.previous-preview.outputs.range_base }}
         run: |
           set -euo pipefail
 
           echo "Using GitHub token for $(gh api user --jq .login)."
-
-          PREVIEW_COMMIT='${{ needs.preflight.outputs.commit }}'
-          PREVIEW_TAG='${{ needs.preflight.outputs.tag }}'
-          PREVIEW_BUILD_ID='${{ needs.preflight.outputs.build_id }}'
-          PREVIOUS_PREVIEW_COMMIT='${{ steps.previous-preview.outputs.commit }}'
-          PREVIEW_RANGE_BASE='${{ steps.previous-preview.outputs.range_base }}'
 
           echo "Previous preview commit: $PREVIOUS_PREVIEW_COMMIT"
           echo "Scanning preview commits in $PREVIEW_RANGE_BASE..$PREVIEW_COMMIT for refs #<issue> mentions."
