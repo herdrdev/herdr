@@ -775,9 +775,9 @@ fn key_tap_inputs(vk: u16) -> [INPUT; 2] {
 
 /// Injects a key-down then key-up for `vk` via `SendInput`.
 ///
-/// Returns `true` only when the whole tap was queued. Thin wrapper over
-/// [`send_vk_tap_with`] that plugs in the real `SendInput`; the injection
-/// policy lives in that function so it can be unit-tested without the OS.
+/// Returns `true` when the key-down was queued and the IME may have toggled.
+/// Thin wrapper over [`send_vk_tap_with`] that plugs in the real `SendInput`;
+/// the injection policy lives there so it can be unit-tested without the OS.
 fn send_vk_tap(vk: u16) -> bool {
     send_vk_tap_with(vk, |events| {
         // SAFETY: `events` outlives the call; its `INPUT_KEYBOARD` entries have
@@ -800,10 +800,10 @@ fn send_vk_tap(vk: u16) -> bool {
 /// without touching the real `SendInput`.
 ///
 /// `SendInput` returns how many events it queued; a short count means injection
-/// was blocked (e.g. by UIPI). Returns `true` only when the full down+up tap was
-/// queued. On a partial injection where only the key-down landed, the key-up is
-/// retried so the key is not left logically held down, but the tap is still
-/// reported as failed (`false`) so callers do not assume the toggle took effect.
+/// was blocked (e.g. by UIPI). Returns `true` whenever the key-down was queued,
+/// because the IME may have toggled and callers must retain restoration state.
+/// When only the key-down landed, the key-up is retried so the key is not left
+/// logically held down.
 fn send_vk_tap_with(vk: u16, mut inject: impl FnMut(&[INPUT]) -> u32) -> bool {
     let inputs = key_tap_inputs(vk);
     let sent = inject(&inputs);
@@ -812,8 +812,8 @@ fn send_vk_tap_with(vk: u16, mut inject: impl FnMut(&[INPUT]) -> u32) -> bool {
     }
 
     if sent == 1 {
-        // The key-down landed but the key-up was dropped; retry just the key-up
-        // so we do not strand a logically-pressed key.
+        // The key-down landed and may already have toggled the IME. Retry the
+        // dropped key-up, but report that restoration state is still required.
         let key_up = [inputs[1]];
         let up_sent = inject(&key_up);
         tracing::warn!(
@@ -823,14 +823,15 @@ fn send_vk_tap_with(vk: u16, mut inject: impl FnMut(&[INPUT]) -> u32) -> bool {
             key_up_retry_sent = up_sent,
             "SendInput dropped the IME toggle key-up; retried key-up"
         );
-    } else {
-        tracing::warn!(
-            vk,
-            sent,
-            expected = inputs.len(),
-            "SendInput did not inject the IME toggle key tap"
-        );
+        return true;
     }
+
+    tracing::warn!(
+        vk,
+        sent,
+        expected = inputs.len(),
+        "SendInput did not inject the IME toggle key tap"
+    );
     false
 }
 
@@ -875,6 +876,13 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
         };
         if !ime_open(open) {
             // Already in English/ASCII input; nothing to switch or restore.
+            return None;
+        }
+
+        // The bounded cross-process status read can take long enough for focus
+        // to change. Recheck immediately before using the global input queue.
+        if GetForegroundWindow() != fg {
+            tracing::debug!("prefix IME switch skipped: foreground window changed");
             return None;
         }
 
@@ -948,6 +956,13 @@ impl Drop for InputSourceRestore {
             };
             if ime_open(open) {
                 tracing::debug!("prefix IME restore skipped: IME already back to native input");
+                return;
+            }
+
+            // The bounded cross-process status read can take long enough for
+            // focus to change. Recheck immediately before using SendInput.
+            if GetForegroundWindow() != fg {
+                tracing::debug!("prefix IME restore skipped: foreground window changed");
                 return;
             }
 
@@ -1399,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn send_vk_tap_retries_keyup_and_reports_failure_on_partial_injection() {
+    fn send_vk_tap_retries_keyup_and_reports_toggle_on_partial_injection() {
         let mut calls = 0;
         let mut retry_len = 0;
         let mut retry_is_keyup = false;
@@ -1416,10 +1431,25 @@ mod tests {
                 events.len() as u32
             }
         });
-        assert!(!ok, "a partial injection is reported as failure");
+        assert!(ok, "the queued key-down may have toggled the IME");
         assert_eq!(calls, 2, "the dropped key-up is retried exactly once");
         assert_eq!(retry_len, 1, "only the key-up is retried");
         assert!(retry_is_keyup, "the retry injects the key-up event");
+    }
+
+    #[test]
+    fn send_vk_tap_reports_toggle_when_keyup_retry_fails() {
+        let mut calls = 0;
+        let ok = super::send_vk_tap_with(super::VK_HANGUL, |_events| {
+            calls += 1;
+            if calls == 1 {
+                1
+            } else {
+                0
+            }
+        });
+        assert!(ok, "the queued key-down may have toggled the IME");
+        assert_eq!(calls, 2, "the dropped key-up is retried exactly once");
     }
 
     #[test]
