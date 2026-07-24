@@ -10,7 +10,7 @@ use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
-            CloseHandle, GlobalFree, LocalFree, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS,
+            CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, NTSTATUS,
             STATUS_SUCCESS, UNICODE_STRING,
         },
         System::{
@@ -42,7 +42,8 @@ use windows_sys::{
             },
             Shell::{CommandLineToArgvW, ShellExecuteW},
             WindowsAndMessaging::{
-                GetForegroundWindow, GetWindowThreadProcessId, SendMessageW, WM_IME_CONTROL,
+                GetForegroundWindow, GetWindowThreadProcessId, SendMessageTimeoutW,
+                SMTO_ABORTIFHUNG, WM_IME_CONTROL,
             },
         },
     },
@@ -674,7 +675,9 @@ fn read_unicode_string(process: HANDLE, unicode: UNICODE_STRING) -> Option<Strin
 // Windows IMEs live in the terminal-emulator process, not in herdr. Empirically:
 //   - `WM_IME_CONTROL` / `IMC_GETOPENSTATUS` reads whether the IME is open
 //     (composing native characters) reliably across the process boundary (this
-//     is what kren-select uses), so we detect state with it.
+//     is what kren-select uses), so we detect state with it. The read goes
+//     through `SendMessageTimeoutW` (`SMTO_ABORTIFHUNG`) so a hung host process
+//     cannot block us indefinitely.
 //   - Writing the state back (`IMC_SETOPENSTATUS` / `IMC_SETCONVERSIONMODE`)
 //     changes the flag value but does NOT affect real input in terminal/TSF
 //     hosts, so we cannot switch by writing the mode.
@@ -704,6 +707,39 @@ const LANG_KOREAN: u32 = 0x12;
 /// IME is open and zero when it is in direct English/ASCII input.
 fn ime_open(open_status: isize) -> bool {
     open_status != 0
+}
+
+/// Timeout (ms) for the cross-process IME open-status read. Short enough that a
+/// hung terminal never freezes prefix-mode entry/exit.
+const IME_STATUS_READ_TIMEOUT_MS: u32 = 200;
+
+/// Reads the IME open status (`IMC_GETOPENSTATUS`) with a bounded timeout.
+///
+/// `WM_IME_CONTROL` crosses into the terminal-emulator process, and a plain
+/// `SendMessageW` would block herdr's client thread until that process responds
+/// (indefinitely if it is hung). `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG`
+/// caps the wait; on timeout or failure this returns `None` and callers leave
+/// the IME untouched rather than blocking or guessing.
+fn read_ime_open_status(ime_hwnd: HWND) -> Option<isize> {
+    let mut result: usize = 0;
+    // SAFETY: `ime_hwnd` is a non-null IME window from `ImmGetDefaultIMEWnd`, and
+    // `result` is a valid out-pointer for the message's `DWORD_PTR` result.
+    let ret = unsafe {
+        SendMessageTimeoutW(
+            ime_hwnd,
+            WM_IME_CONTROL,
+            IMC_GETOPENSTATUS,
+            0,
+            SMTO_ABORTIFHUNG,
+            IME_STATUS_READ_TIMEOUT_MS,
+            &mut result,
+        )
+    };
+    if ret == 0 {
+        // Timed out or failed; do not block or assume a state.
+        return None;
+    }
+    Some(result as isize)
 }
 
 /// The IME toggle key for a keyboard layout language id, or `None` when the
@@ -828,12 +864,15 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
             return None;
         };
 
-        // Detect the open (Hangul) state via the reliable read path.
+        // Detect the open (Hangul) state via the bounded read path.
         let ime_hwnd = ImmGetDefaultIMEWnd(fg);
         if ime_hwnd.is_null() {
             return None;
         }
-        let open = SendMessageW(ime_hwnd, WM_IME_CONTROL, IMC_GETOPENSTATUS, 0);
+        let Some(open) = read_ime_open_status(ime_hwnd) else {
+            tracing::debug!("prefix IME switch skipped: IME open-status read timed out");
+            return None;
+        };
         if !ime_open(open) {
             // Already in English/ASCII input; nothing to switch or restore.
             return None;
@@ -903,7 +942,10 @@ impl Drop for InputSourceRestore {
             if ime_hwnd.is_null() {
                 return;
             }
-            let open = SendMessageW(ime_hwnd, WM_IME_CONTROL, IMC_GETOPENSTATUS, 0);
+            let Some(open) = read_ime_open_status(ime_hwnd) else {
+                tracing::debug!("prefix IME restore skipped: IME open-status read timed out");
+                return;
+            };
             if ime_open(open) {
                 tracing::debug!("prefix IME restore skipped: IME already back to native input");
                 return;
