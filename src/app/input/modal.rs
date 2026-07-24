@@ -343,7 +343,7 @@ pub(crate) fn handle_keybind_help_key(state: &mut AppState, key: TerminalKey) {
         KeyCode::PageDown => state.scroll_keybind_help(8),
         KeyCode::Home => state.keybind_help.scroll = 0,
         KeyCode::End => state.keybind_help.scroll = state.keybind_help_max_scroll(),
-        KeyCode::Char('/') if key.modifiers.is_empty() => {
+        _ if keybind_help_text_char(key) == Some('/') => {
             state.keybind_help.search_focused = true;
             state.keybind_help.scroll = 0;
         }
@@ -1811,6 +1811,20 @@ mod tests {
             TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()),
         );
         assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn enhanced_shifted_slash_focuses_keybind_help_filter() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_keybind_help(&mut state);
+
+        handle_keybind_help_key(
+            &mut state,
+            TerminalKey::new(KeyCode::Char('7'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('/' as u32),
+        );
+
+        assert!(state.keybind_help.search_focused);
     }
 
     #[test]
