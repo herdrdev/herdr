@@ -672,10 +672,12 @@ fn read_unicode_string(process: HANDLE, unicode: UNICODE_STRING) -> Option<Strin
 // Prefix-mode ASCII input source support (see `switch_ascii_input_source_in_prefix`).
 //
 // Windows IMEs live in the terminal-emulator process, not in herdr. Empirically:
-//   - `WM_IME_CONTROL` / `IMC_GETCONVERSIONMODE` reads the real conversion mode
-//     reliably (this is what kren-select uses), so we detect state with it.
-//   - `IMC_SETCONVERSIONMODE` changes the flag value but does NOT affect real
-//     input in terminal/TSF hosts, so we cannot switch by writing the mode.
+//   - `WM_IME_CONTROL` / `IMC_GETOPENSTATUS` reads whether the IME is open
+//     (composing native characters) reliably across the process boundary (this
+//     is what kren-select uses), so we detect state with it.
+//   - Writing the state back (`IMC_SETOPENSTATUS` / `IMC_SETCONVERSIONMODE`)
+//     changes the flag value but does NOT affect real input in terminal/TSF
+//     hosts, so we cannot switch by writing the mode.
 //   - `ImmGetContext` on the foreground window returns null across the process
 //     boundary, so the ImmGetOpenStatus/ImmSetOpenStatus path is unavailable.
 // Therefore we switch the way kren-select does: inject the IME toggle key with
@@ -685,12 +687,11 @@ fn read_unicode_string(process: HANDLE, unicode: UNICODE_STRING) -> Option<Strin
 // keyboard layout's language id. Only Korean is mapped today; other IMEs are
 // detected and left untouched (a no-op) rather than toggled with the wrong key.
 
-/// `WM_IME_CONTROL` sub-command that reads the current IME conversion mode.
-const IMC_GETCONVERSIONMODE: usize = 0x0005;
-
-/// Conversion-mode bit set while the IME composes native characters
-/// (Hangul / kana / pinyin). Cleared means ASCII-capable direct input.
-const IME_CMODE_NATIVE: isize = 0x0001;
+/// `WM_IME_CONTROL` sub-command that reads whether the IME is open, i.e.
+/// composing native characters. This is `IMC_GETOPENSTATUS` (0x0005); for the
+/// Korean IME "open" is exactly the Hangul state and "closed" is English/ASCII
+/// direct input, which is the state we detect and toggle.
+const IMC_GETOPENSTATUS: usize = 0x0005;
 
 /// Virtual key that toggles Hangul/English on Korean IMEs.
 const VK_HANGUL: u16 = 0x15;
@@ -698,13 +699,11 @@ const VK_HANGUL: u16 = 0x15;
 /// Primary language id (low 10 bits of a LANGID) for Korean.
 const LANG_KOREAN: u32 = 0x12;
 
-/// Whether the IME is currently composing native (non-ASCII) characters.
-///
-/// Uses a bit test rather than an equality check because Japanese and Chinese
-/// IMEs combine `IME_CMODE_NATIVE` with other bits (full-shape, katakana,
-/// roman), so the native state is not a single fixed value.
-fn native_mode_active(mode: isize) -> bool {
-    mode & IME_CMODE_NATIVE != 0
+/// Whether the IME reports itself open, i.e. composing native characters
+/// (Hangul for the Korean IME). `IMC_GETOPENSTATUS` returns nonzero when the
+/// IME is open and zero when it is in direct English/ASCII input.
+fn ime_open(open_status: isize) -> bool {
+    open_status != 0
 }
 
 /// The IME toggle key for a keyboard layout language id, or `None` when the
@@ -739,30 +738,64 @@ fn key_tap_inputs(vk: u16) -> [INPUT; 2] {
 }
 
 /// Injects a key-down then key-up for `vk` via `SendInput`.
-fn send_vk_tap(vk: u16) {
+///
+/// Returns `true` only when the whole tap was queued. Thin wrapper over
+/// [`send_vk_tap_with`] that plugs in the real `SendInput`; the injection
+/// policy lives in that function so it can be unit-tested without the OS.
+fn send_vk_tap(vk: u16) -> bool {
+    send_vk_tap_with(vk, |events| {
+        // SAFETY: `events` outlives the call; its `INPUT_KEYBOARD` entries have
+        // the `ki` union variant fully initialized, which is the variant
+        // SendInput reads for keyboard input. `size_of::<INPUT>()` is the
+        // required `cbSize`.
+        unsafe {
+            SendInput(
+                events.len() as u32,
+                events.as_ptr(),
+                size_of::<INPUT>() as i32,
+            )
+        }
+    })
+}
+
+/// Core key-tap logic with the raw event injector abstracted behind `inject`,
+/// which returns how many of the passed events it actually queued. This keeps
+/// the success / partial-injection / total-failure branches unit-testable
+/// without touching the real `SendInput`.
+///
+/// `SendInput` returns how many events it queued; a short count means injection
+/// was blocked (e.g. by UIPI). Returns `true` only when the full down+up tap was
+/// queued. On a partial injection where only the key-down landed, the key-up is
+/// retried so the key is not left logically held down, but the tap is still
+/// reported as failed (`false`) so callers do not assume the toggle took effect.
+fn send_vk_tap_with(vk: u16, mut inject: impl FnMut(&[INPUT]) -> u32) -> bool {
     let inputs = key_tap_inputs(vk);
-    // SAFETY: `inputs` outlives the call; its `INPUT_KEYBOARD` entries have the
-    // `ki` union variant fully initialized, which is the variant SendInput reads
-    // for keyboard input. `size_of::<INPUT>()` is the required `cbSize`.
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_ptr(),
-            size_of::<INPUT>() as i32,
-        )
-    };
-    // SendInput returns how many events it actually queued; a short count means
-    // injection was blocked (e.g. by UIPI) and the IME did not toggle. Warn so
-    // a stuck-ASCII/stuck-native IME leaves a diagnostic trail instead of a
-    // silent "success".
-    if sent as usize != inputs.len() {
+    let sent = inject(&inputs);
+    if sent as usize == inputs.len() {
+        return true;
+    }
+
+    if sent == 1 {
+        // The key-down landed but the key-up was dropped; retry just the key-up
+        // so we do not strand a logically-pressed key.
+        let key_up = [inputs[1]];
+        let up_sent = inject(&key_up);
         tracing::warn!(
             vk,
             sent,
             expected = inputs.len(),
-            "SendInput did not inject the full IME toggle key tap"
+            key_up_retry_sent = up_sent,
+            "SendInput dropped the IME toggle key-up; retried key-up"
+        );
+    } else {
+        tracing::warn!(
+            vk,
+            sent,
+            expected = inputs.len(),
+            "SendInput did not inject the IME toggle key tap"
         );
     }
+    false
 }
 
 pub(crate) fn pump_input_source_runloop() {}
@@ -795,49 +828,91 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
             return None;
         };
 
-        // Detect native composition via the reliable read path.
+        // Detect the open (Hangul) state via the reliable read path.
         let ime_hwnd = ImmGetDefaultIMEWnd(fg);
         if ime_hwnd.is_null() {
             return None;
         }
-        let mode = SendMessageW(ime_hwnd, WM_IME_CONTROL, IMC_GETCONVERSIONMODE, 0);
-        if !native_mode_active(mode) {
-            // Already ASCII-capable; nothing to switch or restore.
+        let open = SendMessageW(ime_hwnd, WM_IME_CONTROL, IMC_GETOPENSTATUS, 0);
+        if !ime_open(open) {
+            // Already in English/ASCII input; nothing to switch or restore.
             return None;
         }
 
-        // Toggle to ASCII by injecting the language's IME toggle key.
-        send_vk_tap(toggle_vk);
+        // Toggle to ASCII by injecting the language's IME toggle key. Only arm
+        // restoration when the toggle actually landed, so we never try to
+        // restore a switch that never happened.
+        if !send_vk_tap(toggle_vk) {
+            tracing::warn!(
+                langid = format!("{langid:#06x}"),
+                "prefix IME switch: toggle injection failed, leaving IME as-is"
+            );
+            return None;
+        }
         tracing::debug!(
             langid = format!("{langid:#06x}"),
             "switched host IME to ASCII for prefix mode"
         );
-        Some(InputSourceRestore { toggle_vk })
+        Some(InputSourceRestore {
+            toggle_vk,
+            origin_hwnd: fg as isize,
+        })
     }
 }
 
-/// Restores the native IME state that was active before prefix mode.
+/// Restores the native (Hangul) IME state that was active before prefix mode.
 ///
-/// Only constructed by [`switch_to_ascii_input_source`] after it toggled away
-/// from native composition, so dropping it re-injects the same toggle key to go
-/// back. It deliberately does NOT re-read the conversion mode: the injected key
-/// is applied asynchronously, so a fresh read here would be stale. Mirrors the
-/// macOS "save the previous source, restore on drop" contract.
+/// Only constructed by [`switch_to_ascii_input_source`] after it successfully
+/// toggled the IME to English/ASCII. Dropping it re-injects the same toggle key
+/// to go back, but only after two guards, so restoration never fights the user
+/// or another application:
+///   - the same window that was switched must still be focused, otherwise the
+///     toggle would land on whatever app the user moved to;
+///   - the IME must still be in English (our switch still in effect), otherwise
+///     the user manually returned to Hangul during prefix mode and we must leave
+///     their choice alone.
 ///
-/// Note: the toggle key is injected into whatever window currently has focus, so
-/// if focus moved to another app between the switch and this restore, the toggle
-/// lands there. This matches the injection-based approach's inherent limitation
-/// (and the cross-app caveat the macOS path has too); prefix mode is short-lived,
-/// so in practice the herdr terminal is still focused.
+/// `origin_hwnd` stores the foreground window at switch time as raw pointer bits
+/// (`isize`, not `HWND`) so the guard stays `Send` when parked in the client's
+/// prefix-input state across `.await` points.
 #[derive(Debug)]
 pub(crate) struct InputSourceRestore {
     toggle_vk: u16,
+    origin_hwnd: isize,
 }
 
 impl Drop for InputSourceRestore {
     fn drop(&mut self) {
-        send_vk_tap(self.toggle_vk);
-        tracing::debug!("restored host IME after prefix mode");
+        // SAFETY: all calls are Win32 UI functions invoked on the client's main
+        // thread. Every HWND is null-checked before use.
+        unsafe {
+            // Guard 1: only restore if the window we switched is still focused,
+            // so the toggle never lands on a different application.
+            let fg = GetForegroundWindow();
+            if fg.is_null() || fg as isize != self.origin_hwnd {
+                tracing::debug!(
+                    "prefix IME restore skipped: foreground window changed since switch"
+                );
+                return;
+            }
+
+            // Guard 2: only restore if the IME is still in English (our switch is
+            // still in effect). If the user manually switched back to Hangul
+            // during prefix mode, leave their choice untouched.
+            let ime_hwnd = ImmGetDefaultIMEWnd(fg);
+            if ime_hwnd.is_null() {
+                return;
+            }
+            let open = SendMessageW(ime_hwnd, WM_IME_CONTROL, IMC_GETOPENSTATUS, 0);
+            if ime_open(open) {
+                tracing::debug!("prefix IME restore skipped: IME already back to native input");
+                return;
+            }
+
+            if send_vk_tap(self.toggle_vk) {
+                tracing::debug!("restored host IME after prefix mode");
+            }
+        }
     }
 }
 
@@ -1242,17 +1317,13 @@ mod tests {
     }
 
     #[test]
-    fn native_mode_detected_across_cjk_ime_bit_combinations() {
-        // Korean: native composition is exactly the NATIVE bit.
-        assert!(super::native_mode_active(0x0001));
-        // Japanese hiragana: NATIVE | FULLSHAPE | ROMAN.
-        assert!(super::native_mode_active(0x0001 | 0x0008 | 0x0010));
-        // Chinese pinyin: NATIVE with other bits set.
-        assert!(super::native_mode_active(0x0001 | 0x0020));
-        // Direct ASCII input: NATIVE bit clear.
-        assert!(!super::native_mode_active(0x0000));
-        // Full-shape alphanumeric without native composition still counts as ASCII-capable.
-        assert!(!super::native_mode_active(0x0008));
+    fn ime_open_reflects_open_status() {
+        // IMC_GETOPENSTATUS returns nonzero when the IME is open (Hangul
+        // composing) and zero for direct English/ASCII input.
+        assert!(super::ime_open(1));
+        assert!(!super::ime_open(0));
+        // Any nonzero value is treated as open, not just 1.
+        assert!(super::ime_open(2));
     }
 
     #[test]
@@ -1272,6 +1343,55 @@ mod tests {
         assert_eq!(super::toggle_key_for_language(0x0804), None);
         // English (0x0409): nothing to toggle.
         assert_eq!(super::toggle_key_for_language(0x0409), None);
+    }
+
+    #[test]
+    fn send_vk_tap_reports_success_when_full_tap_is_queued() {
+        let mut calls = 0;
+        let ok = super::send_vk_tap_with(super::VK_HANGUL, |events| {
+            calls += 1;
+            events.len() as u32
+        });
+        assert!(ok, "a fully queued tap is reported as success");
+        assert_eq!(calls, 1, "a clean tap needs no retry");
+    }
+
+    #[test]
+    fn send_vk_tap_retries_keyup_and_reports_failure_on_partial_injection() {
+        let mut calls = 0;
+        let mut retry_len = 0;
+        let mut retry_is_keyup = false;
+        let ok = super::send_vk_tap_with(super::VK_HANGUL, |events| {
+            calls += 1;
+            if calls == 1 {
+                // Only the key-down is queued; the key-up is dropped.
+                1
+            } else {
+                retry_len = events.len();
+                // SAFETY: keyboard inputs, so reading the `ki` union is valid.
+                retry_is_keyup =
+                    unsafe { events[0].Anonymous.ki.dwFlags } == super::KEYEVENTF_KEYUP;
+                events.len() as u32
+            }
+        });
+        assert!(!ok, "a partial injection is reported as failure");
+        assert_eq!(calls, 2, "the dropped key-up is retried exactly once");
+        assert_eq!(retry_len, 1, "only the key-up is retried");
+        assert!(retry_is_keyup, "the retry injects the key-up event");
+    }
+
+    #[test]
+    fn send_vk_tap_reports_failure_without_retry_when_nothing_is_queued() {
+        let mut calls = 0;
+        let ok = super::send_vk_tap_with(super::VK_HANGUL, |_events| {
+            calls += 1;
+            0
+        });
+        assert!(!ok, "a fully blocked tap is reported as failure");
+        assert_eq!(
+            calls, 1,
+            "nothing was queued, so there is no key-up to retry"
+        );
     }
 
     #[test]
