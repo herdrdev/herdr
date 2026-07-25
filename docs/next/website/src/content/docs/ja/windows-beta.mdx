@@ -79,6 +79,8 @@ host_cursor = "native"
 
 Windows のターミナルは、修飾キー付きのキーをすべて同じ形で報告するわけではありません。Herdr は Windows Terminal と Windows 上の Alacritty ではマウス報告と `ctrl+j` を保持しますが、`shift+enter` は外側ターミナルが修飾付き Enter として区別して報告する場合にだけ動作します。Windows またはターミナルがそれを通常の Enter として報告する場合、Herdr は通常の Enter を転送します。
 
+古い Windows 10 ビルドのシステム ConPTY は、Kimi や Pi などのエージェントが使用する Kitty キーボードプロトコルのシーケンスを失うため、プレビューパッケージには Microsoft の最新のアプリローカル ConPTY ランタイムが含まれます。バンドル版ランタイムとの互換性問題を診断する場合に限り、Herdr を起動する前に `HERDR_WINDOWS_CONPTY=system` を設定してください。
+
 ## コピーと貼り付け
 
 Herdr のペインテキストコピーは Windows ベータで動作します。ペイン内でテキストをドラッグ選択すると Herdr 経由でコピーされます。

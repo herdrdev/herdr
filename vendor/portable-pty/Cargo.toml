@@ -102,8 +102,8 @@ version = "1.3"
 [target."cfg(windows)".dependencies.lazy_static]
 version = "1.4"
 
-[target."cfg(windows)".dependencies.shared_library]
-version = "0.1"
+[target."cfg(windows)".dependencies.sha2]
+version = "0.10"
 
 [target."cfg(windows)".dependencies.winapi]
 version = "0.3"
@@ -112,6 +112,7 @@ features = [
     "consoleapi",
     "handleapi",
     "fileapi",
+    "libloaderapi",
     "namedpipeapi",
     "synchapi",
 ]

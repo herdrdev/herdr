@@ -59,6 +59,44 @@ impl App {
         response_rx.try_recv().ok()
     }
 
+    pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
+        match ev {
+            AppEvent::GitStatusRefreshed {
+                results,
+                cache_updates,
+            } => self.handle_git_status_refreshed(results, cache_updates),
+            ev => {
+                self.handle_internal_event(ev);
+                true
+            }
+        }
+    }
+
+    fn handle_git_status_refreshed(
+        &mut self,
+        results: Vec<crate::workspace::WorkspaceGitStatus>,
+        cache_updates: Vec<(std::path::PathBuf, crate::workspace::GitStatusCacheEntry)>,
+    ) -> bool {
+        self.git_refresh_in_flight = false;
+        for (key, entry) in cache_updates {
+            self.git_status_cache.insert(key, entry);
+        }
+        if self.git_refresh_due_after_in_flight {
+            self.mark_git_status_refresh_due(Instant::now());
+            self.git_refresh_due_after_in_flight = false;
+        } else {
+            self.last_git_remote_status_refresh = Instant::now();
+        }
+        let changed = self
+            .state
+            .apply_workspace_git_statuses(&self.terminal_runtimes, results);
+        if changed {
+            self.render_dirty.store(true, Ordering::Release);
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         if let AppEvent::ClipboardWrite { content } = ev {
             #[cfg(not(test))]
@@ -90,23 +128,7 @@ impl App {
             cache_updates,
         } = ev
         {
-            self.git_refresh_in_flight = false;
-            for (key, entry) in cache_updates {
-                self.git_status_cache.insert(key, entry);
-            }
-            if self.git_refresh_due_after_in_flight {
-                self.mark_git_status_refresh_due(Instant::now());
-                self.git_refresh_due_after_in_flight = false;
-            } else {
-                self.last_git_remote_status_refresh = Instant::now();
-            }
-            if self
-                .state
-                .apply_workspace_git_statuses(&self.terminal_runtimes, results)
-            {
-                self.render_dirty.store(true, Ordering::Release);
-                self.render_notify.notify_one();
-            }
+            self.handle_git_status_refreshed(results, cache_updates);
             return;
         }
 
@@ -270,7 +292,7 @@ impl App {
         }
         self.sync_full_lifecycle_authority_detection_pauses();
         if terminal_cwd_reported {
-            self.mark_git_status_refresh_due(Instant::now());
+            self.request_git_identity_refresh(Instant::now());
             self.render_dirty.store(true, Ordering::Release);
             self.render_notify.notify_one();
         }

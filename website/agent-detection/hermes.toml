@@ -1,30 +1,102 @@
 id = "hermes"
-version = "2026.06.10.1"
-min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+version = "2026.07.24.1"
+min_engine_version = 2
+updated_at = "2026-07-24T19:12:54Z"
 aliases = ["hermes-agent"]
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+visible_blocker = true
+regex = ['^⚠[\u{fe0e}\u{fe0f}]?(?:\s|$)']
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+visible_working = true
+regex = ['^⏳[\u{fe0e}\u{fe0f}]?(?:\s|$)']
 
 [[rules]]
 id = "dangerous_command_approval"
 state = "blocked"
-priority = 300
-region = "whole_recent"
+priority = 900
+region = "bottom_non_empty_lines(14)"
 visible_blocker = true
 any = [
-  { contains = ["dangerous command"] },
-  { contains = ["allow once", "allow for this session", "deny"] },
+  { contains = ["dangerous"] },
+  { contains = ["approval"] },
+  { contains = ["allow once", "deny"] },
+  { line_regex = ['(?i)^\s*[▸>]?\s*1\.\s*allow'] },
 ]
 all = [
-  { any = [{ contains = ["enter to confirm"] }, { contains = ["↑/↓ to select"] }, { contains = ["show full command"] }] },
+  { any = [{ contains = ["enter confirm"] }, { contains = ["enter to confirm"] }, { contains = ["↑/↓ to select"] }, { contains = ["show full command"] }] },
+]
+
+[[rules]]
+id = "clarification_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+any = [
+  { contains = ["hermes needs your"] },
+  { line_regex = ['^\s*ask\s+\S'] },
+  { contains = ["type your answer"] },
+]
+all = [
+  { any = [{ contains = ["enter confirm"] }, { contains = ["enter to confirm"] }, { contains = ["enter send"] }, { contains = ["press enter"] }, { contains = ["↑/↓ select"] }, { contains = ["↑/↓ to select"] }, { contains = ["other (type"] }] },
+]
+
+[[rules]]
+id = "credential_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+any = [
+  { contains = ["sudo password"] },
+  { contains = ["skill setup"] },
+  { contains = ["🔑", "for "] },
+]
+
+[[rules]]
+id = "confirmation_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+all = [
+  { any = [{ contains = ["approve once", "cancel"] }, { contains = ["start a new session", "keep going"] }] },
+  { any = [{ contains = ["enter to confirm"] }, { contains = ["enter confirm"] }, { contains = ["type 1/2/3"] }, { contains = ["y/n quick"] }] },
 ]
 
 [[rules]]
 id = "interrupt_status_working"
 state = "working"
-priority = 100
-region = "whole_recent"
+priority = 950
+region = "bottom_non_empty_lines(5)"
 visible_working = true
 any = [
   { contains = ["msg=interrupt"] },
-  { contains = ["ctrl+c cancel"] },
+  { contains = ["ctrl+c to interrupt"] },
 ]
+
+[[rules]]
+id = "classic_cancel_working"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+contains = ["ctrl+c cancel"]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 100
+region = "osc_title"
+visible_idle = true
+regex = ['^✓[\u{fe0e}\u{fe0f}]?(?:\s|$)']

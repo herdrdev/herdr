@@ -79,6 +79,8 @@ Native mode restores the IME anchor, but it can reintroduce occasional cursor fl
 
 Windows terminals do not all report modified keys in the same shape. Herdr preserves mouse reporting and `ctrl+j` in Windows Terminal and Alacritty on Windows, but `shift+enter` only works when the outer terminal reports it as a distinct modified Enter key. If Windows or the terminal reports it as plain Enter, Herdr forwards plain Enter.
 
+Preview packages include Microsoft's current app-local ConPTY runtime because the system ConPTY on older Windows 10 builds drops Kitty keyboard protocol sequences used by agents such as Kimi and Pi. Set `HERDR_WINDOWS_CONPTY=system` before starting Herdr only when diagnosing a compatibility problem with the bundled runtime.
+
 ## Copy and paste
 
 Herdr's pane text copy works on Windows beta. Drag-select text inside a pane to copy through Herdr.

@@ -4,17 +4,24 @@ use crate::win::procthreadattr::ProcThreadAttributeList;
 use anyhow::{bail, ensure, Error};
 use filedescriptor::{FileDescriptor, OwnedHandle};
 use lazy_static::lazy_static;
-use shared_library::shared_library;
-use std::ffi::OsString;
-use std::io::Error as IoError;
-use std::os::windows::ffi::OsStringExt;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::fs::File;
+use std::io::{Error as IoError, Read};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::fs::MetadataExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::{mem, ptr};
-use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::{DWORD, HMODULE};
 use winapi::shared::winerror::{HRESULT, S_OK};
 use winapi::um::handleapi::*;
+use winapi::um::libloaderapi::{
+    FreeLibrary, GetModuleHandleW, GetProcAddress, LoadLibraryExW,
+    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+};
 use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::{
     CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES, STARTUPINFOEXW,
@@ -30,26 +37,249 @@ pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x4;
 #[allow(dead_code)]
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
 
-shared_library!(ConPtyFuncs,
-    pub fn CreatePseudoConsole(
-        size: COORD,
-        hInput: HANDLE,
-        hOutput: HANDLE,
-        flags: DWORD,
-        hpc: *mut HPCON
-    ) -> HRESULT,
-    pub fn ResizePseudoConsole(hpc: HPCON, size: COORD) -> HRESULT,
-    pub fn ClosePseudoConsole(hpc: HPCON),
-);
+type CreatePseudoConsoleFn = unsafe extern "system" fn(
+    size: COORD,
+    h_input: HANDLE,
+    h_output: HANDLE,
+    flags: DWORD,
+    hpc: *mut HPCON,
+) -> HRESULT;
+type ResizePseudoConsoleFn = unsafe extern "system" fn(hpc: HPCON, size: COORD) -> HRESULT;
+type ClosePseudoConsoleFn = unsafe extern "system" fn(hpc: HPCON);
+
+// These fields intentionally mirror the exported Win32 symbol names.
+#[allow(non_snake_case)]
+struct ConPtyFuncs {
+    module: HMODULE,
+    owned: bool,
+    CreatePseudoConsole: CreatePseudoConsoleFn,
+    ResizePseudoConsole: ResizePseudoConsoleFn,
+    ClosePseudoConsole: ClosePseudoConsoleFn,
+}
+
+unsafe impl Send for ConPtyFuncs {}
+unsafe impl Sync for ConPtyFuncs {}
+
+impl Drop for ConPtyFuncs {
+    fn drop(&mut self) {
+        if self.owned {
+            unsafe { FreeLibrary(self.module) };
+        }
+    }
+}
+
+impl ConPtyFuncs {
+    unsafe fn from_module(module: HMODULE, owned: bool) -> Result<Self, String> {
+        if module.is_null() {
+            return Err(IoError::last_os_error().to_string());
+        }
+        Ok(Self {
+            module,
+            owned,
+            CreatePseudoConsole: load_symbol(module, b"CreatePseudoConsole\0")?,
+            ResizePseudoConsole: load_symbol(module, b"ResizePseudoConsole\0")?,
+            ClosePseudoConsole: load_symbol(module, b"ClosePseudoConsole\0")?,
+        })
+    }
+}
+
+unsafe fn load_symbol<T: Copy>(module: HMODULE, name: &'static [u8]) -> Result<T, String> {
+    let symbol = GetProcAddress(module, name.as_ptr().cast());
+    if symbol.is_null() {
+        return Err(format!(
+            "missing symbol {}",
+            String::from_utf8_lossy(&name[..name.len() - 1])
+        ));
+    }
+    Ok(mem::transmute_copy(&symbol))
+}
+
+fn load_system_conpty() -> Result<ConPtyFuncs, String> {
+    let kernel_name = wide_string(OsStr::new("kernel32.dll"));
+    let module = unsafe { GetModuleHandleW(kernel_name.as_ptr()) };
+    unsafe { ConPtyFuncs::from_module(module, false) }
+}
+
+fn load_app_local_conpty(path: &Path) -> Result<ConPtyFuncs, String> {
+    let wide_path = wide_string(path.as_os_str());
+    let module = unsafe {
+        LoadLibraryExW(
+            wide_path.as_ptr(),
+            ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    match unsafe { ConPtyFuncs::from_module(module, true) } {
+        Ok(functions) => Ok(functions),
+        Err(error) => {
+            if !module.is_null() {
+                unsafe { FreeLibrary(module) };
+            }
+            Err(error)
+        }
+    }
+}
+
+fn wide_string(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(Some(0)).collect()
+}
 
 fn load_conpty() -> ConPtyFuncs {
     // If the kernel doesn't export these functions then their system is
     // too old and we cannot run.
-    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
-        "this system does not support conpty.  Windows 10 October 2018 or newer is required",
-    );
+    let system = load_system_conpty().unwrap_or_else(|error| {
+        panic!(
+            "this system does not support conpty. Windows 10 October 2018 or newer is required: {}",
+            error
+        )
+    });
 
-    kernel
+    if std::env::var("HERDR_WINDOWS_CONPTY").as_deref() == Ok("system") {
+        log::warn!("HERDR_WINDOWS_CONPTY=system disables Herdr's bundled ConPTY");
+        return system;
+    }
+
+    match app_local_conpty_path() {
+        Ok(Some(path)) => load_app_local_conpty(&path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load verified app-local ConPTY from {}: {error}; set HERDR_WINDOWS_CONPTY=system to use the Windows system ConPTY",
+                path.display()
+            )
+        }),
+        Ok(None) => system,
+        Err(error) => panic!(
+            "Herdr's app-local ConPTY bundle is invalid: {}; reinstall Herdr or set HERDR_WINDOWS_CONPTY=system to use the Windows system ConPTY",
+            error
+        ),
+    }
+}
+
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+const CONPTY_FILES: &[(&str, &str)] = &[
+    (
+        "conpty.dll",
+        "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
+    ),
+    (
+        "x64/OpenConsole.exe",
+        "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
+    ),
+    (
+        "arm64/OpenConsole.exe",
+        "ed7622fd0d3bedc9ab9f122f5e58edf0def9e7999224f52dd395ba9f54edbe09",
+    ),
+];
+
+fn app_local_conpty_path() -> Result<Option<PathBuf>, String> {
+    if std::env::consts::ARCH != "x86_64" {
+        return Ok(None);
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate the Herdr executable: {error}"))?;
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| "Herdr executable has no parent directory".to_string())?;
+    let bundle = executable_dir.join("conpty");
+    if !bundle.exists() {
+        return Ok(None);
+    }
+    reject_reparse_point(&bundle)?;
+
+    let mut expected = BTreeSet::from(["herdr-conpty.json".to_string()]);
+    for (relative, expected_hash) in CONPTY_FILES {
+        expected.insert((*relative).to_string());
+        verify_bundle_file(&bundle, relative, expected_hash)?;
+    }
+    let marker = bundle.join("herdr-conpty.json");
+    verify_regular_file(&marker)?;
+
+    let actual = bundle_files(&bundle)?;
+    if actual != expected {
+        return Err(format!(
+            "unexpected bundle layout; expected {expected:?}, found {actual:?}"
+        ));
+    }
+    Ok(Some(bundle.join("conpty.dll")))
+}
+
+fn verify_bundle_file(root: &Path, relative: &str, expected_hash: &str) -> Result<(), String> {
+    let path = root.join(relative);
+    verify_regular_file(&path)?;
+    let mut file = File::open(&path).map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual_hash = format!("{:x}", digest.finalize());
+    if actual_hash != expected_hash {
+        return Err(format!(
+            "{} has hash {actual_hash}, expected {expected_hash}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn verify_regular_file(path: &Path) -> Result<(), String> {
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    Ok(())
+}
+
+fn reject_reparse_point(path: &Path) -> Result<(), String> {
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(format!("{} is not a regular directory", path.display()));
+    }
+    Ok(())
+}
+
+fn bundle_files(root: &Path) -> Result<BTreeSet<String>, String> {
+    fn visit(root: &Path, directory: &Path, files: &mut BTreeSet<String>) -> Result<(), String> {
+        reject_reparse_point(directory)?;
+        for entry in std::fs::read_dir(directory)
+            .map_err(|error| format!("cannot read {}: {error}", directory.display()))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let metadata = path
+                .symlink_metadata()
+                .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(format!("{} is a reparse point", path.display()));
+            }
+            if metadata.is_dir() {
+                visit(root, &path, files)?;
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(relative);
+            } else {
+                return Err(format!("{} is not a regular file", path.display()));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = BTreeSet::new();
+    visit(root, root, &mut files)?;
+    Ok(files)
 }
 
 lazy_static! {

@@ -3,7 +3,7 @@ use crossterm::event::KeyCode;
 use tracing::{debug, warn};
 
 use crate::{
-    app::{App, Mode, TerminalInputTarget},
+    app::{App, InputSourceId, Mode, TerminalInputTarget},
     input::TerminalKey,
 };
 
@@ -28,8 +28,17 @@ fn is_modifier_only_key(code: &KeyCode) -> bool {
 }
 
 impl App {
+    #[cfg(test)]
     pub(crate) fn handle_terminal_key_headless(
         &mut self,
+        key: TerminalKey,
+    ) -> Option<TerminalInputTarget> {
+        self.handle_terminal_key_headless_from(crate::app::LOCAL_INPUT_SOURCE, key)
+    }
+
+    pub(crate) fn handle_terminal_key_headless_from(
+        &mut self,
+        source_id: InputSourceId,
         key: TerminalKey,
     ) -> Option<TerminalInputTarget> {
         match self.prepare_popup_key_forward(key) {
@@ -44,19 +53,26 @@ impl App {
             }
         }
 
-        let input = self.prepare_terminal_key_forward(key)?;
+        let input = self.prepare_terminal_key_forward(source_id, key)?;
         let sent = self
             .lookup_runtime_sender(input.ws_idx, input.pane_id)
             .is_some_and(|runtime| runtime.try_send_bytes(input.bytes).is_ok());
         sent.then_some(input.target)
     }
 
-    fn prepare_terminal_key_forward(&mut self, key: TerminalKey) -> Option<PreparedPaneInput> {
+    fn prepare_terminal_key_forward(
+        &mut self,
+        source_id: InputSourceId,
+        key: TerminalKey,
+    ) -> Option<PreparedPaneInput> {
+        let key_event = key.as_key_event();
+        if self.try_copy_retained_selection(source_id, key) {
+            return None;
+        }
+
         self.state.clear_selection();
         self.selection_autoscroll_deadline = None;
         self.state.update_dismissed = true;
-
-        let key_event = key.as_key_event();
 
         if let Some(action) = super::terminal_direct_non_indexed_navigation_action(&self.state, key)
         {
@@ -365,7 +381,7 @@ impl App {
             }
         }
 
-        let input = self.prepare_terminal_key_forward(key)?;
+        let input = self.prepare_terminal_key_forward(crate::app::LOCAL_INPUT_SOURCE, key)?;
         let sent = if let Some(runtime) = self.lookup_runtime_sender(input.ws_idx, input.pane_id) {
             runtime.send_bytes(input.bytes).await.is_ok()
         } else {
@@ -714,7 +730,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_on_select_disabled_keeps_explicit_double_click_copy() {
+    async fn copy_on_select_disabled_retains_double_clicked_word_until_shortcut() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta");
         app.state.copy_on_select = false;
         let col = info.inner_rect.x + 2;
@@ -722,16 +738,22 @@ mod tests {
 
         double_click(&mut app, col, row);
 
-        assert_eq!(clipboard_write_content(&mut app), b"alpha");
         assert_visible_selection(&app);
-        assert!(app.selection_highlight_clear_deadline.is_some());
+        assert!(app.selection_highlight_clear_deadline.is_none());
         assert!(app.event_rx.try_recv().is_err());
+
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        ));
+
+        assert_eq!(clipboard_write_content(&mut app), b"alpha");
+        assert!(app.state.selection.is_none());
     }
 
     #[tokio::test]
     async fn new_drag_cancels_stale_double_click_highlight_deadline() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta");
-        app.state.copy_on_select = false;
         let row = info.inner_rect.y;
         let word_col = info.inner_rect.x + 2;
 
@@ -740,6 +762,7 @@ mod tests {
         let stale_deadline = app
             .selection_highlight_clear_deadline
             .expect("double-click highlight deadline");
+        app.state.copy_on_select = false;
 
         let start_col = info.inner_rect.x + 6;
         let end_col = info.inner_rect.x + 9;

@@ -1,5 +1,5 @@
-# GitHub usernames, one per line.
-# Maintainers and trusted contributors can be listed here.
+# GitHub usernames approved to contribute, one per line.
+# This does not grant maintainer authority; see .github/MAINTAINERS.
 Edmund-a7
 othavioquiliao
 edheltzel
@@ -46,3 +46,4 @@ carlesso
 joonhwan
 adamkrellenstein
 corrius
+ogulcancelik

@@ -605,6 +605,9 @@ impl TerminalState {
         seq: Option<u64>,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
+        if crate::detect::session_identity_only_integration(&source, &agent_label) {
+            return None;
+        }
         if !crate::detect::full_lifecycle_hook_authority(&source, &agent_label)
             && self.recent_agent_process_exit.is_some_and(|exit| {
                 crate::detect::parse_agent_label(&agent_label) == Some(exit.agent)
@@ -1280,6 +1283,7 @@ impl TerminalState {
                 "codex",
                 Some("startup" | "clear" | "resume" | "compact")
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
+                | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
                 | ("herdr:opencode", "opencode", Some("new"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | (
@@ -1414,6 +1418,21 @@ impl TerminalState {
             &agent_label,
             session_start_source.as_deref(),
         );
+        let replacing_hermes_session =
+            crate::detect::session_identity_only_integration(&source, &agent_label)
+                && session_replacement_allowed
+                && self.current_session_identity_for_persistence().is_some_and(
+                    |(current_source, current_agent, current_kind, current_value)| {
+                        current_source == source
+                            && current_agent == agent_label
+                            && current_kind == crate::agent_resume::AgentSessionRefKind::Id
+                            && session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
+                            && current_value != session_ref.value
+                    },
+                );
+        if replacing_hermes_session && !process_present {
+            return None;
+        }
         let owner_conflicts = self.current_session_owner_conflicts(&source, &agent_label);
         let foreground_takeover_allowed = owner_conflicts
             && self.foreground_agent_confirms_different_owner_takeover(
@@ -2256,7 +2275,6 @@ mod tests {
         for (agent, source, label) in [
             (Agent::Kimi, "herdr:kimi", "kimi"),
             (Agent::Kilo, "herdr:kilo", "kilo"),
-            (Agent::Hermes, "herdr:hermes", "hermes"),
         ] {
             let mut terminal = test_terminal();
             terminal.set_detected_state(Some(agent), AgentState::Idle);
@@ -2288,6 +2306,104 @@ mod tests {
             );
             assert_eq!(terminal.state, AgentState::Working);
         }
+    }
+
+    #[test]
+    fn hermes_session_claim_leaves_state_to_detection() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
+        let session_ref = crate::agent_resume::AgentSessionRef::id("hermes-root").unwrap();
+
+        let session = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            Some(session_ref.clone()),
+            Some(10),
+            Some("startup".into()),
+        );
+
+        assert!(session.is_some());
+        assert!(terminal.hook_authority.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&session_ref)
+        );
+
+        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Working);
+
+        assert_eq!(terminal.state, AgentState::Working);
+        assert!(terminal.hook_authority.is_none());
+
+        let replacement_ref =
+            crate::agent_resume::AgentSessionRef::id("hermes-replacement").unwrap();
+        let replacement = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            Some(replacement_ref.clone()),
+            Some(11),
+            Some("startup".into()),
+        );
+
+        assert!(replacement.is_some());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert!(terminal.hook_authority.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&replacement_ref)
+        );
+
+        let legacy_state = terminal.set_hook_authority_with_session_ref(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            AgentState::Blocked,
+            None,
+            Some(replacement_ref.clone()),
+            Some(12),
+        );
+        assert!(legacy_state.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert!(terminal.hook_authority.is_none());
+
+        terminal.set_detected_state(None, AgentState::Unknown);
+        let background_replacement = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            crate::agent_resume::AgentSessionRef::id("hermes-background"),
+            Some(13),
+            Some("resume".into()),
+        );
+        assert!(background_replacement.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&replacement_ref)
+        );
+
+        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
+        let retried_ref = crate::agent_resume::AgentSessionRef::id("hermes-background").unwrap();
+        let retried_replacement = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            Some(retried_ref.clone()),
+            Some(14),
+            Some("resume".into()),
+        );
+        assert!(retried_replacement.is_some());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&retried_ref)
+        );
     }
 
     #[test]
@@ -3425,17 +3541,17 @@ mod tests {
     fn visible_working_does_not_override_full_lifecycle_hook_idle() {
         let now = Instant::now();
         let mut terminal = test_terminal();
-        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
+        terminal.set_detected_state(Some(Agent::Kimi), AgentState::Idle);
         anchor_full_lifecycle_session(
             &mut terminal,
-            Agent::Hermes,
-            "herdr:hermes",
-            "hermes",
-            crate::agent_resume::AgentSessionRef::id("hermes-root").unwrap(),
+            Agent::Kimi,
+            "herdr:kimi",
+            "kimi",
+            crate::agent_resume::AgentSessionRef::id("kimi-root").unwrap(),
         );
         terminal.set_hook_authority_at(
-            "herdr:hermes".into(),
-            "hermes".into(),
+            "herdr:kimi".into(),
+            "kimi".into(),
             AgentState::Idle,
             None,
             None,
@@ -3444,7 +3560,7 @@ mod tests {
         );
 
         let change = terminal.set_detected_state_with_screen_signals_at(
-            Some(Agent::Hermes),
+            Some(Agent::Kimi),
             AgentState::Working,
             false,
             false,
@@ -5167,20 +5283,20 @@ mod tests {
     #[test]
     fn detected_agent_disappearance_does_not_clear_full_lifecycle_hook_session_ref() {
         let mut terminal = test_terminal();
-        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
+        terminal.set_detected_state(Some(Agent::Kimi), AgentState::Idle);
         anchor_full_lifecycle_session(
             &mut terminal,
-            Agent::Hermes,
-            "herdr:hermes",
-            "hermes",
-            crate::agent_resume::AgentSessionRef::id("hermes-session").unwrap(),
+            Agent::Kimi,
+            "herdr:kimi",
+            "kimi",
+            crate::agent_resume::AgentSessionRef::id("kimi-session").unwrap(),
         );
         terminal.set_hook_authority_with_session_ref(
-            "herdr:hermes".into(),
-            "hermes".into(),
+            "herdr:kimi".into(),
+            "kimi".into(),
             AgentState::Working,
             None,
-            crate::agent_resume::AgentSessionRef::id("hermes-session"),
+            crate::agent_resume::AgentSessionRef::id("kimi-session"),
             Some(20),
         );
 
@@ -5189,7 +5305,7 @@ mod tests {
         assert!(!mutation.session_ref_changed);
         assert!(terminal.hook_authority.is_some());
         assert!(terminal.persisted_agent_session.is_none());
-        assert_eq!(terminal.effective_agent_label(), Some("hermes"));
+        assert_eq!(terminal.effective_agent_label(), Some("kimi"));
     }
 
     #[test]

@@ -197,12 +197,12 @@ fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indent
     let (state, seen) = ws.aggregate_state(&app.terminals);
     let label = if indented {
         grouped_child_display_label(
-            &ws.display_name(),
+            &ws.display_name_from_terminals(&app.terminals),
             ws.branch().as_deref(),
             ws.custom_name.is_some(),
         )
     } else {
-        ws.display_name()
+        ws.display_name_from_terminals(&app.terminals)
     };
     let token_values = ws.metadata_tokens.values();
     tokens::space_rows(

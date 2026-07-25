@@ -39,7 +39,10 @@ class PreviewNotesTests(unittest.TestCase):
                 base_version="0.6.6",
                 protocol=12,
                 notes=notes,
-                shas={"linux-x86_64": "deadbeef"},
+                shas={
+                    "linux-x86_64": "deadbeef",
+                    "windows-x86_64": "a" * 64,
+                },
                 retain=30,
             )
             data = json.loads(content)
@@ -51,9 +54,31 @@ class PreviewNotesTests(unittest.TestCase):
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["url"],
-                "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.exe",
+                "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
             )
+            self.assertEqual(
+                data["assets"]["windows-x86_64"]["sha256"],
+                "a" * 64,
+            )
+            self.assertEqual(data["assets"]["windows-x86_64"]["format"], "zip")
             self.assertIn("2026-06-02-abcdef123456", data["builds"])
+
+    def test_windows_preview_asset_requires_sha256(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "windows-x86_64 requires"):
+                preview.build_manifest(
+                    output=Path(tmp) / "preview.json",
+                    repo="ogulcancelik/herdr",
+                    tag="preview-test",
+                    build_id="test",
+                    commit="abcdef",
+                    built_at="2026-06-02T03:00:00Z",
+                    base_version="0.6.6",
+                    protocol=12,
+                    notes="test",
+                    shas={},
+                    retain=1,
+                )
 
     def test_hidden_subjects_include_preview_manifest_commits(self):
         self.assertTrue(preview.hidden_subject("docs: update preview manifest"))

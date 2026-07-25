@@ -1027,7 +1027,7 @@ impl ExperimentSetting {
         match self {
             Self::PaneHistory => "pane screen history",
             Self::SwitchAsciiInputSourceInPrefix => {
-                "switch to ascii input source in prefix (macOS)"
+                "switch to ascii input source in prefix (macOS/Windows)"
             }
         }
     }

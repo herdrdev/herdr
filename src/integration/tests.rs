@@ -2747,14 +2747,6 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(KILO_PLUGIN_ASSET.contains("session_start_source: \"startup\""));
     assert!(KILO_PLUGIN_ASSET.contains("reportState"));
     assert!(!KILO_PLUGIN_ASSET.contains("pane.release_agent"));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("session_id = _session_id(kwargs)"));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("agent_session_id"));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("pane.report_agent_session\","));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("\"session_start_source\": \"startup\""));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("pane.report_agent\","));
-    assert!(HERMES_PLUGIN_INIT_ASSET.contains("on_session_end"));
-    assert!(!HERMES_PLUGIN_INIT_ASSET.contains("on_session_finalize"));
-    assert!(!HERMES_PLUGIN_INIT_ASSET.contains("pane.release_agent"));
     assert!(QODERCLI_HOOK_ASSET.contains("HERDR_PANE_ID"));
     assert!(QODERCLI_HOOK_ASSET.contains("session_id"));
     assert!(QODERCLI_HOOK_ASSET.contains("report-agent-session"));

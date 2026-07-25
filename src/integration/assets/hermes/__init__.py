@@ -1,4 +1,4 @@
-"""Hermes plugin installed by Herdr to report agent lifecycle state."""
+"""Hermes plugin installed by Herdr to report resumable session identity."""
 
 # HERDR_INTEGRATION_ID=hermes
 # HERDR_INTEGRATION_VERSION=4
@@ -13,6 +13,7 @@ import time
 
 _SOURCE = "herdr:hermes"
 _AGENT = "hermes"
+_INTERACTIVE_PLATFORMS = {"cli", "tui", "desktop", "acp"}
 
 
 def _base_params() -> tuple[str, str] | None:
@@ -56,53 +57,35 @@ def _send(method: str, params: dict) -> None:
         pass
 
 
-def _session_id(kwargs: dict) -> str | None:
-    value = kwargs.get("session_id")
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _report(state: str, **kwargs) -> None:
-    params = {"state": state}
-    session_id = _session_id(kwargs)
-    if session_id:
-        params["agent_session_id"] = session_id
-    _send("pane.report_agent", params)
+def _report_session(start_source: str, **kwargs) -> None:
+    if kwargs.get("platform") not in _INTERACTIVE_PLATFORMS:
+        return
+    session_id = kwargs.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    _send(
+        "pane.report_agent_session",
+        {
+            "agent_session_id": session_id,
+            "session_start_source": start_source,
+        },
+    )
 
 
 def _session_started(**kwargs) -> None:
-    session_id = _session_id(kwargs)
-    if session_id:
-        _send(
-            "pane.report_agent_session",
-            {
-                "agent_session_id": session_id,
-                "session_start_source": "startup",
-            },
-        )
-    _idle(**kwargs)
+    _report_session("startup", **kwargs)
 
 
-def _working(**kwargs) -> None:
-    _report("working", **kwargs)
+def _session_reset(**kwargs) -> None:
+    _report_session("new", **kwargs)
 
 
-def _blocked(**kwargs) -> None:
-    _report("blocked", **kwargs)
-
-
-def _idle(**kwargs) -> None:
-    _report("idle", **kwargs)
+def _session_observed(**kwargs) -> None:
+    if kwargs.get("platform") == "cli":
+        _report_session("resume", **kwargs)
 
 
 def register(ctx):
     ctx.register_hook("on_session_start", _session_started)
-    ctx.register_hook("pre_llm_call", _working)
-    ctx.register_hook("pre_api_request", _working)
-    ctx.register_hook("pre_tool_call", _working)
-    ctx.register_hook("post_tool_call", _working)
-    ctx.register_hook("pre_approval_request", _blocked)
-    ctx.register_hook("post_approval_response", _working)
-    ctx.register_hook("post_llm_call", _idle)
-    ctx.register_hook("on_session_end", _idle)
+    ctx.register_hook("on_session_reset", _session_reset)
+    ctx.register_hook("pre_llm_call", _session_observed)
