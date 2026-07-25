@@ -349,15 +349,28 @@ fn capture_tab(
                     });
                 }
             }
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| PaneAgentSessionSnapshot {
+            if let Some(session) = terminal.persisted_agent_session.as_ref() {
+                return Some(PaneAgentSessionSnapshot {
                     source: session.source.clone(),
                     agent: session.agent.clone(),
                     kind: session.session_ref.kind,
                     value: session.session_ref.value.clone(),
-                })
+                });
+            }
+            if terminal.detected_agent == Some(crate::detect::Agent::Antigravity)
+                || terminal.agent_name.as_deref() == Some("agy")
+            {
+                let cmdline = terminal.launch_argv.as_ref().map(|v| v.join(" "));
+                if let Some(cid) = crate::agent_resume::infer_agy_session_id(cmdline.as_deref()) {
+                    return Some(PaneAgentSessionSnapshot {
+                        source: "herdr:agy".to_string(),
+                        agent: "agy".to_string(),
+                        kind: crate::agent_resume::AgentSessionRefKind::Id,
+                        value: cid,
+                    });
+                }
+            }
+            None
         });
         panes.insert(
             id.raw(),

@@ -215,6 +215,46 @@ pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> S
     )
 }
 
+pub fn infer_agy_session_id(cmdline: Option<&str>) -> Option<String> {
+    if let Some(cmd) = cmdline {
+        if let Some(idx) = cmd.find("--conversation") {
+            let rest = cmd[idx + "--conversation".len()..].trim_start();
+            let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
+            let token = rest.split_whitespace().next().unwrap_or("");
+            let token = token.trim_matches('\'').trim_matches('"');
+            if !token.is_empty() && token != "--continue" {
+                return Some(token.to_string());
+            }
+        }
+    }
+
+    let home = std::env::var("HOME").ok()?;
+    let brain_dir = std::path::PathBuf::from(home).join(".gemini/antigravity-cli/brain");
+    let entries = std::fs::read_dir(brain_dir).ok()?;
+
+    let mut newest: Option<(std::time::SystemTime, String)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    let name = path.file_name()?.to_string_lossy().to_string();
+                    match &newest {
+                        Some((best_time, _)) if mtime > *best_time => {
+                            newest = Some((mtime, name));
+                        }
+                        None => {
+                            newest = Some((mtime, name));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    newest.map(|(_, name)| name)
+}
+
 pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
     matches!(
         (source, agent),
@@ -436,6 +476,18 @@ mod tests {
             .unwrap()
             .argv,
             vec!["agy", "--conversation", "agy-session"]
+        );
+    }
+
+    #[test]
+    fn infer_agy_session_id_extracts_conversation_flag_or_brain_session() {
+        assert_eq!(
+            infer_agy_session_id(Some("agy --conversation 708b9fbb-241f-4933-af28-2fdfe4e41d77")),
+            Some("708b9fbb-241f-4933-af28-2fdfe4e41d77".to_string())
+        );
+        assert_eq!(
+            infer_agy_session_id(Some("agy --conversation='my-sess-id'")),
+            Some("my-sess-id".to_string())
         );
     }
 
