@@ -1630,6 +1630,10 @@ impl AppState {
                 crate::logging::workspace_closed(&workspace_id);
             }
         }
+        let active_workspace_id = self
+            .active
+            .and_then(|idx| self.workspaces.get(idx))
+            .map(|ws| ws.id.clone());
         self.remove_plugin_pane_records(pane_ids);
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
@@ -1642,6 +1646,12 @@ impl AppState {
             self.tab_scroll = 0;
             self.tab_scroll_follow_active = true;
         } else {
+            // Keep focus on the previously focused workspace
+            if let Some(id) = active_workspace_id {
+                if let Some(idx) = self.workspaces.iter().position(|ws| ws.id == id) {
+                    self.selected = idx;
+                }
+            }
             if self.selected >= self.workspaces.len() {
                 self.selected = self.workspaces.len() - 1;
             }
@@ -4497,6 +4507,22 @@ mod tests {
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.selected, 0);
         assert_eq!(state.active, Some(0));
+    }
+
+    #[test]
+    fn close_non_focused_workspace_keeps_focus() {
+        let mut state = app_with_workspaces(&["a", "b", "c"]);
+        state.selected = 1;
+        state.active = Some(0);
+
+        state.close_selected_workspace();
+
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(state.workspaces[0].display_name(), "a");
+        assert_eq!(state.workspaces[1].display_name(), "c");
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.active, Some(0));
+        state.assert_invariants_for_test();
     }
 
     #[test]
