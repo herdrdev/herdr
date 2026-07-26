@@ -595,6 +595,12 @@ fn restore_terminal_state(
     }
 
     ratatui::restore();
+    // Clear host mouse reporting again *after* leaving the alternate screen.
+    // Some terminals (e.g. Ghostty) track DEC private modes per screen buffer
+    // and restore the primary screen's saved mouse-tracking state on
+    // LeaveAlternateScreen, re-enabling it after the pre-restore clear above.
+    // See issue #1713 (follow-up to #939).
+    let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
     let _ = write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
 
     #[cfg(windows)]

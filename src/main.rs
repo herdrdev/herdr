@@ -774,6 +774,10 @@ fn main() -> io::Result<()> {
         let _ = set_host_color_scheme_reports(false);
         let _ = pop_keyboard_enhancement_flags();
         ratatui::restore();
+        // Re-clear after leaving the alternate screen: some terminals restore
+        // the primary screen's saved mouse-tracking state on
+        // LeaveAlternateScreen, undoing the pre-restore clear. See issue #1713.
+        let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
         original_hook(info);
     }));
 
@@ -840,6 +844,10 @@ fn main() -> io::Result<()> {
         crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
         set_host_color_scheme_reports(false)?;
         ratatui::restore();
+        // Re-clear after leaving the alternate screen: some terminals restore
+        // the primary screen's saved mouse-tracking state on
+        // LeaveAlternateScreen, undoing the pre-restore clear. See issue #1713.
+        crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
 
         // Drop app (and all workspaces/panes) before runtime shuts down
         drop(app);
