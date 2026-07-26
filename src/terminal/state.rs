@@ -1326,6 +1326,25 @@ impl TerminalState {
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
+        self.set_agent_session_ref_from_report(
+            source,
+            agent_label,
+            session_ref,
+            seq,
+            session_start_source,
+            None,
+        )
+    }
+
+    pub fn set_agent_session_ref_from_report(
+        &mut self,
+        source: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        session_start_source: Option<String>,
+        parent_session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    ) -> Option<TerminalStateMutation> {
         let session_ref = session_ref?;
         let known_agent = crate::detect::parse_agent_label(&agent_label);
         let process_present = known_agent.is_some()
@@ -1411,6 +1430,19 @@ impl TerminalState {
             return None;
         }
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
+            return None;
+        }
+        let nested_session = parent_session_ref
+            .as_ref()
+            .is_some_and(|parent_session_ref| {
+                parent_session_ref != &session_ref
+                    && self.current_session_identity_for_persistence().is_some_and(
+                        |(current_source, current_agent, _, _)| {
+                            current_source == source && current_agent == agent_label
+                        },
+                    )
+            });
+        if nested_session {
             return None;
         }
         let session_replacement_allowed = Self::session_start_source_allows_session_replacement(
@@ -4398,6 +4430,44 @@ mod tests {
                 Some(next_session.as_str())
             );
         }
+
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                crate::agent_resume::AgentSessionRef::id("codex-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal.set_agent_session_ref_from_report(
+            "herdr:codex".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("nested-session"),
+            Some(21),
+            Some("startup".into()),
+            crate::agent_resume::AgentSessionRef::id("codex-session"),
+        );
+
+        assert!(mutation.is_none());
+        let mutation = terminal.set_agent_session_ref_from_report(
+            "herdr:codex".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("deeply-nested-session"),
+            Some(22),
+            Some("startup".into()),
+            crate::agent_resume::AgentSessionRef::id("nested-session"),
+        );
+
+        assert!(mutation.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("codex-session")
+        );
     }
 
     #[test]

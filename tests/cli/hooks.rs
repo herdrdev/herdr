@@ -8,14 +8,6 @@ fn run_claude_hook(action: &str, hook_input: &str) -> Option<serde_json::Value> 
     )
 }
 
-fn run_codex_hook(action: &str, hook_input: &str) -> Option<serde_json::Value> {
-    run_shell_hook(
-        "src/integration/assets/codex/herdr-agent-state.sh",
-        &[action],
-        hook_input,
-    )
-}
-
 fn run_copilot_hook(hook_input: &str) -> Option<serde_json::Value> {
     run_shell_hook(
         "src/integration/assets/copilot/herdr-agent-state.sh",
@@ -151,14 +143,20 @@ fn claude_hook_reports_session_id_from_stdin() {
 
 #[test]
 fn codex_hook_reports_session_id_from_stdin() {
-    let request = run_codex_hook(
-        "session",
+    let request = run_shell_hook_with_env(
+        "src/integration/assets/codex/herdr-agent-state.sh",
+        &["session"],
         r#"{"hook_event_name":"SessionStart","session_id":"codex-session"}"#,
+        &[("CODEX_THREAD_ID", "parent-session")],
     )
     .expect("codex hook should report session identity");
 
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent_session_id"], "codex-session");
+    assert_eq!(
+        request["params"]["parent_agent_session_id"],
+        "parent-session"
+    );
     assert!(request["params"].get("state").is_none());
 }
 

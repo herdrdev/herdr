@@ -109,6 +109,7 @@ impl PaneLaunchEnv {
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+    cmd.env_remove("CODEX_THREAD_ID");
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }

@@ -1243,6 +1243,12 @@ impl App {
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        let parent_session_ref = crate::agent_resume::session_ref_from_report(
+            &params.source,
+            &agent_label,
+            params.parent_agent_session_id,
+            None,
+        );
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1257,6 +1263,7 @@ impl App {
             session_start_source: crate::agent_resume::normalize_session_start_source(
                 params.session_start_source,
             ),
+            parent_session_ref,
         });
 
         encode_success(id, ResponseResult::Ok {})

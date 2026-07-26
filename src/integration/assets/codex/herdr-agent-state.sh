@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 
 set -eu
 
@@ -56,6 +56,9 @@ request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):0
 report_seq = time.time_ns()
 session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
+parent_agent_session_id = os.environ.get("CODEX_THREAD_ID")
+if parent_agent_session_id == agent_session_id:
+    parent_agent_session_id = None
 session_start_source = hook_input.get("source") if hook_event_name == "SessionStart" else None
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = None
@@ -69,6 +72,8 @@ if agent_session_id:
     }
     if session_start_source:
         params["session_start_source"] = session_start_source
+    if parent_agent_session_id:
+        params["parent_agent_session_id"] = parent_agent_session_id
     request = {
         "id": request_id,
         "method": "pane.report_agent_session",

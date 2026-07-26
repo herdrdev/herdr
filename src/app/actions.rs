@@ -2827,14 +2827,16 @@ impl AppState {
                 seq,
                 session_ref,
                 session_start_source,
+                parent_session_ref,
             } => self
                 .update_terminal_state(pane_id, |terminal| {
-                    terminal.set_agent_session_ref_for_session_start(
+                    terminal.set_agent_session_ref_from_report(
                         source,
                         agent_label,
                         session_ref,
                         seq,
                         session_start_source,
+                        parent_session_ref,
                     )
                 })
                 .into_iter()

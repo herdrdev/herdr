@@ -2833,6 +2833,12 @@
             "pane_id": {
               "type": "string"
             },
+            "parent_agent_session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "seq": {
               "format": "uint64",
               "minimum": 0,
