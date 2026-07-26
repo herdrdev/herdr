@@ -256,20 +256,6 @@ Herdr 使用 `~/.mastracode`。安装会写入 `hooks/herdr-agent-state.sh`,并�
 
 Herdr 用 `mastracode --thread <id>` 恢复保存的 MastraCode 线程。
 
-## Grok CLI
-
-安装 Grok CLI 钩子:
-
-```bash
-herdr integration install grok
-```
-
-该钩子在 Grok CLI 运行于 Herdr 窗格内时,通过 Grok 的 `SessionStart` 钩子上报会话身份。Grok 的状态来自 Herdr 的屏幕清单检测。
-
-Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的每个 `hooks/*.json` 文件,所以安装会在 `hooks/herdr-agent-state.sh` 脚本旁写入一个自包含的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并且不会编辑其他钩子文件。卸载只会删除这两个 Herdr 拥有的文件。
-
-在 Grok 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `grok --resume <id>` 恢复该窗格。
-
 ## 自定义状态标签
 
 集成只把生命周期状态作为语义状态上报。例如,上报智能体为 `working` 时,不在生命周期报告中添加展示字段。
