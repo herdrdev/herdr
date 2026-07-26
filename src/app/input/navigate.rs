@@ -372,6 +372,7 @@ impl App {
             }
             NavigateAction::EditScrollback => {}
             NavigateAction::CopyMode => self.state.enter_copy_mode(&self.terminal_runtimes),
+            NavigateAction::Pluck => self.state.enter_pluck(&self.terminal_runtimes),
             NavigateAction::Zoom => {
                 self.zoom_focused_pane_via_api();
                 leave_navigate_mode(&mut self.state);
@@ -1342,6 +1343,7 @@ pub(crate) enum NavigateAction {
     ClosePane,
     EditScrollback,
     CopyMode,
+    Pluck,
     Zoom,
     EnterResizeMode,
     ToggleSidebar,
@@ -1472,6 +1474,7 @@ fn non_indexed_action_for_key(
         (&kb.rename_pane, NavigateAction::RenamePane),
         (&kb.edit_scrollback, NavigateAction::EditScrollback),
         (&kb.copy_mode, NavigateAction::CopyMode),
+        (&kb.pluck, NavigateAction::Pluck),
         (&kb.focus_pane_left, NavigateAction::FocusPaneLeft),
         (&kb.focus_pane_down, NavigateAction::FocusPaneDown),
         (&kb.focus_pane_up, NavigateAction::FocusPaneUp),
@@ -1714,6 +1717,7 @@ pub(super) fn execute_navigate_action_in_context(
         }
         NavigateAction::EditScrollback => {}
         NavigateAction::CopyMode => state.enter_copy_mode(terminal_runtimes),
+        NavigateAction::Pluck => state.enter_pluck(terminal_runtimes),
         NavigateAction::Zoom => {
             state.toggle_zoom();
             leave_navigate_mode(state);

@@ -937,6 +937,21 @@ pub(crate) struct NavigatorState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluckMatch {
+    pub hint: String,
+    pub text: String,
+    pub row: u16,
+    pub col: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluckState {
+    pub pane_id: PaneId,
+    pub matches: Vec<PluckMatch>,
+    pub input: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CopyModeState {
     pub pane_id: PaneId,
     pub cursor_row: u16,
@@ -1465,6 +1480,7 @@ pub struct AppState {
     pub keybind_help: KeybindHelpState,
     pub navigator: NavigatorState,
     pub copy_mode: Option<CopyModeState>,
+    pub(crate) pluck: Option<PluckState>,
     pub workspace_scroll: usize,
     pub agent_panel_scroll: usize,
     pub tab_scroll: usize,
@@ -1835,6 +1851,7 @@ impl AppState {
             keybind_help: KeybindHelpState::default(),
             navigator: NavigatorState::default(),
             copy_mode: None,
+            pluck: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             tab_scroll: 0,
@@ -2198,6 +2215,9 @@ impl AppState {
         }
         if let Some(copy_mode) = &self.copy_mode {
             assert_live_pane(copy_mode.pane_id, "copy mode");
+        }
+        if let Some(pluck) = &self.pluck {
+            assert_live_pane(pluck.pane_id, "pluck mode");
         }
         if let Some(pane_id) = self.rename_pane_target {
             assert_live_pane(pane_id, "rename pane target");

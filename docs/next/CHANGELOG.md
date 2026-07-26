@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+### Added
+- `prefix+s` now opens native pluck mode, labeling visible URLs, paths, identifiers, and numbers for one- or two-key clipboard selection.
+
 ### Changed
+- Settings moved from `prefix+s` to `prefix+comma` to make room for pluck mode.
 - Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.
 
 ### Fixed

@@ -313,7 +313,7 @@ pub struct KeysConfig {
     pub prefix: String,
     /// Open keybinding help. Default: "prefix+?"
     pub help: BindingConfig,
-    /// Open settings. Default: "prefix+s"
+    /// Open settings. Default: "prefix+comma"
     pub settings: BindingConfig,
     /// Create a new workspace. Default: "prefix+shift+n"
     pub new_workspace: BindingConfig,
@@ -381,6 +381,8 @@ pub struct KeysConfig {
     pub edit_scrollback: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
+    /// Show hints for copyable tokens in the focused pane. Default: "prefix+s".
+    pub pluck: BindingConfig,
     /// Focus the pane to the left. Default: "prefix+h".
     pub focus_pane_left: BindingConfig,
     /// Focus the pane below. Default: "prefix+j".
@@ -501,6 +503,8 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     copy_mode: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pluck: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     focus_pane_left: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     focus_pane_down: Option<BindingConfig>,
@@ -593,6 +597,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(rename_pane);
         apply_field!(edit_scrollback);
         apply_field!(copy_mode);
+        apply_field!(pluck);
         apply_field!(focus_pane_left);
         apply_field!(focus_pane_down);
         apply_field!(focus_pane_up);
@@ -691,6 +696,7 @@ impl KeysConfig {
         copy_effective_action_field!(rename_pane, keybinds.rename_pane);
         copy_effective_action_field!(edit_scrollback, keybinds.edit_scrollback);
         copy_effective_action_field!(copy_mode, keybinds.copy_mode);
+        copy_effective_action_field!(pluck, keybinds.pluck);
         copy_effective_action_field!(focus_pane_left, keybinds.focus_pane_left);
         copy_effective_action_field!(focus_pane_down, keybinds.focus_pane_down);
         copy_effective_action_field!(focus_pane_up, keybinds.focus_pane_up);
@@ -926,7 +932,7 @@ impl Default for KeysConfig {
         Self {
             prefix: "ctrl+b".into(),
             help: BindingConfig::one("prefix+?"),
-            settings: BindingConfig::one("prefix+s"),
+            settings: BindingConfig::one("prefix+comma"),
             new_workspace: BindingConfig::one("prefix+shift+n"),
             new_worktree: BindingConfig::one("prefix+shift+g"),
             open_worktree: BindingConfig::empty(),
@@ -960,6 +966,7 @@ impl Default for KeysConfig {
             rename_pane: BindingConfig::one("prefix+shift+p"),
             edit_scrollback: BindingConfig::one("prefix+e"),
             copy_mode: BindingConfig::one("prefix+["),
+            pluck: BindingConfig::one("prefix+s"),
             focus_pane_left: BindingConfig::one("prefix+h"),
             focus_pane_down: BindingConfig::one("prefix+j"),
             focus_pane_up: BindingConfig::one("prefix+k"),
