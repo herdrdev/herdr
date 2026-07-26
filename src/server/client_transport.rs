@@ -1077,7 +1077,11 @@ command = "lazygit"
             .bindings
             .iter()
             .any(|binding| binding.label == "prefix+t"));
-        assert!(keybindings.keybinds.custom_commands.is_empty());
+        assert!(!keybindings
+            .keybinds
+            .custom_commands
+            .iter()
+            .any(|command| command.command == "lazygit"));
     }
 
     #[test]

@@ -1508,6 +1508,14 @@ mod tests {
             .collect()
     }
 
+    fn non_builtin_sesh_commands(keybinds: &Keybinds) -> Vec<&CustomCommandKeybind> {
+        keybinds
+            .custom_commands
+            .iter()
+            .filter(|command| command.command != SESH_PLUGIN_ACTION_ID)
+            .collect()
+    }
+
     #[test]
     fn parse_simple_char_combo() {
         assert_eq!(
@@ -1918,7 +1926,10 @@ command = "echo hi"
             .navigate
             .workspace_down
             .matches_direct_key(TerminalKey::new(KeyCode::Char('f'), KeyModifiers::empty())));
-        assert!(!keybinds.custom_commands.is_empty());
+        assert!(keybinds
+            .custom_commands
+            .iter()
+            .any(|command| command.command == "echo hi"));
         assert!(!diagnostics.iter().any(|diag| {
             diag.contains("disabled keys.navigate_workspace_down")
                 && (diag.contains("keys.next_tab") || diag.contains("keys.command"))
@@ -1981,7 +1992,7 @@ command = "echo no"
         )
         .unwrap();
         let diagnostics = config.collect_diagnostics();
-        assert!(config.keybinds().custom_commands.is_empty());
+        assert!(non_builtin_sesh_commands(&config.keybinds()).is_empty());
         assert!(diagnostics.iter().any(|diag| {
             diag.contains("reserved keybinding") && diag.contains("keys.command[0].key")
         }));
@@ -2000,7 +2011,7 @@ command = "echo no"
         )
         .unwrap();
         let diagnostics = config.collect_diagnostics();
-        assert!(config.keybinds().custom_commands.is_empty());
+        assert!(non_builtin_sesh_commands(&config.keybinds()).is_empty());
         assert!(diagnostics.iter().any(|diag| {
             diag.contains("unsafe direct keybinding") && diag.contains("keys.command[0].key")
         }));
@@ -2022,7 +2033,7 @@ command = "echo no"
         let diagnostics = config.collect_diagnostics();
         let keybinds = config.keybinds();
         assert!(!keybinds.new_tab.bindings.is_empty());
-        assert!(keybinds.custom_commands.is_empty());
+        assert!(non_builtin_sesh_commands(&keybinds).is_empty());
         assert!(diagnostics.iter().any(|diag| {
             diag.contains("kept keys.new_tab") && diag.contains("disabled keys.command[0].key")
         }));
@@ -2328,11 +2339,9 @@ description = "say hello"
         )
         .unwrap();
         let keybinds = config.keybinds();
-        assert_eq!(keybinds.custom_commands.len(), 1);
-        assert_eq!(
-            keybinds.custom_commands[0].description,
-            Some("say hello".to_string())
-        );
+        let commands = non_builtin_sesh_commands(&keybinds);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].description, Some("say hello".to_string()));
     }
 
     #[test]
@@ -2349,19 +2358,11 @@ height = "80%"
         )
         .unwrap();
         let keybinds = config.keybinds();
-        assert_eq!(keybinds.custom_commands.len(), 1);
-        assert_eq!(
-            keybinds.custom_commands[0].action,
-            CustomCommandAction::Popup
-        );
-        assert_eq!(
-            keybinds.custom_commands[0].width,
-            Some(PopupSize::Cells(90))
-        );
-        assert_eq!(
-            keybinds.custom_commands[0].height,
-            Some(PopupSize::Percent(80))
-        );
+        let commands = non_builtin_sesh_commands(&keybinds);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].action, CustomCommandAction::Popup);
+        assert_eq!(commands[0].width, Some(PopupSize::Cells(90)));
+        assert_eq!(commands[0].height, Some(PopupSize::Percent(80)));
     }
 
     #[test]
@@ -2378,7 +2379,9 @@ width = "80%"
         .unwrap();
 
         let keybinds = config.keybinds();
-        assert_eq!(keybinds.custom_commands[0].width, None);
+        let commands = non_builtin_sesh_commands(&keybinds);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].width, None);
         assert!(config
             .collect_diagnostics()
             .iter()
