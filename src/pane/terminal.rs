@@ -1286,6 +1286,8 @@ impl GhosttyPaneTerminal {
         let Ok(mut core) = self.core.lock() else {
             return;
         };
+        #[cfg(windows)]
+        core.kitty_keyboard.observe(ansi.as_bytes());
         core.terminal.write(ansi.as_bytes());
         #[cfg(windows)]
         windows_recent_fallback::update(&mut core);
@@ -1565,6 +1567,9 @@ impl GhosttyPaneTerminal {
             mouse_protocol_mode,
             mouse_protocol_encoding,
             mouse_alternate_scroll,
+            #[cfg(windows)]
+            modify_other_keys: core.kitty_keyboard.modify_other_keys_enabled(),
+            #[cfg(not(windows))]
             modify_other_keys: core
                 .terminal
                 .keyboard_state_ansi()
@@ -1619,6 +1624,18 @@ impl GhosttyPaneTerminal {
         key: crate::input::TerminalKey,
         protocol: crate::input::KeyboardProtocol,
     ) -> Vec<u8> {
+        #[cfg(windows)]
+        if let Some(bytes) = crate::platform::encode_windows_conpty_shift_enter(key) {
+            if self.core.lock().is_ok_and(|core| {
+                core.terminal
+                    .kitty_keyboard_flags()
+                    .is_ok_and(|flags| flags == 0)
+                    && !core.kitty_keyboard.modify_other_keys_enabled()
+            }) {
+                return bytes;
+            }
+        }
+
         if ghostty_prefers_herdr_text_encoding(key) {
             return crate::input::encode_terminal_key(key, protocol);
         }
@@ -3967,11 +3984,16 @@ mod tests {
     fn ghostty_modify_other_keys_mode_one_preserves_shift_enter() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
-        let pane_id = PaneId::from_raw(1);
-        pane.process_pty_bytes(pane_id, 0, b"\x1b[>4;1m", &tx);
-
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
+
+        #[cfg(windows)]
+        assert_eq!(
+            pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+            b"\x1b[13;28;13;1;16;1_"
+        );
+
+        pane.seed_history_ansi("\x1b[>4;1m");
         let encoded = pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy);
 
         assert_eq!(encoded, b"\x1b[27;2;13~");
