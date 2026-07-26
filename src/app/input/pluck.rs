@@ -233,6 +233,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn headless_copy_mode_dispatch_routes_pluck_hints() {
+        let (mut app, _) = app_with_pluck_screen(b"copy https://example.com/path\n");
+        enter_pluck_with_prefix_s(&mut app).await;
+        let hint = app.state.pluck.as_ref().expect("pluck mode").matches[0]
+            .hint
+            .clone();
+
+        for ch in hint.chars() {
+            app.handle_non_terminal_key_headless(TerminalKey::new(
+                KeyCode::Char(ch),
+                KeyModifiers::empty(),
+            ));
+        }
+
+        match app.event_rx.try_recv().expect("clipboard event") {
+            AppEvent::ClipboardWrite { content } => {
+                assert_eq!(content, b"https://example.com/path");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.pluck, None);
+    }
+
+    #[tokio::test]
     async fn escape_and_ctrl_c_cancel_pluck_mode() {
         for key in [
             TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()),
