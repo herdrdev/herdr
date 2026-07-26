@@ -361,6 +361,7 @@ pub(super) fn render_panes(
                 true,
             );
             render_copy_mode_cursor(app, frame, info);
+            render_pluck_hints(app, frame, info);
         }
     }
 
@@ -676,6 +677,33 @@ fn line_cell_symbol(line: LineCell) -> &'static str {
         (true, false, false, true) => "└",
         (true, false, true, false) => "┘",
         _ => "",
+    }
+}
+
+fn render_pluck_hints(app: &AppState, frame: &mut Frame, info: &PaneInfo) {
+    let Some(pluck) = app.pluck.as_ref().filter(|pluck| pluck.pane_id == info.id) else {
+        return;
+    };
+    let style = Style::default()
+        .fg(app.palette.panel_bg)
+        .bg(app.palette.accent)
+        .add_modifier(Modifier::BOLD);
+    let buffer = frame.buffer_mut();
+    for item in &pluck.matches {
+        for (offset, ch) in item.hint.chars().enumerate() {
+            let Ok(offset) = u16::try_from(offset) else {
+                break;
+            };
+            let x = info
+                .inner_rect
+                .x
+                .saturating_add(item.col)
+                .saturating_add(offset);
+            let y = info.inner_rect.y.saturating_add(item.row);
+            if x < info.inner_rect.right() && y < info.inner_rect.bottom() {
+                buffer[(x, y)].set_char(ch).set_style(style);
+            }
+        }
     }
 }
 

@@ -580,6 +580,7 @@ impl App {
             keybind_help: state::KeybindHelpState::default(),
             navigator: state::NavigatorState::default(),
             copy_mode: None,
+            pluck: None,
             workspace_scroll: 0,
             agent_panel_scroll: 0,
             tab_scroll: 0,

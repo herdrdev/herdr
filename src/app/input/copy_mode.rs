@@ -724,7 +724,7 @@ impl AppState {
         }
     }
 
-    fn copy_mode_visible_row_text(
+    pub(crate) fn copy_mode_visible_row_text(
         &self,
         terminal_runtimes: &TerminalRuntimeRegistry,
         viewport_row: u16,
@@ -812,15 +812,19 @@ impl AppState {
         &mut self,
         pane_ids: impl IntoIterator<Item = crate::layout::PaneId>,
     ) {
-        let Some(copy_mode) = self.copy_mode.as_ref() else {
-            return;
-        };
-        if pane_ids
-            .into_iter()
-            .any(|pane_id| pane_id == copy_mode.pane_id)
-        {
+        let pane_ids: Vec<_> = pane_ids.into_iter().collect();
+        let removed_copy = self
+            .copy_mode
+            .as_ref()
+            .is_some_and(|copy_mode| pane_ids.contains(&copy_mode.pane_id));
+        let removed_pluck = self
+            .pluck
+            .as_ref()
+            .is_some_and(|pluck| pane_ids.contains(&pluck.pane_id));
+        if removed_copy || removed_pluck {
             self.clear_selection();
             self.copy_mode = None;
+            self.pluck = None;
             if self.mode == Mode::Copy {
                 self.mode = if self.active.is_some() {
                     Mode::Terminal
