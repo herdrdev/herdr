@@ -381,7 +381,7 @@ pub struct KeysConfig {
     pub edit_scrollback: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
-    /// Show hints for copyable tokens in the focused pane. Default: "prefix+s".
+    /// Show hints for URLs, paths, hashes, IP addresses, and long numbers in the focused pane. Default: "prefix+s".
     pub pluck: BindingConfig,
     /// Focus the pane to the left. Default: "prefix+h".
     pub focus_pane_left: BindingConfig,

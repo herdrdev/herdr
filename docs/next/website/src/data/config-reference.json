@@ -425,7 +425,7 @@
           "key": "keys.pluck",
           "type": "keybinding",
           "default": "\"prefix+s\"",
-          "description": "Show hints for copyable tokens in the focused pane."
+          "description": "Show hints for URLs, paths, hashes, IP addresses, and long numbers in the focused pane."
         },
         {
           "key": "keys.focus_pane_left",
