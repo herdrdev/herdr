@@ -88,6 +88,9 @@ impl App {
             }
             return None;
         }
+        if self.state.mode != Mode::Copy {
+            self.state.clear_pluck();
+        }
 
         match self.state.mode {
             Mode::Terminal => return self.handle_terminal_key(key).await,
