@@ -2225,6 +2225,32 @@ swap_pane_right = "prefix+shift+l"
     }
 
     #[test]
+    fn defaults_register_sesh_without_shadowing_swap_pane_up() {
+        let keybinds = Config::default().keybinds();
+        let sesh = keybinds
+            .custom_commands
+            .iter()
+            .find(|command| command.command == "fullerzz.sesh.open-picker")
+            .expect("default Sesh action");
+
+        assert_eq!(sesh.action, CustomCommandAction::PluginAction);
+        assert_eq!(
+            binding_triggers(&sesh.bindings),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('k'),
+                KeyModifiers::SHIFT
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&keybinds.swap_pane_up),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL
+            ))]
+        );
+    }
+
+    #[test]
     fn custom_command_with_description_parses() {
         let config: Config = toml::from_str(
             r#"
