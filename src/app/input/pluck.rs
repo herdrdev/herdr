@@ -6,8 +6,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::{
-        App, AppState, Mode,
         state::{PluckMatch, PluckState},
+        App, AppState, Mode,
     },
     input::TerminalKey,
     terminal::TerminalRuntimeRegistry,
@@ -203,12 +203,10 @@ mod tests {
         assert_eq!(app.state.mode, Mode::Copy);
         assert_eq!(pluck.pane_id, pane_id);
         assert_eq!(app.state.copy_mode, None);
-        assert!(
-            pluck
-                .matches
-                .iter()
-                .any(|item| item.text == "https://example.com")
-        );
+        assert!(pluck
+            .matches
+            .iter()
+            .any(|item| item.text == "https://example.com"));
     }
 
     #[tokio::test]
@@ -251,8 +249,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn entering_copy_mode_clears_stale_pluck_state() {
+    #[tokio::test]
+    async fn entering_copy_mode_clears_stale_pluck_state() {
         let (mut app, _) = app_with_pluck_screen(b"copy https://example.com\n");
         app.state.enter_pluck(&app.terminal_runtimes);
         assert!(app.state.pluck.is_some());
