@@ -45,6 +45,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         modifiers: key_modifiers_from_u8(modifier),
         kind,
         shifted_codepoint,
+        is_text_commit: false,
     })
 }
 
@@ -597,6 +598,22 @@ mod tests {
         assert_eq!(key.modifiers, KeyModifiers::SHIFT);
         assert_eq!(key.kind, crossterm::event::KeyEventKind::Release);
         assert_eq!(key.shifted_codepoint, Some('L' as u32));
+    }
+
+    #[test]
+    fn parse_kitty_sequence_preserves_non_us_shift_pairs() {
+        for (sequence, base, shifted) in [
+            ("\x1b[50:34;2:1u", '2', '"'),
+            ("\x1b[38:49;2:1u", '&', '1'),
+            ("\x1b[305:73;2:1u", 'ı', 'I'),
+            ("\x1b[287:286;2:1u", 'ğ', 'Ğ'),
+        ] {
+            let key = parse_terminal_key_sequence(sequence).unwrap();
+            assert_eq!(key.code, KeyCode::Char(base));
+            assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+            assert_eq!(key.kind, crossterm::event::KeyEventKind::Press);
+            assert_eq!(key.shifted_codepoint, Some(shifted as u32));
+        }
     }
 
     #[test]

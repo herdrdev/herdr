@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "package": {
+    "id": "Microsoft.Windows.Console.ConPTY",
+    "version": "1.24.260710001",
+    "release_tag": "v1.24.11911.0",
+    "url": "https://github.com/microsoft/terminal/releases/download/v1.24.11911.0/Microsoft.Windows.Console.ConPTY.1.24.260710001.nupkg",
+    "sha256": "9382ad7becb7e4d84e300578d8e4f4df28f43d979d9055d978c42913c47e0e9d",
+    "license": "MIT"
+  },
+  "bundles": {
+    "x86_64": {
+      "target_triple": "x86_64-pc-windows-msvc",
+      "files": [
+        {
+          "source": "runtimes/win-x64/native/conpty.dll",
+          "destination": "conpty/conpty.dll",
+          "sha256": "39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8",
+          "pe_machine": "0x8664"
+        },
+        {
+          "source": "build/native/runtimes/x64/OpenConsole.exe",
+          "destination": "conpty/x64/OpenConsole.exe",
+          "sha256": "b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160",
+          "pe_machine": "0x8664"
+        },
+        {
+          "source": "build/native/runtimes/arm64/OpenConsole.exe",
+          "destination": "conpty/arm64/OpenConsole.exe",
+          "sha256": "ed7622fd0d3bedc9ab9f122f5e58edf0def9e7999224f52dd395ba9f54edbe09",
+          "pe_machine": "0xaa64"
+        }
+      ]
+    }
+  },
+  "notices": [
+    {
+      "source": "packaging/windows/licenses/Microsoft.Windows.Console.ConPTY-LICENSE.txt",
+      "destination": "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-LICENSE.txt",
+      "sha256": "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b"
+    },
+    {
+      "source": "packaging/windows/licenses/Microsoft.Windows.Console.ConPTY-NOTICE.md",
+      "destination": "THIRD-PARTY-NOTICES/Microsoft.Windows.Console.ConPTY-NOTICE.md",
+      "sha256": "e7fbaadee6ab20c28b87730a510ee5f5815d8fb4bd88d1d54d282dc2a74c0726"
+    }
+  ]
+}

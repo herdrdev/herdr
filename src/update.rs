@@ -294,7 +294,7 @@ fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
-    let output = Command::new("curl")
+    let output = crate::noninteractive_process::curl_command()
         .args([
             "-sfL",
             "--retry",
@@ -508,7 +508,7 @@ fn homebrew_update_from_formula_json(
 fn check_homebrew_latest() -> Result<Option<Version>, String> {
     let current = Version::current();
 
-    let output = Command::new("curl")
+    let output = crate::noninteractive_process::curl_command()
         .args([
             "-sfL",
             "--retry",
@@ -571,7 +571,7 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
     let tmp_path = parent.join(format!(".herdr-update-{}.tmp", std::process::id()));
 
     // Download the exact asset URL (pinned to the release we checked)
-    let status = Command::new("curl")
+    let status = crate::noninteractive_process::curl_command()
         .args(["-sfL", "--max-time", "120", "-o"])
         .arg(&tmp_path)
         .arg(&release.download_url)
@@ -628,8 +628,12 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
 }
 
 #[cfg(windows)]
-fn install_windows_update_with_installer(channel: UpdateChannel) -> Result<(), String> {
-    let status = Command::new("powershell")
+fn install_windows_update_with_installer(
+    channel: UpdateChannel,
+    expected_build_id: Option<&str>,
+) -> Result<(), String> {
+    let mut command = Command::new("powershell");
+    command
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -643,7 +647,11 @@ fn install_windows_update_with_installer(channel: UpdateChannel) -> Result<(), S
         // PowerShell 5.1 (this `powershell`) fails to autoload cmdlets like
         // Get-FileHash. Removing it lets 5.1 compute its own default path.
         // See PowerShell/PowerShell#8635.
-        .env_remove("PSModulePath")
+        .env_remove("PSModulePath");
+    if let Some(build_id) = expected_build_id {
+        command.env("HERDR_EXPECTED_BUILD_ID", build_id);
+    }
+    let status = command
         .status()
         .map_err(|err| format!("failed to run Windows installer: {err}"))?;
 
@@ -2019,7 +2027,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
         if let Some(sha256) = &release.sha256 {
             tracing::debug!(sha256 = %sha256, "selected Windows update asset has checksum");
         }
-        install_windows_update_with_installer(channel)?;
+        install_windows_update_with_installer(channel, release.build_id.as_deref())?;
         let updated_exe = windows_installed_herdr_exe_path()?;
         eprintln!("installed {}", release.label());
         print_outdated_integration_notice_with_updated_binary(&updated_exe);

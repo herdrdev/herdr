@@ -1,11 +1,17 @@
+use super::AgentPanelEntry;
 use crate::config::{
-    AgentSidebarToken, AgentsSidebarConfig, SpaceSidebarToken, SpacesSidebarConfig,
+    AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
+    SpacesSidebarConfig,
 };
 
-use super::AgentPanelEntry;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedToken {
+    pub kind: ResolvedTokenKind,
+    pub style: SidebarTokenStyle,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ResolvedToken {
+pub(super) enum ResolvedTokenKind {
     StateIcon,
     StateText(String),
     Workspace(String),
@@ -16,6 +22,17 @@ pub(super) enum ResolvedToken {
     Branch(String),
     GitStatus { ahead: usize, behind: usize },
     Custom(String),
+}
+
+impl ResolvedToken {
+    fn new(kind: ResolvedTokenKind, style: SidebarTokenStyle) -> Self {
+        Self { kind, style }
+    }
+
+    #[cfg(test)]
+    pub(super) fn unstyled(kind: ResolvedTokenKind) -> Self {
+        Self::new(kind, SidebarTokenStyle::default())
+    }
 }
 
 pub(super) fn agent_rows(
@@ -29,30 +46,41 @@ pub(super) fn agent_rows(
         .filter_map(|row| {
             let resolved = row
                 .iter()
-                .filter_map(|token| match token {
-                    AgentSidebarToken::StateIcon => Some(ResolvedToken::StateIcon),
-                    AgentSidebarToken::StateText => {
-                        Some(ResolvedToken::StateText(state_text.to_string()))
-                    }
-                    AgentSidebarToken::Workspace => {
-                        Some(ResolvedToken::Workspace(entry.primary_label.clone()))
-                    }
-                    AgentSidebarToken::Tab => {
-                        entry.primary_tab_label.clone().map(ResolvedToken::Tab)
-                    }
-                    AgentSidebarToken::Pane => entry.pane_label.clone().map(ResolvedToken::Pane),
-                    AgentSidebarToken::Agent => entry.agent_label.clone().map(ResolvedToken::Agent),
-                    AgentSidebarToken::TerminalTitle => entry
-                        .terminal_title
-                        .clone()
-                        .map(ResolvedToken::TerminalTitle),
-                    AgentSidebarToken::TerminalTitleStripped => entry
-                        .terminal_title_stripped
-                        .clone()
-                        .map(ResolvedToken::TerminalTitle),
-                    AgentSidebarToken::Custom(name) => {
-                        entry.tokens.get(name).cloned().map(ResolvedToken::Custom)
-                    }
+                .filter_map(|configured| {
+                    let (token, style) = configured.parts();
+                    let kind = match token {
+                        AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                        AgentSidebarToken::StateText => {
+                            Some(ResolvedTokenKind::StateText(state_text.to_string()))
+                        }
+                        AgentSidebarToken::Workspace => {
+                            Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
+                        }
+                        AgentSidebarToken::Tab => {
+                            entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
+                        }
+                        AgentSidebarToken::Pane => {
+                            entry.pane_label.clone().map(ResolvedTokenKind::Pane)
+                        }
+                        AgentSidebarToken::Agent => {
+                            entry.agent_label.clone().map(ResolvedTokenKind::Agent)
+                        }
+                        AgentSidebarToken::TerminalTitle => entry
+                            .terminal_title
+                            .clone()
+                            .map(ResolvedTokenKind::TerminalTitle),
+                        AgentSidebarToken::TerminalTitleStripped => entry
+                            .terminal_title_stripped
+                            .clone()
+                            .map(ResolvedTokenKind::TerminalTitle),
+                        AgentSidebarToken::Custom(name) => entry
+                            .tokens
+                            .get(name)
+                            .cloned()
+                            .map(ResolvedTokenKind::Custom),
+                        AgentSidebarToken::Styled { .. } => None,
+                    }?;
+                    Some(ResolvedToken::new(kind, style))
                 })
                 .collect::<Vec<_>>();
             (!resolved.is_empty()).then_some(resolved)
@@ -79,26 +107,33 @@ pub(super) fn space_rows(
         .filter_map(|row| {
             let resolved = row
                 .iter()
-                .filter_map(|token| match token {
-                    SpaceSidebarToken::StateIcon => Some(ResolvedToken::StateIcon),
-                    SpaceSidebarToken::StateText => {
-                        Some(ResolvedToken::StateText(context.state_text.to_string()))
-                    }
-                    SpaceSidebarToken::Workspace => {
-                        Some(ResolvedToken::Workspace(context.workspace.to_string()))
-                    }
-                    SpaceSidebarToken::Branch if !context.suppress_git_details => context
-                        .branch
-                        .map(|branch| ResolvedToken::Branch(branch.to_string())),
-                    SpaceSidebarToken::Branch => None,
-                    SpaceSidebarToken::GitStatus if !context.suppress_git_details => context
-                        .ahead_behind
-                        .filter(|(ahead, behind)| *ahead > 0 || *behind > 0)
-                        .map(|(ahead, behind)| ResolvedToken::GitStatus { ahead, behind }),
-                    SpaceSidebarToken::GitStatus => None,
-                    SpaceSidebarToken::Custom(name) => {
-                        context.tokens.get(name).cloned().map(ResolvedToken::Custom)
-                    }
+                .filter_map(|configured| {
+                    let (token, style) = configured.parts();
+                    let kind = match token {
+                        SpaceSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                        SpaceSidebarToken::StateText => {
+                            Some(ResolvedTokenKind::StateText(context.state_text.to_string()))
+                        }
+                        SpaceSidebarToken::Workspace => {
+                            Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
+                        }
+                        SpaceSidebarToken::Branch if !context.suppress_git_details => context
+                            .branch
+                            .map(|branch| ResolvedTokenKind::Branch(branch.to_string())),
+                        SpaceSidebarToken::Branch => None,
+                        SpaceSidebarToken::GitStatus if !context.suppress_git_details => context
+                            .ahead_behind
+                            .filter(|(ahead, behind)| *ahead > 0 || *behind > 0)
+                            .map(|(ahead, behind)| ResolvedTokenKind::GitStatus { ahead, behind }),
+                        SpaceSidebarToken::GitStatus => None,
+                        SpaceSidebarToken::Custom(name) => context
+                            .tokens
+                            .get(name)
+                            .cloned()
+                            .map(ResolvedTokenKind::Custom),
+                        SpaceSidebarToken::Styled { .. } => None,
+                    }?;
+                    Some(ResolvedToken::new(kind, style))
                 })
                 .collect::<Vec<_>>();
             (!resolved.is_empty()).then_some(resolved)
@@ -107,8 +142,8 @@ pub(super) fn space_rows(
 }
 
 pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    if matches!(previous, ResolvedToken::StateIcon)
-        || matches!(current, ResolvedToken::GitStatus { .. })
+    if matches!(previous.kind, ResolvedTokenKind::StateIcon)
+        || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
         " "
     } else {
@@ -119,6 +154,7 @@ pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AgentSidebarToken, SpaceSidebarToken};
     use crate::detect::AgentState;
 
     fn entry() -> AgentPanelEntry {
@@ -132,6 +168,7 @@ mod tests {
             terminal_title: None,
             terminal_title_stripped: None,
             agent_label: Some("pi".into()),
+            agent_kind_label: Some("pi".into()),
             agent: Some(crate::detect::Agent::Pi),
             state: AgentState::Working,
             seen: true,
@@ -159,8 +196,16 @@ mod tests {
         let rows = agent_rows(&config, &entry, "working");
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], vec![ResolvedToken::StateIcon]);
-        assert_eq!(rows[1], vec![ResolvedToken::Agent("pi".into())]);
+        assert_eq!(
+            rows[0],
+            vec![ResolvedToken::unstyled(ResolvedTokenKind::StateIcon)]
+        );
+        assert_eq!(
+            rows[1],
+            vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
+                "pi".into()
+            ))]
+        );
     }
 
     #[test]
@@ -180,8 +225,8 @@ mod tests {
         assert_eq!(
             agent_rows(&config, &entry, "deep in the mines"),
             vec![vec![
-                ResolvedToken::StateText("deep in the mines".into()),
-                ResolvedToken::Custom("reviewing auth".into()),
+                ResolvedToken::unstyled(ResolvedTokenKind::StateText("deep in the mines".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::Custom("reviewing auth".into())),
             ]]
         );
     }
@@ -206,9 +251,9 @@ mod tests {
         assert_eq!(
             agent_rows(&config, &entry, "working"),
             vec![vec![
-                ResolvedToken::TerminalTitle("⠋ raw title".into()),
-                ResolvedToken::TerminalTitle("raw title".into()),
-                ResolvedToken::Custom("custom title".into()),
+                ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("⠋ raw title".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("raw title".into())),
+                ResolvedToken::unstyled(ResolvedTokenKind::Custom("custom title".into())),
             ]]
         );
     }
@@ -227,13 +272,17 @@ mod tests {
 
         assert_eq!(
             agent_rows(&config, &pi, "working"),
-            vec![vec![ResolvedToken::Agent("renamed pi".into())]]
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
+                "renamed pi".into()
+            ))]]
         );
 
         pi.agent = None;
         assert_eq!(
             agent_rows(&config, &pi, "working"),
-            vec![vec![ResolvedToken::Workspace("repo".into())]]
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
+                "repo".into()
+            ))]]
         );
     }
 
@@ -254,8 +303,8 @@ mod tests {
                 },
             ),
             vec![vec![
-                ResolvedToken::StateIcon,
-                ResolvedToken::Workspace("feature".into()),
+                ResolvedToken::unstyled(ResolvedTokenKind::StateIcon),
+                ResolvedToken::unstyled(ResolvedTokenKind::Workspace("feature".into())),
             ]]
         );
     }
@@ -280,7 +329,9 @@ mod tests {
                     suppress_git_details: false,
                 },
             ),
-            vec![vec![ResolvedToken::Custom("2 changes".into())]]
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Custom(
+                "2 changes".into()
+            ))]]
         );
     }
 }

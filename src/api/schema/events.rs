@@ -26,6 +26,8 @@ pub enum Subscription {
     WorkspaceRenamed {},
     #[serde(rename = "workspace.moved")]
     WorkspaceMoved {},
+    #[serde(rename = "workspace.reordered")]
+    WorkspaceReordered {},
     #[serde(rename = "workspace.closed")]
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
@@ -196,6 +198,7 @@ pub enum EventKind {
     WorkspaceClosed,
     WorkspaceRenamed,
     WorkspaceMoved,
+    WorkspaceReordered,
     WorkspaceFocused,
     WorktreeCreated,
     WorktreeOpened,
@@ -226,6 +229,7 @@ impl EventKind {
             EventKind::WorkspaceClosed => "workspace.closed",
             EventKind::WorkspaceRenamed => "workspace.renamed",
             EventKind::WorkspaceMoved => "workspace.moved",
+            EventKind::WorkspaceReordered => "workspace.reordered",
             EventKind::WorkspaceFocused => "workspace.focused",
             EventKind::WorktreeCreated => "worktree.created",
             EventKind::WorktreeOpened => "worktree.opened",
@@ -257,6 +261,7 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::WorkspaceClosed,
     EventKind::WorkspaceRenamed,
     EventKind::WorkspaceMoved,
+    EventKind::WorkspaceReordered,
     EventKind::WorkspaceFocused,
     EventKind::WorktreeCreated,
     EventKind::WorktreeOpened,
@@ -284,6 +289,7 @@ pub const PLUGIN_HOOK_EVENT_KINDS: &[EventKind] = &[
     EventKind::WorkspaceClosed,
     EventKind::WorkspaceRenamed,
     EventKind::WorkspaceMoved,
+    EventKind::WorkspaceReordered,
     EventKind::WorkspaceFocused,
     EventKind::WorktreeCreated,
     EventKind::WorktreeOpened,
@@ -437,6 +443,12 @@ pub enum EventData {
         insert_index: usize,
         workspaces: Vec<WorkspaceInfo>,
     },
+    WorkspaceReordered {
+        workspace_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_workspace_id: Option<String>,
+        workspaces: Vec<WorkspaceInfo>,
+    },
     WorkspaceFocused {
         workspace_id: String,
     },
@@ -520,6 +532,10 @@ pub enum EventData {
         workspace_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        released: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        final_status: Option<AgentStatus>,
     },
     PaneAgentStatusChanged {
         pane_id: String,

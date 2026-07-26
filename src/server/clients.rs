@@ -64,6 +64,8 @@ pub(crate) struct ClientConnection {
     pane_graphics_render_pending: bool,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
+    /// Last Kitty report-all mode sent to this client's host terminal.
+    pub(crate) host_keyboard_report_all_active: Option<bool>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
     /// Channels for sending framed ServerMessage data to the client writer thread.
@@ -127,14 +129,14 @@ impl ClientConnection {
             render_pending: false,
             pane_graphics_render_pending: false,
             host_mouse_capture_active: None,
+            host_keyboard_report_all_active: None,
             staged_clipboard_files: Vec::new(),
             writer,
         }
     }
 
-    pub(crate) fn request_full_redraw(&mut self) {
-        self.render_state.reset_baseline();
-        self.graphics_surface_reset_pending = true;
+    pub(crate) fn request_repaint(&mut self) {
+        self.render_state.request_repaint();
         self.pane_graphics_render_pending = false;
     }
 
@@ -193,6 +195,11 @@ impl ClientConnection {
                     {
                         changed |=
                             self.set_host_appearance(Some(color.inferred_appearance()), false);
+                    }
+                }
+                crate::raw_input::RawInputEvent::HostPaletteColors { colors } => {
+                    for &(index, color) in colors {
+                        next_theme = next_theme.with_palette_color(index, color);
                     }
                 }
                 crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) => {

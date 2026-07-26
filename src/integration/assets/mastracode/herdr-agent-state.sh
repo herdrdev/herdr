@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=mastracode
-# HERDR_INTEGRATION_VERSION=1
+# HERDR_INTEGRATION_VERSION=2
 
 set -eu
 
@@ -13,7 +13,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  working|idle|blocked|release) ;;
+  session|working|idle|blocked) ;;
   *) exit 0 ;;
 esac
 
@@ -55,14 +55,18 @@ if isinstance(session_id, str) and session_id:
     agent_session_id = session_id
 else:
     agent_session_id = None
-if action == "release":
+if action == "session":
+    if not agent_session_id:
+        raise SystemExit(0)
     request = {
         "id": request_id,
-        "method": "pane.release_agent",
+        "method": "pane.report_agent_session",
         "params": {
             "pane_id": pane_id,
             "source": source,
             "agent": "mastracode",
+            "agent_session_id": agent_session_id,
+            "session_start_source": "startup",
             "seq": report_seq,
         },
     }

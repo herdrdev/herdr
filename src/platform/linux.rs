@@ -70,6 +70,10 @@ pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<
     Ok(vec!["/bin/sh".to_string(), "-c".to_string(), command])
 }
 
+pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
+    super::interactive_unix_shell_command(argv, shell_name, shell_quote)
+}
+
 fn shell_quote(value: &str) -> String {
     if !value.is_empty()
         && value.chars().all(|ch| {
@@ -87,6 +91,10 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// Collect the foreground terminal job for a given child PID.
+pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
+    super::available_pane_shell_from_job(child_pid, foreground_job(child_pid)?)
+}
+
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     let tpgid = foreground_process_group_id(child_pid)?;
     let members = foreground_process_group_members(child_pid, tpgid)?;
@@ -280,18 +288,7 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
         return None;
     }
     let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    parse_agent_env_hint(&environ)
-}
-
-fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agent> {
-    for record in environ.split(|&byte| byte == 0) {
-        let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
-            continue;
-        };
-        let value = std::str::from_utf8(value).ok()?;
-        return crate::detect::parse_agent_label(value);
-    }
-    None
+    super::parse_agent_env_hint(&environ)
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
@@ -806,24 +803,6 @@ mod tests {
             process_pgrp_and_comm_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
             Some((456, "name with ) paren".to_string()))
         );
-    }
-
-    #[test]
-    fn parse_agent_env_hint_accepts_known_agents() {
-        assert_eq!(
-            parse_agent_env_hint(b"PATH=/bin\0HERDR_AGENT=claude\0TERM=xterm\0"),
-            Some(crate::detect::Agent::Claude)
-        );
-        assert_eq!(
-            parse_agent_env_hint(b"HERDR_AGENT=codex"),
-            Some(crate::detect::Agent::Codex)
-        );
-    }
-
-    #[test]
-    fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
-        assert_eq!(parse_agent_env_hint(b"PATH=/bin\0TERM=xterm\0"), None);
-        assert_eq!(parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"), None);
     }
 
     #[test]

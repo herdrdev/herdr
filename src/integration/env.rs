@@ -10,6 +10,7 @@ pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
 pub(crate) const PI_CODING_AGENT_DIR_ENV_VAR: &str = "PI_CODING_AGENT_DIR";
+pub(crate) const OMP_CONFIG_DIR_ENV_VAR: &str = "PI_CONFIG_DIR";
 pub(crate) const CLAUDE_CONFIG_DIR_ENV_VAR: &str = "CLAUDE_CONFIG_DIR";
 pub(crate) const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 pub(crate) const KIMI_CODE_HOME_ENV_VAR: &str = "KIMI_CODE_HOME";
@@ -17,6 +18,10 @@ pub(crate) const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 pub(crate) const QODERCLI_CONFIG_DIR_ENV_VAR: &str = "QODER_CONFIG_DIR";
 pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 pub(crate) const ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CLI_CONFIG_DIR";
+pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
+/// The grok CLI's own config-home override (documented alongside
+/// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
+pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -30,10 +35,19 @@ pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn omp_extension_dir() -> io::Result<PathBuf> {
-    Ok(
-        config_dir_from_env_or_home(PI_CODING_AGENT_DIR_ENV_VAR, &[".omp", "agent"])?
-            .join("extensions"),
-    )
+    if let Some(value) =
+        std::env::var_os(PI_CODING_AGENT_DIR_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("extensions"));
+    }
+
+    let config_dir = std::env::var_os(OMP_CONFIG_DIR_ENV_VAR)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ".omp".into());
+    Ok(home_dir()?
+        .join(config_dir)
+        .join("agent")
+        .join("extensions"))
 }
 
 pub(crate) fn claude_dir() -> io::Result<PathBuf> {
@@ -131,6 +145,18 @@ pub(crate) fn mastracode_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn antigravity_cli_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &[".gemini", "antigravity-cli"])
+}
+
+pub(crate) fn grok_dir() -> io::Result<PathBuf> {
+    // GROK_CONFIG_DIR is a herdr-level override only (primarily a test
+    // seam); the grok CLI does not honor it, so it stays first and explicit.
+    if let Some(value) = std::env::var_os(GROK_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+    // The grok CLI honors GROK_HOME as its config home (config.toml,
+    // auth.json, hooks/); mirror it so hook installs land where grok looks.
+    config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {

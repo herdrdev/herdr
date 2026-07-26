@@ -86,6 +86,52 @@ fn stream_set_message(
 }
 
 #[tokio::test]
+async fn focus_repaint_preserves_uploaded_graphics() {
+    let (mut server, client_rx, pane_id) = retained_test_server(b"aaaa");
+    let (client_2_writer, _client_2_control_rx, client_2_rx) = test_client_writer();
+    server.clients.insert(
+        2,
+        ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize {
+                width_px: 10,
+                height_px: 20,
+            },
+            crate::terminal_theme::TerminalTheme::default(),
+            Some(false),
+            0,
+            RenderEncoding::SemanticFrame,
+            Some(client_2_writer),
+        ),
+    );
+    set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
+    let initial = enable_graphics_and_render(&mut server, &client_rx);
+    let initial_graphics = String::from_utf8_lossy(&initial.graphics);
+    assert!(initial_graphics.contains("a=t"));
+    assert!(initial_graphics.contains("a=p"));
+    let client_2_initial = read_server_frame(
+        client_2_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("second client initial frame"),
+    );
+    assert!(String::from_utf8_lossy(&client_2_initial.graphics).contains("a=t"));
+
+    assert!(server.handle_server_event(ServerEvent::ClientInput {
+        client_id: 2,
+        data: b"\x1b[I".to_vec(),
+    }));
+    assert_eq!(server.foreground_client_id, Some(2));
+    server.render_and_stream();
+
+    let focused = read_server_frame(
+        client_2_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("focus redraw"),
+    );
+    assert!(focused.graphics.is_empty());
+}
+
+#[tokio::test]
 async fn retained_update_sends_only_graphics_message() {
     let (mut server, client_rx, pane_id) = retained_test_server(b"aaaa");
     let baseline = enable_graphics_and_render(&mut server, &client_rx);
@@ -148,7 +194,7 @@ async fn retained_update_does_not_downgrade_pending_full_render() {
     let _ = enable_graphics_and_render(&mut server, &client_rx);
     fill_render_lane(&server);
     let client = server.clients.get_mut(&1).unwrap();
-    client.request_full_redraw();
+    client.request_repaint();
     server.render_and_stream();
     assert_eq!(
         server.clients.get(&1).unwrap().deferred_render(),

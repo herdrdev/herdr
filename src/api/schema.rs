@@ -75,6 +75,8 @@ pub enum Method {
     WorkspaceRename(WorkspaceRenameParams),
     #[serde(rename = "workspace.move")]
     WorkspaceMove(WorkspaceMoveParams),
+    #[serde(rename = "workspace.move_block")]
+    WorkspaceMoveBlock(WorkspaceMoveBlockParams),
     #[serde(rename = "workspace.report_metadata")]
     WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
@@ -109,14 +111,22 @@ pub enum Method {
     AgentRead(AgentReadParams),
     #[serde(rename = "agent.explain")]
     AgentExplain(AgentTarget),
-    #[serde(rename = "agent.send")]
-    AgentSend(AgentSendParams),
+    #[serde(rename = "agent.send_keys")]
+    AgentSendKeys(AgentSendKeysParams),
     #[serde(rename = "agent.rename")]
     AgentRename(AgentRenameParams),
+    #[serde(rename = "agent.view.set")]
+    AgentViewSet(AgentViewSetParams),
+    #[serde(rename = "agent.view.clear")]
+    AgentViewClear(AgentViewClearParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.start")]
     AgentStart(AgentStartParams),
+    #[serde(rename = "agent.prompt")]
+    AgentPrompt(AgentPromptParams),
+    #[serde(rename = "agent.wait")]
+    AgentWait(AgentWaitParams),
     #[serde(rename = "pane.split")]
     PaneSplit(PaneSplitParams),
     #[serde(rename = "pane.swap")]

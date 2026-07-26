@@ -58,11 +58,47 @@ impl TerminalState {
         crate::metadata_tokens::sequence_is_fresh(&self.metadata_report_sequences, source, seq)
     }
 
+    pub(crate) fn metadata_report_agent(
+        source: &str,
+        agent_label: Option<&str>,
+        applies_to_source: Option<&str>,
+    ) -> Option<crate::detect::Agent> {
+        agent_label
+            .and_then(crate::detect::parse_agent_label)
+            .or_else(|| {
+                crate::detect::Agent::ALL.iter().copied().find(|agent| {
+                    let agent_label = crate::detect::agent_label(*agent);
+                    crate::agent_resume::is_official_agent_source(source, agent_label)
+                        || applies_to_source.is_some_and(|source| {
+                            crate::agent_resume::is_official_agent_source(source, agent_label)
+                        })
+                })
+            })
+    }
+
+    pub(crate) fn metadata_report_blocked_by_process_exit(
+        &self,
+        source: &str,
+        agent_label: Option<&str>,
+        applies_to_source: Option<&str>,
+    ) -> bool {
+        let Some(exit) = self.recent_agent_process_exit else {
+            return false;
+        };
+        let exited_agent_label = crate::detect::agent_label(exit.agent);
+        agent_label.and_then(crate::detect::parse_agent_label) == Some(exit.agent)
+            || crate::agent_resume::is_official_agent_source(source, exited_agent_label)
+            || applies_to_source.is_some_and(|source| {
+                crate::agent_resume::is_official_agent_source(source, exited_agent_label)
+            })
+    }
+
     pub(crate) fn accept_metadata_report(
         &mut self,
         source: &str,
         seq: Option<u64>,
         includes_tokens: bool,
+        agent: Option<crate::detect::Agent>,
     ) -> Result<bool, ()> {
         let Some(seq) = seq else {
             return Ok(true);
@@ -79,6 +115,10 @@ impl TerminalState {
         }
         self.metadata_report_sequences
             .insert(source.to_string(), seq);
+        if let Some(agent) = agent {
+            self.metadata_report_agents
+                .insert(source.to_string(), agent);
+        }
         if includes_tokens {
             self.metadata_token_sequence_sources
                 .insert(source.to_string());
@@ -105,8 +145,20 @@ impl TerminalState {
         &mut self,
         report: AgentMetadataReport,
     ) -> Option<TerminalStateMutation> {
+        if self.metadata_report_blocked_by_process_exit(
+            &report.source,
+            report.agent_label.as_deref(),
+            report.applies_to_source.as_deref(),
+        ) {
+            return None;
+        }
+        let report_agent = Self::metadata_report_agent(
+            &report.source,
+            report.agent_label.as_deref(),
+            report.applies_to_source.as_deref(),
+        );
         if !matches!(
-            self.accept_metadata_report(&report.source, report.seq, false),
+            self.accept_metadata_report(&report.source, report.seq, false, report_agent),
             Ok(true)
         ) {
             return None;
@@ -237,6 +289,7 @@ impl TerminalState {
         Some(TerminalStateMutation {
             effective_state_change,
             session_ref_changed: false,
+            agent_released: false,
         })
     }
     pub fn effective_title(&self) -> Option<String> {
@@ -319,6 +372,7 @@ impl TerminalState {
                 now,
             ),
             session_ref_changed: false,
+            agent_released: false,
         })
     }
 
@@ -480,13 +534,13 @@ mod tests {
         let mut terminal = test_terminal();
         for index in 0..=crate::metadata_tokens::MAX_SEQUENCE_SOURCES {
             assert_eq!(
-                terminal.accept_metadata_report(&format!("source-{index}"), Some(1), false),
+                terminal.accept_metadata_report(&format!("source-{index}"), Some(1), false, None,),
                 Ok(true)
             );
         }
         for index in 0..crate::metadata_tokens::MAX_SEQUENCE_SOURCES {
             assert_eq!(
-                terminal.accept_metadata_report(&format!("source-{index}"), Some(2), true),
+                terminal.accept_metadata_report(&format!("source-{index}"), Some(2), true, None,),
                 Ok(true)
             );
         }
@@ -495,9 +549,66 @@ mod tests {
                 &format!("source-{}", crate::metadata_tokens::MAX_SEQUENCE_SOURCES),
                 Some(2),
                 true,
+                None,
             ),
             Err(())
         );
+    }
+
+    #[test]
+    fn custom_metadata_reanchors_sequence_after_process_restart() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        let report = |seq, ttl| AgentMetadataReport {
+            source: "custom:pi-metadata".into(),
+            agent_label: Some("pi".into()),
+            applies_to_source: None,
+            title: Some("Pi task".into()),
+            display_agent: None,
+            state_labels: HashMap::new(),
+            clear_title: false,
+            clear_display_agent: false,
+            clear_state_labels: false,
+            ttl,
+            seq: Some(seq),
+        };
+        assert!(terminal
+            .set_agent_metadata(report(100, Some(Duration::ZERO)))
+            .is_some());
+        let deadline = terminal.next_agent_metadata_expiry().unwrap();
+        terminal.expire_agent_metadata_at(deadline, deadline);
+        assert!(terminal.agent_metadata.is_empty());
+        let exit_at = Instant::now() + Duration::from_millis(1);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            true,
+            exit_at,
+        );
+        terminal.set_detected_state_with_screen_signals_at(
+            None,
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            exit_at + Duration::from_millis(1),
+        );
+        assert!(terminal.set_agent_metadata(report(1, None)).is_none());
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            false,
+            exit_at + Duration::from_millis(2),
+        );
+        assert!(terminal.set_agent_metadata(report(1, None)).is_some());
     }
 
     #[test]

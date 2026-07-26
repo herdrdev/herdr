@@ -63,6 +63,12 @@ impl App {
                             context
                         })
                 }),
+            EventData::WorkspaceReordered { workspace_ids, .. } => workspace_ids
+                .first()
+                .and_then(|workspace_id| {
+                    self.plugin_context_for_workspace_id(workspace_id, correlation_id)
+                })
+                .unwrap_or_else(|| empty_plugin_context(correlation_id)),
             EventData::WorkspaceRenamed { workspace_id, .. }
             | EventData::WorkspaceMoved { workspace_id, .. }
             | EventData::WorkspaceFocused { workspace_id } => self

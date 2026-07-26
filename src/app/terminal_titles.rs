@@ -9,7 +9,7 @@ impl App {
             .flatten()
             .any(|token| {
                 matches!(
-                    token,
+                    token.parts().0,
                     crate::config::AgentSidebarToken::TerminalTitle
                         | crate::config::AgentSidebarToken::TerminalTitleStripped
                 )

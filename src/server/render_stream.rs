@@ -14,7 +14,11 @@ pub(crate) enum ClientRenderState {
     /// Semantic clients compare full frame data and skip identical frames.
     Semantic { last_frame: Option<FrameData> },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
-    TerminalAnsi { blit_encoder: BlitEncoder, seq: u64 },
+    TerminalAnsi {
+        blit_encoder: BlitEncoder,
+        seq: u64,
+        repaint_pending: bool,
+    },
 }
 
 impl ClientRenderState {
@@ -24,6 +28,7 @@ impl ClientRenderState {
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
                 blit_encoder: BlitEncoder::new(),
                 seq: 0,
+                repaint_pending: false,
             },
         }
     }
@@ -31,7 +36,23 @@ impl ClientRenderState {
     pub(crate) fn reset_baseline(&mut self) {
         match self {
             Self::Semantic { last_frame } => *last_frame = None,
-            Self::TerminalAnsi { blit_encoder, .. } => *blit_encoder = BlitEncoder::new(),
+            Self::TerminalAnsi {
+                blit_encoder,
+                repaint_pending,
+                ..
+            } => {
+                *blit_encoder = BlitEncoder::new();
+                *repaint_pending = false;
+            }
+        }
+    }
+
+    pub(crate) fn request_repaint(&mut self) {
+        match self {
+            Self::Semantic { last_frame } => *last_frame = None,
+            Self::TerminalAnsi {
+                repaint_pending, ..
+            } => *repaint_pending = true,
         }
     }
 
@@ -53,12 +74,16 @@ impl ClientRenderState {
                     message: ServerMessage::Frame(frame),
                 })
             }
-            Self::TerminalAnsi { blit_encoder, seq } => {
-                if blit_encoder.is_current(&frame) {
+            Self::TerminalAnsi {
+                blit_encoder,
+                seq,
+                repaint_pending,
+            } => {
+                if !*repaint_pending && blit_encoder.is_current(&frame) {
                     crate::render_prof::event("prepare_frame.ansi.skip_current");
                     return None;
                 }
-                let mut encoded = blit_encoder.encode(&frame, false);
+                let mut encoded = blit_encoder.encode(&frame, *repaint_pending);
                 crate::render_prof::event("prepare_frame.ansi.changed");
                 crate::render_prof::counter("prepare_frame.ansi.bytes", encoded.bytes.len() as u64);
                 if encoded.full {
@@ -102,7 +127,11 @@ impl ClientRenderState {
                 },
             ) => *last_frame = Some(frame),
             (
-                Self::TerminalAnsi { blit_encoder, seq },
+                Self::TerminalAnsi {
+                    blit_encoder,
+                    seq,
+                    repaint_pending,
+                },
                 PreparedRender::TerminalAnsi {
                     frame,
                     encoded: Some(encoded),
@@ -111,6 +140,7 @@ impl ClientRenderState {
             ) => {
                 blit_encoder.commit(frame, encoded);
                 *seq += 1;
+                *repaint_pending = false;
             }
             _ => {}
         }
@@ -125,28 +155,16 @@ impl ClientRenderState {
     }
 }
 
-const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
-
 fn insert_graphics_before_sync_end(encoded: &mut Vec<u8>, graphics: &[u8]) {
     if graphics.is_empty() {
         return;
     }
 
-    if let Some(sync_end) = rfind_subslice(encoded, SYNC_OUTPUT_END) {
+    if let Some(sync_end) = crate::protocol::render_ansi::final_sync_output_end(encoded) {
         encoded.splice(sync_end..sync_end, graphics.iter().copied());
     } else {
         encoded.extend_from_slice(graphics);
     }
-}
-
-fn rfind_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-
-    haystack
-        .windows(needle.len())
-        .rposition(|window| window == needle)
 }
 
 /// A prepared client render message plus any baseline state needed after send.
@@ -327,6 +345,45 @@ pub(crate) fn render_virtual_with_runtime_registry(
     (buffer, cursor)
 }
 
+pub(crate) fn render_working_animation_from_frame(
+    app_state: &mut AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    mut frame: FrameData,
+) -> Option<FrameData> {
+    let area = Rect::new(0, 0, frame.width, frame.height);
+    crate::ui::compute_view_without_resizing_panes(app_state, terminal_runtimes, area);
+
+    let backend = CursorTrackingBackend::new(area.width, area.height);
+    let mut terminal = ratatui::Terminal::new(backend).ok()?;
+    terminal
+        .draw(|frame| {
+            crate::ui::render_working_animation(app_state, terminal_runtimes, frame);
+        })
+        .ok()?;
+
+    let updated_area = if app_state.view.layout == crate::app::state::ViewLayout::Mobile {
+        app_state.view.mobile_header_rect
+    } else {
+        app_state.view.sidebar_rect
+    };
+    if updated_area.x.saturating_add(updated_area.width) > frame.width
+        || updated_area.y.saturating_add(updated_area.height) > frame.height
+    {
+        return None;
+    }
+
+    let rendered = terminal.backend().buffer();
+    frame.graphics.clear();
+    for y in updated_area.y..updated_area.y.saturating_add(updated_area.height) {
+        for x in updated_area.x..updated_area.x.saturating_add(updated_area.width) {
+            let index = usize::from(y) * usize::from(frame.width) + usize::from(x);
+            let cell = rendered.cell((x, y))?;
+            frame.cells[index] = crate::protocol::CellData::from_ratatui_cell(cell);
+        }
+    }
+    Some(frame)
+}
+
 fn popup_terminal_cursor(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -384,94 +441,14 @@ pub(crate) fn visible_hyperlinks(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Vec<((u16, u16), String, String)> {
-    let Some(ws_idx) = app_state.active else {
-        return Vec::new();
-    };
-    if app_state.workspaces.get(ws_idx).is_none() {
-        return Vec::new();
-    }
-
-    let mut links = Vec::new();
-    for info in &app_state.view.pane_infos {
-        if let Some(runtime) =
-            app_state.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
-        {
-            links.extend(runtime.visible_hyperlinks(info.inner_rect));
-        }
-    }
-    links
+    crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, app_state.view.tab_surface())
 }
 
 pub(crate) fn focused_terminal_cursor(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Option<CursorState> {
-    if app_state.mode != Mode::Terminal {
-        return None;
-    }
-
-    let ws_idx = app_state.active?;
-    let info = app_state
-        .view
-        .pane_infos
-        .iter()
-        .find(|info| info.is_focused)?;
-    if !app_state.pane_exposes_host_cursor(ws_idx, info.id) {
-        return None;
-    }
-    let rt = app_state.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)?;
-    if rt.synchronized_output_active() {
-        return None;
-    }
-    let scrolled_back = crate::ui::pane_is_scrolled_back(rt);
-    // Determine whether the IME-anchor reveal applies to this focused pane.
-    // The master switch must be on, and either no agent filter is configured
-    // (apply to any pane) or the focused pane's detected agent matches the
-    // allow-list. A configured list with no valid entries reveals nothing.
-    let reveal = app_state.reveal_hidden_cursor_for_cjk_ime
-        && (!app_state.cjk_ime_agent_filter_configured || {
-            let detected = app_state
-                .workspaces
-                .get(ws_idx)
-                .and_then(|ws| ws.terminal_id(info.id))
-                .and_then(|tid| app_state.terminals.get(tid))
-                .and_then(|t| t.detected_agent);
-            detected.is_some_and(|agent| app_state.cjk_ime_agents.contains(&agent))
-        });
-
-    if let Some(cursor) = rt.cursor_state(info.inner_rect, true) {
-        // When the reveal applies, expose the cursor anchor regardless of the
-        // pane's `?25l` request so macOS IMEs keep tracking the candidate
-        // window when TUIs paint their own cursor. Scrollback suppression
-        // still applies.
-        let visible = if reveal {
-            !scrolled_back
-        } else {
-            cursor.visible && !scrolled_back
-        };
-        Some(CursorState {
-            x: cursor.x,
-            y: cursor.y,
-            visible,
-            shape: if reveal && visible {
-                app_state.cjk_ime_cursor_shape
-            } else {
-                cursor.shape
-            },
-        })
-    } else if reveal && !scrolled_back {
-        // cursor_state() returned None — the viewport has no cursor position
-        // (can happen with complex TUIs). Fall back to the pane's top-left so
-        // the outer terminal still exposes a cursor anchor for IME tracking.
-        Some(CursorState {
-            x: info.inner_rect.x,
-            y: info.inner_rect.y,
-            visible: true,
-            shape: app_state.cjk_ime_cursor_shape,
-        })
-    } else {
-        None
-    }
+    crate::ui::tab_surface_cursor(app_state, terminal_runtimes, app_state.view.tab_surface())
 }
 
 fn focused_terminal_owns_host_cursor(

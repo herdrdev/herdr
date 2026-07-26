@@ -2,7 +2,7 @@ name: PR Gate
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
 
 jobs:
   check-contributor:
@@ -12,112 +12,238 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Check if contributor is approved
+      - name: Check pull request intake policy
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ secrets.KANGAL_GITHUB_TOKEN }}
           script: |
-            const prAuthor = context.payload.pull_request.user.login;
+            const CANONICAL_REPOSITORY = 'ogulcancelik/herdr';
+            const KANGAL_USER_ID = 285672167;
+            const CI_ONLY_PR_AUTHOR_IDS = new Set([
+              49699333, // dependabot[bot]
+              41898282, // github-actions[bot]
+            ]);
+            const MAX_UNAPPROVED_CHANGED_FILES = 20;
+            const MAX_UNAPPROVED_CHANGED_LINES = 1000;
+            const REVIEW_LABELS = ['greptile-review', 'coderabbit-review'];
+            const MAINTAINER_APPROVED_LABEL = 'maintainer-approved';
+            const COMMENT_MARKER = '<!-- herdr:pr-gate -->';
+
+            const pullNumber = context.payload.pull_request.number;
             const reopener = context.payload.sender?.login ?? null;
             const action = context.payload.action;
             const defaultBranch = context.payload.repository.default_branch;
-            const maintainerPermissions = ['admin', 'maintain', 'write'];
+            const repositoryName = context.payload.repository.full_name.toLowerCase();
 
-            if (prAuthor.endsWith('[bot]') || prAuthor === 'dependabot[bot]') {
-              console.log(`Skipping bot: ${prAuthor}`);
+            if (repositoryName !== CANONICAL_REPOSITORY) {
+              core.setFailed(`PR Gate only runs for ${CANONICAL_REPOSITORY}`);
               return;
             }
 
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            });
+            const prAuthor = pr.user.login;
+            const changedLines = pr.additions + pr.deletions;
+
             async function getPermission(username) {
               try {
-                const { data: permissionLevel } = await github.rest.repos.getCollaboratorPermissionLevel({
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   username,
                 });
-                return permissionLevel.permission;
+                return data.permission;
               } catch {
                 return null;
               }
             }
 
             async function getTextFile(path) {
-              const { data: fileContent } = await github.rest.repos.getContent({
+              const { data } = await github.rest.repos.getContent({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 path,
                 ref: defaultBranch,
               });
-
-              if (!('content' in fileContent) || typeof fileContent.content !== 'string') {
+              if (!('content' in data) || typeof data.content !== 'string') {
                 throw new Error(`Expected file content for ${path}`);
               }
-
-              return Buffer.from(fileContent.content, 'base64').toString('utf8');
+              return Buffer.from(data.content, 'base64').toString('utf8');
             }
 
-            async function closePullRequest(message) {
+            function parseUserList(content) {
+              return new Set(content
+                .split('\n')
+                .map(line => line.trim().toLowerCase())
+                .filter(line => line && !line.startsWith('#')));
+            }
+
+            const [maintainersContent, approvedContent] = await Promise.all([
+              getTextFile('.github/MAINTAINERS'),
+              getTextFile('.github/APPROVED_CONTRIBUTORS'),
+            ]);
+            const maintainers = parseUserList(maintainersContent);
+            const approvedContributors = parseUserList(approvedContent);
+
+            async function isVerifiedMaintainer(username) {
+              if (!username || !maintainers.has(username.toLowerCase())) return false;
+              return ['admin', 'maintain', 'write'].includes(await getPermission(username));
+            }
+
+            async function currentLabels() {
+              const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              });
+              return new Set(labels.map(label => label.name));
+            }
+
+            async function addLabels(names) {
+              const labels = await currentLabels();
+              const missing = names.filter(name => !labels.has(name));
+              if (missing.length === 0) return;
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                labels: missing,
+              });
+            }
+
+            async function removeLabels(names) {
+              const labels = await currentLabels();
+              for (const name of names) {
+                if (!labels.has(name)) continue;
+                await github.rest.issues.removeLabelForIssue({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullNumber,
+                  name,
+                });
+              }
+            }
+
+            async function addReviewLabels() {
+              await addLabels(REVIEW_LABELS);
+            }
+
+            async function removeReviewLabels() {
+              await removeLabels(REVIEW_LABELS);
+            }
+
+            async function upsertGateComment(message) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              });
+              const existing = comments.find(comment =>
+                comment.user?.id === KANGAL_USER_ID && comment.body?.includes(COMMENT_MARKER));
+              const body = `${COMMENT_MARKER}\n${message}`;
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              }
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                body: message,
+                issue_number: pullNumber,
+                body,
               });
+            }
 
+            async function closePullRequest(reason, { removeApproval = false } = {}) {
+              const labels = await currentLabels();
+              if (!removeApproval && labels.has(MAINTAINER_APPROVED_LABEL)) {
+                core.info(`PR #${pullNumber} has a maintainer scope override; leaving it open`);
+                await addReviewLabels();
+                return;
+              }
+              await removeLabels(removeApproval
+                ? [...REVIEW_LABELS, MAINTAINER_APPROVED_LABEL]
+                : REVIEW_LABELS);
+              const message = [
+                `Hi @${prAuthor}, thanks for your interest in contributing!`,
+                '',
+                `Herdr automatically admits unapproved pull requests when the patch changes no more than ${MAX_UNAPPROVED_CHANGED_FILES} files and ${MAX_UNAPPROVED_CHANGED_LINES.toLocaleString('en-US')} total added or deleted lines.`,
+                '',
+                reason,
+                '',
+                'Feature requests, behavior changes, and other proposals belong in GitHub Discussions and require maintainer approval before a pull request. Membership in `.github/APPROVED_CONTRIBUTORS` bypasses this automatic intake gate, but does not grant maintainer authority or guarantee that a change will be accepted.',
+                '',
+                'If this gate classified the pull request incorrectly, reply and tag a maintainer listed in `.github/MAINTAINERS`. A verified maintainer can reopen it; reopening by anyone else will be closed again automatically.',
+                '',
+                `Patch size: ${pr.changed_files} changed files, ${changedLines} changed lines.`,
+                '',
+                `See https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/CONTRIBUTING.md for the contribution policy.`,
+              ].join('\n');
+              await upsertGateComment(message);
               await github.rest.pulls.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: context.payload.pull_request.number,
+                pull_number: pullNumber,
                 state: 'closed',
               });
             }
 
-            const authorPermission = await getPermission(prAuthor);
-            if (maintainerPermissions.includes(authorPermission)) {
-              console.log(`${prAuthor} is a collaborator with ${authorPermission} access`);
-              return;
-            }
-
             if (action === 'reopened') {
-              const reopenerPermission = reopener ? await getPermission(reopener) : null;
-              if (maintainerPermissions.includes(reopenerPermission)) {
-                console.log(`${reopener} reopened this PR with ${reopenerPermission} access; leaving it open`);
+              if (!(await isVerifiedMaintainer(reopener))) {
+                await closePullRequest(
+                  'This pull request was reopened by someone other than a verified maintainer.',
+                  { removeApproval: true },
+                );
                 return;
               }
-            }
-
-            const approvedContent = await getTextFile('.github/APPROVED_CONTRIBUTORS');
-            const approvedList = approvedContent
-              .split('\n')
-              .map(line => line.trim().toLowerCase())
-              .filter(line => line && !line.startsWith('#'));
-            const isApprovedContributor = approvedList.includes(prAuthor.toLowerCase());
-
-            if (isApprovedContributor) {
-              console.log(`${prAuthor} is in the approved contributors list`);
+              core.info(`${reopener} is a verified maintainer; leaving reopened PR #${pullNumber} open`);
+              if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)) {
+                await removeReviewLabels();
+              } else {
+                await addLabels([...REVIEW_LABELS, MAINTAINER_APPROVED_LABEL]);
+              }
               return;
             }
 
-            console.log(`${prAuthor} is not approved, closing PR`);
+            if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)) {
+              core.info(`Leaving CI-only bot PR open without automated AI review: ${prAuthor}`);
+              await removeReviewLabels();
+              return;
+            }
 
-            const message = [
-              `Hi @${prAuthor}, thanks for your interest in contributing!`,
-              '',
-              'New contributors need maintainer approval before opening PRs. This keeps review time focused on accepted work and avoids wasted effort.',
-              '',
-              'Herdr is opinionated about how it should look, feel, and work. Feature requests, ideas, questions, contribution proposals, and product-direction checks belong in Discussions, not issues.',
-              '',
-              '**Next steps:**',
-              '1. If this is a feature or behavior change, open a Discussion describing what you want to change and why',
-              '2. If the work is accepted, a maintainer may convert the discussion into an issue or create a new issue for it',
-              '3. If this is a reproducible bug, open a bug report using the issue template',
-              '4. Wait for maintainer approval on an accepted issue before opening a PR',
-              '   Maintainers approve first-time PR paths with `/approve @your-github-username` on the accepted issue.',
-              '5. Keep it concise and write in your own voice',
-              '',
-              'A discussion, issue, branch, or proposed implementation does not reserve the work and does not mean the PR path is approved.',
-              '',
-              `This PR will be closed automatically. See https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/CONTRIBUTING.md for more details.`,
-            ].join('\n');
+            if (await isVerifiedMaintainer(prAuthor)) {
+              core.info(`${prAuthor} is a verified maintainer`);
+              await addReviewLabels();
+              return;
+            }
 
-            await closePullRequest(message);
+            if (approvedContributors.has(prAuthor.toLowerCase())) {
+              core.info(`${prAuthor} is in the approved contributors list`);
+              await addReviewLabels();
+              return;
+            }
+
+            if ((await currentLabels()).has(MAINTAINER_APPROVED_LABEL)) {
+              core.info(`PR #${pullNumber} has a maintainer scope override`);
+              await addReviewLabels();
+              return;
+            }
+
+            const exceedsBudget = pr.changed_files > MAX_UNAPPROVED_CHANGED_FILES ||
+              changedLines > MAX_UNAPPROVED_CHANGED_LINES;
+            if (exceedsBudget) {
+              await closePullRequest('The current patch exceeds the automatic intake budget and needs maintainer alignment before review.');
+              return;
+            }
+
+            core.info(`Admitting scoped pull request from ${prAuthor}: ${pr.changed_files} files, ${changedLines} lines`);
+            await addReviewLabels();

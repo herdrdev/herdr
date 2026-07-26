@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+mod agent_view;
 mod agents;
 mod env;
 mod integrations;
@@ -58,6 +59,44 @@ impl App {
         response_rx.try_recv().ok()
     }
 
+    pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
+        match ev {
+            AppEvent::GitStatusRefreshed {
+                results,
+                cache_updates,
+            } => self.handle_git_status_refreshed(results, cache_updates),
+            ev => {
+                self.handle_internal_event(ev);
+                true
+            }
+        }
+    }
+
+    fn handle_git_status_refreshed(
+        &mut self,
+        results: Vec<crate::workspace::WorkspaceGitStatus>,
+        cache_updates: Vec<(std::path::PathBuf, crate::workspace::GitStatusCacheEntry)>,
+    ) -> bool {
+        self.git_refresh_in_flight = false;
+        for (key, entry) in cache_updates {
+            self.git_status_cache.insert(key, entry);
+        }
+        if self.git_refresh_due_after_in_flight {
+            self.mark_git_status_refresh_due(Instant::now());
+            self.git_refresh_due_after_in_flight = false;
+        } else {
+            self.last_git_remote_status_refresh = Instant::now();
+        }
+        let changed = self
+            .state
+            .apply_workspace_git_statuses(&self.terminal_runtimes, results);
+        if changed {
+            self.render_dirty.store(true, Ordering::Release);
+            self.render_notify.notify_one();
+        }
+        changed
+    }
+
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         if let AppEvent::ClipboardWrite { content } = ev {
             #[cfg(not(test))]
@@ -89,23 +128,7 @@ impl App {
             cache_updates,
         } = ev
         {
-            self.git_refresh_in_flight = false;
-            for (key, entry) in cache_updates {
-                self.git_status_cache.insert(key, entry);
-            }
-            if self.git_refresh_due_after_in_flight {
-                self.mark_git_status_refresh_due(Instant::now());
-                self.git_refresh_due_after_in_flight = false;
-            } else {
-                self.last_git_remote_status_refresh = Instant::now();
-            }
-            if self
-                .state
-                .apply_workspace_git_statuses(&self.terminal_runtimes, results)
-            {
-                self.render_dirty.store(true, Ordering::Release);
-                self.render_notify.notify_one();
-            }
+            self.handle_git_status_refreshed(results, cache_updates);
             return;
         }
 
@@ -269,7 +292,7 @@ impl App {
         }
         self.sync_full_lifecycle_authority_detection_pauses();
         if terminal_cwd_reported {
-            self.mark_git_status_refresh_due(Instant::now());
+            self.request_git_identity_refresh(Instant::now());
             self.render_dirty.store(true, Ordering::Release);
             self.render_notify.notify_one();
         }
@@ -556,13 +579,19 @@ impl App {
         };
         let workspace_id = self.public_workspace_id(update.ws_idx);
 
-        if update.previous_agent_label != update.agent_label {
+        if update.agent_name_changed {
+            self.emit_pane_updated(update.ws_idx, update.pane_id);
+        }
+
+        if update.previous_agent_label != update.agent_label || update.agent_released {
             self.emit_event(crate::api::schema::EventEnvelope {
                 event: crate::api::schema::EventKind::PaneAgentDetected,
                 data: crate::api::schema::EventData::PaneAgentDetected {
                     pane_id: pane_id.clone(),
                     workspace_id: workspace_id.clone(),
                     agent: update.agent_label.clone(),
+                    released: update.agent_released,
+                    final_status: update.agent_release_status,
                 },
             });
         }
@@ -959,6 +988,9 @@ impl App {
             Method::WorkspaceMove(params) => {
                 return self.handle_workspace_move(request.id, params);
             }
+            Method::WorkspaceMoveBlock(params) => {
+                return self.handle_workspace_move_block(request.id, params);
+            }
             Method::WorkspaceReportMetadata(params) => {
                 return self.handle_workspace_report_metadata(request.id, params);
             }
@@ -994,10 +1026,24 @@ impl App {
             Method::AgentGet(target) => return self.handle_agent_get(request.id, target),
             Method::AgentFocus(target) => return self.handle_agent_focus(request.id, target),
             Method::AgentRename(params) => return self.handle_agent_rename(request.id, params),
+            Method::AgentViewSet(params) => return self.handle_agent_view_set(request.id, params),
+            Method::AgentViewClear(params) => {
+                return self.handle_agent_view_clear(request.id, params)
+            }
             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
+            Method::AgentPrompt(params) => return self.handle_agent_prompt(request.id, params),
+            Method::AgentWait(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "agent.wait is handled by the api server",
+                );
+            }
             Method::AgentRead(params) => return self.handle_agent_read(request.id, params),
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
-            Method::AgentSend(params) => return self.handle_agent_send(request.id, params),
+            Method::AgentSendKeys(params) => {
+                return self.handle_agent_send_keys(request.id, params)
+            }
             Method::PaneSplit(params) => return self.handle_pane_split(request.id, params),
             Method::PaneSwap(params) => return self.handle_pane_swap(request.id, params),
             Method::PaneMove(params) => return self.handle_pane_move(request.id, params),
@@ -1508,7 +1554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_explain_reports_hook_only_full_lifecycle_authority() {
+    async fn agent_explain_rejects_hook_only_full_lifecycle_authority() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -1546,17 +1592,7 @@ mod tests {
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
-        assert_eq!(response["result"]["type"], "agent_explain");
-        assert_eq!(response["result"]["explain"]["agent"], "omp");
-        assert_eq!(response["result"]["explain"]["state"], "working");
-        assert_eq!(
-            response["result"]["explain"]["screen_detection_skip_reason"],
-            "full_lifecycle_hook_authority"
-        );
-        assert_eq!(
-            response["result"]["explain"]["matched_rule"],
-            serde_json::Value::Null
-        );
+        assert_eq!(response["error"]["code"], "agent_not_found");
     }
 
     #[tokio::test]
@@ -1872,6 +1908,102 @@ mod tests {
             crate::api::schema::EventData::LayoutUpdated { layout }
                 if layout.tab_id == tab_id && layout.panes.len() == 1
         ));
+    }
+
+    #[test]
+    fn idle_agent_exit_emits_release_event_without_a_state_change() {
+        for agent_name in [None, Some("reviewer")] {
+            let event_hub = crate::api::EventHub::default();
+            let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(
+                &crate::config::Config::default(),
+                true,
+                None,
+                api_rx,
+                event_hub.clone(),
+            );
+            let workspace = crate::workspace::Workspace::test_new("idle-agent-exit");
+            let pane_id = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+            app.state.workspaces = vec![workspace];
+            app.state.ensure_test_terminals();
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+            if let Some(agent_name) = agent_name {
+                terminal.set_agent_name(agent_name.into());
+            }
+
+            app.handle_internal_event(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(Agent::Pi),
+                state: AgentState::Idle,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: true,
+                observed_at: std::time::Instant::now(),
+            });
+
+            assert!(app.state.terminals[&terminal_id].agent_name.is_none());
+            assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
+                &event.data,
+                crate::api::schema::EventData::PaneAgentDetected {
+                    released: true,
+                    final_status: Some(crate::api::schema::AgentStatus::Idle),
+                    ..
+                }
+            )));
+        }
+    }
+
+    #[test]
+    fn process_exit_releases_a_newer_hook_owned_agent() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("stale-agent-exit");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let observed_at = std::time::Instant::now();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+        terminal
+            .set_hook_authority_at(
+                "herdr:codex".into(),
+                "codex".into(),
+                AgentState::Working,
+                None,
+                None,
+                Some(1),
+                observed_at + std::time::Duration::from_secs(1),
+            )
+            .unwrap();
+        terminal.set_agent_name("reviewer".into());
+
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Codex),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: true,
+            observed_at,
+        });
+
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert!(terminal.agent_name.is_none());
+        assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
+            event.data,
+            crate::api::schema::EventData::PaneAgentDetected { released: true, .. }
+        )));
     }
 
     #[test]

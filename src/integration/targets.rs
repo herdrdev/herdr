@@ -14,7 +14,7 @@ use super::config_edit::{
 };
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
+    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
     opencode_dir, pi_extension_dir, qodercli_dir,
 };
 use super::file_ops::{
@@ -24,11 +24,11 @@ use super::types::{
     AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
     ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
     CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
-    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, HermesInstallPaths,
-    HermesUninstallResult, KiloInstallPaths, KiloUninstallResult, KimiInstallPaths,
-    KimiUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
-    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
-    QodercliInstallPaths, QodercliUninstallResult,
+    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
+    GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
+    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths,
+    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
+    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_EVENTS, ANTIGRAVITY_CLI_HOOK_INSTALL_NAME,
@@ -37,24 +37,34 @@ use super::{
     COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME,
     DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
     DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET, DROID_HOOK_EVENTS,
-    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, HERMES_PLUGIN_INIT_ASSET,
+    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, GROK_HOOK_ASSET,
+    GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
     HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
     KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
-    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, OMP_EXTENSION_ASSET,
-    OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET, OPENCODE_PLUGIN_INSTALL_NAME,
-    PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS,
-    QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
+    OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
+    OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME,
+    QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME,
+    QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
+
+fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if dir.parent().is_some_and(|parent| parent.is_dir()) {
+        return fs::create_dir_all(dir);
+    }
+    Err(io::Error::other(format!(
+        "{agent} extension directory not found at {}. install {agent} first",
+        dir.display()
+    )))
+}
 
 pub(crate) fn install_pi() -> io::Result<PathBuf> {
     let dir = pi_extension_dir()?;
-    if !dir.is_dir() {
-        return Err(io::Error::other(format!(
-            "pi extension directory not found at {}. install pi and create the extensions directory first",
-            dir.display()
-        )));
-    }
+    ensure_extension_dir(&dir, "pi")?;
 
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
@@ -63,23 +73,14 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
 pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
     let dir = omp_extension_dir()?;
-    if !dir.is_dir() {
-        if dir.parent().is_some_and(|parent| parent.is_dir()) {
-            fs::create_dir_all(&dir)?;
-        } else {
-            return Err(io::Error::other(format!(
-                "omp extension directory not found at {}. install omp and create the extensions directory first",
-                dir.display()
-            )));
-        }
-    }
-
-    if !dir.is_dir() {
+    let pi_dir = pi_extension_dir()?;
+    if dir == pi_dir {
         return Err(io::Error::other(format!(
-            "omp extension directory not found at {}. install omp and create the extensions directory first",
+            "Pi and OMP resolve to the same extension directory at {}; configure separate agent directories before installing OMP",
             dir.display()
         )));
     }
+    ensure_extension_dir(&dir, "omp")?;
 
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
     let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
@@ -1136,6 +1137,9 @@ pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
     })?;
 
     let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
+    for (event, action) in MASTRACODE_REMOVED_HOOK_EVENTS {
+        remove_flat_command_hook(hooks, event, &format!("bash {quoted_hook_path} {action}"))?;
+    }
     for (event, action) in MASTRACODE_HOOK_EVENTS {
         ensure_flat_command_hook(
             hooks,
@@ -1174,7 +1178,10 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
         })?;
 
         let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
-        for (event, action) in MASTRACODE_HOOK_EVENTS {
+        for (event, action) in MASTRACODE_HOOK_EVENTS
+            .into_iter()
+            .chain(MASTRACODE_REMOVED_HOOK_EVENTS)
+        {
             updated_hooks |= remove_flat_command_hook(
                 hooks,
                 event,
@@ -1286,5 +1293,75 @@ pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallR
         hooks_path,
         removed_hook_file,
         updated_hooks,
+    })
+}
+
+/// The complete Herdr-owned Grok hook config. Installation and status share
+/// this value so any config drift is reported as outdated.
+pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
+    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
+    let session_command = format!("sh {quoted_hook_path} session");
+    json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": session_command,
+                            "timeout": 10,
+                        }
+                    ]
+                }
+            ]
+        }
+    })
+}
+
+pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
+    let dir = grok_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "grok config directory not found at {}. install grok cli first",
+            dir.display()
+        )));
+    }
+
+    // Grok merges every `~/.grok/hooks/*.json`, so herdr owns a dedicated
+    // config file and never edits the user's other hooks. The hook script and
+    // its config live side by side under `hooks/`.
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, GROK_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&grok_hook_config(&hook_path))?,
+    )?;
+
+    Ok(GrokInstallPaths {
+        hook_path,
+        config_path,
+    })
+}
+
+pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
+    let hooks_dir = grok_dir()?.join("hooks");
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
+
+    // herdr owns both files outright, so removal is a straight delete.
+    let removed_config_file = remove_file_if_exists(&config_path)?;
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(GrokUninstallResult {
+        hook_path,
+        config_path,
+        removed_hook_file,
+        removed_config_file,
     })
 }

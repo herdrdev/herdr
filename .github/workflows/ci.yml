@@ -173,3 +173,106 @@ jobs:
           $ErrorActionPreference = "Stop"
           $exe = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug\herdr.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+  windows-conpty-package:
+    name: Windows ConPTY package
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+          use-cache: false
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-bin: false
+          key: conpty-package-windows-2022
+
+      - name: Build Herdr
+        run: cargo build --locked --target x86_64-pc-windows-msvc
+
+      - name: Verify invalid bundle is rejected and system override recovers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
+          $exe = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug\herdr.exe"
+          $bundle = Join-Path (Split-Path -Parent $exe) "conpty"
+          New-Item -ItemType Directory -Force -Path (Join-Path $bundle "x64"), (Join-Path $bundle "arm64") | Out-Null
+          Set-Content -LiteralPath (Join-Path $bundle "herdr-conpty.json") -Value "{}" -Encoding ascii
+          [System.IO.File]::WriteAllBytes((Join-Path $bundle "conpty.dll"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
+          [System.IO.File]::WriteAllBytes((Join-Path $bundle "x64\OpenConsole.exe"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
+          [System.IO.File]::WriteAllBytes((Join-Path $bundle "arm64\OpenConsole.exe"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
+          try {
+            $rejected = $false
+            try {
+              .\scripts\windows_smoke_conpty_path.ps1 `
+                -ExePath $exe `
+                -Session "ci-conpty-invalid-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+            } catch {
+              if ($_.Exception.Message -notlike "workspace create failed with exit code*") {
+                throw
+              }
+              $rejected = $true
+            }
+            if (-not $rejected) {
+              throw "Herdr accepted a tampered app-local ConPTY bundle"
+            }
+
+            $env:HERDR_WINDOWS_CONPTY = "system"
+            .\scripts\windows_smoke_conpty_path.ps1 `
+              -ExePath $exe `
+              -Session "ci-conpty-system-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          } finally {
+            Remove-Item Env:HERDR_WINDOWS_CONPTY -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $bundle -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Build and verify official ConPTY package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          .\scripts\package_windows_conpty.ps1 `
+            -HerdrExe target\x86_64-pc-windows-msvc\debug\herdr.exe `
+            -PackagePath $package `
+            -StageDir $stage `
+            -OutputPath artifacts\herdr-windows-x86_64.zip
+          "HERDR_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Probe enhanced pane input with bundled ConPTY
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Join-Path $env:HERDR_CONPTY_PACKAGE_DIR "herdr.exe"
+          $consoleHost = Join-Path $env:HERDR_CONPTY_PACKAGE_DIR "conpty\x64\OpenConsole.exe"
+          .\scripts\windows_conpty_enhanced_input_probe.ps1 `
+            -ExePath $exe `
+            -Session "ci-conpty-bundled-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
+            -ExpectedConsoleHostPath $consoleHost
+
+      - name: Test packaged installer and repair with Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            .\scripts\windows_install_conpty_package_test.ps1 `
+            -ArchivePath artifacts\herdr-windows-x86_64.zip
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows PowerShell installer test failed with exit code $LASTEXITCODE"
+          }

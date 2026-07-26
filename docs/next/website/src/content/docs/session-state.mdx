@@ -72,6 +72,7 @@ Native session restore requires these Herdr integration versions or newer:
 | Claude Code | `6` | `claude --resume <id>` |
 | Codex | `5` | `codex resume <id>` |
 | Cursor Agent CLI | `1` | `cursor-agent --resume <id>` |
+| Grok CLI | `1` | `grok --resume <id>` |
 | GitHub Copilot CLI | `2` | `copilot --resume=<id>` |
 | Devin CLI | `2` | `devin --resume <id>` |
 | Droid | `2` | `droid --resume <id>` |
@@ -93,6 +94,8 @@ If native agent session restore applies to a pane, Herdr resumes the agent sessi
 Live handoff is for update and remote attach flows that need to replace a running Herdr server. It asks the old server to transfer live panes to the new server, so pane processes can keep running across the server replacement.
 
 This is different from snapshot restore, pane history replay, and native agent session restore. Handoff tries to keep the current processes alive. The others reconstruct state after the old server has already stopped.
+
+Handoff protects long-lived server-owned session state: pane PTYs and processes, agent identity and durable metadata, and plugin/session state needed by the replacement server. It does not preserve transient coordination across the replacement boundary. In-flight CLI or API requests, waits, subscription streams, client sockets, and pane-to-pane messages may be interrupted; clients should reconnect and retry them.
 
 Live handoff is experimental and opt-in:
 

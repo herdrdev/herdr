@@ -59,8 +59,11 @@ Invoke-Checked rustc @("--crate-type", "cdylib", "--edition", "2021", $fakeSourc
 
 $oldPath = $env:PATH
 $oldSession = $env:HERDR_SESSION
+$oldSocket = $env:HERDR_SOCKET_PATH
+$oldClientSocket = $env:HERDR_CLIENT_SOCKET_PATH
 $env:PATH = "$fakeDir;$oldPath"
 $env:HERDR_SESSION = $Session
+Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
 
 $server = $null
 try {
@@ -84,26 +87,43 @@ try {
         throw "server did not become ready"
     }
 
-    Invoke-Checked $exe @("agent", "start", "smoke", "--", $env:ComSpec, "/K", "dir")
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $created = & $exe workspace create --cwd $PWD.Path 2>&1
+        $createdExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if ($createdExitCode -ne 0) {
+        throw "workspace create failed with exit code $createdExitCode`: $($created -join "`n")"
+    }
+    $paneId = (($created -join "`n") | ConvertFrom-Json).result.root_pane.pane_id
+    if ([string]::IsNullOrWhiteSpace($paneId)) {
+        throw "workspace create did not return a root pane id: $($created -join "`n")"
+    }
+    $marker = "HERDR_CONPTY_SMOKE_OK"
+    Invoke-Checked $exe @("pane", "run", $paneId, "echo $marker")
+
     $text = ""
     $deadline = (Get-Date).AddSeconds(15)
     do {
         Start-Sleep -Milliseconds 500
         try {
-            $read = & $exe agent read smoke --source recent --lines 40 --format text 2>&1
+            $read = & $exe pane read $paneId --source recent-unwrapped --lines 40 --format text 2>&1
             $readExitCode = $LASTEXITCODE
         } catch {
             $read = @($_.Exception.Message)
             $readExitCode = 1
         }
         $text = $read -join "`n"
-        if ($readExitCode -eq 0 -and $text -match "File\(s\)" -and $text -match "Dir\(s\)") {
+        if ($readExitCode -eq 0 -and (($text -replace "\s", "") -match $marker)) {
             break
         }
     } while ((Get-Date) -lt $deadline)
 
-    if ($text -notmatch "File\(s\)" -or $text -notmatch "Dir\(s\)") {
-        throw "pane read did not include cmd.exe directory output: $text"
+    if (($text -replace "\s", "") -notmatch $marker) {
+        throw "pane read did not include the smoke marker: $text"
     }
 } finally {
     if ($null -ne $server) {
@@ -116,9 +136,27 @@ try {
             Write-Host "server stop during cleanup failed: $($_.Exception.Message)"
         }
         Wait-Process -Id $server.Id -Timeout 10 -ErrorAction SilentlyContinue
+        $server.Refresh()
+        if (-not $server.HasExited) {
+            & taskkill.exe /PID $server.Id /T /F 2>&1 | Out-Null
+        }
     }
     $global:LASTEXITCODE = 0
     $env:PATH = $oldPath
-    $env:HERDR_SESSION = $oldSession
+    if ($null -eq $oldSession) {
+        Remove-Item Env:HERDR_SESSION -ErrorAction SilentlyContinue
+    } else {
+        $env:HERDR_SESSION = $oldSession
+    }
+    if ($null -eq $oldSocket) {
+        Remove-Item Env:HERDR_SOCKET_PATH -ErrorAction SilentlyContinue
+    } else {
+        $env:HERDR_SOCKET_PATH = $oldSocket
+    }
+    if ($null -eq $oldClientSocket) {
+        Remove-Item Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
+    } else {
+        $env:HERDR_CLIENT_SOCKET_PATH = $oldClientSocket
+    }
     Remove-Item -Recurse -Force $fakeDir -ErrorAction SilentlyContinue
 }

@@ -299,6 +299,18 @@ Space rows accept these built-in tokens:
 
 Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
 
+A token entry can also be an inline style table:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", { token = "workspace", bold = false }, "tab"],
+  [{ token = "$summary", fg = "#89b4fa", bold = true, dim = false }],
+]
+```
+
+`fg` accepts strict `#RGB` or `#RRGGBB`. `bold` and `dim` accept booleans. Omitted fields preserve the token's contextual style; explicit `false` removes that modifier. Styling applies to one occurrence, so the same token may look different in another row or agent override. A foreground override replaces all semantic foregrounds inside that occurrence: for example, styled `git_status` ahead and behind counts use one color instead of their default green and red. Token styles never change separators or row backgrounds.
+
 `row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. Consecutive indented worktree children remain packed as one Space group.
 
 Override the complete Agent layout for a known agent under `rows_by_agent`:
@@ -338,7 +350,9 @@ herdr pane report-metadata <pane_id> \
   --token summary="reviewing authentication"
 ```
 
-Use `herdr workspace report-metadata` in the same way for custom Space tokens. Unreported custom tokens simply disappear. Metadata reporters provide values only; they cannot choose rows or styling. See [CLI reference: report metadata](/docs/cli-reference/#panes) for clearing, sequencing, and expiring values.
+Use `herdr workspace report-metadata` in the same way for custom Space tokens. Unreported custom tokens simply disappear.
+
+Metadata reporters provide values only; styling stays in the local sidebar configuration. See [CLI reference: report metadata](/docs/cli-reference/#panes) for limits, clearing, sequencing, and expiry.
 
 Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mobile views keep their compact layouts.
 
@@ -418,14 +432,18 @@ Restricting `cjk_ime_agents` avoids showing an extra hardware cursor in unrelate
 
 ## Prefix input source switching
 
-On macOS, Herdr can temporarily switch to the system ASCII-capable input source while prefix commands and prefix-launched modes are active:
+On macOS and Windows, Herdr can temporarily switch to an ASCII-capable input source while prefix commands and prefix-launched modes are active:
 
 ```toml
 [experimental]
 switch_ascii_input_source_in_prefix = true
 ```
 
-Herdr restores the previous input source when returning to terminal input or entering a text field. This setting has no effect on other platforms.
+On macOS this switches to the current ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Herdr restores the previous input source when returning to terminal input or entering a text field. This setting has no effect on other platforms.
+
+:::caution[Windows support is Korean IME only]
+On Windows, support is currently limited to the Korean IME. With an IME for any other language, this setting leaves the input source unchanged.
+:::
 
 ## Environment variables
 

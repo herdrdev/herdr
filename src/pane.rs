@@ -41,8 +41,8 @@ use self::agent_detection::{
 };
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{
-    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalTextMatch, TerminalTextPoint,
-    TerminalWordMotion,
+    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalTextMatch,
+    TerminalTextPoint, TerminalWordMotion,
 };
 pub use self::{
     state::PaneState,
@@ -290,6 +290,7 @@ fn foreground_member_cwd_different_from_shell(
 enum ForegroundShellAgentAction {
     ObserveProbe,
     ReportProcessExit,
+    ReportReplacementProcess,
     ClearAgent,
 }
 
@@ -299,12 +300,20 @@ fn foreground_shell_agent_action(
     foreground_is_pane_shell: bool,
     process_exit_reported: bool,
 ) -> ForegroundShellAgentAction {
-    if previous_agent.is_none() || new_agent.is_some() {
+    let Some(previous_agent) = previous_agent else {
         return ForegroundShellAgentAction::ObserveProbe;
-    }
-
+    };
     if process_exit_reported {
-        return ForegroundShellAgentAction::ClearAgent;
+        return if new_agent == Some(previous_agent) {
+            ForegroundShellAgentAction::ReportReplacementProcess
+        } else if new_agent.is_none() {
+            ForegroundShellAgentAction::ClearAgent
+        } else {
+            ForegroundShellAgentAction::ObserveProbe
+        };
+    }
+    if new_agent.is_some() {
+        return ForegroundShellAgentAction::ObserveProbe;
     }
 
     if foreground_is_pane_shell {
@@ -315,6 +324,38 @@ fn foreground_shell_agent_action(
     }
 
     ForegroundShellAgentAction::ObserveProbe
+}
+
+fn apply_foreground_shell_agent_action(
+    agent_presence: &mut AgentDetectionPresence,
+    action: ForegroundShellAgentAction,
+    previous_agent: Option<Agent>,
+    new_agent: Option<Agent>,
+    pending_foreground_shell_clear: &mut bool,
+    foreground_shell_exit_reported: &mut bool,
+) -> bool {
+    match action {
+        ForegroundShellAgentAction::ReportReplacementProcess => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(previous_agent);
+            true
+        }
+        ForegroundShellAgentAction::ReportProcessExit => {
+            *pending_foreground_shell_clear = true;
+            false
+        }
+        ForegroundShellAgentAction::ClearAgent => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.clear_current_agent()
+        }
+        ForegroundShellAgentAction::ObserveProbe => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(new_agent)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -680,27 +721,20 @@ fn spawn_basic_detection_task(
                     }
                 }
                 let previous_agent = agent_presence.current_agent();
-                let changed = match foreground_shell_agent_action(
+                let foreground_action = foreground_shell_agent_action(
                     previous_agent,
                     new_agent,
                     foreground_is_pane_shell,
                     foreground_shell_exit_reported,
-                ) {
-                    ForegroundShellAgentAction::ReportProcessExit => {
-                        pending_foreground_shell_clear = true;
-                        false
-                    }
-                    ForegroundShellAgentAction::ClearAgent => {
-                        pending_foreground_shell_clear = false;
-                        foreground_shell_exit_reported = false;
-                        agent_presence.clear_current_agent()
-                    }
-                    ForegroundShellAgentAction::ObserveProbe => {
-                        pending_foreground_shell_clear = false;
-                        foreground_shell_exit_reported = false;
-                        agent_presence.observe_process_probe(new_agent)
-                    }
-                };
+                );
+                let changed = apply_foreground_shell_agent_action(
+                    &mut agent_presence,
+                    foreground_action,
+                    previous_agent,
+                    new_agent,
+                    &mut pending_foreground_shell_clear,
+                    &mut foreground_shell_exit_reported,
+                );
                 if new_agent.is_some() {
                     last_foreground_pgid = process_group_id.or(foreground_pgid);
                     acquisition_started_at = None;
@@ -715,7 +749,9 @@ fn spawn_basic_detection_task(
                 }
                 if changed {
                     agent = agent_presence.current_agent();
-                    agent_changed = previous_agent != agent;
+                    agent_changed = previous_agent != agent
+                        || foreground_action
+                            == ForegroundShellAgentAction::ReportReplacementProcess;
                     if agent_changed {
                         pending_idle.clear();
                         last_screen_scan_detection_content_seq = None;
@@ -1717,7 +1753,7 @@ impl PaneRuntime {
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         terminal
-            .enable_grapheme_cluster_mode()
+            .resize(cols, rows, cell_width_px, cell_height_px)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if crate::kitty_graphics::is_enabled() {
             terminal
@@ -1851,9 +1887,6 @@ impl PaneRuntime {
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        terminal
-            .enable_grapheme_cluster_mode()
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if crate::kitty_graphics::is_enabled() {
             terminal
@@ -2108,27 +2141,20 @@ impl PaneRuntime {
                             }
 
                             let previous_agent = agent_presence.current_agent();
-                            let changed = match foreground_shell_agent_action(
+                            let foreground_action = foreground_shell_agent_action(
                                 previous_agent,
                                 new_agent,
                                 foreground_is_pane_shell,
                                 foreground_shell_exit_reported,
-                            ) {
-                                ForegroundShellAgentAction::ReportProcessExit => {
-                                    pending_foreground_shell_clear = true;
-                                    false
-                                }
-                                ForegroundShellAgentAction::ClearAgent => {
-                                    pending_foreground_shell_clear = false;
-                                    foreground_shell_exit_reported = false;
-                                    agent_presence.clear_current_agent()
-                                }
-                                ForegroundShellAgentAction::ObserveProbe => {
-                                    pending_foreground_shell_clear = false;
-                                    foreground_shell_exit_reported = false;
-                                    agent_presence.observe_process_probe(new_agent)
-                                }
-                            };
+                            );
+                            let changed = apply_foreground_shell_agent_action(
+                                &mut agent_presence,
+                                foreground_action,
+                                previous_agent,
+                                new_agent,
+                                &mut pending_foreground_shell_clear,
+                                &mut foreground_shell_exit_reported,
+                            );
                             if new_agent.is_some() {
                                 last_foreground_pgid = process_group_id;
                                 acquisition_started_at = None;
@@ -2145,7 +2171,10 @@ impl PaneRuntime {
                             }
                             if changed {
                                 agent = agent_presence.current_agent();
-                                if agent != previous_agent {
+                                if agent != previous_agent
+                                    || foreground_action
+                                        == ForegroundShellAgentAction::ReportReplacementProcess
+                                {
                                     pending_idle.clear();
                                     last_screen_scan_detection_content_seq = None;
                                     // A new foreground agent must not inherit OSC
@@ -2523,16 +2552,24 @@ impl PaneRuntime {
         self.terminal.recent_text(lines)
     }
 
-    pub fn recent_ansi(&self, lines: usize) -> String {
-        self.terminal.recent_ansi(lines)
+    pub(crate) fn recent_text_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        self.terminal.recent_text_snapshot(lines)
     }
 
-    pub fn recent_unwrapped_text(&self, lines: usize) -> String {
-        self.terminal.recent_unwrapped_text(lines)
+    pub(crate) fn recent_ansi_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        self.terminal.recent_ansi_snapshot(lines)
+    }
+
+    pub(crate) fn recent_unwrapped_text_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        self.terminal.recent_unwrapped_text_snapshot(lines)
     }
 
     pub fn recent_unwrapped_ansi(&self, lines: usize) -> String {
         self.terminal.recent_unwrapped_ansi(lines)
+    }
+
+    pub(crate) fn recent_unwrapped_ansi_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
+        self.terminal.recent_unwrapped_ansi_snapshot(lines)
     }
 
     pub fn snapshot_history(&self) -> Option<String> {
@@ -2699,7 +2736,6 @@ impl PaneRuntime {
             .lock()
             .ok()
             .and_then(|reported_cwd| reported_cwd.clone())
-            .and_then(usable_reported_cwd)
         {
             return Some(cwd);
         }
@@ -2711,6 +2747,22 @@ impl PaneRuntime {
     pub fn child_pid(&self) -> Option<u32> {
         let pid = self.child_pid.load(Ordering::Acquire);
         (pid > 0).then_some(pid)
+    }
+
+    pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
+        #[cfg(unix)]
+        {
+            let leader_cwd = self
+                .io
+                .foreground_process_group_id()
+                .and_then(usable_process_cwd);
+            leader_cwd.or_else(|| self.cwd())
+        }
+
+        #[cfg(not(unix))]
+        {
+            self.cwd()
+        }
     }
 
     /// Get the current working directory of the process group controlling the pane PTY.
@@ -2815,6 +2867,42 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let cwd = std::env::temp_dir().join(format!(
+            "herdr-reported-cwd-cache-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&cwd).expect("create reported cwd");
+
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let (events, _event_rx) = mpsc::channel(1);
+        publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
+        assert_eq!(
+            runtime.reported_cwd.lock().unwrap().as_ref(),
+            Some(&cwd),
+            "test setup must pass cache admission"
+        );
+
+        std::fs::remove_dir(&cwd).expect("remove reported cwd after admission");
+
+        assert_eq!(runtime.cwd(), Some(cwd));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follow_cwd_falls_back_to_reported_pane_cwd_without_foreground_group() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let cwd = std::env::temp_dir();
+        *runtime.reported_cwd.lock().unwrap() = Some(cwd.clone());
+
+        assert_eq!(runtime.follow_cwd(), Some(cwd));
+    }
 
     #[test]
     fn shutdown_liveness_treats_reaped_direct_child_as_gone() {
@@ -3322,6 +3410,14 @@ mod tests {
     }
 
     #[test]
+    fn same_agent_after_reported_exit_is_a_replacement_process() {
+        assert_eq!(
+            foreground_shell_agent_action(Some(Agent::Pi), Some(Agent::Pi), false, true),
+            ForegroundShellAgentAction::ReportReplacementProcess
+        );
+    }
+
+    #[test]
     fn unknown_non_shell_foreground_job_is_not_immediate_clear_signal() {
         assert_eq!(
             foreground_shell_agent_action(Some(Agent::Claude), None, false, false),
@@ -3340,7 +3436,7 @@ mod tests {
     #[test]
     fn foreground_agent_job_is_not_clear_signal() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), Some(Agent::OpenCode), true, false),
+            foreground_shell_agent_action(Some(Agent::Claude), Some(Agent::OpenCode), true, false,),
             ForegroundShellAgentAction::ObserveProbe
         );
     }

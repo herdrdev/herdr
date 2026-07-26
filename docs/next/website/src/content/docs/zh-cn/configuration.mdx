@@ -295,6 +295,18 @@ Space 行支持以下内置 token：
 
 token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
 
+也可以用内联样式表定义 token：
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", { token = "workspace", bold = false }, "tab"],
+  [{ token = "$summary", fg = "#89b4fa", bold = true, dim = false }],
+]
+```
+
+`fg` 只接受严格的 `#RGB` 或 `#RRGGBB`，`bold` 和 `dim` 接受布尔值。省略字段会保留上下文样式；显式 `false` 会移除对应修饰。样式只作用于当前出现位置。为 `git_status` 设置 `fg` 后，ahead 和 behind 会使用同一种颜色，而不是默认的绿色和红色。token 样式不会改变分隔符或行背景。
+
 `row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
 
 在 `rows_by_agent` 下为已知智能体覆盖完整的 Agent 布局：
@@ -334,7 +346,9 @@ herdr pane report-metadata <pane_id> \
   --token summary="reviewing authentication"
 ```
 
-自定义 Space token 可用同样的方式通过 `herdr workspace report-metadata` 报告。未报告的自定义 token 会直接消失。元数据报告方只提供值，不能选择行或样式。有关清除、顺序和过期值的信息，请参阅 [CLI 参考：报告元数据](/docs/cli-reference/#panes)。
+自定义 Space token 可用同样的方式通过 `herdr workspace report-metadata` 报告。未报告的自定义 token 会直接消失。
+
+元数据上报方只提供值；样式由本地侧边栏配置控制。有关限制、清除、顺序和过期值的信息，请参阅 [CLI 参考：报告元数据](/docs/cli-reference/#panes)。
 
 侧边栏行设置仅影响展开的桌面侧边栏。折叠视图和移动视图仍使用紧凑布局。
 
@@ -414,14 +428,18 @@ cjk_ime_agents = ["claude", "pi", "codex"]
 
 ## 前缀输入源切换
 
-在 macOS 上，当前缀命令和由前缀启动的模式处于活动状态时，Herdr 可以临时切换到系统中支持 ASCII 的输入源：
+在 macOS 和 Windows 上，当前缀命令和由前缀启动的模式处于活动状态时，Herdr 可以临时切换到支持 ASCII 的输入源：
 
 ```toml
 [experimental]
 switch_ascii_input_source_in_prefix = true
 ```
 
-返回终端输入或进入文本字段时，Herdr 会恢复之前的输入源。此设置在其他平台上无效。
+在 macOS 上，会切换到当前支持 ASCII 的键盘布局；在 Windows 上，会将 IME 切换到英文（ASCII）输入。返回终端输入或进入文本字段时，Herdr 会恢复之前的输入源。此设置在其他平台上无效。
+
+:::caution[Windows 上仅支持韩语 IME]
+目前 Windows 上的支持仅限于韩语 IME。使用其他语言的 IME 时，此设置不会改变输入源。
+:::
 
 ## 环境变量
 

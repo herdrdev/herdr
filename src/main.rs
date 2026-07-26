@@ -74,6 +74,7 @@ mod kitty_graphics;
 mod layout;
 mod logging;
 mod metadata_tokens;
+mod noninteractive_process;
 mod pane;
 mod persist;
 mod platform;
@@ -253,6 +254,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Maximum sidebar width when expanded (columns)
 # sidebar_max_width = 36
 
+# Start with the sidebar collapsed. Changes take effect on the next launch.
+# sidebar_start_collapsed = false
+
 # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
 # sidebar_collapsed_mode = "compact"
 
@@ -265,8 +269,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Pane apps like lazygit and btop can still receive mouse when they request it.
 # mouse_capture = true
 
-# Copy text selected by mouse drag or double-click.
-# Set false to disable mouse text selection and copying.
+# Automatically copy text selected with the mouse.
+# Set false to retain drag or double-click word selection until Ctrl+C,
+# or Cmd+C when the host forwards it, copies and clears it.
 # copy_on_select = true
 
 # Host cursor policy: "auto", "native", or "drawn".
@@ -293,6 +298,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Set false to create tabs immediately with generated names.
 # prompt_new_tab_name = true
 
+# Ask for a workspace name before interactive creation.
+# prompt_new_workspace_name = false
+
 # Draw borders around split panes.
 # pane_borders = true
 
@@ -313,6 +321,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
 # terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
+# A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
+# Omitted style fields preserve the contextual default.
 # [ui.sidebar.agents]
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
@@ -323,6 +333,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 
 # Expanded space rows. Built-ins are state_icon, state_text, workspace, branch, and git_status.
 # Custom values reported through workspace metadata use a $name token, for example $jj_status.
+# Inline token styles accept strict #RGB/#RRGGBB foregrounds plus bold and dim booleans.
 # [ui.sidebar.spaces]
 # Blank rows between space entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
@@ -385,10 +396,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # kitty_graphics = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
-# While prefix mode is active, temporarily switch the macOS host input
-# source to an ASCII-capable keyboard layout so prefix commands register
-# even when a CJK IME is active, then restore the previous input source
-# when prefix mode exits. macOS only; best-effort. Default: false.
+# While prefix mode is active, temporarily switch the host input source to
+# an ASCII-capable mode so prefix commands register even when an IME is
+# active, then restore the previous input source when prefix mode exits. On
+# macOS this selects the ASCII-capable keyboard layout; on Windows it toggles
+# a Korean IME between Hangul and English (other IME languages are left
+# unchanged). macOS and Windows only; best-effort. Default: false.
 # switch_ascii_input_source_in_prefix = false
 # Expose the focused pane's cursor to the outer terminal so macOS input
 # methods keep tracking the candidate window when TUIs paint their own
@@ -473,8 +486,11 @@ fn main() -> io::Result<()> {
         std::process::exit(2);
     }
 
-    if let cli::CommandOutcome::Handled(code) = cli::maybe_run(&args)? {
-        std::process::exit(code);
+    match cli::maybe_run(&args) {
+        Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
+        Ok(cli::CommandOutcome::NotCli) => {}
+        Err(err) if cli::protocol_mismatch_was_reported(&err) => std::process::exit(1),
+        Err(err) => return Err(err),
     }
 
     // Subcommands and flags (no TUI, no logging needed)
@@ -541,7 +557,6 @@ fn main() -> io::Result<()> {
         println!("       herdr notification <subcommand> ...");
         println!("       herdr agent <subcommand> ...");
         println!("       herdr pane <subcommand> ...");
-        println!("       herdr wait <subcommand> ...");
         println!("       herdr session <subcommand> ...");
         println!("       herdr integration <subcommand> ...");
         println!();
@@ -598,10 +613,6 @@ fn main() -> io::Result<()> {
             (
                 "herdr pane <subcommand>",
                 "Pane control helpers over the socket API",
-            ),
-            (
-                "herdr wait <subcommand>",
-                "Blocking wait helpers over the socket API",
             ),
             (
                 "herdr session <subcommand>",
@@ -663,7 +674,7 @@ fn main() -> io::Result<()> {
         if arg.starts_with('-') && !known_flags.contains(&arg_name) {
             eprintln!("unknown option: {arg}");
             eprintln!("run 'herdr --help' for usage");
-            std::process::exit(1);
+            std::process::exit(2);
         }
         if !arg.starts_with('-')
             && ![
@@ -677,7 +688,6 @@ fn main() -> io::Result<()> {
                 "workspace",
                 "worktree",
                 "pane",
-                "wait",
                 "session",
                 "integration",
             ]
@@ -685,7 +695,7 @@ fn main() -> io::Result<()> {
         {
             eprintln!("unknown command: {arg}");
             eprintln!("run 'herdr --help' for usage");
-            std::process::exit(1);
+            std::process::exit(2);
         }
     }
 

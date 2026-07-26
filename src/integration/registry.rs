@@ -23,6 +23,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Cursor => "cursor",
         crate::api::schema::IntegrationTarget::Mastracode => "mastracode",
         crate::api::schema::IntegrationTarget::AntigravityCli => "antigravity-cli",
+        crate::api::schema::IntegrationTarget::Grok => "grok",
     }
 }
 
@@ -51,6 +52,7 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Cursor => cursor_command_names(),
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
+        crate::api::schema::IntegrationTarget::Grok => &["grok"],
     }
 }
 
@@ -63,9 +65,13 @@ pub(crate) fn integration_target_supported(target: crate::api::schema::Integrati
     {
         matches!(
             target,
-            crate::api::schema::IntegrationTarget::Claude
+            crate::api::schema::IntegrationTarget::Pi
+                | crate::api::schema::IntegrationTarget::Omp
+                | crate::api::schema::IntegrationTarget::Claude
                 | crate::api::schema::IntegrationTarget::Codex
                 | crate::api::schema::IntegrationTarget::Copilot
+                | crate::api::schema::IntegrationTarget::Opencode
+                | crate::api::schema::IntegrationTarget::Kilo
                 | crate::api::schema::IntegrationTarget::Droid
                 | crate::api::schema::IntegrationTarget::Kimi
                 | crate::api::schema::IntegrationTarget::Qodercli
@@ -256,7 +262,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 15] {
+); 16] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -336,6 +342,11 @@ fn integration_specs() -> [(
             antigravity_cli_dir().map(|dir| dir.join("hooks").join(super::ANTIGRAVITY_CLI_HOOK_INSTALL_NAME)),
             super::ANTIGRAVITY_CLI_INTEGRATION_VERSION,
         ),
+        (
+            crate::api::schema::IntegrationTarget::Grok,
+            grok_dir().map(|dir| dir.join("hooks").join(super::GROK_HOOK_INSTALL_NAME)),
+            super::GROK_INTEGRATION_VERSION,
+        ),
     ]
 }
 
@@ -376,6 +387,19 @@ pub(crate) fn print_outdated_update_notice() -> bool {
     true
 }
 
+/// Whether the Herdr-owned Grok hook config exactly matches the installed
+/// integration. JSON formatting and object key order do not affect validity.
+fn grok_hook_config_is_valid(hook_path: &Path) -> bool {
+    let Some(hooks_dir) = hook_path.parent() else {
+        return false;
+    };
+    let config_path = hooks_dir.join(super::GROK_HOOK_CONFIG_INSTALL_NAME);
+    fs::read_to_string(config_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .is_some_and(|config| config == super::targets::grok_hook_config(hook_path))
+}
+
 pub(crate) fn integration_status_at(
     target: crate::api::schema::IntegrationTarget,
     path: PathBuf,
@@ -394,11 +418,22 @@ pub(crate) fn integration_status_at(
     let installed_version = fs::read_to_string(&path)
         .ok()
         .and_then(|content| parse_integration_version(&content));
-    let state = if installed_version.is_some_and(|version| version >= expected_version) {
+    let mut state = if installed_version.is_some_and(|version| version >= expected_version) {
         super::IntegrationStatusKind::Current
     } else {
         super::IntegrationStatusKind::Outdated
     };
+
+    // Grok only invokes the hook when the herdr-owned `hooks/herdr.json`
+    // registers it, so a current hook script with a missing or broken config
+    // is a nonfunctional install: report it as outdated so `herdr integration
+    // status` flags it and a reinstall rewrites both files.
+    if target == crate::api::schema::IntegrationTarget::Grok
+        && state == super::IntegrationStatusKind::Current
+        && !grok_hook_config_is_valid(&path)
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
 
     super::IntegrationStatus {
         target,

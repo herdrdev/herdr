@@ -137,10 +137,6 @@ async function startHerdrWorktree(
 
     await runInNewPane(pi, signal, created.rootPaneId, newSessionFile, worktreePath);
 
-    if (created.workspaceId) {
-      await herdr(pi, ["workspace", "focus", created.workspaceId], signal, sourceCheckout, 10_000);
-    }
-
     if (options.closeOldPane && oldPaneId) {
       await scheduleOldPaneCleanup(pi, signal, currentFile, oldPaneId, process.pid);
     }
@@ -201,7 +197,6 @@ async function createHerdrWorktree(
     sourceCheckout,
     "--base",
     options.base || DEFAULT_BASE,
-    "--focus",
     "--json",
   ];
 

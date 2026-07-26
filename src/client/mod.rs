@@ -30,6 +30,7 @@ use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 #[cfg(not(windows))]
 use crossterm::event::{PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 use crossterm::execute;
+use crossterm::terminal::{DisableLineWrap, EnableLineWrap};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::TryClone as _;
 use tracing::{debug, info, warn};
@@ -68,6 +69,8 @@ struct ClientState {
     blit_encoder: render_ansi::BlitEncoder,
     /// Whether host mouse capture is currently active.
     mouse_capture_active: bool,
+    /// Whether the host terminal currently reports all keys as Kitty sequences.
+    keyboard_report_all_active: bool,
     /// The terminal size we reported to the server in our last Hello/Resize.
     reported_size: (u16, u16),
     /// Client-local sound playback config, refreshed on server request.
@@ -84,6 +87,8 @@ struct ClientState {
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     /// Whether outer focus gain should force a full host-terminal redraw.
     redraw_on_focus_gained: bool,
+    /// Whether the next semantic frame must repaint every cell without clearing the surface.
+    repaint_pending: bool,
     /// Whether this client draws the cursor into frame cells instead of using the host cursor.
     draw_host_cursor: bool,
 }
@@ -217,8 +222,8 @@ fn attach_scroll_action(
 }
 
 impl ClientState {
-    fn request_full_redraw(&mut self) {
-        self.blit_encoder = render_ansi::BlitEncoder::new();
+    fn request_repaint(&mut self) {
+        self.repaint_pending = true;
     }
 }
 
@@ -404,6 +409,8 @@ fn setup_terminal_with_capabilities(
         io::stdout().flush()?;
     }
 
+    execute!(io::stdout(), DisableLineWrap)?;
+
     Ok(TerminalGuard {
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
@@ -576,6 +583,7 @@ fn restore_terminal_state(
 
     let _ = execute!(
         io::stdout(),
+        EnableLineWrap,
         DisableFocusChange,
         DisableBracketedPaste,
         DisableMouseCapture
@@ -1286,6 +1294,7 @@ async fn run_client_loop(
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
         mouse_capture_active: config.mouse_capture_active,
+        keyboard_report_all_active: false,
         reported_size: (cols, rows),
         sound_config: config.sound_config,
         kitty_graphics_enabled: config.kitty_graphics_enabled,
@@ -1295,6 +1304,7 @@ async fn run_client_loop(
         #[cfg(unix)]
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
+        repaint_pending: false,
         draw_host_cursor,
     };
     debug!(?negotiated_encoding, "client render encoding active");
@@ -1356,7 +1366,8 @@ async fn run_client_loop(
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
 
-    // This (foreground) client owns the prefix ASCII input-source switch; a no-op on non-macOS.
+    // This (foreground) client owns the prefix ASCII input-source switch
+    // (implemented on macOS and Windows; a no-op on other platforms).
     use crate::platform::PrefixInputSource;
     let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
 
@@ -1410,7 +1421,7 @@ async fn run_client_loop(
                         &events,
                         state.redraw_on_focus_gained,
                     ) {
-                        state.request_full_redraw();
+                        state.request_repaint();
                     }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
                         query_host_terminal_theme();
@@ -1482,7 +1493,7 @@ async fn run_client_loop(
                     &raw_events,
                     state.redraw_on_focus_gained,
                 ) {
-                    state.request_full_redraw();
+                    state.request_repaint();
                 }
                 let msg = ClientMessage::InputEvents { events };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
@@ -1509,11 +1520,14 @@ async fn run_client_loop(
                         frame_data
                     };
                     let encoded = if state.draw_host_cursor {
+                        state.blit_encoder.encode_with_suppressed_visible_cursor(
+                            &frame_data,
+                            state.repaint_pending,
+                        )
+                    } else {
                         state
                             .blit_encoder
-                            .encode_with_suppressed_visible_cursor(&frame_data, false)
-                    } else {
-                        state.blit_encoder.encode(&frame_data, false)
+                            .encode(&frame_data, state.repaint_pending)
                     };
                     let mut stdout = io::stdout();
                     let graphics = if state.kitty_graphics_enabled {
@@ -1525,6 +1539,7 @@ async fn run_client_loop(
                         write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
                     let _ = stdout.flush();
                     state.blit_encoder.commit(frame_data, encoded);
+                    state.repaint_pending = false;
                 }
                 ServerMessage::Terminal(frame) => {
                     if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
@@ -1579,6 +1594,16 @@ async fn run_client_loop(
                         }
                         state.mouse_capture_active = desired;
                         host_mouse_capture_active.store(desired, Ordering::Release);
+                    }
+                }
+                ServerMessage::KittyKeyboardReportAll { enabled } => {
+                    if enabled != state.keyboard_report_all_active {
+                        crate::terminal_modes::set_host_kitty_keyboard_report_all(
+                            &mut io::stdout(),
+                            enabled,
+                        )
+                        .map_err(ClientError::ConnectionFailed)?;
+                        state.keyboard_report_all_active = enabled;
                     }
                 }
                 ServerMessage::PrefixInputSource { active } => {
@@ -1966,15 +1991,18 @@ fn write_encoded_frame_with_graphics(
     encoded: &[u8],
     graphics: &[u8],
 ) -> io::Result<()> {
-    writer.write_all(encoded)?;
     if graphics.is_empty() {
-        return Ok(());
+        return writer.write_all(encoded);
     }
 
+    let insertion = render_ansi::final_sync_output_end(encoded).unwrap_or(encoded.len());
+
+    writer.write_all(&encoded[..insertion])?;
     record_received_kitty_graphics(graphics);
     writer.write_all(b"\x1b7")?;
     writer.write_all(graphics)?;
-    writer.write_all(b"\x1b8")
+    writer.write_all(b"\x1b8")?;
+    writer.write_all(&encoded[insertion..])
 }
 
 fn contains_kitty_graphics_bytes(bytes: &[u8]) -> bool {
@@ -2118,7 +2146,8 @@ fn should_query_host_terminal_theme() -> bool {
 }
 
 fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
-    writer.write_all(crate::terminal_theme::HOST_COLOR_QUERY_SEQUENCE.as_bytes())?;
+    let query = crate::terminal_theme::host_terminal_theme_query_sequence();
+    writer.write_all(query.as_bytes())?;
     writer.flush()
 }
 
@@ -2342,7 +2371,7 @@ mod tests {
     }
 
     #[test]
-    fn graphics_bytes_are_written_after_blit_with_saved_cursor() {
+    fn graphics_bytes_are_written_inside_synchronized_blit_with_saved_cursor() {
         let mut output = Vec::new();
         write_encoded_frame_with_graphics(
             &mut output,
@@ -2353,7 +2382,7 @@ mod tests {
 
         assert_eq!(
             output,
-            b"\x1b[?2026htext\x1b[?2026lcursor\x1b7graphics\x1b8"
+            b"\x1b[?2026htext\x1b7graphics\x1b8\x1b[?2026lcursor"
         );
     }
 
@@ -2395,7 +2424,7 @@ mod tests {
         write_host_terminal_theme_query(&mut output).unwrap();
         assert_eq!(
             output,
-            crate::terminal_theme::HOST_COLOR_QUERY_SEQUENCE.as_bytes()
+            crate::terminal_theme::host_terminal_theme_query_sequence().as_bytes()
         );
     }
 

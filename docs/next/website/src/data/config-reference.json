@@ -566,6 +566,12 @@
           "description": "Maximum sidebar width (columns) when expanded."
         },
         {
+          "key": "ui.sidebar_start_collapsed",
+          "type": "boolean",
+          "default": "false",
+          "description": "Start Herdr with the sidebar collapsed. Changes take effect on the next launch."
+        },
+        {
           "key": "ui.sidebar_collapsed_mode",
           "type": "enum",
           "default": "compact",
@@ -591,7 +597,7 @@
           "key": "ui.copy_on_select",
           "type": "boolean",
           "default": "true",
-          "description": "Copy text selected with the mouse."
+          "description": "Automatically copy text selected by mouse drag or double-click. When disabled, Ctrl+C or a host-forwarded Cmd+C copies and clears the retained selection."
         },
         {
           "key": "ui.host_cursor",
@@ -633,6 +639,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Ask for a tab name before creating a new tab."
+        },
+        {
+          "key": "ui.prompt_new_workspace_name",
+          "type": "boolean",
+          "default": "false",
+          "description": "Ask for a workspace name before interactive TUI creation."
         },
         {
           "key": "ui.pane_borders",
@@ -678,7 +690,7 @@
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"workspace\", \"tab\"], [\"agent\"]]",
-          "description": "Default expanded Agent sidebar layout. Supports built-in tokens and $name metadata tokens; at most 16 rows and 16 tokens per row."
+          "description": "Default expanded Agent sidebar layout. Entries may be token strings or inline { token, fg, bold, dim } style tables. Supports built-in and $name metadata tokens; at most 16 rows and 16 tokens per row."
         },
         {
           "key": "ui.sidebar.agents.rows_by_agent",
@@ -696,7 +708,7 @@
           "key": "ui.sidebar.spaces.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"workspace\"], [\"branch\", \"git_status\"]]",
-          "description": "Expanded Space sidebar layout. Supports built-in tokens and $name metadata tokens; at most 16 rows and 16 tokens per row."
+          "description": "Expanded Space sidebar layout. Entries may be token strings or inline { token, fg, bold, dim } style tables. Supports built-in and $name metadata tokens; at most 16 rows and 16 tokens per row."
         },
         {
           "key": "ui.accent",
@@ -992,7 +1004,7 @@
           "key": "ui.sound.agents.maki",
           "type": "enum",
           "default": "\"default\"",
-          "description": "Sound override for detected MastraCode agents.",
+          "description": "Sound override for detected Maki agents.",
           "values": [
             "default",
             "on",
@@ -1101,7 +1113,7 @@
           "key": "experimental.switch_ascii_input_source_in_prefix",
           "type": "boolean",
           "default": "false",
-          "description": "While prefix mode is active, temporarily switch the macOS host input source to an ASCII-capable keyboard layout so prefix commands are read as ASCII even when a CJK IME is active, then restore the previous input source when prefix mode exits. macOS only; a no-op elsewhere and a best-effort no-op if the switch fails."
+          "description": "While prefix mode is active, temporarily switch the host input source to an ASCII-capable mode so prefix commands are read as ASCII even when an IME is active, then restore the previous input source when prefix mode exits. On macOS this selects the ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Windows support is currently limited to the Korean IME; with an IME for any other language, the input source is left unchanged. macOS and Windows only; a no-op elsewhere and a best-effort no-op if the switch fails."
         }
       ]
     }

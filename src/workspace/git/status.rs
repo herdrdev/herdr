@@ -1,19 +1,39 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use crate::workspace::WorkspaceGitStatusSnapshot;
+use crate::workspace::{GitSpaceMetadata, WorkspaceGitStatusSnapshot};
 
 use super::{
     config::{read_branch_config, upstream_full_ref},
     discovery::{
-        canonicalize_best_effort_path, git_branch, git_ref_storage_is_reftable,
-        git_rev_parse_verify, git_space_metadata, git_symbolic_head_full, git_worktree_info,
-        read_ref_oid, GitWorktreeInfo,
+        canonicalize_best_effort_path, fallback_label_from_cwd, git_ref_storage_is_reftable,
+        git_rev_parse_verify, git_space_metadata_from_info, git_symbolic_head_full,
+        git_worktree_info, read_ref_oid, GitWorktreeInfo,
     },
 };
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GitStatusRefreshDemand {
+    pub branch: bool,
+    pub ahead_behind: bool,
+}
+
+impl GitStatusRefreshDemand {
+    #[cfg(test)]
+    pub const ALL: Self = Self {
+        branch: true,
+        ahead_behind: true,
+    };
+
+    pub fn is_empty(self) -> bool {
+        !self.branch && !self.ahead_behind
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitStatusCacheEntry {
-    pub fingerprint: GitStatusFingerprint,
+    pub fingerprint: Option<GitStatusFingerprint>,
+    pub retry_after: Option<Instant>,
     pub snapshot: WorkspaceGitStatusSnapshot,
 }
 
@@ -49,33 +69,97 @@ pub fn git_status_cache_key(cwd: &Path) -> Option<PathBuf> {
     git_worktree_info(cwd).map(|info| canonicalize_best_effort_path(&info.repo_root))
 }
 
+pub fn git_status_cache_key_for_space(space: &GitSpaceMetadata) -> PathBuf {
+    canonicalize_best_effort_path(&space.repo_root)
+}
+
+#[cfg(test)]
 pub fn git_status_snapshot_for_cwd(
     cwd: &Path,
     cached: Option<&GitStatusCacheEntry>,
 ) -> (WorkspaceGitStatusSnapshot, Option<GitStatusCacheEntry>) {
-    let space = git_space_metadata(cwd);
-    let Some(fingerprint) = git_status_fingerprint(cwd) else {
+    git_status_snapshot_for_cwd_with_demand(cwd, cached, GitStatusRefreshDemand::ALL)
+}
+
+pub fn git_status_snapshot_for_cwd_with_demand(
+    cwd: &Path,
+    cached: Option<&GitStatusCacheEntry>,
+    demand: GitStatusRefreshDemand,
+) -> (WorkspaceGitStatusSnapshot, Option<GitStatusCacheEntry>) {
+    if let Some(cached) = cached.filter(|entry| {
+        entry.fingerprint.is_none()
+            && entry
+                .retry_after
+                .is_some_and(|retry_after| retry_after > Instant::now())
+    }) {
+        return (cached.snapshot.clone(), Some(cached.clone()));
+    }
+
+    let Some(info) = git_worktree_info(cwd) else {
+        let snapshot = WorkspaceGitStatusSnapshot {
+            auto_label: fallback_label_from_cwd(cwd),
+            branch: None,
+            ahead_behind: None,
+            space: None,
+        };
+        return (
+            snapshot.clone(),
+            Some(GitStatusCacheEntry {
+                fingerprint: None,
+                retry_after: Some(Instant::now() + Duration::from_secs(30)),
+                snapshot,
+            }),
+        );
+    };
+    let space = git_space_metadata_from_info(&info);
+    let auto_label = space.label.clone();
+
+    if !demand.ahead_behind {
+        let branch = demand
+            .branch
+            .then(|| {
+                read_head_identity(&info).and_then(|head| match head {
+                    GitHeadIdentity::Branch { short_name, .. } => Some(short_name),
+                    GitHeadIdentity::Detached { .. } => None,
+                })
+            })
+            .flatten();
         return (
             WorkspaceGitStatusSnapshot {
-                branch: git_branch(cwd),
+                auto_label,
+                branch,
                 ahead_behind: None,
-                space,
+                space: Some(space),
+            },
+            None,
+        );
+    }
+
+    let Some(fingerprint) = git_status_fingerprint_from_info(&info) else {
+        return (
+            WorkspaceGitStatusSnapshot {
+                auto_label,
+                branch: None,
+                ahead_behind: None,
+                space: Some(space),
             },
             None,
         );
     };
     let branch = fingerprint.branch_name().map(str::to_string);
 
-    if let Some(cached) = cached.filter(|entry| entry.fingerprint == fingerprint) {
+    if let Some(cached) = cached.filter(|entry| entry.fingerprint.as_ref() == Some(&fingerprint)) {
         let snapshot = WorkspaceGitStatusSnapshot {
+            auto_label,
             branch,
             ahead_behind: cached.snapshot.ahead_behind,
-            space,
+            space: Some(space),
         };
         return (
             snapshot.clone(),
             Some(GitStatusCacheEntry {
-                fingerprint,
+                fingerprint: Some(fingerprint),
+                retry_after: None,
                 snapshot,
             }),
         );
@@ -86,24 +170,31 @@ pub fn git_status_snapshot_for_cwd(
         .zip(fingerprint.upstream_oid())
         .and_then(|(head_oid, upstream_oid)| git_ahead_behind_between(cwd, head_oid, upstream_oid));
     let snapshot = WorkspaceGitStatusSnapshot {
+        auto_label,
         branch,
         ahead_behind,
-        space,
+        space: Some(space),
     };
     (
         snapshot.clone(),
         Some(GitStatusCacheEntry {
-            fingerprint,
+            fingerprint: Some(fingerprint),
+            retry_after: None,
             snapshot,
         }),
     )
 }
 
+#[cfg(test)]
 pub(super) fn git_status_fingerprint(cwd: &Path) -> Option<GitStatusFingerprint> {
     let info = git_worktree_info(cwd)?;
-    let head = read_head_identity(&info)?;
+    git_status_fingerprint_from_info(&info)
+}
+
+fn git_status_fingerprint_from_info(info: &GitWorktreeInfo) -> Option<GitStatusFingerprint> {
+    let head = read_head_identity(info)?;
     let upstream = match &head {
-        GitHeadIdentity::Branch { short_name, .. } => read_upstream_identity(&info, short_name),
+        GitHeadIdentity::Branch { short_name, .. } => read_upstream_identity(info, short_name),
         GitHeadIdentity::Detached { .. } => None,
     };
 
@@ -218,7 +309,7 @@ fn git_ahead_behind_between(
     upstream_oid: &str,
 ) -> Option<(usize, usize)> {
     let range = format!("{head_oid}...{upstream_oid}");
-    let output = std::process::Command::new("git")
+    let output = crate::noninteractive_process::command("git")
         .arg("-C")
         .arg(cwd)
         .args(["rev-list", "--left-right", "--count", &range])
@@ -243,7 +334,30 @@ fn parse_git_ahead_behind_output(stdout: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::git::test_support::{run_git, temp_test_dir, write_fake_tracked_repo};
+    use crate::workspace::git::{
+        git_space_metadata,
+        test_support::{run_git, temp_test_dir, write_fake_tracked_repo},
+    };
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cache_key_from_space_preserves_non_utf8_checkout_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let base = temp_test_dir("non-utf8-key");
+        let root = base.join(std::ffi::OsString::from_vec(vec![
+            b'r', b'e', b'p', b'o', 0x80,
+        ]));
+        write_fake_tracked_repo(&root);
+        let space = git_space_metadata(&root).expect("Git metadata");
+
+        assert_eq!(
+            git_status_cache_key_for_space(&space),
+            std::fs::canonicalize(&root).unwrap()
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn git_status_cache_key_ignores_invalid_git_marker() {
@@ -258,13 +372,67 @@ mod tests {
     }
 
     #[test]
+    fn non_git_refresh_reuses_cached_miss_without_rechecking_filesystem() {
+        let root = temp_test_dir("cached-miss");
+        let cwd = root.join("deep/nested");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let (initial, cache_entry) = git_status_snapshot_for_cwd(&cwd, None);
+        let cache_entry = cache_entry.expect("non-Git result should be cached");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let (cached, update) = git_status_snapshot_for_cwd(&cwd, Some(&cache_entry));
+
+        assert_eq!(cached, initial);
+        assert_eq!(update, Some(cache_entry));
+    }
+
+    #[test]
+    fn expired_non_git_cache_detects_repository_created_in_place() {
+        let root = temp_test_dir("expired-miss");
+        let (_, cache_entry) = git_status_snapshot_for_cwd(&root, None);
+        let mut cache_entry = cache_entry.expect("non-Git result should be cached");
+        cache_entry.retry_after = Some(Instant::now() - Duration::from_secs(1));
+        write_fake_tracked_repo(&root);
+
+        let (snapshot, update) = git_status_snapshot_for_cwd(&root, Some(&cache_entry));
+
+        assert_eq!(snapshot.branch.as_deref(), Some("main"));
+        assert!(update.is_some_and(|entry| entry.fingerprint.is_some()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn branch_only_refresh_skips_ahead_behind_cache_work() {
+        let root = temp_test_dir("branch-only");
+        write_fake_tracked_repo(&root);
+
+        let (snapshot, update) = git_status_snapshot_for_cwd_with_demand(
+            &root,
+            None,
+            GitStatusRefreshDemand {
+                branch: true,
+                ahead_behind: false,
+            },
+        );
+
+        assert_eq!(snapshot.branch.as_deref(), Some("main"));
+        assert_eq!(snapshot.ahead_behind, None);
+        assert_eq!(update, None);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn git_status_reuses_cached_ahead_behind_when_fingerprint_matches() {
         let root = temp_test_dir("cache-hit");
         write_fake_tracked_repo(&root);
         let fingerprint = git_status_fingerprint(&root).unwrap();
         let cached = GitStatusCacheEntry {
-            fingerprint,
+            fingerprint: Some(fingerprint),
+            retry_after: None,
             snapshot: WorkspaceGitStatusSnapshot {
+                auto_label: "repo".into(),
                 branch: Some("main".into()),
                 ahead_behind: Some((2, 1)),
                 space: git_space_metadata(&root),
@@ -286,8 +454,10 @@ mod tests {
         write_fake_tracked_repo(&root);
         let fingerprint = git_status_fingerprint(&root).unwrap();
         let cached = GitStatusCacheEntry {
-            fingerprint,
+            fingerprint: Some(fingerprint),
+            retry_after: None,
             snapshot: WorkspaceGitStatusSnapshot {
+                auto_label: "repo".into(),
                 branch: Some("main".into()),
                 ahead_behind: Some((4, 0)),
                 space: git_space_metadata(&root),
@@ -319,8 +489,10 @@ mod tests {
         write_fake_tracked_repo(&root);
         let fingerprint = git_status_fingerprint(&root).unwrap();
         let cached = GitStatusCacheEntry {
-            fingerprint,
+            fingerprint: Some(fingerprint),
+            retry_after: None,
             snapshot: WorkspaceGitStatusSnapshot {
+                auto_label: "repo".into(),
                 branch: Some("main".into()),
                 ahead_behind: Some((0, 3)),
                 space: git_space_metadata(&root),

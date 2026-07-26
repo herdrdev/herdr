@@ -1,4 +1,4 @@
-use super::{ghostty_line_from_cells, GhosttyPaneCore};
+use super::{ghostty_line_from_cells, GhosttyPaneCore, TerminalReadSnapshot};
 
 const CACHE_LINES: usize = 2000;
 
@@ -44,9 +44,13 @@ pub(super) fn update(core: &mut GhosttyPaneCore) {
     core.recent_fallback.usable = true;
 }
 
-pub(super) fn recent_text(core: &GhosttyPaneCore, lines: usize, unwrap: bool) -> String {
+pub(super) fn recent_text(
+    core: &GhosttyPaneCore,
+    lines: usize,
+    unwrap: bool,
+) -> TerminalReadSnapshot {
     if !primary_screen_active(core) {
-        return String::new();
+        return TerminalReadSnapshot::default();
     }
     if unwrap {
         unwrapped_text(core, lines)
@@ -62,9 +66,9 @@ fn primary_screen_active(core: &GhosttyPaneCore) -> bool {
     )
 }
 
-fn wrapped_text(core: &GhosttyPaneCore, lines: usize) -> String {
+fn wrapped_text(core: &GhosttyPaneCore, lines: usize) -> TerminalReadSnapshot {
     if !core.recent_fallback.usable {
-        return String::new();
+        return TerminalReadSnapshot::default();
     }
     let rows: Vec<&str> = core
         .recent_fallback
@@ -72,16 +76,24 @@ fn wrapped_text(core: &GhosttyPaneCore, lines: usize) -> String {
         .iter()
         .map(|line| line.text.as_str())
         .collect();
-    cache_text(&rows, lines)
+    TerminalReadSnapshot {
+        text: cache_text(&rows, lines),
+        truncated: rows.len() > lines,
+    }
 }
 
-fn unwrapped_text(core: &GhosttyPaneCore, lines: usize) -> String {
+fn unwrapped_text(core: &GhosttyPaneCore, lines: usize) -> TerminalReadSnapshot {
     if !core.recent_fallback.usable {
-        return String::new();
+        return TerminalReadSnapshot::default();
     }
-    let unwrapped = unwrap_render_lines(&core.recent_fallback.rows);
+    let rendered_rows = &core.recent_fallback.rows;
+    let start = rendered_rows.len().saturating_sub(lines);
+    let unwrapped = unwrap_render_lines(&rendered_rows[start..]);
     let rows: Vec<&str> = unwrapped.iter().map(String::as_str).collect();
-    cache_text(&rows, lines)
+    TerminalReadSnapshot {
+        text: cache_text(&rows, rows.len()),
+        truncated: rendered_rows.len() > lines,
+    }
 }
 
 fn viewport_is_at_bottom(core: &GhosttyPaneCore) -> bool {
@@ -298,8 +310,8 @@ mod tests {
         pane.process_pty_bytes(pane_id, 0, b"new output\r\n", &tx);
 
         let core = pane.core.lock().unwrap();
-        assert_eq!(recent_text(&core, 3, false), "");
-        assert_eq!(recent_text(&core, 3, true), "");
+        assert_eq!(recent_text(&core, 3, false).text, "");
+        assert_eq!(recent_text(&core, 3, true).text, "");
     }
 
     #[test]
@@ -311,12 +323,12 @@ mod tests {
         pane.seed_history_ansi("seeded history\r\n");
 
         let core = pane.core.lock().unwrap();
-        assert!(recent_text(&core, 3, false).contains("seeded history"));
-        assert!(recent_text(&core, 3, true).contains("seeded history"));
+        assert!(recent_text(&core, 3, false).text.contains("seeded history"));
+        assert!(recent_text(&core, 3, true).text.contains("seeded history"));
     }
 
     #[test]
-    fn recent_ansi_unwrapped_uses_unwrapped_render_cache() {
+    fn recent_ansi_unwrapped_limits_rendered_rows_before_unwrapping() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
@@ -324,13 +336,17 @@ mod tests {
         {
             let mut core = pane.core.lock().unwrap();
             core.recent_fallback.rows = vec![
+                rendered_line("older", false, false),
                 rendered_line("wrapped", true, false),
                 rendered_line("rows", false, true),
+                rendered_line("last", false, false),
             ];
             core.recent_fallback.usable = true;
         }
 
-        assert_eq!(pane.recent_ansi(2), "wrapped\nrows\n");
-        assert_eq!(pane.recent_unwrapped_ansi(2), "wrappedrows\n");
+        let snapshot = pane.recent_unwrapped_ansi_snapshot(3);
+        assert_eq!(snapshot.text, "wrappedrows\nlast\n");
+        assert!(snapshot.truncated);
+        assert_eq!(pane.recent_ansi(3), "wrapped\nrows\nlast\n");
     }
 }

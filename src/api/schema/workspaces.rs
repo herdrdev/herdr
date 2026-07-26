@@ -29,6 +29,13 @@ pub struct WorkspaceMoveParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceMoveBlockParams {
+    pub workspace_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_workspace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceReportMetadataParams {
     pub workspace_id: String,
     pub source: String,

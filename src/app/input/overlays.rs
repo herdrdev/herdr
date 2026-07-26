@@ -10,7 +10,7 @@ use crate::app::{
 };
 
 use super::{
-    modal::{leave_modal, modal_action_from_buttons, ModalAction},
+    modal::{keybind_help_back, leave_modal, modal_action_from_buttons, ModalAction},
     ScrollbarClickTarget,
 };
 
@@ -172,9 +172,8 @@ impl App {
                 }
                 MouseEventKind::ScrollUp => {
                     self.state.navigator.scroll = self.state.navigator.scroll.saturating_sub(3);
-                    self.state.navigator.selected = self.state.navigator.scroll;
                     self.state
-                        .clamp_navigator_selection_from(&self.terminal_runtimes);
+                        .align_navigator_selection_to_scroll_from(&self.terminal_runtimes);
                 }
                 MouseEventKind::ScrollDown => {
                     let viewport = self.state.navigator_body_rect().height as usize;
@@ -183,9 +182,8 @@ impl App {
                         .navigator_max_scroll_from(&self.terminal_runtimes, viewport);
                     self.state.navigator.scroll =
                         self.state.navigator.scroll.saturating_add(3).min(max);
-                    self.state.navigator.selected = self.state.navigator.scroll;
                     self.state
-                        .clamp_navigator_selection_from(&self.terminal_runtimes);
+                        .align_navigator_selection_to_scroll_from(&self.terminal_runtimes);
                 }
                 _ => {}
             }
@@ -199,7 +197,7 @@ impl App {
                         .state
                         .keybind_help_close_button_at(mouse.column, mouse.row) =>
                 {
-                    leave_modal(&mut self.state);
+                    keybind_help_back(&mut self.state);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(target) = self
@@ -337,11 +335,17 @@ impl AppState {
         if !rect_contains(body, col, row) {
             return None;
         }
-        let idx = self
+        let line_idx = self
             .navigator
             .scroll
             .saturating_add(row.saturating_sub(body.y) as usize);
-        (idx < self.navigator_rows_from(terminal_runtimes).len()).then_some(idx)
+        let lines = crate::app::state::navigator_display_lines(
+            &self.navigator_rows_from(terminal_runtimes),
+        );
+        match lines.get(line_idx) {
+            Some(crate::app::state::NavigatorDisplayLine::Row(idx)) => Some(*idx),
+            _ => None,
+        }
     }
 
     pub(crate) fn navigator_row_caret_at(&self, col: u16) -> bool {
@@ -732,6 +736,33 @@ mod tests {
         ));
 
         assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn clicking_keybind_help_back_button_leaves_help_open() {
+        let mut app = app_for_mouse_test();
+        app.state.mode = Mode::KeybindHelp;
+        app.state.keybind_help.search_focused = true;
+        app.state.keybind_help.query = "work".into();
+
+        let rect = app.state.keybind_help_popup_rect();
+        let inner = Rect::new(
+            rect.x + 1,
+            rect.y + 1,
+            rect.width.saturating_sub(2),
+            rect.height.saturating_sub(2),
+        );
+        let back =
+            crate::ui::release_notes_close_button_rect(Rect::new(inner.x, inner.y, inner.width, 1));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            back.x,
+            back.y,
+        ));
+
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+        assert!(!app.state.keybind_help.search_focused);
+        assert!(app.state.keybind_help.query.is_empty());
     }
 
     #[test]

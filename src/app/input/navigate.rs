@@ -184,16 +184,7 @@ impl App {
         let previous_mode = self.state.mode;
         match action {
             NavigateAction::NewWorkspace => {
-                self.runtime_workspace_create(
-                    "tui.key.workspace.create",
-                    crate::api::schema::WorkspaceCreateParams {
-                        cwd: None,
-                        focus: true,
-                        label: None,
-                        env: Default::default(),
-                    },
-                );
-                leave_navigate_mode(&mut self.state);
+                self.begin_tui_workspace_create("tui.key.workspace.create");
             }
             NavigateAction::NewWorktree => {
                 if let Some(ws_idx) = workspace_action_target(&self.state, context).filter(|idx| {
@@ -441,6 +432,13 @@ impl App {
                 insert_index: insert_idx,
             },
         );
+    }
+
+    pub(crate) fn move_workspace_block_via_api(
+        &mut self,
+        params: crate::api::schema::WorkspaceMoveBlockParams,
+    ) {
+        self.runtime_workspace_move_block("tui.workspace.move_block", params);
     }
 
     pub(crate) fn focus_tab_idx_via_api(&mut self, tab_idx: usize) {
@@ -733,14 +731,13 @@ impl App {
             .and_then(crate::workspace::Workspace::focused_pane_id);
         let current_idx = entries
             .iter()
-            .position(|entry| Some(entry.pane_id) == focused)
-            .unwrap_or(0);
-        let next_idx = if forward {
-            (current_idx + 1) % entries.len()
-        } else if current_idx == 0 {
-            entries.len() - 1
-        } else {
-            current_idx - 1
+            .position(|entry| Some(entry.pane_id) == focused);
+        let next_idx = match (current_idx, forward) {
+            (Some(idx), true) => (idx + 1) % entries.len(),
+            (Some(0), false) => entries.len() - 1,
+            (Some(idx), false) => idx - 1,
+            (None, true) => 0,
+            (None, false) => entries.len() - 1,
         };
         let target = entries.get(next_idx)?;
         Some((next_idx, target.ws_idx, target.pane_id))
@@ -1134,22 +1131,35 @@ pub(crate) fn command_for_key(
         .cloned()
 }
 
+fn unmodified_digit_for_key(key: TerminalKey) -> Option<char> {
+    ('1'..='9').find(|digit| {
+        crate::config::terminal_key_matches_combo(
+            key,
+            (
+                KeyCode::Char(*digit),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKey) -> bool {
+    if let Some(c) = unmodified_digit_for_key(key) {
+        let idx = (c as usize) - ('1' as usize);
+        if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
+            state.switch_workspace(ws_idx);
+            leave_navigate_mode(state);
+        }
+        return true;
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
             KeyCode::Enter => {
                 if !state.workspaces.is_empty() {
                     state.switch_workspace(state.selected);
-                    leave_navigate_mode(state);
-                }
-                return true;
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                let idx = (c as usize) - ('1' as usize);
-                if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
-                    state.switch_workspace(ws_idx);
                     leave_navigate_mode(state);
                 }
                 return true;
@@ -1208,6 +1218,12 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
 }
 
 fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Option<NavigateAction> {
+    if let Some(c) = unmodified_digit_for_key(key) {
+        return Some(NavigateAction::SwitchWorkspace(
+            (c as usize) - ('1' as usize),
+        ));
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
@@ -1218,11 +1234,6 @@ fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Optio
                         .iter()
                         .position(|idx| *idx == state.selected)
                         .unwrap_or(state.selected),
-                ));
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                return Some(NavigateAction::SwitchWorkspace(
-                    (c as usize) - ('1' as usize),
                 ));
             }
             KeyCode::Tab => return Some(NavigateAction::CyclePaneNext),
@@ -1370,29 +1381,37 @@ fn indexed_navigation_action(
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
     let kb = &state.keybinds;
-    let trigger_matches = |binding: &crate::config::IndexedKeybind| match dispatch {
-        BindingDispatch::Direct => binding.trigger.is_direct(),
-        BindingDispatch::Prefix => binding.trigger.is_prefix(),
-    };
+    let actual_modifiers = crate::config::normalize_key_combo((key.code, key.modifiers)).1;
 
-    for binding in &kb.switch_tab {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::SwitchTab(idx));
+    for exact_modifiers in [true, false] {
+        let trigger_matches = |binding: &crate::config::IndexedKeybind| {
+            let dispatch_matches = match dispatch {
+                BindingDispatch::Direct => binding.trigger.is_direct(),
+                BindingDispatch::Prefix => binding.trigger.is_prefix(),
+            };
+            let expected_modifiers = crate::config::normalize_key_combo(binding.trigger.combo()).1;
+            dispatch_matches && (actual_modifiers == expected_modifiers) == exact_modifiers
+        };
+
+        for binding in &kb.switch_tab {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::SwitchTab(idx));
+                }
             }
         }
-    }
-    for binding in &kb.switch_workspace {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::SwitchWorkspace(idx));
+        for binding in &kb.switch_workspace {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::SwitchWorkspace(idx));
+                }
             }
         }
-    }
-    for binding in &kb.focus_agent {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::FocusAgent(idx));
+        for binding in &kb.focus_agent {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::FocusAgent(idx));
+                }
             }
         }
     }
@@ -1886,6 +1905,39 @@ mod tests {
     }
 
     #[test]
+    fn next_agent_starts_at_first_visible_entry_when_focused_agent_is_filtered_out() {
+        let mut app = app_with_test_workspaces(&["hidden", "first", "second"]);
+        for ws_idx in 0..app.state.workspaces.len() {
+            let pane_id = app.state.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.state = if ws_idx == 0 {
+                crate::detect::AgentState::Idle
+            } else {
+                crate::detect::AgentState::Working
+            };
+        }
+        app.state.agent_view_override = Some(crate::api::schema::AgentViewSetParams {
+            source: "example.views".to_string(),
+            label: None,
+            filter: Some(crate::api::schema::AgentViewFilter::Eq {
+                field: crate::api::schema::AgentViewField::Builtin(
+                    crate::api::schema::AgentViewBuiltinField::Status,
+                ),
+                value: crate::api::schema::AgentViewValue::String("working".to_string()),
+            }),
+            sort: Vec::new(),
+        });
+
+        app.execute_tui_navigate_action(NavigateAction::NextAgent, ActionContext::Prefix);
+
+        assert_eq!(app.state.active, Some(1));
+    }
+
+    #[test]
     fn default_goto_key_opens_navigator() {
         let mut state = state_with_workspaces(&["test"]);
 
@@ -1997,6 +2049,74 @@ mod tests {
 
         assert!(state.request_new_workspace);
         assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn new_workspace_key_opens_prefilled_prompt_and_preserves_captured_cwd() {
+        let cwd = unique_temp_path("workspace-name-suggestion");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let suggested_name = crate::workspace::derive_label_from_cwd(&cwd);
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.new_terminal_cwd =
+            crate::config::NewTerminalCwdConfig::Path(cwd.display().to_string());
+        app.state.prompt_new_workspace_name = true;
+        app.state.mode = Mode::Navigate;
+        app.state.keybinds.new_workspace = crate::config::ActionKeybinds::prefix("g");
+
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('g'), KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::RenameWorkspace);
+        assert_eq!(app.state.name_input, suggested_name);
+        assert!(app.state.name_input_replace_on_type);
+        assert_eq!(app.state.pending_workspace_create_cwd.as_ref(), Some(&cwd));
+        assert_eq!(app.state.workspaces.len(), 1);
+
+        app.state.new_terminal_cwd =
+            crate::config::NewTerminalCwdConfig::Path("/tmp/changed-after-prompt".into());
+        app.handle_rename_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[1].identity_cwd, cwd);
+        assert!(app.state.workspaces[1].custom_name.is_none());
+        assert!(app.state.pending_workspace_create_cwd.is_none());
+        assert_eq!(app.state.mode, Mode::Terminal);
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[tokio::test]
+    async fn new_workspace_prompt_saves_custom_name_atomically() {
+        let cwd = unique_temp_path("workspace-custom-name");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.new_terminal_cwd =
+            crate::config::NewTerminalCwdConfig::Path(cwd.display().to_string());
+        app.state.prompt_new_workspace_name = true;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::NewWorkspace, ActionContext::Navigate);
+        app.state.name_input = "  logs  ".into();
+        app.handle_rename_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[1].custom_name.as_deref(), Some("logs"));
+        assert_eq!(app.state.workspaces[1].identity_cwd, cwd);
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn cancelling_new_workspace_prompt_creates_nothing() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.prompt_new_workspace_name = true;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::NewWorkspace, ActionContext::Navigate);
+        app.handle_rename_key_via_api(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert!(app.state.pending_workspace_create_cwd.is_none());
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]
@@ -2466,7 +2586,7 @@ last_pane = "prefix+tab"
     }
 
     #[test]
-    fn prefix_shift_indexed_workspace_shortcut_maps_shifted_symbol_key() {
+    fn prefix_shift_indexed_workspace_shortcut_maps_legacy_us_symbol_key() {
         let mut state = state_with_workspaces(&["one", "two"]);
         let config: Config =
             toml::from_str("[keys]\nswitch_workspace = \"prefix+shift+1..9\"\n").unwrap();
@@ -2479,6 +2599,42 @@ last_pane = "prefix+tab"
         );
 
         assert_eq!(action, Some(NavigateAction::SwitchWorkspace(1)));
+    }
+
+    #[test]
+    fn prefix_shift_indexed_workspace_shortcut_maps_non_us_number_rows() {
+        let mut state = state_with_workspaces(&["one", "two"]);
+        let config: Config =
+            toml::from_str("[keys]\nswitch_workspace = \"prefix+shift+1..9\"\n").unwrap();
+        state.keybinds.switch_workspace = config.keybinds().switch_workspace;
+
+        for key in [
+            TerminalKey::new(KeyCode::Char('2'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('"' as u32),
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+        ] {
+            assert_eq!(
+                action_for_key(&state, key, BindingDispatch::Prefix),
+                Some(NavigateAction::SwitchWorkspace(1))
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_unshifted_indexed_shortcut_maps_shifted_french_number_row() {
+        let mut state = state_with_workspaces(&["one"]);
+        let config: Config = toml::from_str("[keys]\nswitch_tab = \"prefix+1..9\"\n").unwrap();
+        state.keybinds.switch_tab = config.keybinds().switch_tab;
+
+        let action = action_for_key(
+            &state,
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+            BindingDispatch::Prefix,
+        );
+
+        assert_eq!(action, Some(NavigateAction::SwitchTab(1)));
     }
 
     #[test]
@@ -2684,6 +2840,20 @@ command = "printf literal > '{}'"
 
         assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_maps_french_number_row_to_workspace() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+        );
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]

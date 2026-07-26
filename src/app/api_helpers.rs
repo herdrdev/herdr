@@ -48,6 +48,35 @@ pub(super) fn encode_api_keys(
     Ok(encoded_keys)
 }
 
+pub(super) fn encode_api_submission(
+    runtime: &crate::terminal::TerminalRuntime,
+    text: &str,
+) -> Vec<u8> {
+    let mut bytes = encode_api_text(runtime, text);
+    let enter = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    bytes.extend_from_slice(&runtime.encode_terminal_key(enter.into()));
+    bytes
+}
+
+pub(super) fn encode_api_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    text: &str,
+    keys: &[String],
+) -> Result<Vec<u8>, String> {
+    let mut bytes = if text.is_empty() {
+        Vec::new()
+    } else {
+        encode_api_text(runtime, text)
+    };
+    for encoded in encode_api_keys(runtime, keys)? {
+        bytes.extend_from_slice(&encoded);
+    }
+    Ok(bytes)
+}
+
 pub(super) fn detect_state_from_api(
     state: crate::api::schema::PaneAgentState,
 ) -> crate::detect::AgentState {
@@ -69,6 +98,85 @@ pub(super) fn pane_agent_status(
         (crate::detect::AgentState::Working, _) => crate::api::schema::AgentStatus::Working,
         (crate::detect::AgentState::Blocked, _) => crate::api::schema::AgentStatus::Blocked,
         (crate::detect::AgentState::Unknown, _) => crate::api::schema::AgentStatus::Unknown,
+    }
+}
+
+pub(super) fn read_terminal_snapshot(
+    terminal: &crate::terminal::TerminalRuntime,
+    source: crate::api::schema::ReadSource,
+    format: crate::api::schema::ReadFormat,
+    lines: Option<u32>,
+) -> crate::pane::TerminalReadSnapshot {
+    use crate::api::schema::{ReadFormat, ReadSource};
+
+    let line_limit = lines.map(|lines| lines.min(1000) as usize);
+    let recent_lines = line_limit.unwrap_or(80);
+    match (format, source) {
+        (ReadFormat::Text, ReadSource::Visible) => {
+            limit_snapshot_lines(terminal.visible_text(), line_limit)
+        }
+        (ReadFormat::Text, ReadSource::Recent) => terminal.recent_text_snapshot(recent_lines),
+        (ReadFormat::Text, ReadSource::RecentUnwrapped) => {
+            terminal.recent_unwrapped_text_snapshot(recent_lines)
+        }
+        (ReadFormat::Text, ReadSource::Detection) => {
+            limit_snapshot_lines(terminal.detection_text(), line_limit)
+        }
+        (ReadFormat::Ansi, ReadSource::Visible) => {
+            limit_snapshot_lines(terminal.visible_ansi(), line_limit)
+        }
+        (ReadFormat::Ansi, ReadSource::Recent) => terminal.recent_ansi_snapshot(recent_lines),
+        (ReadFormat::Ansi, ReadSource::RecentUnwrapped) => {
+            terminal.recent_unwrapped_ansi_snapshot(recent_lines)
+        }
+        (ReadFormat::Ansi, ReadSource::Detection) => {
+            limit_snapshot_lines(terminal.detection_text(), line_limit)
+        }
+    }
+}
+
+fn limit_snapshot_lines(text: String, limit: Option<usize>) -> crate::pane::TerminalReadSnapshot {
+    let Some(limit) = limit else {
+        return crate::pane::TerminalReadSnapshot {
+            text,
+            truncated: false,
+        };
+    };
+    let lines: Vec<_> = text.split_inclusive('\n').collect();
+    crate::pane::TerminalReadSnapshot {
+        text: lines[lines.len().saturating_sub(limit)..].concat(),
+        truncated: lines.len() > limit,
+    }
+}
+
+#[cfg(test)]
+mod read_snapshot_tests {
+    use super::limit_snapshot_lines;
+
+    #[test]
+    fn line_limit_preserves_endings_and_reports_omitted_lines() {
+        let snapshot = limit_snapshot_lines("one\ntwø\n三\n".into(), Some(2));
+        assert_eq!(snapshot.text, "twø\n三\n");
+        assert!(snapshot.truncated);
+
+        let snapshot = limit_snapshot_lines("one\ntwo\nthree".into(), Some(1));
+        assert_eq!(snapshot.text, "three");
+        assert!(snapshot.truncated);
+
+        let snapshot = limit_snapshot_lines("one\ntwo".into(), Some(0));
+        assert_eq!(snapshot.text, "");
+        assert!(snapshot.truncated);
+
+        let snapshot = limit_snapshot_lines("".into(), Some(2));
+        assert_eq!(snapshot.text, "");
+        assert!(!snapshot.truncated);
+    }
+
+    #[test]
+    fn omitted_line_limit_returns_the_complete_snapshot() {
+        let snapshot = limit_snapshot_lines("one\ntwo\n".into(), None);
+        assert_eq!(snapshot.text, "one\ntwo\n");
+        assert!(!snapshot.truncated);
     }
 }
 

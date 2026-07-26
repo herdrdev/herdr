@@ -48,8 +48,9 @@ Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接�
 | shell `cd` 之后的实时 cwd | 部分支持 |
 | 通过 shell 集成/OSC7 的实时 cwd | 测试版 |
 | 向智能体粘贴剪贴板图像 | 未验证 |
-| CJK 隐藏光标显示 | 测试版 |
+| CJK 输入法候选窗口定位 | 部分支持 |
 | Kitty graphics 渲染 | 未验证 |
+| 主机光标渲染 | 部分支持 |
 
 Herdr 可以在正确的目录中启动窗格,并能从你启动 Herdr 的目录创建初始工作区。启动之后 PowerShell 的目录变化则不同: Herdr 能检查的进程字段无法可靠跟踪后续的逻辑 `cd` 变化。实时 cwd 上报请使用 Herdr 集成或提示符 shell 集成。
 
@@ -61,18 +62,24 @@ Kitty graphics 仍是实验性功能,尚未宣称支持 Windows。除非你专�
 
 ### 光标渲染
 
-Windows 终端通过 ConPTY 运行 Herdr,在活跃的全屏重绘期间,原生终端光标可能闪烁、跳动,或短暂显示旧位置。Herdr 默认的 `host_cursor = "auto"` 会在原生 Windows 构建和 WSL 上把 Herdr 光标绘制为终端单元格内容,而其他 Linux 和 macOS 客户端继续使用原生终端光标。Windows 上的取舍是:在 Herdr 内得到稳定的不闪烁光标,但不使用外层终端的原生闪烁、形状和光标颜色。
+Herdr 的原生 Windows 窗格依赖 ConPTY。当前 Windows 终端的光标处理可能会在多路复用器重绘屏幕时显示中间光标位置。因此,在持续输出期间,原生光标可能闪烁、跳动,或短暂留在旧位置。这个现象也能在其他 Windows 原生终端多路复用器以及直接连续更新 VT 光标位置的压力测试中复现,所以 Herdr 无法在保留原生光标行为的同时彻底消除它。
 
-要在原生 Windows 或 WSL 上改回外层终端光标,请设置:
+为了优先保证视觉稳定性,默认的 `host_cursor = "auto"` 会在原生 Windows 和 WSL 上把 Herdr 光标绘制为终端单元格内容。其他 Linux 和 macOS 客户端仍使用原生终端光标。Windows 上的绘制光标稳定且不闪烁,但不会使用外层终端的原生闪烁、形状或光标颜色。
+
+绘制光标并不是 Windows 用来定位输入法预编辑文本和候选窗口的真实光标。因此,韩语、日语或中文输入法 UI 可能显示在错误位置。如果遇到这个问题,请改用外层终端光标:
 
 ```toml
 [ui]
 host_cursor = "native"
 ```
 
+原生模式会恢复输入法定位,但在持续输出期间可能再次出现偶发的光标闪烁、跳动或旧位置残影。这是当前 Windows 测试版中的兼容性取舍。
+
 ### 键盘和鼠标
 
 Windows 终端并不都以相同形式报告带修饰键的按键。Herdr 在 Windows Terminal 和 Windows 上的 Alacritty 中保留鼠标报告和 `ctrl+j`,但 `shift+enter` 只有在外层终端把它报告为独立的修饰 Enter 键时才有效。如果 Windows 或终端把它报告为普通 Enter,Herdr 会转发普通 Enter。
+
+旧版 Windows 10 的系统 ConPTY 会丢弃 Kimi 和 Pi 等智能体使用的 Kitty 键盘协议序列，因此预览包包含 Microsoft 当前的应用本地 ConPTY 运行时。仅在诊断捆绑运行时的兼容性问题时，才应在启动 Herdr 前设置 `HERDR_WINDOWS_CONPTY=system`。
 
 ## 复制与粘贴
 

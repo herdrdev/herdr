@@ -264,20 +264,15 @@ pub struct IndexedKeybind {
 
 impl IndexedKeybind {
     pub fn matched_index(&self, key: TerminalKey) -> Option<usize> {
-        let key_number = match key.code {
-            KeyCode::Char(c @ '1'..='9') => c,
-            KeyCode::Char(c) => {
-                let number = shifted_number_symbol(c)?;
-                if !indexed_shifted_number_matches(key, self.trigger.combo(), number) {
-                    return None;
-                }
-                number
-            }
-            _ => return None,
+        let combo = self.trigger.combo();
+        let (expected_code, _) = normalize_key_combo(combo);
+        let KeyCode::Char(key_number @ '1'..='9') = expected_code else {
+            return None;
         };
-        let legacy_shifted_number =
-            matches!(key.code, KeyCode::Char(c) if shifted_number_symbol(c) == Some(key_number));
-        if terminal_key_matches_combo(key, self.trigger.combo()) || legacy_shifted_number {
+        let legacy_shifted_number = matches!(key.code, KeyCode::Char(c)
+            if shifted_number_symbol(c) == Some(key_number)
+                && indexed_shifted_number_matches(key, combo, key_number));
+        if terminal_key_matches_combo(key, combo) || legacy_shifted_number {
             Some((key_number as usize) - ('1' as usize))
         } else {
             None
@@ -1648,6 +1643,27 @@ close_tab = "X"
         assert!(diagnostics.iter().any(
             |diag| diag.contains("unsafe direct keybinding") && diag.contains("keys.close_tab")
         ));
+    }
+
+    #[test]
+    fn unicode_prefix_bindings_match_non_us_keys() {
+        for ch in ['ğ', 'ç', 'ş', 'ı', 'é', 'ø'] {
+            let bindings = ActionKeybinds::prefix(&ch.to_string());
+            assert!(bindings
+                .matches_prefix_key(TerminalKey::new(KeyCode::Char(ch), KeyModifiers::empty(),)));
+        }
+    }
+
+    #[test]
+    fn shifted_unicode_prefix_bindings_match_layout_aware_input() {
+        for (base, shifted) in [('ğ', 'Ğ'), ('ç', 'Ç'), ('ş', 'Ş'), ('ı', 'I'), ('ø', 'Ø')]
+        {
+            let bindings = ActionKeybinds::prefix(&format!("shift+{base}"));
+            assert!(bindings.matches_prefix_key(
+                TerminalKey::new(KeyCode::Char(base), KeyModifiers::SHIFT)
+                    .with_shifted_codepoint(shifted as u32)
+            ));
+        }
     }
 
     #[test]

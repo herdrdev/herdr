@@ -22,10 +22,10 @@ pub(crate) use types::{IntegrationRecommendation, IntegrationStatus, Integration
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
-const PI_INTEGRATION_VERSION: u32 = 5;
+const PI_INTEGRATION_VERSION: u32 = 7;
 const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
-const OMP_INTEGRATION_VERSION: u32 = 5;
+const OMP_INTEGRATION_VERSION: u32 = 7;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -58,20 +58,37 @@ const KIMI_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/kimi/herdr-agent-state.sh")
 };
-const KIMI_INTEGRATION_VERSION: u32 = 4;
+const KIMI_INTEGRATION_VERSION: u32 = 6;
 const KIMI_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr kimi integration";
 const KIMI_CONFIG_BLOCK_END: &str = "# <<< herdr kimi integration";
 const KIMI_MIN_VERSION: &str = "0.14.0";
-const KIMI_HOOK_EVENTS: [(&str, &str); 9] = [
-    ("SessionStart", "session"),
-    ("UserPromptSubmit", "working"),
-    ("PreToolUse", "working"),
-    ("SubagentStart", "working"),
-    ("PreCompact", "working"),
-    ("PermissionRequest", "blocked"),
-    ("PermissionResult", "working"),
-    ("Stop", "idle"),
-    ("Interrupt", "idle"),
+const KIMI_ASK_USER_QUESTION_MATCHER: &str = "^AskUserQuestion$";
+const KIMI_OTHER_TOOL_MATCHER: &str = "^(?!AskUserQuestion$).*$";
+const KIMI_HOOK_EVENTS: [(&str, Option<&str>, &str); 12] = [
+    ("SessionStart", None, "session"),
+    ("UserPromptSubmit", None, "working"),
+    ("PreToolUse", Some(KIMI_OTHER_TOOL_MATCHER), "working"),
+    (
+        "PreToolUse",
+        Some(KIMI_ASK_USER_QUESTION_MATCHER),
+        "blocked",
+    ),
+    (
+        "PostToolUse",
+        Some(KIMI_ASK_USER_QUESTION_MATCHER),
+        "working",
+    ),
+    (
+        "PostToolUseFailure",
+        Some(KIMI_ASK_USER_QUESTION_MATCHER),
+        "working",
+    ),
+    ("SubagentStart", None, "working"),
+    ("PreCompact", None, "working"),
+    ("PermissionRequest", None, "blocked"),
+    ("PermissionResult", None, "working"),
+    ("Stop", None, "idle"),
+    ("Interrupt", None, "idle"),
 ];
 const COPILOT_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
@@ -140,16 +157,16 @@ const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
 ];
 const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-state.js");
-const OPENCODE_INTEGRATION_VERSION: u32 = 8;
+const OPENCODE_INTEGRATION_VERSION: u32 = 9;
 const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
-const KILO_INTEGRATION_VERSION: u32 = 2;
+const KILO_INTEGRATION_VERSION: u32 = 4;
 const HERMES_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
 const HERMES_PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
-const HERMES_INTEGRATION_VERSION: u32 = 3;
+const HERMES_INTEGRATION_VERSION: u32 = 4;
 const QODERCLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -200,10 +217,12 @@ const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 5] = [
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const MASTRACODE_HOOK_ASSET: &str = include_str!("assets/mastracode/herdr-agent-state.sh");
-const MASTRACODE_INTEGRATION_VERSION: u32 = 1;
+const MASTRACODE_INTEGRATION_VERSION: u32 = 2;
 const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
-const MASTRACODE_HOOK_EVENTS: [(&str, &str); 12] = [
-    ("SessionStart", "idle"),
+const MASTRACODE_REMOVED_HOOK_EVENTS: [(&str, &str); 2] =
+    [("SessionStart", "idle"), ("SessionEnd", "release")];
+const MASTRACODE_HOOK_EVENTS: [(&str, &str); 11] = [
+    ("SessionStart", "session"),
     ("UserPromptSubmit", "working"),
     ("AgentStart", "working"),
     ("PreToolUse", "working"),
@@ -214,8 +233,11 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("Interrupt", "idle"),
     ("AgentEnd", "idle"),
     ("Stop", "idle"),
-    ("SessionEnd", "release"),
 ];
+const GROK_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
+const GROK_HOOK_ASSET: &str = include_str!("assets/grok/herdr-agent-state.sh");
+const GROK_INTEGRATION_VERSION: u32 = 1;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

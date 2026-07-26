@@ -25,8 +25,8 @@ pub use self::{
         ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,
-        SpacesSidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
+        SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
     theme::{parse_color, CustomThemeColors, ThemeConfig},

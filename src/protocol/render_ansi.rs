@@ -34,6 +34,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::protocol::{underline_style_from_modifier, CellData, FrameData};
 
 const REVERSED_MODIFIER: u16 = 1 << 6;
+const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
+
+pub(crate) fn final_sync_output_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(SYNC_OUTPUT_END.len())
+        .rposition(|window| window == SYNC_OUTPUT_END)
+}
 
 /// Bytes produced by a [`BlitEncoder`] for one terminal frame.
 pub(crate) struct EncodedBlit {
@@ -58,44 +65,44 @@ impl BlitEncoder {
         Self::default()
     }
 
-    pub(crate) fn encode(&self, frame: &FrameData, force_full: bool) -> EncodedBlit {
-        self.encode_inner(frame, force_full, false)
+    pub(crate) fn encode(&self, frame: &FrameData, repaint: bool) -> EncodedBlit {
+        self.encode_inner(frame, repaint, false)
     }
 
     pub(crate) fn encode_with_suppressed_visible_cursor(
         &self,
         frame: &FrameData,
-        force_full: bool,
+        repaint: bool,
     ) -> EncodedBlit {
-        self.encode_inner(frame, force_full, true)
+        self.encode_inner(frame, repaint, true)
     }
 
     fn encode_inner(
         &self,
         frame: &FrameData,
-        force_full: bool,
+        repaint: bool,
         suppress_visible_cursor: bool,
     ) -> EncodedBlit {
-        let prev = if force_full {
-            None
-        } else {
-            self.last_frame.as_ref()
-        };
-        let full = force_full
+        let previous_frame = self.last_frame.as_ref();
+        let prev = if repaint { None } else { previous_frame };
+        let full = repaint
             || prev.is_none()
             || prev.is_some_and(|p| p.width != frame.width || p.height != frame.height);
+        let clear_before_full_redraw = previous_frame.is_none();
         let prof_stats =
             crate::render_prof::enabled().then(|| compute_prof_blit_stats(frame, prev, full));
         let prof_started = crate::render_prof::timer();
         let mut bytes = Vec::new();
         let mut next_last_visible_cursor = self.last_visible_cursor;
         let mut next_last_cursor_shape = self.last_cursor_shape;
-        blit_frame_to_with_cursor_memory(
+        blit_frame_to_with_cursor_memory_and_clear_policy(
             &mut bytes,
             frame,
             prev,
             &mut next_last_visible_cursor,
             &mut next_last_cursor_shape,
+            repeat_ime_anchor_after_sync(),
+            clear_before_full_redraw,
             suppress_visible_cursor,
         );
         if let Some(stats) = prof_stats {
@@ -395,8 +402,9 @@ fn blit_frame_to(writer: impl Write, frame: &FrameData, prev: Option<&FrameData>
     );
 }
 
+#[cfg(test)]
 fn blit_frame_to_with_cursor_memory(
-    mut writer: impl Write,
+    writer: impl Write,
     frame: &FrameData,
     prev: Option<&FrameData>,
     last_visible_cursor: &mut Option<(u16, u16)>,
@@ -404,7 +412,7 @@ fn blit_frame_to_with_cursor_memory(
     suppress_visible_cursor: bool,
 ) {
     blit_frame_to_with_cursor_memory_and_policy(
-        &mut writer,
+        writer,
         frame,
         prev,
         last_visible_cursor,
@@ -414,13 +422,36 @@ fn blit_frame_to_with_cursor_memory(
     );
 }
 
+#[cfg(test)]
 fn blit_frame_to_with_cursor_memory_and_policy(
+    writer: impl Write,
+    frame: &FrameData,
+    prev: Option<&FrameData>,
+    last_visible_cursor: &mut Option<(u16, u16)>,
+    last_cursor_shape: &mut u8,
+    repeat_ime_anchor: bool,
+    suppress_visible_cursor: bool,
+) {
+    blit_frame_to_with_cursor_memory_and_clear_policy(
+        writer,
+        frame,
+        prev,
+        last_visible_cursor,
+        last_cursor_shape,
+        repeat_ime_anchor,
+        true,
+        suppress_visible_cursor,
+    );
+}
+
+fn blit_frame_to_with_cursor_memory_and_clear_policy(
     mut writer: impl Write,
     frame: &FrameData,
     prev: Option<&FrameData>,
     last_visible_cursor: &mut Option<(u16, u16)>,
     last_cursor_shape: &mut u8,
     repeat_ime_anchor: bool,
+    clear_before_full_redraw: bool,
     suppress_visible_cursor: bool,
 ) {
     // On first frame or size change, do a full redraw.
@@ -442,8 +473,9 @@ fn blit_frame_to_with_cursor_memory_and_policy(
     let _ = writer.write_all(b"\x1b]8;;\x1b\\");
 
     if full_redraw {
-        // Clear the screen and write all cells.
-        let _ = writer.write_all(b"\x1b[2J\x1b[H");
+        if clear_before_full_redraw {
+            let _ = writer.write_all(b"\x1b[2J");
+        }
         write_all_cells(&mut writer, frame);
     } else {
         // Diff-based update: only write changed cells.
@@ -682,8 +714,7 @@ fn close_hyperlink(writer: &mut impl Write, active: &mut Option<String>) {
 
 fn write_cell(
     writer: &mut impl Write,
-    row: u16,
-    col: u16,
+    cursor_position: Option<(u16, u16)>,
     cell: &CellData,
     last_sgr: &mut String,
     active_hyperlink: &mut Option<String>,
@@ -693,7 +724,9 @@ fn write_cell(
         return;
     }
 
-    let _ = write!(writer, "\x1b[{};{}H", row + 1, col + 1);
+    if let Some(position) = cursor_position {
+        write_cursor_position(writer, position);
+    }
 
     let sgr = build_sgr(cell.fg, cell.bg, cell.modifier);
     if sgr != *last_sgr {
@@ -730,6 +763,9 @@ fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameD
     for row in 0..frame.height {
         let mut invalidated = 0usize;
         let mut to_skip = 0usize;
+        // Herdr clients disable host autowrap, so safe cells can advance inline
+        // without spilling into adjacent rows during a resize race.
+        let mut next_inline_col = None;
 
         for col in 0..frame.width {
             let idx = (row as usize) * (frame.width as usize) + (col as usize);
@@ -745,15 +781,18 @@ fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameD
                 ) || invalidated > 0)
                 && to_skip == 0
             {
+                let cursor_position =
+                    (next_inline_col != Some(col) || invalidated > 0).then_some((col, row));
                 write_cell(
                     writer,
-                    row,
-                    col,
+                    cursor_position,
                     cell,
                     &mut last_sgr,
                     &mut active_hyperlink,
                     frame,
                 );
+                next_inline_col = (cell.symbol.is_ascii() && cell_width(cell) == 1)
+                    .then_some(col.saturating_add(1));
             }
 
             to_skip = cell_width(cell).saturating_sub(1);
@@ -1400,19 +1439,86 @@ mod tests {
     }
 
     #[test]
-    fn blit_frame_size_change_triggers_full_redraw() {
-        let prev = make_frame(2, 2, vec![make_cell("A", 0, 0, 0); 4]);
-
-        let curr = make_frame(3, 2, vec![make_cell("B", 0, 0, 0); 6]);
+    fn scroll_sized_ascii_shift_batches_changed_cells_by_row() {
+        const WIDTH: u16 = 140;
+        const HEIGHT: u16 = 50;
+        let prev = make_frame(
+            WIDTH,
+            HEIGHT,
+            vec![make_cell("A", 0, 0, 0); usize::from(WIDTH) * usize::from(HEIGHT)],
+        );
+        let curr = make_frame(
+            WIDTH,
+            HEIGHT,
+            vec![make_cell("B", 0, 0, 0); usize::from(WIDTH) * usize::from(HEIGHT)],
+        );
 
         let mut output = Vec::new();
         blit_frame_to(&mut output, &curr, Some(&prev));
 
-        let output_str = String::from_utf8(output).unwrap();
+        let cup_count = output.iter().filter(|&&byte| byte == b'H').count();
         assert!(
-            output_str.contains("\x1b[2J"),
-            "size change should trigger full redraw"
+            cup_count <= usize::from(HEIGHT) + 2,
+            "one dense scroll frame should need at most one CUP per row plus cursor anchors, got {cup_count}"
         );
+        assert!(
+            output.len() <= 16_290,
+            "one dense scroll frame should stay below 25% of the 65,161-byte live baseline, got {} bytes",
+            output.len()
+        );
+    }
+
+    #[test]
+    fn batched_ascii_diff_replays_to_current_frame() {
+        let prev = make_frame(4, 3, vec![make_cell("A", 0, 0, 0); 12]);
+        let curr = make_frame(4, 3, vec![make_cell("B", 0, 0, 0); 12]);
+        let mut terminal = crate::ghostty::Terminal::new(4, 3, 0).unwrap();
+
+        let mut initial = Vec::new();
+        blit_frame_to(&mut initial, &prev, None);
+        terminal.write(&initial);
+
+        let mut diff = Vec::new();
+        blit_frame_to(&mut diff, &curr, Some(&prev));
+        terminal.write(&diff);
+
+        for row in 0..3 {
+            for col in 0..4 {
+                let (_, graphemes) = terminal.screen_cell(col, row).unwrap();
+                assert_eq!(graphemes, vec![u32::from('B')]);
+            }
+        }
+    }
+
+    #[test]
+    fn encoder_size_change_repaints_without_clearing() {
+        let prev = make_frame(2, 2, vec![make_cell("A", 0, 0, 0); 4]);
+        let curr = make_frame(3, 2, vec![make_cell("B", 0, 0, 0); 6]);
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode(&prev, false);
+        encoder.commit(prev, initial);
+
+        let encoded = encoder.encode(&curr, false);
+        assert!(encoded.full);
+        let output = String::from_utf8(encoded.bytes).unwrap();
+
+        assert!(!output.contains("\x1b[2J"));
+        assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 6);
+    }
+
+    #[test]
+    fn encoder_forced_repaint_writes_all_cells_without_clearing() {
+        let frame = make_frame(3, 2, vec![make_cell("A", 0, 0, 0); 6]);
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode(&frame, false);
+        encoder.commit(frame.clone(), initial);
+
+        let encoded = encoder.encode(&frame, true);
+        assert!(encoded.full);
+        let output = String::from_utf8(encoded.bytes).unwrap();
+
+        assert!(!output.contains("\x1b[2J"));
+        assert!(output.bytes().filter(|byte| *byte == b'A').count() >= 6);
     }
 
     #[test]

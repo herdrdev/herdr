@@ -496,30 +496,41 @@ impl PollBackoff {
 
 fn with_timed_reads<T>(
     stream: &mut LocalStream,
-    read: impl FnOnce(&mut LocalStream, ReadWait) -> std::io::Result<T>,
-) -> std::io::Result<T> {
+    read: impl FnOnce(&mut LocalStream, ReadWait) -> std::io::Result<Option<T>>,
+) -> std::io::Result<Option<T>> {
     match stream.set_recv_timeout(Some(CONNECTION_POLL_INTERVAL)) {
         Ok(()) => {
             let result = read(stream, ReadWait::SocketTimeout);
-            merge_read_reset_result(result, stream.set_recv_timeout(None))
+            finish_timed_read(result, || stream.set_recv_timeout(None))
         }
         Err(err) if err.kind() == io::ErrorKind::Unsupported => {
             stream.set_nonblocking(true)?;
             let result = read(stream, ReadWait::Poll(PollBackoff::new()));
-            merge_read_reset_result(result, stream.set_nonblocking(false))
+            finish_timed_read(result, || stream.set_nonblocking(false))
         }
+        // A peer can disconnect after the caller's running check but before
+        // setsockopt. macOS reports that closed-socket race as EINVAL.
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => Ok(None),
         Err(err) => Err(err),
     }
 }
 
-fn merge_read_reset_result<T>(
-    result: std::io::Result<T>,
-    reset_result: std::io::Result<()>,
-) -> std::io::Result<T> {
-    match (result, reset_result) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Ok(_), Err(err)) => Err(err),
-        (Err(err), _) => Err(err),
+fn finish_timed_read<T>(
+    result: std::io::Result<Option<T>>,
+    reset: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<Option<T>> {
+    match result {
+        // None is terminal for this dedicated stream. macOS returns EINVAL when
+        // socket options are restored after the peer has already disconnected.
+        Ok(None) => Ok(None),
+        Ok(value) => {
+            reset()?;
+            Ok(value)
+        }
+        Err(err) => {
+            let _ = reset();
+            Err(err)
+        }
     }
 }
 
@@ -597,6 +608,18 @@ mod tests {
 
     fn assert_server_stream_owner(owner: &str) {
         assert!(owner.starts_with("pane.graphics.stream:"));
+    }
+
+    #[test]
+    fn timed_read_skips_reset_after_stream_ends() {
+        let mut reset_called = false;
+        let result = finish_timed_read::<()>(Ok(None), || {
+            reset_called = true;
+            Ok(())
+        });
+
+        assert!(result.unwrap().is_none());
+        assert!(!reset_called);
     }
 
     #[cfg(unix)]

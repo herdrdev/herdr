@@ -201,7 +201,9 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     };
 
-    let response = super::send_request(&Request {
+    // Live handoff is itself a protocol-mismatch recovery path, so it must
+    // reach the running server without the normal CLI compatibility guard.
+    let response = super::send_request_unchecked(&Request {
         id: "cli:server:live-handoff".into(),
         method: Method::ServerLiveHandoff(params),
     })?;
