@@ -4,9 +4,9 @@ use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
-    DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    ActionKeybinds, BindingConfig, CommandKeybindConfig, CommandKeybindType, IndexedKeybind,
+    Keybinds, SidebarConfig, SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
+    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -395,7 +395,7 @@ pub struct KeysConfig {
     pub swap_pane_left: BindingConfig,
     /// Swap the focused pane with the pane below. Default: "prefix+shift+j".
     pub swap_pane_down: BindingConfig,
-    /// Swap the focused pane with the pane above. Default: "prefix+shift+k".
+    /// Swap the focused pane with the pane above. Default: "prefix+ctrl+k".
     pub swap_pane_up: BindingConfig,
     /// Swap the focused pane with the pane to the right. Default: "prefix+shift+l".
     pub swap_pane_right: BindingConfig,
@@ -973,7 +973,7 @@ impl Default for KeysConfig {
             focus_pane_right: BindingConfig::one("prefix+l"),
             swap_pane_left: BindingConfig::one("prefix+shift+h"),
             swap_pane_down: BindingConfig::one("prefix+shift+j"),
-            swap_pane_up: BindingConfig::one("prefix+shift+k"),
+            swap_pane_up: BindingConfig::one("prefix+ctrl+k"),
             swap_pane_right: BindingConfig::one("prefix+shift+l"),
             cycle_pane_next: BindingConfig::one("prefix+tab"),
             cycle_pane_previous: BindingConfig::one("prefix+shift+tab"),
@@ -985,7 +985,13 @@ impl Default for KeysConfig {
             resize_mode: BindingConfig::one("prefix+r"),
             toggle_sidebar: BindingConfig::one("prefix+b"),
             indexed: IndexedKeysConfig::default(),
-            command: Vec::new(),
+            command: vec![CommandKeybindConfig {
+                key: BindingConfig::one("prefix+shift+k"),
+                command: "fullerzz.sesh.open-picker".into(),
+                action_type: CommandKeybindType::PluginAction,
+                description: Some("open Sesh workspace picker".into()),
+                ..CommandKeybindConfig::default()
+            }],
             user_fields: BTreeSet::new(),
         }
     }

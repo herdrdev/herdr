@@ -466,7 +466,7 @@
         {
           "key": "keys.swap_pane_up",
           "type": "keybinding",
-          "default": "\"prefix+shift+k\"",
+          "default": "\"prefix+ctrl+k\"",
           "description": "Swap the focused pane with the pane above."
         },
         {

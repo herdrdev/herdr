@@ -4,6 +4,7 @@
 
 ### Added
 - `prefix+s` now opens native pluck mode, labeling visible URLs, paths, hashes, IP addresses, and long numbers for one- or two-key clipboard selection.
+- `prefix+shift+k` now invokes the installed Sesh plugin workspace picker; pane swap-up moved to `prefix+ctrl+k`.
 
 ### Changed
 - Settings moved from `prefix+s` to `prefix+comma` to make room for pluck mode.
