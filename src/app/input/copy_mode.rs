@@ -28,6 +28,7 @@ impl App {
 
 impl AppState {
     pub(crate) fn enter_copy_mode(&mut self, terminal_runtimes: &TerminalRuntimeRegistry) {
+        self.clear_pluck();
         let Some(ws_idx) = self.active else {
             return;
         };

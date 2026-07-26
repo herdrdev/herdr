@@ -681,6 +681,9 @@ fn line_cell_symbol(line: LineCell) -> &'static str {
 }
 
 fn render_pluck_hints(app: &AppState, frame: &mut Frame, info: &PaneInfo) {
+    if app.mode != Mode::Copy {
+        return;
+    }
     let Some(pluck) = app.pluck.as_ref().filter(|pluck| pluck.pane_id == info.id) else {
         return;
     };
