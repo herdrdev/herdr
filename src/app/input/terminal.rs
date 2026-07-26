@@ -264,6 +264,12 @@ impl App {
     }
 
     pub(crate) fn host_keyboard_report_all_requested(&self) -> bool {
+        if self.state.popup_pane.is_none()
+            && matches!(self.state.mode, Mode::Prefix | Mode::Navigate)
+        {
+            return true;
+        }
+
         let runtime = if self.state.popup_pane.is_some() {
             self.popup_runtime()
         } else if self.state.mode == Mode::Terminal {

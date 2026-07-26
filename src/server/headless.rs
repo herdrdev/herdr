@@ -8425,6 +8425,46 @@ next_tab = ""
     }
 
     #[tokio::test]
+    async fn command_mode_updates_headless_client_keyboard_flags() {
+        let mut server = test_headless_server();
+        let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(client_tx),
+            ),
+        );
+
+        server.app.state.mode = crate::app::Mode::Prefix;
+        server.stream_host_keyboard_enhancement_flags();
+        assert!(matches!(
+            read_server_message(
+                client_control_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("command-mode keyboard enhancement message")
+            ),
+            ServerMessage::KittyKeyboardReportAll { enabled: true }
+        ));
+
+        server.app.state.mode = crate::app::Mode::Terminal;
+        server.stream_host_keyboard_enhancement_flags();
+        assert!(matches!(
+            read_server_message(
+                client_control_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("IME-compatible keyboard enhancement message")
+            ),
+            ServerMessage::KittyKeyboardReportAll { enabled: false }
+        ));
+    }
+
+    #[tokio::test]
     async fn focused_report_all_pane_updates_headless_client_keyboard_flags() {
         let mut server = test_headless_server();
         let (client_tx, client_control_rx, _client_rx) = test_client_writer();
@@ -8456,6 +8496,7 @@ next_tab = ""
         ));
 
         assert!(server.app.close_popup_pane());
+        server.app.state.mode = crate::app::Mode::Terminal;
         server.stream_host_keyboard_enhancement_flags();
         assert!(matches!(
             read_server_message(

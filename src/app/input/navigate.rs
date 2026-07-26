@@ -1131,22 +1131,35 @@ pub(crate) fn command_for_key(
         .cloned()
 }
 
+fn unmodified_digit_for_key(key: TerminalKey) -> Option<char> {
+    ('1'..='9').find(|digit| {
+        crate::config::terminal_key_matches_combo(
+            key,
+            (
+                KeyCode::Char(*digit),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKey) -> bool {
+    if let Some(c) = unmodified_digit_for_key(key) {
+        let idx = (c as usize) - ('1' as usize);
+        if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
+            state.switch_workspace(ws_idx);
+            leave_navigate_mode(state);
+        }
+        return true;
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
             KeyCode::Enter => {
                 if !state.workspaces.is_empty() {
                     state.switch_workspace(state.selected);
-                    leave_navigate_mode(state);
-                }
-                return true;
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                let idx = (c as usize) - ('1' as usize);
-                if let Some(ws_idx) = state.workspace_at_visible_position(idx) {
-                    state.switch_workspace(ws_idx);
                     leave_navigate_mode(state);
                 }
                 return true;
@@ -1205,6 +1218,12 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
 }
 
 fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Option<NavigateAction> {
+    if let Some(c) = unmodified_digit_for_key(key) {
+        return Some(NavigateAction::SwitchWorkspace(
+            (c as usize) - ('1' as usize),
+        ));
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
@@ -1215,11 +1234,6 @@ fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Optio
                         .iter()
                         .position(|idx| *idx == state.selected)
                         .unwrap_or(state.selected),
-                ));
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                return Some(NavigateAction::SwitchWorkspace(
-                    (c as usize) - ('1' as usize),
                 ));
             }
             KeyCode::Tab => return Some(NavigateAction::CyclePaneNext),
@@ -1367,29 +1381,37 @@ fn indexed_navigation_action(
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
     let kb = &state.keybinds;
-    let trigger_matches = |binding: &crate::config::IndexedKeybind| match dispatch {
-        BindingDispatch::Direct => binding.trigger.is_direct(),
-        BindingDispatch::Prefix => binding.trigger.is_prefix(),
-    };
+    let actual_modifiers = crate::config::normalize_key_combo((key.code, key.modifiers)).1;
 
-    for binding in &kb.switch_tab {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::SwitchTab(idx));
+    for exact_modifiers in [true, false] {
+        let trigger_matches = |binding: &crate::config::IndexedKeybind| {
+            let dispatch_matches = match dispatch {
+                BindingDispatch::Direct => binding.trigger.is_direct(),
+                BindingDispatch::Prefix => binding.trigger.is_prefix(),
+            };
+            let expected_modifiers = crate::config::normalize_key_combo(binding.trigger.combo()).1;
+            dispatch_matches && (actual_modifiers == expected_modifiers) == exact_modifiers
+        };
+
+        for binding in &kb.switch_tab {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::SwitchTab(idx));
+                }
             }
         }
-    }
-    for binding in &kb.switch_workspace {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::SwitchWorkspace(idx));
+        for binding in &kb.switch_workspace {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::SwitchWorkspace(idx));
+                }
             }
         }
-    }
-    for binding in &kb.focus_agent {
-        if trigger_matches(binding) {
-            if let Some(idx) = binding.matched_index(key) {
-                return Some(NavigateAction::FocusAgent(idx));
+        for binding in &kb.focus_agent {
+            if trigger_matches(binding) {
+                if let Some(idx) = binding.matched_index(key) {
+                    return Some(NavigateAction::FocusAgent(idx));
+                }
             }
         }
     }
@@ -2564,7 +2586,7 @@ last_pane = "prefix+tab"
     }
 
     #[test]
-    fn prefix_shift_indexed_workspace_shortcut_maps_shifted_symbol_key() {
+    fn prefix_shift_indexed_workspace_shortcut_maps_legacy_us_symbol_key() {
         let mut state = state_with_workspaces(&["one", "two"]);
         let config: Config =
             toml::from_str("[keys]\nswitch_workspace = \"prefix+shift+1..9\"\n").unwrap();
@@ -2577,6 +2599,42 @@ last_pane = "prefix+tab"
         );
 
         assert_eq!(action, Some(NavigateAction::SwitchWorkspace(1)));
+    }
+
+    #[test]
+    fn prefix_shift_indexed_workspace_shortcut_maps_non_us_number_rows() {
+        let mut state = state_with_workspaces(&["one", "two"]);
+        let config: Config =
+            toml::from_str("[keys]\nswitch_workspace = \"prefix+shift+1..9\"\n").unwrap();
+        state.keybinds.switch_workspace = config.keybinds().switch_workspace;
+
+        for key in [
+            TerminalKey::new(KeyCode::Char('2'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('"' as u32),
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+        ] {
+            assert_eq!(
+                action_for_key(&state, key, BindingDispatch::Prefix),
+                Some(NavigateAction::SwitchWorkspace(1))
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_unshifted_indexed_shortcut_maps_shifted_french_number_row() {
+        let mut state = state_with_workspaces(&["one"]);
+        let config: Config = toml::from_str("[keys]\nswitch_tab = \"prefix+1..9\"\n").unwrap();
+        state.keybinds.switch_tab = config.keybinds().switch_tab;
+
+        let action = action_for_key(
+            &state,
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+            BindingDispatch::Prefix,
+        );
+
+        assert_eq!(action, Some(NavigateAction::SwitchTab(1)));
     }
 
     #[test]
@@ -2782,6 +2840,20 @@ command = "printf literal > '{}'"
 
         assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_maps_french_number_row_to_workspace() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(
+            TerminalKey::new(KeyCode::Char('é'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('2' as u32),
+        );
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]
