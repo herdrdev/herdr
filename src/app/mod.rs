@@ -1758,7 +1758,11 @@ impl App {
                 self.handle_navigate_key(key);
             }
             Mode::Copy => {
-                self.handle_copy_mode_key(key);
+                if self.state.pluck.is_some() {
+                    self.handle_pluck_key(key);
+                } else {
+                    self.handle_copy_mode_key(key);
+                }
             }
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
                 self.handle_rename_key_via_api(key_event);
