@@ -21,6 +21,16 @@ pub(crate) enum ClientRenderState {
     },
 }
 
+/// An owned frame used by a retained render update.
+///
+/// Semantic clients transfer their baseline into the update so the cell vector
+/// can be patched and committed without cloning the full frame. Other
+/// encodings derive an owned working frame from their encoder baseline.
+pub(crate) struct RetainedFrame {
+    pub(crate) frame: FrameData,
+    semantic_baseline: bool,
+}
+
 impl ClientRenderState {
     pub(crate) fn new(render_encoding: RenderEncoding) -> Self {
         match render_encoding {
@@ -60,6 +70,45 @@ impl ClientRenderState {
         if let Self::Semantic { last_frame } = self {
             *last_frame = None;
         }
+    }
+
+    pub(crate) fn take_retained_frame(&mut self) -> Option<RetainedFrame> {
+        match self {
+            Self::Semantic { last_frame } => last_frame.take().map(|frame| RetainedFrame {
+                frame,
+                semantic_baseline: true,
+            }),
+            Self::TerminalAnsi { blit_encoder, .. } => {
+                blit_encoder
+                    .last_frame()
+                    .cloned()
+                    .map(|frame| RetainedFrame {
+                        frame,
+                        semantic_baseline: false,
+                    })
+            }
+        }
+    }
+
+    pub(crate) fn prepare_retained_frame(
+        &mut self,
+        retained: RetainedFrame,
+    ) -> Result<Option<PreparedRender>, FrameData> {
+        if retained.semantic_baseline {
+            let semantic_baseline_is_empty = match self {
+                Self::Semantic { last_frame } => last_frame.is_none(),
+                Self::TerminalAnsi { .. } => false,
+            };
+            if !semantic_baseline_is_empty {
+                return Err(retained.frame);
+            }
+            crate::render_prof::event("prepare_frame.semantic.retained");
+            return Ok(Some(PreparedRender::Semantic {
+                message: ServerMessage::Frame(retained.frame),
+            }));
+        }
+
+        Ok(self.prepare_frame(retained.frame))
     }
 
     pub(crate) fn prepare_frame(&mut self, frame: FrameData) -> Option<PreparedRender> {

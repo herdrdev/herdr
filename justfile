@@ -11,6 +11,10 @@ test:
 test-one filter:
     cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
 
+# Compare upstream frame cloning with retained semantic baseline ownership transfer
+perf-retained-frame:
+    cargo test --release --locked --bin herdr server::headless::tests::retained_frame_ownership_benchmark -- --ignored --exact --nocapture --test-threads=1
+
 # Run fast local lint checks
 lint:
     cargo fmt --check

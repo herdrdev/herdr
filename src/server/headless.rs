@@ -3444,7 +3444,7 @@ impl HeadlessServer {
             if !matches!(mode, ClientConnectionMode::App) {
                 continue;
             }
-            let Some(client) = self.clients.get(&client_id) else {
+            let Some(client) = self.clients.get_mut(&client_id) else {
                 return false;
             };
             if client.deferred_render() != DeferredRender::None
@@ -3453,11 +3453,11 @@ impl HeadlessServer {
                 crate::render_prof::event("retained_animation_fallback.client_state");
                 return false;
             }
-            let Some(previous) = client.render_state.last_frame().cloned() else {
+            let Some(previous) = client.render_state.take_retained_frame() else {
                 crate::render_prof::event("retained_animation_fallback.no_last_frame");
                 return false;
             };
-            if previous.width != cols || previous.height != rows {
+            if previous.frame.width != cols || previous.frame.height != rows {
                 crate::render_prof::event("retained_animation_fallback.frame_size_mismatch");
                 return false;
             }
@@ -3465,16 +3465,17 @@ impl HeadlessServer {
         }
 
         let mut frames = Vec::with_capacity(targets.len());
-        for (client_id, previous) in targets {
+        for (client_id, mut previous) in targets {
             let Some(frame) = crate::server::render_stream::render_working_animation_from_frame(
                 &mut self.app.state,
                 &self.app.terminal_runtimes,
-                previous,
+                previous.frame,
             ) else {
                 crate::render_prof::event("retained_animation_fallback.render_failed");
                 return false;
             };
-            frames.push((client_id, frame));
+            previous.frame = frame;
+            frames.push((client_id, previous));
         }
 
         let mut broken_clients = Vec::new();
@@ -3546,13 +3547,12 @@ impl HeadlessServer {
         {
             retained_fallback!("visible_kitty_graphics");
         }
-        let Some(mut frame) = client.render_state.last_frame().cloned() else {
+        let Some(frame) = client.render_state.last_frame() else {
             retained_fallback!("no_last_frame");
         };
         if frame.width != *cols || frame.height != *rows {
             retained_fallback!("frame_size_mismatch");
         }
-        frame.graphics.clear();
 
         let Some(ws_idx) = self.app.state.active else {
             retained_fallback!("no_active_workspace");
@@ -3562,9 +3562,9 @@ impl HeadlessServer {
             retained_fallback!("no_pane_info");
         }
 
-        let mut touched = false;
+        let mut patches = Vec::new();
         for info in pane_infos {
-            if !rect_fits_frame(info.inner_rect, &frame) {
+            if !rect_fits_frame(info.inner_rect, frame) {
                 retained_fallback!("pane_rect_outside_frame");
             }
             let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
@@ -3584,30 +3584,41 @@ impl HeadlessServer {
                 crate::pane::TerminalDirtyPatchOutcome::Patch(patch) => {
                     crate::render_prof::event("retained.pane_patch");
                     crate::render_prof::counter("retained.patch_rows", patch.rows.len() as u64);
-                    if dirty_patch_intersects_hyperlinks(&frame, info.inner_rect, &patch) {
+                    if dirty_patch_intersects_hyperlinks(frame, info.inner_rect, &patch) {
                         retained_fallback!("hyperlink_intersection");
                     }
-                    if !apply_terminal_dirty_patch(&mut frame, info.inner_rect, patch) {
-                        retained_fallback!("patch_apply_failed");
-                    }
-                    touched = true;
+                    patches.push((info.inner_rect, patch));
                 }
             }
         }
 
-        let previous_cursor = frame.cursor.clone();
-        frame.cursor = crate::server::render_stream::focused_terminal_cursor(
+        let cursor = crate::server::render_stream::focused_terminal_cursor(
             &self.app.state,
             &self.app.terminal_runtimes,
         );
-        let cursor_changed = frame.cursor != previous_cursor;
+        let cursor_changed = frame.cursor != cursor;
 
-        if !touched && !cursor_changed {
+        if patches.is_empty() && !cursor_changed {
             retained_success!("clean_no_cursor_change");
         }
 
+        let Some(mut retained) = self
+            .clients
+            .get_mut(client_id)
+            .and_then(|client| client.render_state.take_retained_frame())
+        else {
+            retained_fallback!("no_last_frame");
+        };
+        retained.frame.graphics.clear();
+        for (area, patch) in patches {
+            if !apply_terminal_dirty_patch(&mut retained.frame, area, patch) {
+                retained_fallback!("patch_apply_failed");
+            }
+        }
+        retained.frame.cursor = cursor;
+
         let mut broken_clients = Vec::new();
-        let sent = self.send_retained_frame_to_client(*client_id, frame, &mut broken_clients);
+        let sent = self.send_retained_frame_to_client(*client_id, retained, &mut broken_clients);
         for broken_client in broken_clients {
             self.remove_client_and_resize_if_needed(broken_client);
         }
@@ -3631,7 +3642,7 @@ impl HeadlessServer {
     fn send_retained_frame_to_client(
         &mut self,
         client_id: u64,
-        frame: FrameData,
+        frame: crate::server::render_stream::RetainedFrame,
         broken_clients: &mut Vec<u64>,
     ) -> bool {
         let Some(client) = self.clients.get_mut(&client_id) else {
@@ -3643,11 +3654,19 @@ impl HeadlessServer {
             return false;
         };
         let prepare_started = crate::render_prof::timer();
-        let Some(prepared) = client.render_state.prepare_frame(frame) else {
-            client.clear_deferred_render();
-            crate::render_prof::event("retained_send.skip_identical");
-            crate::render_prof::duration_since("retained_send.prepare_frame", prepare_started);
-            return true;
+        let prepared = match client.render_state.prepare_retained_frame(frame) {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                client.clear_deferred_render();
+                crate::render_prof::event("retained_send.skip_identical");
+                crate::render_prof::duration_since("retained_send.prepare_frame", prepare_started);
+                return true;
+            }
+            Err(_) => {
+                crate::render_prof::event("retained_send_fallback.invalid_baseline");
+                crate::render_prof::duration_since("retained_send.prepare_frame", prepare_started);
+                return false;
+            }
         };
         crate::render_prof::duration_since("retained_send.prepare_frame", prepare_started);
         let serialize_started = crate::render_prof::timer();
@@ -5072,6 +5091,40 @@ mod tests {
             crate::app::state::ViewLayout::Desktop
         );
         assert!(!retained_desktop.hyperlinks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retained_animation_reuses_semantic_frame_allocation() {
+        let (mut server, client_rx, _) = retained_test_server(b"working");
+        set_first_test_pane_working(&mut server);
+
+        server.render_and_stream();
+        let _ = client_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("initial semantic frame");
+        let baseline_cells = server.clients[&1]
+            .render_state
+            .last_frame()
+            .expect("semantic baseline")
+            .cells
+            .as_ptr();
+
+        server.app.state.spinner_tick = app::HEADLESS_ANIMATION_TICK_STEP;
+        assert!(server.render_retained_animation_update_and_stream());
+        let _ = client_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("retained animation frame");
+
+        assert_eq!(
+            server.clients[&1]
+                .render_state
+                .last_frame()
+                .expect("updated semantic baseline")
+                .cells
+                .as_ptr(),
+            baseline_cells,
+            "retained animation should reuse the semantic frame cell allocation"
+        );
     }
 
     #[test]
@@ -8342,6 +8395,12 @@ next_tab = ""
                 .expect("initial frame"),
         );
         assert!(first.cells.iter().any(|cell| cell.symbol == "a"));
+        let baseline_cells = server.clients[&1]
+            .render_state
+            .last_frame()
+            .expect("semantic baseline")
+            .cells
+            .as_ptr();
 
         let runtime = server
             .app
@@ -8358,6 +8417,314 @@ next_tab = ""
         );
         assert!(patched.cells.iter().any(|cell| cell.symbol == "Z"));
         assert_eq!((patched.width, patched.height), (80, 24));
+        assert_eq!(
+            server.clients[&1]
+                .render_state
+                .last_frame()
+                .expect("updated semantic baseline")
+                .cells
+                .as_ptr(),
+            baseline_cells,
+            "retained PTY update should reuse the semantic frame cell allocation"
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_pty_queue_full_discards_semantic_baseline_until_full_render() {
+        let (mut server, client_rx, pane_id) = retained_test_server(b"aaaa");
+        server.render_and_stream();
+        let _ = client_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("initial frame");
+
+        let queued = HeadlessServer::frame_server_message(&ServerMessage::ReloadSoundConfig)
+            .expect("serialize dummy message");
+        server.clients[&1]
+            .writer
+            .as_ref()
+            .expect("client writer")
+            .render
+            .try_send(queued)
+            .expect("pre-fill render queue");
+
+        let runtime = server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        runtime.test_process_pty_bytes(b"\rZ");
+
+        assert!(!server.render_retained_pty_update_and_stream());
+        assert_eq!(server.clients[&1].deferred_render(), DeferredRender::Full);
+        assert!(
+            server.clients[&1].render_state.last_frame().is_none(),
+            "failed retained send must invalidate the transferred semantic baseline"
+        );
+
+        let _ = client_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("queued dummy message");
+        server.render_and_stream();
+        let recovered = read_server_frame(
+            client_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("full recovery frame"),
+        );
+        assert!(recovered.cells.iter().any(|cell| cell.symbol == "Z"));
+        assert!(server.clients[&1].render_state.last_frame().is_some());
+    }
+
+    #[derive(Clone, Copy)]
+    enum RetainedFrameBenchmarkStrategy {
+        UpstreamClone,
+        OwnedBaseline,
+    }
+
+    struct RetainedFrameBenchmarkWorkload {
+        label: &'static str,
+        baseline: FrameData,
+        patch_a: Vec<crate::protocol::CellData>,
+        patch_b: Vec<crate::protocol::CellData>,
+        segments: Vec<(usize, usize, usize)>,
+        update_cursor: bool,
+    }
+
+    fn retained_frame_benchmark_cell(symbol: &str, index: usize) -> crate::protocol::CellData {
+        crate::protocol::CellData {
+            symbol: symbol.to_owned(),
+            fg: 0x02_DD_DD_DD,
+            bg: if index.is_multiple_of(11) {
+                0x02_22_22_22
+            } else {
+                0
+            },
+            modifier: u16::from(index.is_multiple_of(17)),
+            skip: false,
+            hyperlink: None,
+        }
+    }
+
+    fn retained_frame_benchmark_baseline(width: u16, height: u16) -> FrameData {
+        let cells = (0..usize::from(width) * usize::from(height))
+            .map(|index| {
+                let symbol = if index.is_multiple_of(29) { "中" } else { " " };
+                retained_frame_benchmark_cell(symbol, index)
+            })
+            .collect();
+        FrameData {
+            cells,
+            width,
+            height,
+            cursor: Some(crate::protocol::CursorState {
+                x: 36,
+                y: height / 2,
+                visible: true,
+                shape: 2,
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        }
+    }
+
+    fn retained_frame_benchmark_workloads() -> Vec<RetainedFrameBenchmarkWorkload> {
+        const WIDTH: u16 = 165;
+        const HEIGHT: u16 = 43;
+        const SIDEBAR_WIDTH: u16 = 36;
+        let baseline = retained_frame_benchmark_baseline(WIDTH, HEIGHT);
+
+        let pty_width = WIDTH - SIDEBAR_WIDTH;
+        let pty_row = HEIGHT / 2;
+        let pty_patch_len = usize::from(pty_width);
+        let pty_patch_a = (0..pty_patch_len)
+            .map(|index| retained_frame_benchmark_cell("x", index))
+            .collect();
+        let pty_patch_b = (0..pty_patch_len)
+            .map(|index| retained_frame_benchmark_cell("y", index))
+            .collect();
+        let pty_start = usize::from(pty_row) * usize::from(WIDTH) + usize::from(SIDEBAR_WIDTH);
+
+        let animation_patch_len = usize::from(SIDEBAR_WIDTH) * usize::from(HEIGHT);
+        let animation_patch_a = (0..animation_patch_len)
+            .map(|index| retained_frame_benchmark_cell("⠋", index))
+            .collect();
+        let animation_patch_b = (0..animation_patch_len)
+            .map(|index| retained_frame_benchmark_cell("⠙", index))
+            .collect();
+        let animation_segments = (0..usize::from(HEIGHT))
+            .map(|row| {
+                (
+                    row * usize::from(WIDTH),
+                    row * usize::from(SIDEBAR_WIDTH),
+                    usize::from(SIDEBAR_WIDTH),
+                )
+            })
+            .collect();
+
+        vec![
+            RetainedFrameBenchmarkWorkload {
+                label: "PTY one dirty row (129 cells)",
+                baseline: baseline.clone(),
+                patch_a: pty_patch_a,
+                patch_b: pty_patch_b,
+                segments: vec![(pty_start, 0, pty_patch_len)],
+                update_cursor: true,
+            },
+            RetainedFrameBenchmarkWorkload {
+                label: "animation sidebar (36x43 cells)",
+                baseline,
+                patch_a: animation_patch_a,
+                patch_b: animation_patch_b,
+                segments: animation_segments,
+                update_cursor: false,
+            },
+        ]
+    }
+
+    fn measure_retained_frame_benchmark(
+        workload: &RetainedFrameBenchmarkWorkload,
+        strategy: RetainedFrameBenchmarkStrategy,
+        iterations: usize,
+    ) -> Duration {
+        let mut baseline = Some(workload.baseline.clone());
+        let started = Instant::now();
+
+        for iteration in 0..iterations {
+            let mut frame = match strategy {
+                RetainedFrameBenchmarkStrategy::UpstreamClone => baseline
+                    .as_ref()
+                    .expect("upstream benchmark baseline")
+                    .clone(),
+                RetainedFrameBenchmarkStrategy::OwnedBaseline => {
+                    baseline.take().expect("owned benchmark baseline")
+                }
+            };
+            let patch = if iteration % 2 == 0 {
+                &workload.patch_a
+            } else {
+                &workload.patch_b
+            };
+            for &(frame_start, patch_start, len) in &workload.segments {
+                frame.cells[frame_start..frame_start + len]
+                    .clone_from_slice(&patch[patch_start..patch_start + len]);
+            }
+            if workload.update_cursor {
+                frame.cursor = Some(crate::protocol::CursorState {
+                    x: 36 + u16::try_from(iteration % 129).expect("cursor column"),
+                    y: 21,
+                    visible: true,
+                    shape: 2,
+                });
+            }
+
+            let message = ServerMessage::Frame(frame);
+            let framed =
+                HeadlessServer::frame_server_message(&message).expect("serialize benchmark frame");
+            let frame = match message {
+                ServerMessage::Frame(frame) => frame,
+                _ => unreachable!("benchmark constructs a semantic frame"),
+            };
+            baseline = Some(frame);
+            std::hint::black_box(framed);
+        }
+
+        started.elapsed()
+    }
+
+    fn retained_frame_benchmark_ns_per_op(
+        workload: &RetainedFrameBenchmarkWorkload,
+        strategy: RetainedFrameBenchmarkStrategy,
+        iterations: usize,
+    ) -> f64 {
+        measure_retained_frame_benchmark(workload, strategy, iterations).as_secs_f64()
+            * 1_000_000_000.0
+            / iterations as f64
+    }
+
+    fn retained_frame_benchmark_median(samples: &mut [f64]) -> f64 {
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    }
+
+    /// Run with `just perf-retained-frame`.
+    #[test]
+    #[ignore = "manual release-mode performance comparison"]
+    fn retained_frame_ownership_benchmark() {
+        const TARGET_SAMPLE: Duration = Duration::from_millis(75);
+        const SAMPLE_COUNT: usize = 15;
+
+        println!();
+        println!("retained SemanticFrame ownership benchmark");
+        println!("upstream baseline: 8843bbb (full FrameData clone per retained update)");
+        println!("frame: 165x43 cells; samples: {SAMPLE_COUNT}");
+        println!();
+        println!(
+            "{:<38} {:>14} {:>14} {:>10} {:>14}",
+            "workload", "upstream ns/op", "owned ns/op", "speedup", "path reduction"
+        );
+
+        for workload in retained_frame_benchmark_workloads() {
+            let mut iterations = 1usize;
+            while measure_retained_frame_benchmark(
+                &workload,
+                RetainedFrameBenchmarkStrategy::UpstreamClone,
+                iterations,
+            ) < TARGET_SAMPLE
+                && iterations < 16_384
+            {
+                iterations *= 2;
+            }
+
+            let warmup_iterations = iterations.max(4) / 4;
+            for _ in 0..3 {
+                std::hint::black_box(measure_retained_frame_benchmark(
+                    &workload,
+                    RetainedFrameBenchmarkStrategy::UpstreamClone,
+                    warmup_iterations,
+                ));
+                std::hint::black_box(measure_retained_frame_benchmark(
+                    &workload,
+                    RetainedFrameBenchmarkStrategy::OwnedBaseline,
+                    warmup_iterations,
+                ));
+            }
+
+            let mut upstream_samples = Vec::with_capacity(SAMPLE_COUNT);
+            let mut owned_samples = Vec::with_capacity(SAMPLE_COUNT);
+            for sample in 0..SAMPLE_COUNT {
+                let strategies = if sample % 2 == 0 {
+                    [
+                        RetainedFrameBenchmarkStrategy::UpstreamClone,
+                        RetainedFrameBenchmarkStrategy::OwnedBaseline,
+                    ]
+                } else {
+                    [
+                        RetainedFrameBenchmarkStrategy::OwnedBaseline,
+                        RetainedFrameBenchmarkStrategy::UpstreamClone,
+                    ]
+                };
+                for strategy in strategies {
+                    let ns_per_op =
+                        retained_frame_benchmark_ns_per_op(&workload, strategy, iterations);
+                    match strategy {
+                        RetainedFrameBenchmarkStrategy::UpstreamClone => {
+                            upstream_samples.push(ns_per_op);
+                        }
+                        RetainedFrameBenchmarkStrategy::OwnedBaseline => {
+                            owned_samples.push(ns_per_op);
+                        }
+                    }
+                }
+            }
+
+            let upstream = retained_frame_benchmark_median(&mut upstream_samples);
+            let owned = retained_frame_benchmark_median(&mut owned_samples);
+            let speedup = upstream / owned;
+            let cpu_reduction = (1.0 - owned / upstream) * 100.0;
+            println!(
+                "{:<38} {:>14.0} {:>14.0} {:>9.2}x {:>13.1}%",
+                workload.label, upstream, owned, speedup, cpu_reduction
+            );
+        }
     }
 
     #[tokio::test]
