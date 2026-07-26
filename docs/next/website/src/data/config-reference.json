@@ -220,7 +220,7 @@
         {
           "key": "keys.settings",
           "type": "keybinding",
-          "default": "\"prefix+s\"",
+          "default": "\"prefix+comma\"",
           "description": "Open settings."
         },
         {
@@ -420,6 +420,12 @@
           "type": "keybinding",
           "default": "\"prefix+[\"",
           "description": "Enter keyboard copy mode for the focused pane."
+        },
+        {
+          "key": "keys.pluck",
+          "type": "keybinding",
+          "default": "\"prefix+s\"",
+          "description": "Show hints for copyable tokens in the focused pane."
         },
         {
           "key": "keys.focus_pane_left",

@@ -42,6 +42,7 @@ mod modal;
 mod mouse;
 mod navigate;
 mod overlays;
+mod pluck;
 mod selection;
 mod settings;
 mod sidebar;
@@ -92,7 +93,13 @@ impl App {
             Mode::Terminal => return self.handle_terminal_key(key).await,
             Mode::Prefix => self.handle_prefix_key(key),
             Mode::Navigate => self.handle_navigate_key(key),
-            Mode::Copy => self.handle_copy_mode_key(key),
+            Mode::Copy => {
+                if self.state.pluck.is_some() {
+                    self.handle_pluck_key(key);
+                } else {
+                    self.handle_copy_mode_key(key);
+                }
+            }
             _ => match self.state.mode {
                 Mode::Onboarding => self.handle_onboarding_key(key_event),
                 Mode::ReleaseNotes => self.handle_release_notes_key(key_event),
