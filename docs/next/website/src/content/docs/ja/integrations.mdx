@@ -256,6 +256,20 @@ Herdr は `~/.mastracode` を使います。インストールは `hooks/herdr-a
 
 Herdr は保存された MastraCode スレッドを `mastracode --thread <id>` で resume します。
 
+## Grok CLI
+
+Grok CLI フックをインストールします:
+
+```bash
+herdr integration install grok
+```
+
+このフックは、Grok CLI が Herdr のペイン内で動いている間、Grok の `SessionStart` フックを通じてセッション識別を報告します。Grok の状態は Herdr のスクリーンマニフェスト検出から得られます。
+
+Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルをマージするため、インストールは Herdr の `SessionStart` エントリを含む自己完結した `hooks/herdr.json` を `hooks/herdr-agent-state.sh` スクリプトの隣に書き込み、他のフックファイルは編集しません。アンインストールは Herdr が所有するその 2 つのファイルだけを削除します。
+
+Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
+
 ## カスタムステータスラベル
 
 インテグレーションは、ライフサイクル状態を意味的な状態としてのみ報告します。たとえば、ライフサイクル報告に表示フィールドを加えず、エージェントを `working` として報告します。
