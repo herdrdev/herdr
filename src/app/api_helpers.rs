@@ -52,13 +52,21 @@ pub(super) fn encode_api_submission(
     runtime: &crate::terminal::TerminalRuntime,
     text: &str,
 ) -> Vec<u8> {
-    let mut bytes = encode_api_text(runtime, text);
+    let (mut bytes, enter) = encode_api_submission_parts(runtime, text);
+    bytes.extend_from_slice(&enter);
+    bytes
+}
+
+pub(super) fn encode_api_submission_parts(
+    runtime: &crate::terminal::TerminalRuntime,
+    text: &str,
+) -> (Vec<u8>, Vec<u8>) {
+    let bytes = encode_api_text(runtime, text);
     let enter = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Enter,
         crossterm::event::KeyModifiers::NONE,
     );
-    bytes.extend_from_slice(&runtime.encode_terminal_key(enter.into()));
-    bytes
+    (bytes, runtime.encode_terminal_key(enter.into()))
 }
 
 pub(super) fn encode_api_input(

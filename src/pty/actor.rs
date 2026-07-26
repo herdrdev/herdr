@@ -35,6 +35,15 @@ mod windows {
         terminal_responses: Vec<Bytes>,
     }
 
+    enum PtyIoDataCommand {
+        WriteUserInput(Bytes),
+        WriteSubmission {
+            text: Bytes,
+            enter: Bytes,
+            delay: Duration,
+        },
+    }
+
     pub(crate) struct PtyIoActorConfig {
         pub pane_id: u32,
         pub master: Box<dyn MasterPty + Send>,
@@ -50,7 +59,7 @@ mod windows {
 
     #[derive(Clone)]
     pub(crate) struct PtyIoActorHandle {
-        data_tx: mpsc::Sender<Bytes>,
+        data_tx: mpsc::Sender<PtyIoDataCommand>,
         control_tx: std_mpsc::Sender<PtyIoControlCommand>,
         accepting: Arc<Mutex<bool>>,
     }
@@ -67,7 +76,13 @@ mod windows {
             {
                 return Err(mpsc::error::SendError(bytes));
             }
-            self.data_tx.send(bytes).await
+            self.data_tx
+                .send(PtyIoDataCommand::WriteUserInput(bytes))
+                .await
+                .map_err(|err| match err.0 {
+                    PtyIoDataCommand::WriteUserInput(bytes) => mpsc::error::SendError(bytes),
+                    PtyIoDataCommand::WriteSubmission { text, .. } => mpsc::error::SendError(text),
+                })
         }
 
         pub(crate) fn try_write_user_input(
@@ -81,7 +96,45 @@ mod windows {
             {
                 return Err(mpsc::error::TrySendError::Closed(bytes));
             }
-            self.data_tx.try_send(bytes)
+            self.data_tx
+                .try_send(PtyIoDataCommand::WriteUserInput(bytes))
+                .map_err(|err| match err {
+                    mpsc::error::TrySendError::Full(PtyIoDataCommand::WriteUserInput(bytes)) => {
+                        mpsc::error::TrySendError::Full(bytes)
+                    }
+                    mpsc::error::TrySendError::Closed(PtyIoDataCommand::WriteUserInput(bytes)) => {
+                        mpsc::error::TrySendError::Closed(bytes)
+                    }
+                    _ => unreachable!("user input send returned a different command"),
+                })
+        }
+
+        pub(crate) fn try_write_submission(
+            &self,
+            text: Bytes,
+            enter: Bytes,
+            delay: Duration,
+        ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+            if !*self
+                .accepting
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
+                return Err(mpsc::error::TrySendError::Closed(text));
+            }
+            self.data_tx
+                .try_send(PtyIoDataCommand::WriteSubmission { text, enter, delay })
+                .map_err(|err| match err {
+                    mpsc::error::TrySendError::Full(PtyIoDataCommand::WriteSubmission {
+                        text,
+                        ..
+                    }) => mpsc::error::TrySendError::Full(text),
+                    mpsc::error::TrySendError::Closed(PtyIoDataCommand::WriteSubmission {
+                        text,
+                        ..
+                    }) => mpsc::error::TrySendError::Closed(text),
+                    _ => unreachable!("submission send returned a different command"),
+                })
         }
 
         pub(crate) fn resize(
@@ -132,16 +185,25 @@ mod windows {
                 .take_writer()
                 .map_err(|err| std::io::Error::other(err.to_string()))?;
             let writer = Arc::new(Mutex::new(writer));
-            let (data_tx, mut data_rx) = mpsc::channel::<Bytes>(1024);
+            let (data_tx, mut data_rx) = mpsc::channel::<PtyIoDataCommand>(1024);
             let (control_tx, control_rx) = std_mpsc::channel::<PtyIoControlCommand>();
             let accepting = Arc::new(Mutex::new(!initially_quiesced));
 
             {
                 let writer = Arc::clone(&writer);
                 std::thread::spawn(move || {
-                    while let Some(bytes) = data_rx.blocking_recv() {
-                        if write_all_locked(&writer, &bytes).is_err() {
-                            break;
+                    while let Some(command) = data_rx.blocking_recv() {
+                        match command {
+                            PtyIoDataCommand::WriteUserInput(bytes) => {
+                                if write_all_locked(&writer, &bytes).is_err() {
+                                    break;
+                                }
+                            }
+                            PtyIoDataCommand::WriteSubmission { text, enter, delay } => {
+                                if write_submission_locked(&writer, &text, &enter, delay).is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                     debug!(pane_id, "windows pty writer thread exiting");
@@ -220,6 +282,22 @@ mod windows {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         writer.write_all(bytes)?;
+        writer.flush()
+    }
+
+    fn write_submission_locked(
+        writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+        text: &[u8],
+        enter: &[u8],
+        delay: Duration,
+    ) -> std::io::Result<()> {
+        let mut writer = writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        writer.write_all(text)?;
+        writer.flush()?;
+        std::thread::sleep(delay);
+        writer.write_all(enter)?;
         writer.flush()
     }
 

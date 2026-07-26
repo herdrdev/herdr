@@ -1107,6 +1107,29 @@ impl PaneRuntimeIo {
             PaneRuntimeIo::TestChannel { sender, .. } => sender.try_send(bytes),
         }
     }
+
+    fn try_send_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.try_write_submission(text, enter, delay)?,
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                sender.try_send(text)?;
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if let Err(err) = sender.try_send(enter) {
+                        warn!(%err, "failed to send delayed test pane input");
+                    }
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2626,6 +2649,15 @@ impl PaneRuntime {
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.io.try_send_bytes(bytes)
+    }
+
+    pub fn try_send_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.io.try_send_submission(text, enter, delay)
     }
 
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {

@@ -8,6 +8,10 @@ use crate::app::App;
 
 use super::responses::{encode_error, encode_error_body, encode_success};
 
+// Claude and Codex can absorb Enter while settling a bracketed paste. Keep the
+// delay inside one PTY actor command so later input cannot interleave with it.
+const PROMPT_SUBMISSION_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+
 impl App {
     pub(super) fn handle_agent_list(&mut self, id: String) -> String {
         encode_success(
@@ -94,8 +98,13 @@ impl App {
                 ),
             );
         }
-        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &params.text);
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+        let (text, enter) =
+            crate::app::api_helpers::encode_api_submission_parts(runtime, &params.text);
+        if let Err(err) = runtime.try_send_submission(
+            Bytes::from(text),
+            Bytes::from(enter),
+            PROMPT_SUBMISSION_SETTLE_DELAY,
+        ) {
             return encode_error(id, "agent_prompt_failed", err.to_string());
         }
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
@@ -338,9 +347,10 @@ mod tests {
         };
         assert_eq!(agent.name.as_deref(), Some("reviewer"));
         assert_eq!(
-            rx.try_recv().unwrap(),
-            Bytes::from_static(b"\x1b[200~A != B\x1b[201~\r")
+            rx.recv().await.unwrap(),
+            Bytes::from_static(b"\x1b[200~A != B\x1b[201~")
         );
+        assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"\r"));
         assert!(rx.try_recv().is_err());
 
         app.lookup_runtime_sender(0, pane_id)
@@ -356,7 +366,8 @@ mod tests {
         );
         let raw: SuccessResponse = serde_json::from_str(&raw).unwrap();
         assert!(matches!(raw.result, ResponseResult::AgentPrompted { .. }));
-        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"A != B\r"));
+        assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"A != B"));
+        assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"\r"));
         assert!(rx.try_recv().is_err());
 
         let rejected = app.handle_agent_prompt(

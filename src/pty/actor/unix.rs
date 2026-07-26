@@ -72,6 +72,11 @@ pub(crate) struct PtyIoActorConfig {
 
 enum PtyIoDataCommand {
     WriteUserInput(Bytes),
+    WriteSubmission {
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+    },
 }
 
 enum PtyIoControlCommand {
@@ -154,6 +159,40 @@ impl PtyIoActorHandle {
             Err(mpsc::error::TrySendError::Closed(PtyIoDataCommand::WriteUserInput(bytes))) => {
                 Err(mpsc::error::TrySendError::Closed(bytes))
             }
+            Err(_) => unreachable!("user input send returned a different command"),
+        }
+    }
+
+    pub(crate) fn try_write_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        let user_writes = self
+            .user_writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !user_writes.accepting {
+            return Err(mpsc::error::TrySendError::Closed(text));
+        }
+        match self
+            .data_tx
+            .try_send(PtyIoDataCommand::WriteSubmission { text, enter, delay })
+        {
+            Ok(()) => {
+                self.wake_actor();
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(PtyIoDataCommand::WriteSubmission {
+                text,
+                ..
+            })) => Err(mpsc::error::TrySendError::Full(text)),
+            Err(mpsc::error::TrySendError::Closed(PtyIoDataCommand::WriteSubmission {
+                text,
+                ..
+            })) => Err(mpsc::error::TrySendError::Closed(text)),
+            Err(_) => unreachable!("submission send returned a different command"),
         }
     }
 
@@ -524,6 +563,13 @@ impl PtyIoActorRunner {
                     self.enqueue_write(bytes);
                 }
             }
+            PtyIoDataCommand::WriteSubmission { text, enter, delay } => {
+                if self.state == ActorState::Running {
+                    if let Err(err) = self.process_submission(text, enter, delay) {
+                        warn!(pane = self.pane_id, %err, "failed to flush prompt text before submit");
+                    }
+                }
+            }
         }
         false
     }
@@ -581,14 +627,20 @@ impl PtyIoActorRunner {
                 "PTY actor was released before handoff quiesce",
             ));
         }
-        let deadline = Instant::now() + HANDOFF_DRAIN_TIMEOUT;
+        self.drain_pending_writes(HANDOFF_DRAIN_TIMEOUT)?;
+        self.state = ActorState::Quiesced;
+        Ok(())
+    }
+
+    fn drain_pending_writes(&mut self, timeout: Duration) -> std::io::Result<()> {
+        let deadline = Instant::now() + timeout;
         self.flush_pending_writes_once();
         while !self.pending_writes.is_empty() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "timed out draining PTY writes before handoff",
+                    "timed out draining PTY writes",
                 ));
             }
             let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
@@ -612,14 +664,34 @@ impl PtyIoActorRunner {
                 self.flush_pending_writes_once();
             }
         }
-        self.state = ActorState::Quiesced;
+        Ok(())
+    }
+
+    fn process_submission(
+        &mut self,
+        text: Bytes,
+        enter: Bytes,
+        delay: Duration,
+    ) -> std::io::Result<()> {
+        self.enqueue_write(text);
+        self.drain_pending_writes(HANDOFF_DRAIN_TIMEOUT)?;
+        std::thread::sleep(delay);
+        self.enqueue_write(enter);
         Ok(())
     }
 
     fn drain_pre_quiesce_commands(&mut self) {
-        while let Ok(PtyIoDataCommand::WriteUserInput(bytes)) = self.data_rx.try_recv() {
-            if self.state != ActorState::Released {
-                self.enqueue_write(bytes);
+        while let Ok(command) = self.data_rx.try_recv() {
+            if self.state == ActorState::Released {
+                continue;
+            }
+            match command {
+                PtyIoDataCommand::WriteUserInput(bytes) => self.enqueue_write(bytes),
+                PtyIoDataCommand::WriteSubmission { text, enter, delay } => {
+                    if let Err(err) = self.process_submission(text, enter, delay) {
+                        warn!(pane = self.pane_id, %err, "failed to flush queued prompt before handoff");
+                    }
+                }
             }
         }
     }
@@ -861,6 +933,59 @@ mod tests {
         let mut buf = [0u8; 5];
         peer.read_exact(&mut buf).expect("peer receives write");
         assert_eq!(&buf, b"hello");
+        handle.shutdown();
+    }
+
+    #[test]
+    fn actor_submission_separates_enter_and_serializes_following_input() {
+        let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
+        let delay = Duration::from_millis(30);
+
+        let start = Instant::now();
+        handle
+            .try_write_submission(
+                Bytes::from_static(b"text"),
+                Bytes::from_static(b"\r"),
+                delay,
+            )
+            .expect("submission accepted");
+        handle
+            .try_write_user_input(Bytes::from_static(b"next"))
+            .expect("following input accepted");
+
+        let mut text = [0u8; 4];
+        peer.read_exact(&mut text)
+            .expect("peer receives prompt text");
+        assert_eq!(&text, b"text");
+        let mut remainder = [0u8; 5];
+        peer.read_exact(&mut remainder)
+            .expect("peer receives enter before following input");
+        assert_eq!(&remainder, b"\rnext");
+        assert!(start.elapsed() >= delay);
+        handle.shutdown();
+    }
+
+    #[test]
+    fn handoff_preserves_submission_delay() {
+        let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
+        let delay = Duration::from_millis(30);
+        let start = Instant::now();
+        handle
+            .try_write_submission(
+                Bytes::from_static(b"text"),
+                Bytes::from_static(b"\r"),
+                delay,
+            )
+            .expect("submission accepted");
+
+        handle
+            .begin_handoff(Duration::from_secs(1))
+            .expect("handoff completes");
+        let mut submitted = [0u8; 5];
+        peer.read_exact(&mut submitted)
+            .expect("peer receives complete submission");
+        assert_eq!(&submitted, b"text\r");
+        assert!(start.elapsed() >= delay);
         handle.shutdown();
     }
 
