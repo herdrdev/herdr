@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- `prefix+s` now opens native pluck mode, labeling visible URLs, paths, identifiers, and numbers for one- or two-key clipboard selection.
+- `prefix+s` now opens native pluck mode, labeling visible URLs, paths, hashes, IP addresses, and long numbers for one- or two-key clipboard selection.
 
 ### Changed
 - Settings moved from `prefix+s` to `prefix+comma` to make room for pluck mode.
