@@ -228,18 +228,18 @@ impl App {
     ) -> Result<(), String> {
         self.refresh_installed_plugins()
             .map_err(|err| format!("failed to load plugin registry: {err}"))?;
-        let (plugin, action) = self.find_plugin_action(None, &action_id).map_err(
-            |(_, message)| {
-                if action_id == crate::config::SESH_PLUGIN_ACTION_ID {
-                    format!(
+        let (plugin, action) =
+            self.find_plugin_action(None, &action_id)
+                .map_err(|(_, message)| {
+                    if action_id == crate::config::SESH_PLUGIN_ACTION_ID {
+                        format!(
                         "{message}. Install the managed Sesh plugin with: herdr plugin install {}",
                         crate::config::SESH_PLUGIN_INSTALL_SOURCE
                     )
-                } else {
-                    message
-                }
-            },
-        )?;
+                    } else {
+                        message
+                    }
+                })?;
         if !plugin.enabled {
             return Err(format!("plugin {} is disabled", plugin.plugin_id));
         }
