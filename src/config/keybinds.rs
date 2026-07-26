@@ -8,6 +8,9 @@ use super::Config;
 use crate::input::TerminalKey;
 use crate::popup_size::PopupSize;
 
+pub const SESH_PLUGIN_ACTION_ID: &str = "fullerzz.sesh.open-picker";
+pub const SESH_PLUGIN_INSTALL_SOURCE: &str = "fullerzz/herdr-plugin-sesh";
+
 pub type KeyCombo = (KeyCode, KeyModifiers);
 
 #[derive(Debug, Clone)]
@@ -692,6 +695,12 @@ impl Config {
                     &mut registry,
                     &mut diagnostics,
                 );
+            } else {
+                append_builtin_plugin_action_bindings(
+                    &mut keybinds,
+                    &mut registry,
+                    &mut diagnostics,
+                );
             }
         }
 
@@ -778,6 +787,33 @@ fn append_custom_command_bindings(
             height,
         });
     }
+}
+
+fn append_builtin_plugin_action_bindings(
+    keybinds: &mut Keybinds,
+    registry: &mut BindingRegistry,
+    diagnostics: &mut Vec<String>,
+) {
+    let bindings = parse_action_bindings(
+        "keys.builtin.sesh",
+        &BindingConfig::one("prefix+shift+k"),
+        registry,
+        diagnostics,
+        BindingSource::Default,
+    );
+    if bindings.bindings.is_empty() {
+        return;
+    }
+    let label = bindings.label().unwrap_or_else(|| "unset".to_string());
+    keybinds.custom_commands.push(CustomCommandKeybind {
+        bindings,
+        label,
+        command: SESH_PLUGIN_ACTION_ID.to_string(),
+        action: CustomCommandAction::PluginAction,
+        description: Some("open Sesh workspace picker".into()),
+        width: None,
+        height: None,
+    });
 }
 
 fn parse_action_bindings(
@@ -2230,7 +2266,7 @@ swap_pane_right = "prefix+shift+l"
         let sesh = keybinds
             .custom_commands
             .iter()
-            .find(|command| command.command == "fullerzz.sesh.open-picker")
+            .find(|command| command.command == SESH_PLUGIN_ACTION_ID)
             .expect("default Sesh action");
 
         assert_eq!(sesh.action, CustomCommandAction::PluginAction);
@@ -2246,6 +2282,36 @@ swap_pane_right = "prefix+shift+l"
             vec![BindingTrigger::Prefix((
                 KeyCode::Char('k'),
                 KeyModifiers::CONTROL
+            ))]
+        );
+    }
+
+    #[test]
+    fn default_sesh_binding_survives_user_custom_commands() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.command]]
+key = "prefix+y"
+command = "echo hello"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+
+        assert!(keybinds
+            .custom_commands
+            .iter()
+            .any(|command| command.command == "echo hello"));
+        let sesh = keybinds
+            .custom_commands
+            .iter()
+            .find(|command| command.command == SESH_PLUGIN_ACTION_ID)
+            .expect("default Sesh action");
+        assert_eq!(
+            binding_triggers(&sesh.bindings),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('k'),
+                KeyModifiers::SHIFT
             ))]
         );
     }

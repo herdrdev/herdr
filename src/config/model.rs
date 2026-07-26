@@ -4,9 +4,9 @@ use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, CommandKeybindType, IndexedKeybind,
-    Keybinds, SidebarConfig, SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
+    SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
+    DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -985,13 +985,7 @@ impl Default for KeysConfig {
             resize_mode: BindingConfig::one("prefix+r"),
             toggle_sidebar: BindingConfig::one("prefix+b"),
             indexed: IndexedKeysConfig::default(),
-            command: vec![CommandKeybindConfig {
-                key: BindingConfig::one("prefix+shift+k"),
-                command: "fullerzz.sesh.open-picker".into(),
-                action_type: CommandKeybindType::PluginAction,
-                description: Some("open Sesh workspace picker".into()),
-                ..CommandKeybindConfig::default()
-            }],
+            command: Vec::new(),
             user_fields: BTreeSet::new(),
         }
     }
