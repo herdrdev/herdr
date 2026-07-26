@@ -2172,7 +2172,7 @@ switch_tab = "prefix+?"
             binding_triggers(&kb.swap_pane_up),
             vec![BindingTrigger::Prefix((
                 KeyCode::Char('k'),
-                KeyModifiers::SHIFT
+                KeyModifiers::CONTROL
             ))]
         );
         assert_eq!(
