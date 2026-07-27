@@ -64,15 +64,39 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
 
-pub(crate) fn encode_windows_conpty_shift_enter(key: crate::input::TerminalKey) -> Option<Vec<u8>> {
+/// Native Win32 input, with targeted fallbacks for semantic-only input.
+pub(crate) fn encode_windows_conpty_fallback(key: crate::input::TerminalKey) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
-    if key.code != KeyCode::Enter || key.modifiers != KeyModifiers::SHIFT {
-        return None;
-    }
+    let record = match key.windows_record {
+        Some(record) if record.repeat_count == 1 => record,
+        Some(_) | None => {
+            if key.code != KeyCode::Enter || key.modifiers != KeyModifiers::SHIFT {
+                return None;
+            }
+            crate::input::WindowsKeyRecord {
+                key_down: !matches!(key.kind, KeyEventKind::Release),
+                repeat_count: 1,
+                virtual_key_code: 13,
+                virtual_scan_code: 28,
+                unicode: 13,
+                control_key_state: 16,
+            }
+        }
+    };
 
-    let key_down = !matches!(key.kind, KeyEventKind::Release);
-    Some(format!("\x1b[13;28;13;{};16;1_", u8::from(key_down)).into_bytes())
+    Some(
+        format!(
+            "\x1b[{};{};{};{};{};{}_",
+            record.virtual_key_code,
+            record.virtual_scan_code,
+            record.unicode,
+            u8::from(record.key_down),
+            record.control_key_state,
+            record.repeat_count,
+        )
+        .into_bytes(),
+    )
 }
 
 #[derive(Debug)]

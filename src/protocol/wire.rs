@@ -130,6 +130,12 @@ pub enum ClientInputEvent {
     },
     FocusGained,
     FocusLost,
+    WindowsKey {
+        code: ClientKeyCode,
+        modifiers: u8,
+        kind: ClientKeyKind,
+        record: crate::input::WindowsKeyRecord,
+    },
 }
 
 impl ClientKeyKind {
@@ -309,6 +315,19 @@ impl ClientInputEvent {
             Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
             Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
             Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::WindowsKey {
+                code,
+                modifiers,
+                kind,
+                record,
+            } => crate::raw_input::RawInputEvent::Key(
+                crate::input::TerminalKey::new(
+                    code.to_crossterm(),
+                    crossterm::event::KeyModifiers::from_bits_truncate(*modifiers),
+                )
+                .with_windows_record(*record)
+                .with_kind(kind.to_crossterm()),
+            ),
         }
     }
 }
@@ -1083,6 +1102,19 @@ mod tests {
                     modifiers: 0,
                     kind: ClientKeyKind::Press,
                 },
+                ClientInputEvent::WindowsKey {
+                    code: ClientKeyCode::Esc,
+                    modifiers: 0,
+                    kind: ClientKeyKind::Release,
+                    record: crate::input::WindowsKeyRecord {
+                        key_down: false,
+                        repeat_count: 1,
+                        virtual_key_code: 27,
+                        virtual_scan_code: 1,
+                        unicode: 27,
+                        control_key_state: 0,
+                    },
+                },
                 ClientInputEvent::Mouse {
                     kind: ClientMouseKind::Down(ClientMouseButton::Left),
                     column: 3,
@@ -1099,10 +1131,19 @@ mod tests {
 
     #[test]
     fn client_input_events_convert_to_raw_keys() {
-        let shifted = ClientInputEvent::Key {
+        let record = crate::input::WindowsKeyRecord {
+            key_down: false,
+            repeat_count: 1,
+            virtual_key_code: 78,
+            virtual_scan_code: 49,
+            unicode: 78,
+            control_key_state: 16,
+        };
+        let shifted = ClientInputEvent::WindowsKey {
             code: ClientKeyCode::Char('N'),
             modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
             kind: ClientKeyKind::Press,
+            record,
         }
         .to_raw_input_event();
         match shifted {
@@ -1110,6 +1151,7 @@ mod tests {
                 assert_eq!(key.code, crossterm::event::KeyCode::Char('N'));
                 assert_eq!(key.modifiers, crossterm::event::KeyModifiers::SHIFT);
                 assert_eq!(key.kind, crossterm::event::KeyEventKind::Press);
+                assert_eq!(key.windows_record.map(|record| record.key_down), Some(true));
             }
             other => panic!("expected shifted key event, got {other:?}"),
         }

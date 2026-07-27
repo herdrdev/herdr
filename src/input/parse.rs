@@ -46,6 +46,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         kind,
         shifted_codepoint,
         is_text_commit: false,
+        windows_record: None,
     })
 }
 

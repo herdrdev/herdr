@@ -156,6 +156,7 @@ impl App {
                     crossterm::event::KeyEventKind::Release => {
                         self.suppressed_repeat_keys.remove(&pressed_key_id);
                         if let Some(pressed) = self.pressed_terminal_keys.remove(&pressed_key_id) {
+                            let key = pressed.release_key(key);
                             let _ = self
                                 .forward_terminal_key_to_target(&pressed.target, key)
                                 .await;

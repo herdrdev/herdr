@@ -3,6 +3,16 @@ use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsKeyRecord {
+    pub key_down: bool,
+    pub repeat_count: u16,
+    pub virtual_key_code: u16,
+    pub virtual_scan_code: u16,
+    pub unicode: u16,
+    pub control_key_state: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalKey {
     pub code: KeyCode,
@@ -10,6 +20,7 @@ pub struct TerminalKey {
     pub kind: crossterm::event::KeyEventKind,
     pub shifted_codepoint: Option<u32>,
     pub is_text_commit: bool,
+    pub windows_record: Option<WindowsKeyRecord>,
 }
 
 impl TerminalKey {
@@ -20,10 +31,14 @@ impl TerminalKey {
             kind: crossterm::event::KeyEventKind::Press,
             shifted_codepoint: None,
             is_text_commit: false,
+            windows_record: None,
         }
     }
 
     pub fn with_kind(mut self, kind: crossterm::event::KeyEventKind) -> Self {
+        if let Some(record) = self.windows_record.as_mut() {
+            record.key_down = kind != crossterm::event::KeyEventKind::Release;
+        }
         self.kind = kind;
         self
     }
@@ -31,6 +46,11 @@ impl TerminalKey {
     #[allow(dead_code)] // Reserved for the upcoming raw input parser to preserve shifted/base key pairs.
     pub fn with_shifted_codepoint(mut self, shifted_codepoint: u32) -> Self {
         self.shifted_codepoint = Some(shifted_codepoint);
+        self
+    }
+
+    pub fn with_windows_record(mut self, record: WindowsKeyRecord) -> Self {
+        self.windows_record = Some(record);
         self
     }
 

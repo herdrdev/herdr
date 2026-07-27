@@ -1625,7 +1625,7 @@ impl GhosttyPaneTerminal {
         protocol: crate::input::KeyboardProtocol,
     ) -> Vec<u8> {
         #[cfg(windows)]
-        if let Some(bytes) = crate::platform::encode_windows_conpty_shift_enter(key) {
+        if let Some(bytes) = crate::platform::encode_windows_conpty_fallback(key) {
             if self.core.lock().is_ok_and(|core| {
                 core.terminal
                     .kitty_keyboard_flags()

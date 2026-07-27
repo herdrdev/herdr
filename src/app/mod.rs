@@ -209,6 +209,15 @@ pub(crate) struct PressedTerminalKey {
     key: crate::input::TerminalKey,
 }
 
+impl PressedTerminalKey {
+    fn release_key(&self, mut key: crate::input::TerminalKey) -> crate::input::TerminalKey {
+        if matches!(self.key.windows_record, Some(record) if record.repeat_count > 1) {
+            key.windows_record = None;
+        }
+        key
+    }
+}
+
 pub(crate) type InputSourceId = u64;
 const LOCAL_INPUT_SOURCE: InputSourceId = 0;
 
@@ -216,7 +225,18 @@ fn pressed_key_identity(
     source_id: InputSourceId,
     key: &crate::input::TerminalKey,
 ) -> (InputSourceId, crossterm::event::KeyCode) {
-    (source_id, key.code)
+    const ENHANCED_KEY: u32 = 0x0100;
+    let native_code = key.windows_record.and_then(|record| {
+        (record.virtual_scan_code != 0)
+            .then(|| {
+                0xf0000
+                    + u32::from(record.virtual_scan_code)
+                    + (u32::from(record.control_key_state & ENHANCED_KEY != 0) << 16)
+            })
+            .and_then(char::from_u32)
+            .map(crossterm::event::KeyCode::Char)
+    });
+    (source_id, native_code.unwrap_or(key.code))
 }
 
 fn auto_updates_enabled(no_session: bool) -> bool {
@@ -1660,6 +1680,7 @@ impl App {
                             if let Some(pressed) =
                                 self.pressed_terminal_keys.remove(&pressed_key_id)
                             {
+                                let key = pressed.release_key(key);
                                 let _ = self
                                     .forward_terminal_key_to_target_headless(&pressed.target, key);
                             }
@@ -1833,6 +1854,49 @@ mod tests {
         crate::raw_input::RawInputEvent::Key(
             crate::input::TerminalKey::new(code, modifiers).with_kind(kind),
         )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_pressed_key_identity_and_grouped_release_follow_press_record() {
+        let record = crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 88,
+            virtual_scan_code: 45,
+            unicode: 120,
+            control_key_state: 0,
+        };
+        let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
+            .with_windows_record(record);
+        let mut enhanced = key;
+        enhanced.windows_record.as_mut().unwrap().control_key_state = 0x0100;
+        assert_ne!(
+            pressed_key_identity(7, &key),
+            pressed_key_identity(7, &enhanced)
+        );
+        let encode = |key: crate::input::TerminalKey| {
+            crate::platform::encode_windows_conpty_fallback(key).unwrap_or_else(|| {
+                crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy)
+            })
+        };
+        assert_eq!(encode(key), b"\x1b[88;45;120;1;0;1_");
+        let grouped = key.with_windows_record(crate::input::WindowsKeyRecord {
+            repeat_count: 2,
+            ..record
+        });
+        let pressed = PressedTerminalKey {
+            target: TerminalInputTarget {
+                terminal_id: crate::terminal::TerminalId::alloc(),
+            },
+            key: grouped,
+        };
+        let mut release = key;
+        release.windows_record.as_mut().unwrap().key_down = false;
+        let release = pressed.release_key(release.with_kind(KeyEventKind::Release));
+        assert_eq!(encode(grouped), b"x");
+        assert_eq!(encode(grouped.with_kind(KeyEventKind::Repeat)), b"x");
+        assert!(encode(release).is_empty());
     }
 
     fn release_notes_state() -> state::ReleaseNotesState {

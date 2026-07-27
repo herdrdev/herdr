@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use super::windows_client_input_event_from_raw;
 #[cfg(windows)]
 use super::ClientLoopEvent;
+use crate::input::WindowsKeyRecord;
 
 #[cfg(windows)]
 pub(super) fn raw_console_reader_loop(
@@ -162,16 +163,6 @@ enum WindowsInputRecord {
     Key(WindowsKeyRecord),
     Mouse(WindowsMouseRecord),
     Focus(bool),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct WindowsKeyRecord {
-    key_down: bool,
-    repeat_count: u16,
-    virtual_key_code: u16,
-    virtual_scan_code: u16,
-    unicode: u16,
-    control_key_state: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -574,12 +565,37 @@ impl WindowsInputMapper {
         }
 
         let is_alt_code = Self::is_alt_code(key);
+        let carries_native_record = key.repeat_count != 0
+            && key.virtual_key_code != 0
+            && key.virtual_key_code != 0x03
+            && !matches!(key.virtual_key_code, 0xe5 | 0xe7)
+            && !is_alt_code
+            && !(0xd800..=0xdfff).contains(&key.unicode);
         (0..key.repeat_count.max(1))
             .filter_map(|repeat_idx| {
                 self.translate_semantic_key_event(
                     key,
                     Self::semantic_key_kind(key, is_alt_code, repeat_idx),
                 )
+            })
+            .map(|event| {
+                if carries_native_record {
+                    match event {
+                        crate::protocol::ClientInputEvent::Key {
+                            code,
+                            modifiers,
+                            kind,
+                        } => crate::protocol::ClientInputEvent::WindowsKey {
+                            code,
+                            modifiers,
+                            kind,
+                            record: key,
+                        },
+                        event => event,
+                    }
+                } else {
+                    event
+                }
             })
             .collect()
     }
@@ -1063,7 +1079,7 @@ mod tests {
             key_down: true,
             repeat_count,
             virtual_key_code: vk,
-            virtual_scan_code: 0,
+            virtual_scan_code: 1,
             unicode: 0,
             control_key_state: 0,
         })
@@ -1113,6 +1129,33 @@ mod tests {
     }
 
     fn translate(
+        records: impl IntoIterator<Item = WindowsInputRecord>,
+    ) -> Vec<crate::protocol::ClientInputEvent> {
+        semantic_only(translate_with_provenance(records))
+    }
+
+    fn semantic_only(
+        events: impl IntoIterator<Item = crate::protocol::ClientInputEvent>,
+    ) -> Vec<crate::protocol::ClientInputEvent> {
+        events
+            .into_iter()
+            .map(|event| match event {
+                crate::protocol::ClientInputEvent::WindowsKey {
+                    code,
+                    modifiers,
+                    kind,
+                    ..
+                } => crate::protocol::ClientInputEvent::Key {
+                    code,
+                    modifiers,
+                    kind,
+                },
+                event => event,
+            })
+            .collect()
+    }
+
+    fn translate_with_provenance(
         records: impl IntoIterator<Item = WindowsInputRecord>,
     ) -> Vec<crate::protocol::ClientInputEvent> {
         let mut translator = WindowsInputTranslator::default();
@@ -1384,39 +1427,72 @@ mod tests {
 
     #[test]
     fn vti_physical_escape_key_record_is_immediately_semantic() {
-        let mut translator = WindowsInputTranslator::default();
+        let record = WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0x1b,
+            virtual_scan_code: 0x01,
+            unicode: 0x1b,
+            control_key_state: 0,
+        };
         assert_eq!(
-            translator.translate(key_vk_with_scan_unicode(0x1b, 0x01, '\x1b', 0)),
-            vec![crate::protocol::ClientInputEvent::Key {
+            translate_with_provenance([WindowsInputRecord::Key(record)]),
+            vec![crate::protocol::ClientInputEvent::WindowsKey {
                 code: crate::protocol::ClientKeyCode::Esc,
                 modifiers: 0,
                 kind: crate::protocol::ClientKeyKind::Press,
+                record,
             }]
         );
     }
 
     #[test]
-    fn vti_repeated_escape_record_stays_semantic() {
+    fn vti_grouped_escape_down_and_up_keep_native_ownership_record() {
+        use crate::protocol::ClientKeyKind::{Press, Release, Repeat};
+
+        let events = translate_with_provenance([
+            key_vk_with_repeat(0x1b, 3),
+            key_vk_up_with_scan_unicode(0x1b, 1, '\0', 0),
+        ]);
+
         assert_eq!(
-            translate([key_vk_with_repeat(0x1b, 3)]),
-            vec![
-                crate::protocol::ClientInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Esc,
-                    modifiers: 0,
-                    kind: crate::protocol::ClientKeyKind::Press,
-                },
-                crate::protocol::ClientInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Esc,
-                    modifiers: 0,
-                    kind: crate::protocol::ClientKeyKind::Repeat,
-                },
-                crate::protocol::ClientInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Esc,
-                    modifiers: 0,
-                    kind: crate::protocol::ClientKeyKind::Repeat,
-                },
+            events
+                .iter()
+                .map(|event| match event {
+                    crate::protocol::ClientInputEvent::WindowsKey {
+                        code: crate::protocol::ClientKeyCode::Esc,
+                        kind,
+                        record,
+                        ..
+                    } => (*kind, record.key_down, record.repeat_count),
+                    event => panic!("unexpected grouped event: {event:?}"),
+                })
+                .collect::<Vec<_>>(),
+            [
+                (Press, true, 3),
+                (Repeat, true, 3),
+                (Repeat, true, 3),
+                (Release, false, 1)
             ]
         );
+    }
+
+    #[test]
+    fn vti_ctrl_break_record_keeps_semantic_path() {
+        assert!(matches!(
+            translate_with_provenance([key_vk(0x03, 0x0008)]).as_slice(),
+            [crate::protocol::ClientInputEvent::Key { .. }]
+        ));
+    }
+
+    #[test]
+    fn vti_ime_virtual_keys_keep_semantic_path() {
+        for vk in [0xe5, 0xe7] {
+            assert!(matches!(
+                translate_with_provenance([key_vk_with_unicode(vk, 'é', 0)]).as_slice(),
+                [crate::protocol::ClientInputEvent::Key { .. }]
+            ));
+        }
     }
 
     #[test]
@@ -1813,24 +1889,33 @@ mod tests {
         let mut translator = WindowsInputTranslator::default();
         assert_eq!(
             translator.translate(key_vk_with_scan_unicode(0x1b, 0x02, '\0', 0)),
-            vec![crate::protocol::ClientInputEvent::Key {
+            vec![crate::protocol::ClientInputEvent::WindowsKey {
                 code: crate::protocol::ClientKeyCode::Esc,
                 modifiers: 0,
                 kind: crate::protocol::ClientKeyKind::Press,
+                record: WindowsKeyRecord {
+                    key_down: true,
+                    repeat_count: 1,
+                    virtual_key_code: 0x1b,
+                    virtual_scan_code: 0x02,
+                    unicode: 0,
+                    control_key_state: 0,
+                },
             }]
         );
     }
 
     #[test]
     fn vti_win32_input_mode_physical_escape_is_immediately_semantic() {
-        let records = win32_input_mode_encoded_record(WindowsKeyRecord {
+        let record = WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 0x1b,
             virtual_scan_code: 0x01,
             unicode: 0x1b,
             control_key_state: 0,
-        });
+        };
+        let records = win32_input_mode_encoded_record(record);
         let mut translator = WindowsInputTranslator::default();
 
         assert_eq!(
@@ -1838,10 +1923,11 @@ mod tests {
                 .into_iter()
                 .flat_map(|record| translator.translate(record))
                 .collect::<Vec<_>>(),
-            vec![crate::protocol::ClientInputEvent::Key {
+            vec![crate::protocol::ClientInputEvent::WindowsKey {
                 code: crate::protocol::ClientKeyCode::Esc,
                 modifiers: 0,
                 kind: crate::protocol::ClientKeyKind::Press,
+                record,
             }]
         );
     }
@@ -1912,7 +1998,7 @@ mod tests {
         let mut translator = WindowsInputTranslator::default();
         assert!(translator.translate(key_char('\x1b')).is_empty());
         assert_eq!(
-            translator.translate(key_vk(0x26, 0)),
+            semantic_only(translator.translate(key_vk(0x26, 0))),
             vec![
                 crate::protocol::ClientInputEvent::Key {
                     code: crate::protocol::ClientKeyCode::Esc,
