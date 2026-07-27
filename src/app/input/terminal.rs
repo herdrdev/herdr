@@ -1105,17 +1105,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pane_cell_url_resolver_prefers_osc8_hyperlink() {
-        let (app, _info) = app_with_screen_bytes(
-            b"\x1b]8;;https://example.com/hidden-target\x1b\\label\x1b]8;;\x1b\\",
+    async fn pane_cell_url_resolver_accepts_safe_osc8_hyperlink_metadata() {
+        // Explicit OSC 8 metadata supplies the target for both `https://` and
+        // `file://` links, while unsafe schemes remain inert.
+        let https_uri = "https://example.com/hidden-target";
+        let (https_app, _info) = app_with_screen_bytes(
+            format!("\x1b]8;;{https_uri}\x1b\\https://decoy-anchor.example/\x1b]8;;\x1b\\",)
+                .as_bytes(),
         );
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let https_pane_id = https_app.state.workspaces[0].tabs[0].root_pane;
 
         assert_eq!(
-            app.state
-                .url_at_pane_cell(&app.terminal_runtimes, pane_id, 0, 1)
+            https_app
+                .state
+                .url_at_pane_cell(&https_app.terminal_runtimes, https_pane_id, 0, 1)
                 .as_deref(),
-            Some("https://example.com/hidden-target")
+            Some(https_uri),
+            "https:// OSC 8 metadata must win over the visible anchor text"
+        );
+
+        let file_uri = "file:///home/user/notes.md";
+        let (file_app, _info) = app_with_screen_bytes(
+            format!("\x1b]8;;{file_uri}\x1b\\open me\x1b]8;;\x1b\\").as_bytes(),
+        );
+        let file_pane_id = file_app.state.workspaces[0].tabs[0].root_pane;
+
+        assert_eq!(
+            file_app
+                .state
+                .url_at_pane_cell(&file_app.terminal_runtimes, file_pane_id, 0, 1)
+                .as_deref(),
+            Some(file_uri),
+            "file:// OSC 8 metadata must resolve; v0.7.4 returned None here"
+        );
+
+        let (unsafe_app, _info) =
+            app_with_screen_bytes(b"\x1b]8;;javascript:alert(1)\x1b\\open me\x1b]8;;\x1b\\");
+        let unsafe_pane_id = unsafe_app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            unsafe_app
+                .state
+                .url_at_pane_cell(&unsafe_app.terminal_runtimes, unsafe_pane_id, 0, 1),
+            None,
+            "unsafe OSC 8 schemes must remain inert"
         );
     }
 
