@@ -1156,6 +1156,7 @@ mod tests {
 
     #[test]
     fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
+        let _lock = crate::integration::integration_env_lock();
         let base = std::env::temp_dir().join(format!(
             "herdr-agent-argv-{}-{}",
             std::process::id(),
