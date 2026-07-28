@@ -145,7 +145,7 @@ impl Palette {
             panel_bg: Color::Rgb(24, 24, 37),
             surface0: Color::Rgb(49, 50, 68),
             surface1: Color::Rgb(69, 71, 90),
-            surface_dim: Color::Rgb(30, 30, 46),
+            surface_dim: Color::Rgb(49, 50, 68),
             overlay0: Color::Rgb(108, 112, 134),
             overlay1: Color::Rgb(127, 132, 156),
             text: Color::Rgb(205, 214, 244),
