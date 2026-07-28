@@ -56,6 +56,17 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
 
+pub(crate) fn encode_windows_conpty_shift_enter(key: crate::input::TerminalKey) -> Option<Vec<u8>> {
+    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+
+    if key.code != KeyCode::Enter || key.modifiers != KeyModifiers::SHIFT {
+        return None;
+    }
+
+    let key_down = !matches!(key.kind, KeyEventKind::Release);
+    Some(format!("\x1b[13;28;13;{};16;1_", u8::from(key_down)).into_bytes())
+}
+
 #[derive(Debug)]
 struct CachedProcessSnapshot {
     built_at: Instant,
@@ -1145,6 +1156,7 @@ mod tests {
 
     #[test]
     fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
+        let _lock = crate::integration::integration_env_lock();
         let base = std::env::temp_dir().join(format!(
             "herdr-agent-argv-{}-{}",
             std::process::id(),

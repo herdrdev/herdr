@@ -16,6 +16,68 @@ pub(super) fn temp_test_dir(name: &str) -> PathBuf {
     path
 }
 
+fn init_repo_with_commit(repo: &Path) {
+    std::fs::create_dir_all(repo).unwrap();
+    run_git(repo, &["init", "--quiet"]);
+    run_git(repo, &["config", "user.email", "herdr@example.invalid"]);
+    run_git(repo, &["config", "user.name", "Herdr Test"]);
+    run_git(
+        repo,
+        &["commit", "--quiet", "--allow-empty", "-m", "initial"],
+    );
+}
+
+pub(crate) fn create_repo_with_linked_worktree(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = temp_test_dir(name);
+    let repo = base.join("herdr");
+    let checkout = base.join("testr56");
+    init_repo_with_commit(&repo);
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "testr56",
+            checkout.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    (base, repo, checkout)
+}
+
+pub(crate) fn create_bare_repo_with_linked_worktree(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = temp_test_dir(name);
+    let seed = base.join("seed");
+    let bare = base.join("herdr.git");
+    let checkout = base.join("feature");
+    init_repo_with_commit(&seed);
+    run_git(
+        &base,
+        &[
+            "clone",
+            "--quiet",
+            "--bare",
+            seed.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    run_git(
+        &bare,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feature",
+            checkout.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    (base, bare, checkout)
+}
+
 pub(super) fn write_fake_tracked_repo(root: &Path) {
     let head_oid = "1111111111111111111111111111111111111111";
     let upstream_oid = "2222222222222222222222222222222222222222";

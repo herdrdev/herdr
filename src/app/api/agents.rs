@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bytes::Bytes;
 
 use crate::api::schema::{
@@ -7,6 +9,8 @@ use crate::api::schema::{
 use crate::app::App;
 
 use super::responses::{encode_error, encode_error_body, encode_success};
+
+const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
 impl App {
     pub(super) fn handle_agent_list(&mut self, id: String) -> String {
@@ -94,10 +98,12 @@ impl App {
                 ),
             );
         }
-        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &params.text);
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+        let (text, enter) =
+            crate::app::api_helpers::encode_api_submission_parts(runtime, &params.text);
+        if let Err(err) = runtime.try_send_bytes(Bytes::from(text)) {
             return encode_error(id, "agent_prompt_failed", err.to_string());
         }
+        runtime.send_bytes_after(Bytes::from(enter), AGENT_PROMPT_SUBMIT_DELAY);
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
@@ -307,7 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_prompt_accepts_pane_ids_and_working_agents_atomically() {
+    async fn agent_prompt_sends_text_then_delays_enter() {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -324,6 +330,7 @@ mod tests {
         app.state.insert_test_runtime(pane_id, runtime);
 
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let bracketed_started = std::time::Instant::now();
         let response = app.handle_agent_prompt(
             "req".into(),
             AgentPromptParams {
@@ -339,13 +346,22 @@ mod tests {
         assert_eq!(agent.name.as_deref(), Some("reviewer"));
         assert_eq!(
             rx.try_recv().unwrap(),
-            Bytes::from_static(b"\x1b[200~A != B\x1b[201~\r")
+            Bytes::from_static(b"\x1b[200~A != B\x1b[201~")
         );
         assert!(rx.try_recv().is_err());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        assert!(bracketed_started.elapsed() >= AGENT_PROMPT_SUBMIT_DELAY);
 
         app.lookup_runtime_sender(0, pane_id)
             .unwrap()
             .test_process_pty_bytes(b"\x1b[?2004l");
+        let raw_started = std::time::Instant::now();
         let raw = app.handle_agent_prompt(
             "req-raw".into(),
             AgentPromptParams {
@@ -356,8 +372,16 @@ mod tests {
         );
         let raw: SuccessResponse = serde_json::from_str(&raw).unwrap();
         assert!(matches!(raw.result, ResponseResult::AgentPrompted { .. }));
-        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"A != B\r"));
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"A != B"));
         assert!(rx.try_recv().is_err());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        assert!(raw_started.elapsed() >= AGENT_PROMPT_SUBMIT_DELAY);
 
         let rejected = app.handle_agent_prompt(
             "req-label".into(),

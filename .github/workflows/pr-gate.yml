@@ -2,7 +2,7 @@ name: PR Gate
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize]
+    types: [opened, edited, reopened, synchronize]
 
 jobs:
   check-contributor:
@@ -47,6 +47,13 @@ jobs:
             });
             const prAuthor = pr.user.login;
             const changedLines = pr.additions + pr.deletions;
+
+            const eventPullRequestState = context.payload.pull_request.state;
+            if (action === 'edited' &&
+                (eventPullRequestState !== 'open' || pr.state !== 'open')) {
+              core.info(`Ignoring edits to closed PR #${pullNumber}`);
+              return;
+            }
 
             async function getPermission(username) {
               try {
@@ -176,7 +183,7 @@ jobs:
               const message = [
                 `Hi @${prAuthor}, thanks for your interest in contributing!`,
                 '',
-                `Herdr automatically admits unapproved pull requests when the patch changes no more than ${MAX_UNAPPROVED_CHANGED_FILES} files and ${MAX_UNAPPROVED_CHANGED_LINES.toLocaleString('en-US')} total added or deleted lines.`,
+                `Herdr automatically admits focused bug fixes from unapproved contributors when the title uses \`fix: ...\` or \`fix(scope): ...\` and the patch changes no more than ${MAX_UNAPPROVED_CHANGED_FILES} files and ${MAX_UNAPPROVED_CHANGED_LINES.toLocaleString('en-US')} total added or deleted lines.`,
                 '',
                 reason,
                 '',
@@ -235,6 +242,14 @@ jobs:
             if ((await currentLabels()).has(MAINTAINER_APPROVED_LABEL)) {
               core.info(`PR #${pullNumber} has a maintainer scope override`);
               await addReviewLabels();
+              return;
+            }
+
+            const hasFixTitle = /^fix(?:\([^)]+\))?:\s+\S/.test(pr.title);
+            if (!hasFixTitle) {
+              await closePullRequest(
+                'Unapproved contributors may submit only focused bug fixes. If this pull request fixes a bug, rename it to use a conventional `fix: ...` or `fix(scope): ...` title, then tag a maintainer to review and reopen it.',
+              );
               return;
             }
 

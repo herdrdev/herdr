@@ -61,6 +61,10 @@ impl App {
         let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
 
+        if matches!(key.code, KeyCode::Modifier(_)) {
+            return;
+        }
+
         if self.state.is_prefix_key(raw_key) {
             if self.state.copy_mode_pane_is_focused() {
                 self.state.cancel_copy_mode(&self.terminal_runtimes);
@@ -1867,7 +1871,7 @@ mod tests {
     #[cfg(unix)]
     use std::time::Duration;
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, ModifierKeyCode};
     use ratatui::layout::Direction;
 
     #[cfg(unix)]
@@ -2619,6 +2623,30 @@ last_pane = "prefix+tab"
                 Some(NavigateAction::SwitchWorkspace(1))
             );
         }
+    }
+
+    #[test]
+    fn prefix_shift_indexed_workspace_shortcut_survives_modifier_press() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        let config: Config =
+            toml::from_str("[keys]\nswitch_workspace = \"prefix+shift+1..9\"\n").unwrap();
+        app.state.keybinds.switch_workspace = config.keybinds().switch_workspace;
+        app.state.mode = Mode::Prefix;
+
+        app.handle_prefix_key(TerminalKey::new(
+            KeyCode::Modifier(ModifierKeyCode::LeftShift),
+            KeyModifiers::SHIFT,
+        ));
+
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        app.handle_prefix_key(
+            TerminalKey::new(KeyCode::Char('2'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('"' as u32),
+        );
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]

@@ -157,7 +157,7 @@ fn agent_start_command_works() {
             "do not transition",
             "--wait",
             "--timeout",
-            "200",
+            "500",
         ],
     );
     assert_eq!(stale_idle.status.code(), Some(1));

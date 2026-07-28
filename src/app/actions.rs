@@ -1697,6 +1697,10 @@ impl AppState {
                 crate::logging::workspace_closed(&workspace_id);
             }
         }
+        let active_workspace_id = self
+            .active
+            .and_then(|idx| self.workspaces.get(idx))
+            .map(|ws| ws.id.clone());
         self.remove_plugin_pane_records(pane_ids);
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
@@ -1709,6 +1713,12 @@ impl AppState {
             self.tab_scroll = 0;
             self.tab_scroll_follow_active = true;
         } else {
+            // Keep focus on the previously focused workspace
+            if let Some(id) = active_workspace_id {
+                if let Some(idx) = self.workspaces.iter().position(|ws| ws.id == id) {
+                    self.selected = idx;
+                }
+            }
             if self.selected >= self.workspaces.len() {
                 self.selected = self.workspaces.len() - 1;
             }
@@ -3316,6 +3326,11 @@ impl AppState {
         self.mark_session_dirty();
 
         if should_close_workspace {
+            let active_workspace_id = self
+                .active
+                .and_then(|idx| self.workspaces.get(idx))
+                .map(|ws| ws.id.clone());
+            let selected_workspace_id = self.workspaces.get(self.selected).map(|ws| ws.id.clone());
             self.workspaces.remove(ws_idx);
             self.remove_unattached_terminal_ids(workspace_terminal_ids);
             if self.workspaces.is_empty() {
@@ -3325,14 +3340,29 @@ impl AppState {
                     self.mode = Mode::Navigate;
                 }
             } else {
+                // Keep focus on the previously focused workspace
+                if let Some(id) = active_workspace_id {
+                    if let Some(idx) = self.workspaces.iter().position(|ws| ws.id == id) {
+                        self.active = Some(idx);
+                    }
+                }
                 if let Some(active) = self.active {
                     if active >= self.workspaces.len() {
                         self.active = Some(self.workspaces.len() - 1);
                     }
                 }
+                if let Some(id) = selected_workspace_id {
+                    if let Some(idx) = self.workspaces.iter().position(|ws| ws.id == id) {
+                        self.selected = idx;
+                    }
+                }
                 if self.selected >= self.workspaces.len() {
                     self.selected = self.workspaces.len() - 1;
                 }
+                self.workspace_scroll = self
+                    .workspace_scroll
+                    .min(self.workspaces.len().saturating_sub(1));
+                self.ensure_workspace_visible(self.selected);
             }
         } else {
             self.remove_unattached_terminal_ids(pane_terminal_id);
@@ -4106,7 +4136,7 @@ mod tests {
                 space: Some(crate::workspace::GitSpaceMetadata {
                     key: "other-repo-key".into(),
                     checkout_key: "/other/checkout".into(),
-                    label: "other".into(),
+                    repo_name: "other".into(),
                     repo_root: "/other/repo".into(),
                     is_linked_worktree: false,
                 }),
@@ -4617,6 +4647,50 @@ mod tests {
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.selected, 0);
         assert_eq!(state.active, Some(0));
+    }
+
+    #[test]
+    fn close_non_focused_workspace_keeps_focus() {
+        let mut state = app_with_workspaces(&["a", "b", "c"]);
+        state.selected = 1;
+        state.active = Some(0);
+
+        state.close_selected_workspace();
+
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(state.workspaces[0].display_name(), "a");
+        assert_eq!(state.workspaces[1].display_name(), "c");
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.active, Some(0));
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn pane_died_self_closing_earlier_workspace_keeps_focus() {
+        let names = (0..20).map(|i| format!("ws{i:02}")).collect::<Vec<_>>();
+        let name_refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut state = app_with_workspaces(&name_refs);
+        state.selected = 1;
+        state.active = Some(1);
+        // Constrain the sidebar viewport so the focused workspace starts
+        // off-screen: 20 workspaces cannot all fit in 12 rows, so index 1 is
+        // hidden at maximum scroll regardless of individual card height.
+        state.view.sidebar_rect = ratatui::layout::Rect::new(0, 0, 30, 12);
+        state.workspace_scroll =
+            crate::ui::normalized_workspace_scroll(&state, state.view.sidebar_rect, usize::MAX / 2);
+        let cards = crate::ui::compute_workspace_card_areas(&state, state.view.sidebar_rect);
+        assert!(cards.iter().all(|card| card.ws_idx != 1));
+
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        state.handle_pane_died(pane_id);
+
+        assert_eq!(state.workspaces.len(), 19);
+        assert_eq!(state.workspaces[0].display_name(), "ws01");
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.active, Some(0));
+        let cards = crate::ui::compute_workspace_card_areas(&state, state.view.sidebar_rect);
+        assert!(cards.iter().any(|card| card.ws_idx == 0));
+        state.assert_invariants_for_test();
     }
 
     #[test]

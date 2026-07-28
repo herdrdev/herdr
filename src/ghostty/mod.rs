@@ -534,7 +534,6 @@ unsafe fn capture_clipboard_write(
     // SAFETY: userdata is the TerminalCallbackState installed with this terminal.
     let state = unsafe { &mut *userdata.cast::<TerminalCallbackState>() };
     if request.contents_len == 0 {
-        state.clipboard_writes.push(Vec::new());
         return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
     }
     if request.contents_len != 1 {
@@ -3839,7 +3838,7 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_callback_rejects_writes_the_text_pipeline_cannot_represent() {
+    fn clipboard_callback_ignores_clear_and_rejects_unsupported_writes() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
         let full_size = std::mem::size_of::<ffi::GhosttyClipboardWrite>();
         let success = ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
@@ -3851,7 +3850,7 @@ mod tests {
             invoke_clipboard_callback(&mut terminal, &[], full_size),
             success
         );
-        assert_eq!(terminal.take_clipboard_writes(), vec![Vec::<u8>::new()]);
+        assert!(terminal.take_clipboard_writes().is_empty());
 
         let empty = test_clipboard_content(b"text/plain", b"");
         assert_eq!(
@@ -3893,7 +3892,7 @@ mod tests {
         assert!(terminal.take_clipboard_writes().is_empty());
 
         terminal.write(b"\x1b]52;c;\x07");
-        assert_eq!(terminal.take_clipboard_writes(), vec![Vec::<u8>::new()]);
+        assert!(terminal.take_clipboard_writes().is_empty());
     }
 
     #[test]

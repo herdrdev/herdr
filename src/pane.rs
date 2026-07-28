@@ -109,6 +109,7 @@ impl PaneLaunchEnv {
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
+    cmd.env_remove("CODEX_THREAD_ID");
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
@@ -1105,6 +1106,28 @@ impl PaneRuntimeIo {
             PaneRuntimeIo::Actor(actor) => actor.try_write_user_input(bytes),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => sender.try_send(bytes),
+        }
+    }
+
+    fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => {
+                let actor = actor.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if let Err(err) = actor.write_user_input(bytes).await {
+                        warn!(error = %err, "failed to send delayed PTY input");
+                    }
+                });
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    let _ = sender.send(bytes).await;
+                });
+            }
         }
     }
 }
@@ -2628,6 +2651,10 @@ impl PaneRuntime {
         self.io.try_send_bytes(bytes)
     }
 
+    pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
+        self.io.send_bytes_after(bytes, delay);
+    }
+
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
         self.send_bytes(self.paste_payload(text)).await
     }
@@ -2867,6 +2894,16 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_launch_env_removes_outer_codex_thread_id() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("CODEX_THREAD_ID", "outer-session");
+
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+
+        assert!(cmd.get_env("CODEX_THREAD_ID").is_none());
+    }
 
     #[tokio::test]
     async fn cwd_returns_accepted_report_without_rechecking_filesystem() {

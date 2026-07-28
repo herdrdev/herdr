@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 pub struct GitSpaceMetadata {
     pub key: String,
     pub checkout_key: String,
-    pub label: String,
+    pub repo_name: String,
     pub repo_root: PathBuf,
     pub is_linked_worktree: bool,
 }
@@ -19,13 +19,9 @@ pub struct GitWorktreeInfo {
 }
 
 pub fn derive_label_from_cwd(cwd: &Path) -> String {
-    if let Some(repo_root) = git_repo_root(cwd) {
-        if let Some(name) = repo_root.file_name().and_then(|n| n.to_str()) {
-            return name.to_string();
-        }
-    }
-
-    fallback_label_from_cwd(cwd)
+    git_repo_root(cwd)
+        .map(|repo_root| automatic_workspace_label(cwd, &repo_root))
+        .unwrap_or_else(|| fallback_label_from_cwd(cwd))
 }
 
 pub fn fallback_label_from_cwd(cwd: &Path) -> String {
@@ -64,6 +60,14 @@ pub fn git_space_metadata(cwd: &Path) -> Option<GitSpaceMetadata> {
     Some(git_space_metadata_from_info(&info))
 }
 
+pub(crate) fn automatic_workspace_label(cwd: &Path, repo_root: &Path) -> String {
+    repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback_label_from_cwd(cwd))
+}
+
 pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMetadata {
     let key = canonicalize_best_effort_path(&info.git_common_dir)
         .display()
@@ -79,9 +83,9 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
     {
         info.git_common_dir.parent().unwrap_or(&info.repo_root)
     } else {
-        &info.repo_root
+        &info.git_common_dir
     };
-    let label = label_path
+    let repo_name = label_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("repo")
@@ -89,7 +93,7 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
     GitSpaceMetadata {
         key,
         checkout_key,
-        label,
+        repo_name,
         repo_root: info.repo_root.clone(),
         is_linked_worktree: info.is_linked_worktree,
     }
@@ -402,6 +406,29 @@ mod tests {
         assert!(!metadata.is_linked_worktree);
 
         std::fs::remove_dir_all(bare).unwrap();
+    }
+
+    #[test]
+    fn bare_source_and_linked_checkout_share_repo_name_but_not_auto_label() {
+        let (base, bare, checkout) =
+            crate::workspace::git::test_support::create_bare_repo_with_linked_worktree(
+                "bare-linked-labels",
+            );
+
+        let bare_space = git_space_metadata(&bare).unwrap();
+        let checkout_space = git_space_metadata(&checkout).unwrap();
+        let bare_auto_label = automatic_workspace_label(&bare, &bare_space.repo_root);
+        let checkout_auto_label = automatic_workspace_label(&checkout, &checkout_space.repo_root);
+
+        assert_eq!(bare_space.key, checkout_space.key);
+        assert_eq!(bare_space.repo_name, checkout_space.repo_name);
+        assert_eq!(bare_auto_label, bare.file_name().unwrap().to_str().unwrap());
+        assert_eq!(
+            checkout_auto_label,
+            checkout.file_name().unwrap().to_str().unwrap()
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

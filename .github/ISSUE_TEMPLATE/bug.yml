@@ -8,7 +8,7 @@ body:
 
         Issues are only for reproducible bugs and maintainer-created or maintainer-converted work items. Feature requests, ideas, questions, contribution proposals, and direction checks belong in [Discussions](https://github.com/ogulcancelik/herdr/discussions).
 
-        Unapproved contributors may open focused PRs when the patch changes no more than 20 files and 1,000 total added or deleted lines. Features and larger changes require maintainer approval first.
+        Unapproved contributors may open focused bug-fix PRs when the title uses `fix: ...` or `fix(scope): ...` and the patch changes no more than 20 files and 1,000 total added or deleted lines. Features and larger changes require maintainer approval first.
 
         Keep this short. If it does not fit on one screen, it is too long. Write in your own voice.
 

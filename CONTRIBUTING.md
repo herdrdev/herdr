@@ -36,11 +36,11 @@ Issues that do not use the bug report template may be closed automatically. Issu
 
 ## Pull request intake
 
-Anyone may open a focused PR without prior approval. Automated intake uses a budget based on changed files and line churn to filter out large, machine-generated submissions that show little evidence of human review before they consume maintainer and reviewer time. Passing this budget is not a statement that a smaller patch is correct or in scope.
+Anyone may open a focused bug-fix PR without prior approval. Unapproved contributors must use a conventional `fix: ...` or `fix(scope): ...` PR title and stay within the automated budget for changed files and line churn. The title and size checks filter out proposals and large, machine-generated submissions before they consume maintainer and reviewer time. Passing these checks is not a statement that a patch is correct or in scope.
 
-Feature requests, behavior changes, ideas, and other proposals still require maintainer alignment before a PR. Start with a GitHub Discussion describing what you want to change and why. If the work is accepted, a maintainer may convert the discussion into an issue, approve you through an accepted issue, or reopen the resulting PR.
+Feature requests, behavior changes, ideas, and other proposals still require maintainer alignment before a PR. Start with a GitHub Discussion describing what you want to change and why. If the work is accepted, a maintainer may convert the discussion into an issue, approve you through an accepted issue, or reopen the resulting PR. A PR with any title other than `fix: ...` or `fix(scope): ...` is closed automatically when its author is not a maintainer or approved contributor, unless a maintainer has granted a scope override.
 
-Contributors listed in `.github/APPROVED_CONTRIBUTORS` bypass the automated size gate. That list grants no maintainer authority, does not pre-approve feature scope, and does not guarantee acceptance. Contributors are added after a merged PR or when a maintainer explicitly trusts them for approved work.
+Contributors listed in `.github/APPROVED_CONTRIBUTORS` bypass the automated title and size gates. That list grants no maintainer authority, does not pre-approve feature scope, and does not guarantee acceptance. Contributors are added after a merged PR or when a maintainer explicitly trusts them for approved work.
 
 If an admitted PR from an unapproved contributor later grows beyond either limit, the gate removes its automated-review labels and closes it. A verified maintainer reopening a PR records a scope override for later updates; a PR reopened by anyone else is closed again automatically. If the gate classified your focused change incorrectly, reply and tag a maintainer listed in `.github/MAINTAINERS`; do not repeatedly reopen the PR yourself.
 
@@ -111,7 +111,7 @@ Do not use GitHub closing keywords like `fixes #128`, `closes #128`, or `resolve
 
 ## PR scope
 
-Focused bug fixes that clearly match the existing design are good PR candidates. Unapproved contributors must stay within the automated intake budget described above.
+Focused bug fixes that clearly match the existing design are good PR candidates. Unapproved contributors must use a `fix: ...` or `fix(scope): ...` PR title and stay within the automated intake budget described above.
 
 Features and bigger changes to UI, behavior, interaction patterns, persistence, or architecture need discussion and maintainer approval first.
 

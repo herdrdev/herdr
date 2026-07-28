@@ -3,6 +3,8 @@ pub(crate) struct KittyKeyboardTracker {
     pending: Vec<u8>,
     stack: Vec<u16>,
     flags: u16,
+    #[cfg(windows)]
+    modify_other_keys: bool,
 }
 
 impl KittyKeyboardTracker {
@@ -30,6 +32,10 @@ impl KittyKeyboardTracker {
                 self.store_pending(&bytes[index..]);
                 break;
             }
+            #[cfg(windows)]
+            if bytes[index + 1] == b'c' {
+                self.modify_other_keys = false;
+            }
             if bytes[index + 1] != b'[' {
                 index += 1;
                 continue;
@@ -44,10 +50,49 @@ impl KittyKeyboardTracker {
                 break;
             }
 
-            if bytes[end] == b'u' {
-                self.observe_csi_u(&bytes[index + 2..end]);
+            match bytes[end] {
+                b'u' => self.observe_csi_u(&bytes[index + 2..end]),
+                #[cfg(windows)]
+                b'm' => self.observe_modify_other_keys(&bytes[index + 2..end]),
+                #[cfg(windows)]
+                b'n' if bytes[index + 2..end]
+                    .strip_prefix(b">")
+                    .is_some_and(|params| {
+                        !params.contains(&b';') && parse_kitty_keyboard_flags(params) == 4
+                    }) =>
+                {
+                    self.modify_other_keys = false;
+                }
+                _ => {}
             }
             index = end + 1;
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn modify_other_keys_enabled(&self) -> bool {
+        self.modify_other_keys
+    }
+
+    #[cfg(windows)]
+    fn observe_modify_other_keys(&mut self, params: &[u8]) {
+        let Some(params) = params.strip_prefix(b">") else {
+            return;
+        };
+        if params.is_empty() {
+            self.modify_other_keys = false;
+            return;
+        }
+
+        let mut parts = params.split(|byte| *byte == b';');
+        let resource = parts.next().unwrap_or_default();
+        let value = parts.next();
+        if parts.next().is_some() {
+            return;
+        }
+        if parse_kitty_keyboard_flags(resource) == 4 {
+            self.modify_other_keys =
+                value.is_some_and(|value| parse_kitty_keyboard_flags(value) != 0);
         }
     }
 
@@ -115,11 +160,19 @@ mod tests {
     fn buffers_split_csi_sequences() {
         let mut tracker = KittyKeyboardTracker::default();
 
-        tracker.observe(b"\x1b[>1u\x1b[>5");
-        tracker.observe(b"u\x1b[<");
+        tracker.observe(b"\x1b[>1u\x1b[>4;");
+        tracker.observe(b"01m\x1b[>5u\x1b[<");
         tracker.observe(b"u");
 
         assert_eq!(tracker.flags, 1);
         assert_eq!(tracker.stack, vec![0]);
+        #[cfg(windows)]
+        {
+            assert!(tracker.modify_other_keys_enabled());
+            tracker.observe(b"\x1b[>1m");
+            assert!(tracker.modify_other_keys_enabled());
+            tracker.observe(b"\x1b[>04n");
+            assert!(!tracker.modify_other_keys_enabled());
+        }
     }
 }
