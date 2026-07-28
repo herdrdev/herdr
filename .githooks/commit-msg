@@ -4,4 +4,8 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-python3 scripts/conventional_commits.py --message-file "$1"
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+    python scripts/conventional_commits.py --message-file "$1"
+else
+    python3 scripts/conventional_commits.py --message-file "$1"
+fi
