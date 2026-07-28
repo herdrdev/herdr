@@ -7,6 +7,7 @@ use crate::detect::Agent;
 const MAX_SIDEBAR_ROWS: usize = 16;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
+const DEFAULT_SIDEBAR_GROUP_GAP: u16 = 0;
 
 fn deserialize_sidebar_rows<'de, D, T>(deserializer: D) -> Result<Vec<Vec<T>>, D::Error>
 where
@@ -424,7 +425,7 @@ impl Default for SpacesSidebarConfig {
                 vec![SpaceSidebarToken::Branch, SpaceSidebarToken::GitStatus],
             ],
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
-            group_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            group_gap: DEFAULT_SIDEBAR_GROUP_GAP,
         }
     }
 }
