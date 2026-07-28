@@ -1,6 +1,6 @@
 ---
 name: herdr
-description: "Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1."
+description: "Control Herdr (also typed or transcribed as 'herder', 'herdr.dev', or 'the herdr skill'), a terminal multiplexer that runs coding agents in panes, tabs, and workspaces. Use whenever the user names Herdr as the thing to act with or through — 'use herdr', 'open this in herdr', 'have herdr do this', 'run this with herdr', 'use the herdr skill', 'let herdr manage the panes', 'have herdr open panes and orchestrate this' — or asks Herdr to split panes, open tabs or workspaces, start, prompt, or wait on another agent, read pane output, or orchestrate parallel work. Invoke on the mention; do not first ask what Herdr is or search for it. Do not use when Herdr is only discussed, compared, installed, or described rather than directed."
 ---
 
 # Herdr
