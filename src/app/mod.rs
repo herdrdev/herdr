@@ -138,7 +138,7 @@ pub struct App {
     pub(crate) last_render_at: Option<Instant>,
     pub(crate) pressed_terminal_keys:
         HashMap<(InputSourceId, crossterm::event::KeyCode), PressedTerminalKey>,
-    pub(crate) suppressed_repeat_keys: HashSet<(InputSourceId, crossterm::event::KeyCode)>,
+    pub(crate) held_key_repeats: HashMap<(InputSourceId, crossterm::event::KeyCode), HeldKeyRepeat>,
     pub render_notify: Arc<Notify>,
     pub render_dirty: Arc<AtomicBool>,
     pub(crate) full_redraw_pending: bool,
@@ -210,6 +210,12 @@ pub(crate) struct PressedTerminalKey {
     key: crate::input::TerminalKey,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldKeyRepeat {
+    Blocked,
+    InMode(Mode),
+}
+
 pub(crate) type InputSourceId = u64;
 const LOCAL_INPUT_SOURCE: InputSourceId = 0;
 
@@ -218,6 +224,17 @@ fn pressed_key_identity(
     key: &crate::input::TerminalKey,
 ) -> (InputSourceId, crossterm::event::KeyCode) {
     (source_id, key.code)
+}
+
+fn modal_repeat_allowed(state: &AppState, key: &crate::input::TerminalKey) -> bool {
+    if input::is_modal_paste_shortcut(&key.as_key_event()) {
+        return false;
+    }
+    match key.code {
+        crossterm::event::KeyCode::Enter | crossterm::event::KeyCode::Esc => false,
+        crossterm::event::KeyCode::Char(' ') => input::modal_paste_target_active(state),
+        _ => true,
+    }
 }
 
 fn auto_updates_enabled(no_session: bool) -> bool {
@@ -765,7 +782,7 @@ impl App {
             persist_pane_history: config.experimental.pane_history,
             last_render_at: None,
             pressed_terminal_keys: HashMap::new(),
-            suppressed_repeat_keys: HashSet::new(),
+            held_key_repeats: HashMap::new(),
             api_rx,
             event_hub,
             last_focus,
@@ -1621,7 +1638,7 @@ impl App {
                         crossterm::event::KeyEventKind::Press => {
                             if self.state.popup_pane.is_some() || self.state.mode == Mode::Terminal
                             {
-                                self.suppressed_repeat_keys.remove(&pressed_key_id);
+                                self.held_key_repeats.remove(&pressed_key_id);
                                 if let Some(target) =
                                     self.handle_terminal_key_headless_from(source_id, key)
                                 {
@@ -1636,7 +1653,8 @@ impl App {
                                 }
                             } else {
                                 self.pressed_terminal_keys.remove(&pressed_key_id);
-                                self.suppressed_repeat_keys.insert(pressed_key_id);
+                                self.held_key_repeats
+                                    .insert(pressed_key_id, HeldKeyRepeat::InMode(self.state.mode));
                                 self.handle_non_terminal_key_headless(key);
                             }
                         }
@@ -1649,15 +1667,21 @@ impl App {
                                 {
                                     self.pressed_terminal_keys.remove(&pressed_key_id);
                                 }
-                            } else if (self.state.popup_pane.is_some()
-                                || self.state.mode == Mode::Terminal)
-                                && !self.suppressed_repeat_keys.contains(&pressed_key_id)
+                            } else if self.state.popup_pane.is_some()
+                                || self.state.mode == Mode::Terminal
                             {
-                                let _ = self.handle_terminal_key_headless_from(source_id, key);
+                                if !self.held_key_repeats.contains_key(&pressed_key_id) {
+                                    let _ = self.handle_terminal_key_headless_from(source_id, key);
+                                }
+                            } else if modal_repeat_allowed(&self.state, &key)
+                                && self.held_key_repeats.get(&pressed_key_id)
+                                    == Some(&HeldKeyRepeat::InMode(self.state.mode))
+                            {
+                                self.handle_non_terminal_key_headless(key);
                             }
                         }
                         crossterm::event::KeyEventKind::Release => {
-                            self.suppressed_repeat_keys.remove(&pressed_key_id);
+                            self.held_key_repeats.remove(&pressed_key_id);
                             if let Some(pressed) =
                                 self.pressed_terminal_keys.remove(&pressed_key_id)
                             {
@@ -3410,6 +3434,307 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn navigator_handles_repeat_key_events() {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            Workspace::test_new("one"),
+            Workspace::test_new("two"),
+            Workspace::test_new("three"),
+        ];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigator;
+        app.state.navigator.selected = 0;
+
+        app.handle_raw_input_event(raw_key(
+            KeyCode::Down,
+            KeyModifiers::empty(),
+            KeyEventKind::Press,
+        ))
+        .await;
+        let after_press = app.state.navigator.selected;
+
+        app.handle_raw_input_event(raw_key(
+            KeyCode::Down,
+            KeyModifiers::empty(),
+            KeyEventKind::Repeat,
+        ))
+        .await;
+        let after_repeat = app.state.navigator.selected;
+
+        assert_eq!(after_press, 1, "press moves the selection");
+        assert_eq!(
+            after_repeat, 2,
+            "held-key repeat keeps moving the selection"
+        );
+    }
+
+    #[test]
+    fn headless_navigator_handles_repeat_key_events() {
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            Workspace::test_new("one"),
+            Workspace::test_new("two"),
+            Workspace::test_new("three"),
+        ];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigator;
+        app.state.navigator.selected = 0;
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Down,
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        let after_press = app.state.navigator.selected;
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Down,
+                KeyModifiers::empty(),
+                KeyEventKind::Repeat,
+            )],
+            false,
+        );
+        let after_repeat = app.state.navigator.selected;
+
+        assert_eq!(after_press, 1, "press moves the selection");
+        assert_eq!(
+            after_repeat, 2,
+            "held-key repeat keeps moving the selection"
+        );
+    }
+
+    #[test]
+    fn keybind_help_search_handles_repeat_key_events() {
+        let mut app = test_app();
+        app.state.mode = Mode::KeybindHelp;
+        app.state.keybind_help.search_focused = true;
+        app.state.keybind_help.query = "abc".to_string();
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Backspace,
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        let after_press = app.state.keybind_help.query.clone();
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Backspace,
+                KeyModifiers::empty(),
+                KeyEventKind::Repeat,
+            )],
+            false,
+        );
+        let after_repeat = app.state.keybind_help.query.clone();
+
+        assert_eq!(after_press, "ab", "press deletes one character");
+        assert_eq!(after_repeat, "a", "held-key repeat keeps deleting");
+    }
+
+    #[test]
+    fn modal_opened_by_prefix_key_ignores_the_same_held_key() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Char('?'),
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Char('?'),
+                KeyModifiers::empty(),
+                KeyEventKind::Repeat,
+            )],
+            false,
+        );
+        assert_eq!(
+            app.state.mode,
+            Mode::KeybindHelp,
+            "repeat from a press handled in another mode must not reach the new mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn monolithic_modal_opened_by_prefix_key_ignores_the_same_held_key() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+
+        app.handle_raw_input_event(raw_key(
+            KeyCode::Char('?'),
+            KeyModifiers::empty(),
+            KeyEventKind::Press,
+        ))
+        .await;
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+
+        let repeat_handled = app
+            .handle_raw_input_event(raw_key(
+                KeyCode::Char('?'),
+                KeyModifiers::empty(),
+                KeyEventKind::Repeat,
+            ))
+            .await;
+
+        assert!(
+            !repeat_handled,
+            "repeat from a press handled in another mode must not reach the new mode"
+        );
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+    }
+
+    #[test]
+    fn modal_repeat_excludes_confirm_exit_and_paste_keys() {
+        let mut state = AppState::test_new();
+        state.mode = Mode::Navigator;
+        let allowed = |state: &AppState, code, modifiers| {
+            modal_repeat_allowed(state, &crate::input::TerminalKey::new(code, modifiers))
+        };
+
+        assert!(!allowed(&state, KeyCode::Enter, KeyModifiers::empty()));
+        assert!(!allowed(&state, KeyCode::Esc, KeyModifiers::empty()));
+        assert!(!allowed(&state, KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert!(allowed(&state, KeyCode::Down, KeyModifiers::empty()));
+        assert!(allowed(&state, KeyCode::Up, KeyModifiers::empty()));
+        assert!(allowed(&state, KeyCode::Backspace, KeyModifiers::empty()));
+        assert!(allowed(&state, KeyCode::Char('j'), KeyModifiers::empty()));
+        assert!(allowed(&state, KeyCode::Char('v'), KeyModifiers::empty()));
+    }
+
+    #[test]
+    fn modal_repeat_excludes_space_outside_text_inputs() {
+        let space = crate::input::TerminalKey::new(KeyCode::Char(' '), KeyModifiers::empty());
+        let mut state = AppState::test_new();
+
+        state.mode = Mode::Settings;
+        assert!(
+            !modal_repeat_allowed(&state, &space),
+            "space activates the selected settings control"
+        );
+
+        state.mode = Mode::Navigator;
+        state.navigator.search_focused = false;
+        assert!(
+            !modal_repeat_allowed(&state, &space),
+            "space toggles the selected navigator workspace"
+        );
+
+        state.navigator.search_focused = true;
+        assert!(
+            modal_repeat_allowed(&state, &space),
+            "space types a character in the navigator search box"
+        );
+
+        state.mode = Mode::RenameWorkspace;
+        assert!(
+            modal_repeat_allowed(&state, &space),
+            "space types a character in a rename prompt"
+        );
+    }
+
+    #[test]
+    fn held_space_does_not_strobe_the_navigator_tree() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigator;
+        app.state.navigator.selected = 0;
+
+        let mut expanded = Vec::new();
+        for kind in [
+            KeyEventKind::Press,
+            KeyEventKind::Repeat,
+            KeyEventKind::Repeat,
+            KeyEventKind::Repeat,
+        ] {
+            app.route_client_events(
+                vec![raw_key(KeyCode::Char(' '), KeyModifiers::empty(), kind)],
+                false,
+            );
+            expanded.push(app.state.navigator.expanded_workspaces.len());
+        }
+
+        assert_eq!(
+            expanded,
+            vec![1, 1, 1, 1],
+            "the press toggles once and repeats leave the tree alone"
+        );
+    }
+
+    #[test]
+    fn held_space_keeps_typing_in_the_navigator_search_box() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigator;
+        app.state.navigator.search_focused = true;
+        app.state.navigator.query = "a".to_string();
+
+        for kind in [
+            KeyEventKind::Press,
+            KeyEventKind::Repeat,
+            KeyEventKind::Repeat,
+        ] {
+            app.route_client_events(
+                vec![raw_key(KeyCode::Char(' '), KeyModifiers::empty(), kind)],
+                false,
+            );
+        }
+
+        assert_eq!(app.state.navigator.query, "a   ");
+    }
+
+    #[test]
+    fn detaching_an_input_source_clears_its_held_key_repeats() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigator;
+
+        app.route_client_events_from(
+            7,
+            vec![raw_key(
+                KeyCode::Down,
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert_eq!(
+            app.held_key_repeats.get(&(7, KeyCode::Down)),
+            Some(&HeldKeyRepeat::InMode(Mode::Navigator))
+        );
+
+        app.release_input_source_headless(7);
+
+        assert!(app.held_key_repeats.is_empty());
+    }
+
+    #[tokio::test]
     async fn monolithic_input_forwards_report_all_printable_event_kinds() {
         let mut app = test_app();
         let mut workspace = Workspace::test_new("test");
@@ -3636,7 +3961,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeat_key_events_are_ignored_outside_terminal_mode() {
+    async fn repeat_without_a_recorded_press_is_ignored() {
         let mut app = test_app();
         app.state.mode = Mode::ReleaseNotes;
         app.state.release_notes = Some(release_notes_state());

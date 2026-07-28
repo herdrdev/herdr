@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::{
-    app::{App, InputSourceId},
+    app::{App, HeldKeyRepeat, InputSourceId},
     input::TerminalKey,
 };
 
@@ -46,7 +46,8 @@ impl App {
             return false;
         }
 
-        self.suppressed_repeat_keys.insert((source_id, key.code));
+        self.held_key_repeats
+            .insert((source_id, key.code), HeldKeyRepeat::Blocked);
         true
     }
 }

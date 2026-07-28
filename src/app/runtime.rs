@@ -6,8 +6,9 @@ use std::time::Duration;
 use crossterm::terminal;
 
 use super::{
-    background_update_check_enabled, pressed_key_identity, App, AUTO_UPDATE_CHECK_INTERVAL,
-    MIN_RENDER_INTERVAL, RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
+    background_update_check_enabled, modal_repeat_allowed, pressed_key_identity, App,
+    HeldKeyRepeat, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL, RESIZE_POLL_INTERVAL,
+    SELECTION_AUTOSCROLL_INTERVAL,
 };
 fn retain_custom_command_after_wait(
     pid: u32,
@@ -116,9 +117,10 @@ impl App {
                         if self.state.popup_pane.is_some()
                             || self.state.mode == crate::app::Mode::Terminal
                         {
-                            self.suppressed_repeat_keys.remove(&pressed_key_id);
+                            self.held_key_repeats.remove(&pressed_key_id);
                         } else {
-                            self.suppressed_repeat_keys.insert(pressed_key_id);
+                            self.held_key_repeats
+                                .insert(pressed_key_id, HeldKeyRepeat::InMode(self.state.mode));
                         }
                         if let Some(target) = self.handle_key(key).await {
                             if !key.is_text_commit {
@@ -143,9 +145,18 @@ impl App {
                                 self.pressed_terminal_keys.remove(&pressed_key_id);
                             }
                             true
-                        } else if (self.state.popup_pane.is_some()
-                            || self.state.mode == crate::app::Mode::Terminal)
-                            && !self.suppressed_repeat_keys.contains(&pressed_key_id)
+                        } else if self.state.popup_pane.is_some()
+                            || self.state.mode == crate::app::Mode::Terminal
+                        {
+                            if self.held_key_repeats.contains_key(&pressed_key_id) {
+                                false
+                            } else {
+                                self.handle_key(key).await;
+                                true
+                            }
+                        } else if modal_repeat_allowed(&self.state, &key)
+                            && self.held_key_repeats.get(&pressed_key_id)
+                                == Some(&HeldKeyRepeat::InMode(self.state.mode))
                         {
                             self.handle_key(key).await;
                             true
@@ -154,7 +165,7 @@ impl App {
                         }
                     }
                     crossterm::event::KeyEventKind::Release => {
-                        self.suppressed_repeat_keys.remove(&pressed_key_id);
+                        self.held_key_repeats.remove(&pressed_key_id);
                         if let Some(pressed) = self.pressed_terminal_keys.remove(&pressed_key_id) {
                             let _ = self
                                 .forward_terminal_key_to_target(&pressed.target, key)

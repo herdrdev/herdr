@@ -344,8 +344,7 @@ impl App {
             .collect();
         self.pressed_terminal_keys
             .retain(|(id, _), _| *id != source_id);
-        self.suppressed_repeat_keys
-            .retain(|(id, _)| *id != source_id);
+        self.held_key_repeats.retain(|(id, _), _| *id != source_id);
         pressed
     }
 
