@@ -12,9 +12,16 @@ pub fn encode_key(key: KeyEvent, protocol: KeyboardProtocol) -> Vec<u8> {
     encode_terminal_key(key.into(), protocol)
 }
 
-pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<u8> {
+pub fn encode_terminal_key(mut key: TerminalKey, protocol: KeyboardProtocol) -> Vec<u8> {
     if key.is_text_commit {
         return encode_text_input(&key).unwrap_or_default();
+    }
+
+    // BackTab is the legacy representation of Shift+Tab. Restore the modifier
+    // so enhanced-keyboard children receive the same CSI-u event as a physical key.
+    if matches!(protocol, KeyboardProtocol::Kitty { .. }) && key.code == KeyCode::BackTab {
+        key.code = KeyCode::Tab;
+        key.modifiers.insert(KeyModifiers::SHIFT);
     }
 
     // A release event only produces bytes when the pane protocol reports event
@@ -576,6 +583,12 @@ mod tests {
     }
 
     #[test]
+    fn legacy_backtab_uses_csi_z() {
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty());
+        assert_eq!(encode_key(key, KeyboardProtocol::Legacy), b"\x1b[Z");
+    }
+
+    #[test]
     fn legacy_alt_up() {
         let key = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
         assert_eq!(encode_key(key, KeyboardProtocol::Legacy), b"\x1b[1;3A");
@@ -893,11 +906,15 @@ mod tests {
 
     #[test]
     fn kitty_shift_tab() {
-        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT);
-        assert_eq!(
-            encode_key(key, KeyboardProtocol::Kitty { flags: 1 }),
-            b"\x1b[9;2u"
-        );
+        for key in [
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
+        ] {
+            assert_eq!(
+                encode_key(key, KeyboardProtocol::Kitty { flags: 1 }),
+                b"\x1b[9;2u"
+            );
+        }
     }
 
     #[test]
