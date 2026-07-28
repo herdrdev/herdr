@@ -96,8 +96,21 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    let tpgid = foreground_process_group_id(child_pid)?;
-    let members = foreground_process_group_members(child_pid, tpgid)?;
+    let group_id = match foreground_process_group_id(child_pid) {
+        Some(tpgid) => tpgid,
+        // Some sandboxed runtimes never report the terminal foreground group:
+        // under gVisor `tcgetpgrp` fails with ENOTTY and `tpgid` in
+        // /proc/<pid>/stat stays 0, so no pane ever reports a foreground job
+        // and agents are never detected. Fall back to the pane shell's own job
+        // table there.
+        None => newest_child_process_group(child_pid)?,
+    };
+
+    foreground_job_for_group(child_pid, group_id)
+}
+
+fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<ForegroundJob> {
+    let members = foreground_process_group_members(child_pid, process_group_id)?;
     let processes = members
         .into_iter()
         .map(|member| {
@@ -117,9 +130,55 @@ pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     }
 
     Some(ForegroundJob {
-        process_group_id: tpgid,
+        process_group_id,
         processes,
     })
+}
+
+/// Newest job started by the pane shell, used only when the foreground group is
+/// unavailable. A shell puts each job in its own process group led by the first
+/// process of that job, so the pane shell's direct children carry one group id
+/// per job and the highest id is the most recently started one. Children left in
+/// the shell's own group are skipped: they are not a separate job.
+fn newest_child_process_group(child_pid: u32) -> Option<u32> {
+    let shell_group_id = process_pgrp_and_comm(child_pid)
+        .map(|(pgrp, _)| pgrp)
+        .filter(|pgrp| *pgrp > 0)
+        .map(|pgrp| pgrp as u32);
+
+    newest_child_process_group_with(
+        child_pid,
+        shell_group_id,
+        process_task_ids,
+        process_task_children,
+        |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
+    )
+}
+
+fn newest_child_process_group_with(
+    child_pid: u32,
+    shell_group_id: Option<u32>,
+    mut task_ids: impl FnMut(u32) -> Vec<u32>,
+    mut task_children: impl FnMut(u32, u32) -> Vec<u32>,
+    mut process_group_id: impl FnMut(u32) -> Option<i32>,
+) -> Option<u32> {
+    let mut newest: Option<u32> = None;
+    for tid in task_ids(child_pid) {
+        for child in task_children(child_pid, tid) {
+            let Some(pgrp) = process_group_id(child) else {
+                continue;
+            };
+            if pgrp <= 0 {
+                continue;
+            }
+            let pgrp = pgrp as u32;
+            if Some(pgrp) == shell_group_id {
+                continue;
+            }
+            newest = Some(newest.map_or(pgrp, |current: u32| current.max(pgrp)));
+        }
+    }
+    newest
 }
 
 fn foreground_process_group_members(
@@ -663,6 +722,59 @@ mod tests {
         assert!(text_indicates_wsl("4.4.0-19041-Microsoft"));
         assert!(!text_indicates_wsl("6.8.0-64-generic"));
         assert!(!text_indicates_wsl(""));
+    }
+
+    #[test]
+    fn newest_child_group_is_used_when_the_foreground_group_is_unavailable() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![200, 300])]);
+        let groups = HashMap::from([(200, 200), (300, 300)]);
+
+        let group = newest_child_process_group_with(
+            100,
+            Some(100),
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+    }
+
+    #[test]
+    fn newest_child_group_skips_children_left_in_the_shell_group() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![150, 160])]);
+        let groups = HashMap::from([(150, 100), (160, 100)]);
+
+        let group = newest_child_process_group_with(
+            100,
+            Some(100),
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, None);
+    }
+
+    #[test]
+    fn newest_child_group_skips_shell_group_when_the_shell_is_not_its_leader() {
+        // Pane shell 100 lives in group 90, so its own group id differs from its
+        // pid: children left in group 90 are shell work, not a job.
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![150, 160, 300])]);
+        let groups = HashMap::from([(150, 90), (160, 90), (300, 300)]);
+
+        let group = newest_child_process_group_with(
+            100,
+            Some(90),
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
     }
 
     #[test]
