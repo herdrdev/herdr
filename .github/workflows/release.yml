@@ -163,8 +163,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate product announcement
-        run: python3 scripts/changelog.py validate-product-announcement
+      - name: Validate release inputs
+        run: |
+          python3 scripts/changelog.py validate-product-announcement
+          test -f docs/next/README.md
+          test -f docs/next/README.zh-CN.md
 
   release:
     needs: [build, flake-check, validate-release-inputs]
