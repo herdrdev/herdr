@@ -1315,9 +1315,8 @@ fn run_plugin_build_command(
         }));
     };
     let args = command.iter().skip(1).cloned().collect::<Vec<_>>();
-    let mut child = crate::plugin_command::command_for_argv(program, &args);
+    let mut child = crate::plugin_command::command_for_argv_in_dir(program, &args, cwd);
     child
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
