@@ -19,9 +19,11 @@ describe('documentation release publishing', () => {
     await write(root, 'website/src/data/config-reference.json', '{"stable":true}\n');
     await write(root, 'website/latest.json', '{"version":"0.9.0"}\n');
     await write(root, 'README.md', 'stable readme\n');
+    await write(root, 'README.zh-CN.md', 'stable readme zh-cn\n');
     await write(root, 'docs/next/website/src/content/docs/index.mdx', 'next docs\n');
     await write(root, 'docs/next/website/src/data/config-reference.json', '{"next":true}\n');
     await write(root, 'docs/next/README.md', 'next readme\n');
+    await write(root, 'docs/next/README.zh-CN.md', 'next readme zh-cn\n');
 
     git(root, ['init', '-q']);
     git(root, ['config', 'user.email', 'test@example.com']);
@@ -35,6 +37,7 @@ describe('documentation release publishing', () => {
     expect(await read(root, 'website/src/content/docs/index.mdx')).toBe('next docs\n');
     expect(await read(root, 'website/src/data/config-reference.json')).toBe('{"next":true}\n');
     expect(await read(root, 'README.md')).toBe('next readme\n');
+    expect(await read(root, 'README.zh-CN.md')).toBe('next readme zh-cn\n');
     expect(await read(root, 'docs/versions/1.0.0/website/src/content/docs/index.mdx')).toBe('next docs\n');
 
     const manifest = JSON.parse(await read(root, 'docs/versions/manifest.json'));
