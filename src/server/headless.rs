@@ -145,14 +145,6 @@ impl RenderImpact {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ScheduledRenderImpact {
-    #[default]
-    None,
-    Animation,
-    Full,
-}
-
 fn record_render_impact(source: &'static str, impact: RenderImpact) {
     let event = match (source, impact) {
         ("api_requests", RenderImpact::Graphics) => "graphics_render_cause.api_requests",
@@ -484,7 +476,7 @@ impl HeadlessServer {
     /// - Drains API requests (from the JSON socket)
     /// - Accepts new client connections
     /// - Reads client messages and routes input
-    /// - Handles scheduled tasks (resize poll, animation, session save, etc.)
+    /// - Handles scheduled tasks (session save, metadata expiry, etc.)
     /// - Renders virtually and streams frames to clients
     pub async fn run(&mut self) -> io::Result<()> {
         crate::logging::startup("server");
@@ -501,7 +493,6 @@ impl HeadlessServer {
         let mut needs_render = true;
         let mut needs_full_render = true;
         let mut needs_graphics_render = false;
-        let mut needs_animation_render = false;
 
         loop {
             crate::render_prof::event("loop.tick");
@@ -598,19 +589,11 @@ impl HeadlessServer {
 
             // 6. Handle scheduled tasks.
             let now = Instant::now();
-            match self.handle_scheduled_tasks_headless(now, needs_render) {
-                ScheduledRenderImpact::None => {}
-                ScheduledRenderImpact::Animation => {
-                    needs_render = true;
-                    needs_animation_render = true;
-                    crate::render_prof::event("animation_render_cause.scheduled_tasks");
-                }
-                ScheduledRenderImpact::Full => {
-                    needs_render = true;
-                    needs_full_render = true;
-                    needs_graphics_render = false;
-                    crate::render_prof::event("full_render_cause.scheduled_tasks");
-                }
+            if self.handle_scheduled_tasks_headless(now, needs_render) {
+                needs_render = true;
+                needs_full_render = true;
+                needs_graphics_render = false;
+                crate::render_prof::event("full_render_cause.scheduled_tasks");
             }
 
             if self.handle_deferred_requests_headless() {
@@ -632,8 +615,6 @@ impl HeadlessServer {
             self.stream_host_mouse_capture_mode();
             self.stream_host_keyboard_enhancement_flags();
 
-            self.app.sync_headless_animation_timer(now);
-
             // 7. Render virtually and stream frames.
             if needs_render && self.app.can_render_now(now) {
                 crate::render_prof::event("render.attempt");
@@ -647,16 +628,7 @@ impl HeadlessServer {
                     crate::render_prof::event("retained_gate.not_pty_dirty");
                 }
                 let mut deferred_graphics = false;
-                let rendered_retained = if needs_animation_render
-                    && !needs_full_render
-                    && !needs_graphics_render
-                    && !pty_dirty
-                {
-                    self.render_retained_animation_update_and_stream()
-                } else if needs_graphics_render
-                    && !needs_full_render
-                    && !needs_animation_render
-                    && !pty_dirty
+                let rendered_retained = if needs_graphics_render && !needs_full_render && !pty_dirty
                 {
                     match self.render_retained_graphics_update_and_stream() {
                         RetainedGraphicsOutcome::Sent => true,
@@ -667,10 +639,7 @@ impl HeadlessServer {
                         RetainedGraphicsOutcome::Fallback => false,
                     }
                 } else {
-                    pty_dirty
-                        && !needs_full_render
-                        && !needs_animation_render
-                        && self.render_retained_pty_update_and_stream()
+                    pty_dirty && !needs_full_render && self.render_retained_pty_update_and_stream()
                 };
                 if deferred_graphics {
                     needs_render = false;
@@ -684,7 +653,6 @@ impl HeadlessServer {
                 needs_render = false;
                 needs_full_render = false;
                 needs_graphics_render = false;
-                needs_animation_render = false;
                 continue;
             }
 
@@ -3428,69 +3396,6 @@ impl HeadlessServer {
         }
     }
 
-    fn render_retained_animation_update_and_stream(&mut self) -> bool {
-        crate::render_prof::event("retained_animation.attempt");
-        if !self.retained_pty_update_allowed_by_app_state()
-            || self.app.state.config_diagnostic.is_some()
-        {
-            crate::render_prof::event("retained_animation_fallback.unsafe_app_state");
-            return false;
-        }
-
-        let mut targets = Vec::new();
-        for (client_id, (cols, rows), _, _, mode) in
-            render_targets(&self.clients, self.foreground_client_id)
-        {
-            if !matches!(mode, ClientConnectionMode::App) {
-                continue;
-            }
-            let Some(client) = self.clients.get(&client_id) else {
-                return false;
-            };
-            if client.deferred_render() != DeferredRender::None
-                || client.graphics_surface_reset_pending
-            {
-                crate::render_prof::event("retained_animation_fallback.client_state");
-                return false;
-            }
-            let Some(previous) = client.render_state.last_frame().cloned() else {
-                crate::render_prof::event("retained_animation_fallback.no_last_frame");
-                return false;
-            };
-            if previous.width != cols || previous.height != rows {
-                crate::render_prof::event("retained_animation_fallback.frame_size_mismatch");
-                return false;
-            }
-            targets.push((client_id, previous));
-        }
-
-        let mut frames = Vec::with_capacity(targets.len());
-        for (client_id, previous) in targets {
-            let Some(frame) = crate::server::render_stream::render_working_animation_from_frame(
-                &mut self.app.state,
-                &self.app.terminal_runtimes,
-                previous,
-            ) else {
-                crate::render_prof::event("retained_animation_fallback.render_failed");
-                return false;
-            };
-            frames.push((client_id, frame));
-        }
-
-        let mut broken_clients = Vec::new();
-        let mut sent_all = true;
-        for (client_id, frame) in frames {
-            sent_all &= self.send_retained_frame_to_client(client_id, frame, &mut broken_clients);
-        }
-        for client_id in broken_clients {
-            self.remove_client_and_resize_if_needed(client_id);
-        }
-        if sent_all {
-            crate::render_prof::event("retained_animation.success");
-        }
-        sent_all
-    }
-
     fn render_retained_pty_update_and_stream(&mut self) -> bool {
         crate::render_prof::event("retained.attempt");
         let retained_started = crate::render_prof::timer();
@@ -3987,15 +3892,8 @@ impl HeadlessServer {
     ///
     /// Similar to `App::handle_scheduled_tasks` but without resize polling
     /// (the server doesn't have a terminal to resize).
-    fn handle_scheduled_tasks_headless(
-        &mut self,
-        now: Instant,
-        geometry_dirty: bool,
-    ) -> ScheduledRenderImpact {
+    fn handle_scheduled_tasks_headless(&mut self, now: Instant, geometry_dirty: bool) -> bool {
         let mut changed = false;
-        let mut animation_changed = false;
-
-        self.app.sync_headless_animation_timer(now);
 
         // No resize polling needed — server has no terminal.
         // Client resize messages drive size changes instead.
@@ -4047,20 +3945,6 @@ impl HeadlessServer {
             self.app.copy_feedback_deadline = None;
             self.app.state.copy_feedback = None;
             changed = true;
-        }
-
-        if self
-            .app
-            .next_animation_tick
-            .is_some_and(|deadline| now >= deadline)
-        {
-            self.app.state.spinner_tick = self
-                .app
-                .state
-                .spinner_tick
-                .wrapping_add(app::HEADLESS_ANIMATION_TICK_STEP);
-            self.app.next_animation_tick = Some(now + app::HEADLESS_ANIMATION_INTERVAL);
-            animation_changed = true;
         }
 
         if self
@@ -4119,14 +4003,7 @@ impl HeadlessServer {
                 .app
                 .start_pending_agent_resumes(self.app.pending_agent_resume_due(now));
         }
-        self.app.sync_headless_animation_timer(now);
-        if changed {
-            ScheduledRenderImpact::Full
-        } else if animation_changed {
-            ScheduledRenderImpact::Animation
-        } else {
-            ScheduledRenderImpact::None
-        }
+        changed
     }
 
     /// Initiates graceful shutdown.
@@ -4950,22 +4827,6 @@ mod tests {
         (server, client_rx, pane_id)
     }
 
-    fn set_first_test_pane_working(server: &mut HeadlessServer) {
-        server.app.state.ensure_test_terminals();
-        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let terminal = server
-            .app
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("test terminal");
-        terminal.detected_agent = Some(crate::detect::Agent::Pi);
-        terminal.state = crate::detect::AgentState::Working;
-    }
-
     fn assert_frame_data_eq(actual: &FrameData, expected: &FrameData) {
         assert_eq!(
             (actual.width, actual.height),
@@ -4990,88 +4851,6 @@ mod tests {
                 idx / usize::from(actual.width),
             );
         }
-    }
-
-    #[tokio::test]
-    async fn retained_animation_matches_full_render_for_mixed_client_sizes() {
-        fn test_server_with_mobile_client() -> (
-            HeadlessServer,
-            std::sync::mpsc::Receiver<Vec<u8>>,
-            std::sync::mpsc::Receiver<Vec<u8>>,
-        ) {
-            let (mut server, desktop_rx, _) = retained_test_server(
-                b"\x1b]8;;https://example.com\x1b\\\x1b[4:3mlinked\x1b[0m\x1b]8;;\x1b\\",
-            );
-            set_first_test_pane_working(&mut server);
-            let (mobile_tx, _mobile_control_rx, mobile_rx) = test_client_writer();
-            server.clients.insert(
-                2,
-                ClientConnection::new(
-                    (44, 20),
-                    crate::kitty_graphics::HostCellSize::default(),
-                    crate::terminal_theme::TerminalTheme::default(),
-                    None,
-                    2,
-                    RenderEncoding::SemanticFrame,
-                    Some(mobile_tx),
-                ),
-            );
-            (server, desktop_rx, mobile_rx)
-        }
-
-        let (mut retained_server, retained_desktop_rx, retained_mobile_rx) =
-            test_server_with_mobile_client();
-        let (mut full_server, full_desktop_rx, full_mobile_rx) = test_server_with_mobile_client();
-
-        retained_server.render_and_stream();
-        let _ = retained_desktop_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("retained desktop baseline");
-        let _ = retained_mobile_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("retained mobile baseline");
-        full_server.render_and_stream();
-        let _ = full_desktop_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("full desktop baseline");
-        let _ = full_mobile_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("full mobile baseline");
-
-        retained_server.app.state.spinner_tick = app::HEADLESS_ANIMATION_TICK_STEP;
-        full_server.app.state.spinner_tick = app::HEADLESS_ANIMATION_TICK_STEP;
-
-        assert!(retained_server.render_retained_animation_update_and_stream());
-        full_server.render_and_stream();
-
-        let retained_desktop = read_server_frame(
-            retained_desktop_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("retained desktop animation"),
-        );
-        let retained_mobile = read_server_frame(
-            retained_mobile_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("retained mobile animation"),
-        );
-        let full_desktop = read_server_frame(
-            full_desktop_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("full desktop animation"),
-        );
-        let full_mobile = read_server_frame(
-            full_mobile_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("full mobile animation"),
-        );
-
-        assert_frame_data_eq(&retained_desktop, &full_desktop);
-        assert_frame_data_eq(&retained_mobile, &full_mobile);
-        assert_eq!(
-            retained_server.app.state.view.layout,
-            crate::app::state::ViewLayout::Desktop
-        );
-        assert!(!retained_desktop.hyperlinks.is_empty());
     }
 
     #[test]
@@ -6161,10 +5940,7 @@ next_tab = ""
             Some("short lived")
         );
 
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(deadline + Duration::from_millis(1), false),
-            ScheduledRenderImpact::Full
-        );
+        assert!(server.handle_scheduled_tasks_headless(deadline + Duration::from_millis(1), false));
 
         assert_eq!(server.app.agent_metadata_deadline, None);
         assert_eq!(
@@ -6195,38 +5971,12 @@ next_tab = ""
     }
 
     #[test]
-    fn headless_scheduled_animation_is_distinct_but_other_changes_win() {
-        let mut server = test_headless_server();
-        server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("working")];
-        set_first_test_pane_working(&mut server);
-        let now = Instant::now();
-        server.app.next_animation_tick = Some(now);
-
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(now, false),
-            ScheduledRenderImpact::Animation
-        );
-
-        server.app.next_animation_tick = Some(now);
-        server.app.state.config_diagnostic = Some("expired".into());
-        server.app.config_diagnostic_deadline = Some(now);
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(now, false),
-            ScheduledRenderImpact::Full
-        );
-        assert!(server.app.state.config_diagnostic.is_none());
-    }
-
-    #[test]
     fn headless_scheduled_tasks_clears_disabled_agent_manifest_update_deadline() {
         let mut server = test_headless_server();
         let now = Instant::now();
         server.app.next_agent_manifest_update_check = Some(now - Duration::from_millis(1));
 
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(now, false),
-            ScheduledRenderImpact::None
-        );
+        assert!(!server.handle_scheduled_tasks_headless(now, false));
         assert_eq!(server.app.next_agent_manifest_update_check, None);
     }
 
@@ -6282,10 +6032,7 @@ next_tab = ""
         });
         server.app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
 
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(Instant::now(), true),
-            ScheduledRenderImpact::None
-        );
+        assert!(!server.handle_scheduled_tasks_headless(Instant::now(), true));
         assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
         assert!(server
             .app
@@ -6339,10 +6086,7 @@ next_tab = ""
         });
         server.app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
 
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(Instant::now(), false),
-            ScheduledRenderImpact::None
-        );
+        assert!(!server.handle_scheduled_tasks_headless(Instant::now(), false));
         assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
         assert!(server
             .app
@@ -9698,10 +9442,7 @@ next_tab = ""
             }
         );
         let deadline = server.app.toast_deadline.expect("api toast deadline");
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(deadline, false),
-            ScheduledRenderImpact::Full
-        );
+        assert!(server.handle_scheduled_tasks_headless(deadline, false));
         assert!(server.app.state.toast.is_none());
         assert!(server.app.toast_deadline.is_none());
     }
@@ -9828,10 +9569,7 @@ next_tab = ""
             .state
             .next_pending_agent_notification_deadline()
             .expect("pending notification deadline");
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(deadline, false),
-            ScheduledRenderImpact::Full
-        );
+        assert!(server.handle_scheduled_tasks_headless(deadline, false));
 
         let first = read_server_message(
             client_control_rx
@@ -9919,10 +9657,7 @@ next_tab = ""
             .state
             .next_pending_agent_notification_deadline()
             .expect("pending notification deadline");
-        assert_eq!(
-            server.handle_scheduled_tasks_headless(deadline, false),
-            ScheduledRenderImpact::Full
-        );
+        assert!(server.handle_scheduled_tasks_headless(deadline, false));
 
         let first = read_server_message(
             client_control_rx

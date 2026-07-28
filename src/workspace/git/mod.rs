@@ -4,7 +4,9 @@ mod config_tests;
 mod discovery;
 mod status;
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
+
+pub(crate) use self::discovery::automatic_workspace_label;
 
 pub use self::{
     discovery::{

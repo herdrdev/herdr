@@ -65,7 +65,7 @@ pub(crate) fn discover_workspace_git_identity(
     let space = git_space_metadata(cwd);
     let auto_label = space
         .as_ref()
-        .map(|space| space.label.clone())
+        .map(|space| self::git::automatic_workspace_label(cwd, &space.repo_root))
         .unwrap_or_else(|| fallback_label_from_cwd(cwd));
     let status_cache_key = space
         .as_ref()
@@ -1675,6 +1675,22 @@ mod tests {
 
         runtime.shutdown();
         std::fs::remove_dir_all(root).expect("remove test repo");
+    }
+
+    #[test]
+    fn linked_worktree_auto_label_uses_checkout_name_not_repo_name() {
+        let (base, repo, checkout) =
+            self::git::test_support::create_repo_with_linked_worktree("linked-auto-label");
+
+        let (space, auto_label, _) = discover_workspace_git_identity(&checkout);
+
+        assert_eq!(
+            space.unwrap().repo_name,
+            repo.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(auto_label, checkout.file_name().unwrap().to_str().unwrap());
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
