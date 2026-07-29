@@ -343,6 +343,20 @@ pub struct KeysConfig {
     pub navigate_pane_up: BindingConfig,
     /// Focus the pane to the right in navigate mode. Default: "l". Right arrow is always an alias.
     pub navigate_pane_right: BindingConfig,
+    /// Navigator up (extra key beyond ↑). Default: "k".
+    pub navigator_up: BindingConfig,
+    /// Navigator down (extra key beyond ↓). Default: "j".
+    pub navigator_down: BindingConfig,
+    /// Navigator filter: all states. Default: "a".
+    pub navigator_filter_all: BindingConfig,
+    /// Navigator filter: blocked. Default: "b".
+    pub navigator_filter_blocked: BindingConfig,
+    /// Navigator filter: working. Default: "w".
+    pub navigator_filter_working: BindingConfig,
+    /// Navigator filter: idle. Default: "i".
+    pub navigator_filter_idle: BindingConfig,
+    /// Navigator filter: done. Default: "d".
+    pub navigator_filter_done: BindingConfig,
     /// Detach from server/client mode, or exit --no-session mode. Default: "prefix+q".
     pub detach: BindingConfig,
     /// Reload config.toml in the running app/server. Default: "prefix+shift+r".
@@ -463,6 +477,20 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_pane_right: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_up: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_filter_all: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_filter_blocked: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_filter_working: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_filter_idle: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigator_filter_done: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     detach: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reload_config: Option<BindingConfig>,
@@ -574,6 +602,13 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(navigate_pane_down);
         apply_field!(navigate_pane_up);
         apply_field!(navigate_pane_right);
+        apply_field!(navigator_up);
+        apply_field!(navigator_down);
+        apply_field!(navigator_filter_all);
+        apply_field!(navigator_filter_blocked);
+        apply_field!(navigator_filter_working);
+        apply_field!(navigator_filter_idle);
+        apply_field!(navigator_filter_done);
         apply_field!(detach);
         apply_field!(reload_config);
         apply_field!(open_notification_target);
@@ -672,6 +707,13 @@ impl KeysConfig {
         copy_effective_action_field!(navigate_pane_down, keybinds.navigate.pane_down);
         copy_effective_action_field!(navigate_pane_up, keybinds.navigate.pane_up);
         copy_effective_action_field!(navigate_pane_right, keybinds.navigate.pane_right);
+        copy_effective_action_field!(navigator_up, keybinds.navigator.up);
+        copy_effective_action_field!(navigator_down, keybinds.navigator.down);
+        copy_effective_action_field!(navigator_filter_all, keybinds.navigator.filter_all);
+        copy_effective_action_field!(navigator_filter_blocked, keybinds.navigator.filter_blocked);
+        copy_effective_action_field!(navigator_filter_working, keybinds.navigator.filter_working);
+        copy_effective_action_field!(navigator_filter_idle, keybinds.navigator.filter_idle);
+        copy_effective_action_field!(navigator_filter_done, keybinds.navigator.filter_done);
         copy_effective_action_field!(detach, keybinds.detach);
         copy_effective_action_field!(reload_config, keybinds.reload_config);
         copy_effective_action_field!(open_notification_target, keybinds.open_notification_target);
@@ -951,6 +993,13 @@ impl Default for KeysConfig {
             navigate_pane_down: BindingConfig::one("j"),
             navigate_pane_up: BindingConfig::one("k"),
             navigate_pane_right: BindingConfig::one("l"),
+            navigator_up: BindingConfig::one("k"),
+            navigator_down: BindingConfig::one("j"),
+            navigator_filter_all: BindingConfig::one("a"),
+            navigator_filter_blocked: BindingConfig::one("b"),
+            navigator_filter_working: BindingConfig::one("w"),
+            navigator_filter_idle: BindingConfig::one("i"),
+            navigator_filter_done: BindingConfig::one("d"),
             detach: BindingConfig::one("prefix+q"),
             reload_config: BindingConfig::one("prefix+shift+r"),
             open_notification_target: BindingConfig::one("prefix+o"),
