@@ -1309,6 +1309,7 @@ async fn run_client_loop(
     };
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
+    let host_color_query_generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     // Channel for events from the stdin, resize, and server reader threads.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
@@ -1319,17 +1320,18 @@ async fn run_client_loop(
     let stdin_quit = should_quit.clone();
     let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
+    let stdin_host_color_query_generation = host_color_query_generation.clone();
     std::thread::spawn(move || {
         input::stdin_reader_loop(
             stdin_tx,
             &stdin_quit,
-            will_query_host_terminal_theme,
+            stdin_host_color_query_generation,
             stdin_mouse_capture_active,
         );
     });
 
     if will_query_host_terminal_theme {
-        query_host_terminal_theme();
+        query_host_terminal_theme(&host_color_query_generation);
     }
 
     // Spawn the resize poller thread.
@@ -1424,7 +1426,7 @@ async fn run_client_loop(
                         state.request_repaint();
                     }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
-                        query_host_terminal_theme();
+                        query_host_terminal_theme(&host_color_query_generation);
                     }
                     data
                 };
@@ -2150,7 +2152,8 @@ fn resize_poll_loop(
 // ---------------------------------------------------------------------------
 
 /// Initialize logging for the client process.
-fn query_host_terminal_theme() {
+fn query_host_terminal_theme(generation: &std::sync::atomic::AtomicU64) {
+    generation.fetch_add(1, Ordering::Release);
     let _ = write_host_terminal_theme_query(io::stdout());
 }
 

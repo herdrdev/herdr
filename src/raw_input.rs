@@ -519,9 +519,12 @@ pub(crate) fn events_require_host_surface_redraw(
 
 #[cfg(any(not(windows), test))]
 pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::HostColorSchemeChanged(_)))
+    events.iter().any(|event| {
+        matches!(
+            event,
+            RawInputEvent::OuterFocusLost | RawInputEvent::HostColorSchemeChanged(_)
+        )
+    })
 }
 
 fn input_flush_timeout_ms(framer: &RawInputFramer) -> i32 {
@@ -1330,9 +1333,14 @@ mod tests {
         let events = parse_raw_input_bytes_sync(b"\x1b[I");
         assert!(events_require_host_surface_redraw(&events, true));
         assert!(!events_require_host_surface_redraw(&events, false));
+        assert!(!events_require_host_terminal_theme_query(&events));
+    }
 
+    #[test]
+    fn outer_focus_loss_requests_host_theme_query() {
         let events = parse_raw_input_bytes_sync(b"\x1b[O");
         assert!(!events_require_host_surface_redraw(&events, true));
+        assert!(events_require_host_terminal_theme_query(&events));
     }
 
     #[test]

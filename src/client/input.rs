@@ -10,7 +10,7 @@
 //! - We avoid duplicating parsing logic in the client
 //! - Host terminal control replies can be buffered or discarded before they leak
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -38,12 +38,12 @@ mod windows_vti;
 pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
-    host_color_query_sent: bool,
+    host_color_query_generation: Arc<AtomicU64>,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     #[cfg(windows)]
     {
-        let _ = (host_color_query_sent, host_mouse_capture_active);
+        let _ = (host_color_query_generation, host_mouse_capture_active);
         windows_stdin_reader_loop(event_tx, should_quit);
     }
 
@@ -51,7 +51,7 @@ pub fn stdin_reader_loop(
     unix_stdin_reader_loop(
         event_tx,
         should_quit,
-        host_color_query_sent,
+        host_color_query_generation,
         host_mouse_capture_active,
     );
 }
@@ -60,23 +60,30 @@ pub fn stdin_reader_loop(
 fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
-    host_color_query_sent: bool,
+    host_color_query_generation: Arc<AtomicU64>,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let mut scratch = [0u8; 4096];
     let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-    if host_color_query_sent {
-        framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
-    }
+    let mut observed_host_color_query_generation = 0;
+    sync_host_color_query_generation(
+        &mut framer,
+        &host_color_query_generation,
+        &mut observed_host_color_query_generation,
+    );
     let mut pending_palette = Vec::new();
 
     while !should_quit.load(Ordering::Acquire) {
         match reader.read(&mut scratch) {
             Ok(0) => break,
             Ok(n) => {
+                sync_host_color_query_generation(
+                    &mut framer,
+                    &host_color_query_generation,
+                    &mut observed_host_color_query_generation,
+                );
                 if !send_unix_input_chunks(
                     framer.push(&scratch[..n]),
                     &event_tx,
@@ -121,6 +128,21 @@ fn unix_stdin_reader_loop(
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn sync_host_color_query_generation(
+    framer: &mut crate::raw_input::RawInputByteFramer,
+    generation: &AtomicU64,
+    observed_generation: &mut u64,
+) {
+    let current_generation = generation.load(Ordering::Acquire);
+    if current_generation == *observed_generation {
+        return;
+    }
+    *observed_generation = current_generation;
+    framer.host_color_query_sent();
+    framer.enable_host_color_scheme_change_tracking();
 }
 
 #[cfg(unix)]
@@ -496,6 +518,26 @@ mod tests {
     fn raw_input_idle_flush_timeout_keeps_escape_responsive() {
         let timeout_ms = std::hint::black_box(crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS);
         assert!(timeout_ms <= 20);
+    }
+
+    #[test]
+    fn later_host_color_query_rearms_split_reply_framing() {
+        let generation = AtomicU64::new(1);
+        let mut observed_generation = 0;
+        let mut framer = crate::raw_input::RawInputByteFramer::default();
+        sync_host_color_query_generation(&mut framer, &generation, &mut observed_generation);
+
+        for _ in 0..258 {
+            assert_eq!(framer.push(b"\x1b]11;rgb:1111/2222/3333\x1b\\").len(), 1);
+        }
+        assert!(framer.push(b"\x1b").is_empty());
+        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
+
+        generation.store(2, Ordering::Release);
+        sync_host_color_query_generation(&mut framer, &generation, &mut observed_generation);
+        assert!(framer.push(b"\x1b").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(framer.push(b"]11;rgb:aaaa/bbbb/cccc\x1b\\").len(), 1);
     }
 
     #[cfg(not(target_os = "macos"))]
