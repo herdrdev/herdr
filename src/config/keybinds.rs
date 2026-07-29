@@ -302,10 +302,26 @@ pub struct NavigateKeybinds {
     pub pane_right: ActionKeybinds,
 }
 
+/// Parsed keybinds for the navigator modal overlay.
+///
+/// These are direct-only bindings dispatched from `handle_navigator_key()`.
+/// Arrow keys (`↑` / `↓`) remain hardcoded as fallbacks.
+#[derive(Debug, Clone)]
+pub struct NavigatorKeybinds {
+    pub up: ActionKeybinds,
+    pub down: ActionKeybinds,
+    pub filter_all: ActionKeybinds,
+    pub filter_blocked: ActionKeybinds,
+    pub filter_working: ActionKeybinds,
+    pub filter_idle: ActionKeybinds,
+    pub filter_done: ActionKeybinds,
+}
+
 /// Parsed keybinds for Herdr actions.
 #[derive(Debug, Clone)]
 pub struct Keybinds {
     pub navigate: NavigateKeybinds,
+    pub navigator: NavigatorKeybinds,
     pub help: ActionKeybinds,
     pub settings: ActionKeybinds,
     pub new_workspace: ActionKeybinds,
@@ -452,6 +468,7 @@ impl Config {
         let mut navigate_registry = BindingRegistry::new(prefix, prefix_source);
         navigate_registry.reserve_direct(prefix, "keys.prefix", prefix_source);
         reserve_navigate_runtime_keys(&mut navigate_registry);
+        let mut navigator_registry = BindingRegistry::new(prefix, prefix_source);
 
         macro_rules! empty_action {
             () => {
@@ -467,6 +484,15 @@ impl Config {
                 pane_down: empty_action!(),
                 pane_up: empty_action!(),
                 pane_right: empty_action!(),
+            },
+            navigator: NavigatorKeybinds {
+                up: empty_action!(),
+                down: empty_action!(),
+                filter_all: empty_action!(),
+                filter_blocked: empty_action!(),
+                filter_working: empty_action!(),
+                filter_idle: empty_action!(),
+                filter_done: empty_action!(),
             },
             help: empty_action!(),
             settings: empty_action!(),
@@ -574,6 +600,19 @@ impl Config {
                 }
             };
         }
+        macro_rules! apply_navigator {
+            ($target:expr, $field:ident, $source:expr) => {
+                if field_source!($field) == $source {
+                    $target = parse_navigate_bindings(
+                        concat!("keys.", stringify!($field)),
+                        &self.keys.$field,
+                        &mut navigator_registry,
+                        &mut diagnostics,
+                        $source,
+                    );
+                }
+            };
+        }
 
         for source in [BindingSource::User, BindingSource::Default] {
             apply_navigate!(
@@ -590,6 +629,13 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_down, navigate_pane_down, source);
             apply_navigate!(keybinds.navigate.pane_up, navigate_pane_up, source);
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
+            apply_navigator!(keybinds.navigator.up, navigator_up, source);
+            apply_navigator!(keybinds.navigator.down, navigator_down, source);
+            apply_navigator!(keybinds.navigator.filter_all, navigator_filter_all, source);
+            apply_navigator!(keybinds.navigator.filter_blocked, navigator_filter_blocked, source);
+            apply_navigator!(keybinds.navigator.filter_working, navigator_filter_working, source);
+            apply_navigator!(keybinds.navigator.filter_idle, navigator_filter_idle, source);
+            apply_navigator!(keybinds.navigator.filter_done, navigator_filter_done, source);
             apply_action!(keybinds.help, help, source);
             apply_action!(keybinds.settings, settings, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
