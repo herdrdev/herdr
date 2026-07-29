@@ -1228,9 +1228,11 @@ fn run_client_with_mode(
     // ctrlc's "termination" feature makes this also catch SIGTERM/SIGHUP, so a
     // kill or SSH teardown still runs the quit path and TerminalGuard::Drop.
     let quit_flag = should_quit.clone();
-    let _ = ctrlc::set_handler(move || {
+    if let Err(err) = ctrlc::set_handler(move || {
         quit_flag.store(true, Ordering::Release);
-    });
+    }) {
+        warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
+    }
 
     let result = rt.block_on(async {
         run_client_loop(
