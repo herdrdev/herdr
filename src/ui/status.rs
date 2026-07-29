@@ -203,21 +203,6 @@ pub(super) fn state_dot(state: AgentState, seen: bool, p: &Palette) -> (&'static
     }
 }
 
-pub(super) fn agent_icon(
-    state: AgentState,
-    seen: bool,
-    tick: u32,
-    p: &Palette,
-) -> (&'static str, Style) {
-    match (state, seen) {
-        (AgentState::Blocked, _) => ("◉", Style::default().fg(p.red)),
-        (AgentState::Working, _) => (super::spinner_frame(tick), Style::default().fg(p.yellow)),
-        (AgentState::Idle, false) => ("●", Style::default().fg(p.teal)),
-        (AgentState::Idle, true) => ("✓", Style::default().fg(p.green)),
-        (AgentState::Unknown, _) => ("○", Style::default().fg(p.overlay0)),
-    }
-}
-
 pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
     match (state, seen) {
         (AgentState::Blocked, _) => "blocked",
@@ -256,6 +241,22 @@ mod tests {
     fn feedback() -> CopyFeedback {
         CopyFeedback {
             message: "copied to clipboard".to_string(),
+        }
+    }
+
+    #[test]
+    fn state_dots_use_aligned_static_workspace_marks() {
+        let palette = Palette::catppuccin();
+        for (state, seen, symbol, color) in [
+            (AgentState::Blocked, true, "●", palette.red),
+            (AgentState::Working, true, "●", palette.yellow),
+            (AgentState::Idle, false, "●", palette.teal),
+            (AgentState::Idle, true, "○", palette.green),
+            (AgentState::Unknown, true, "·", palette.overlay0),
+        ] {
+            let (actual_symbol, style) = state_dot(state, seen, &palette);
+            assert_eq!(actual_symbol, symbol);
+            assert_eq!(style.fg, Some(color));
         }
     }
 

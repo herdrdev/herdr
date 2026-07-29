@@ -345,45 +345,6 @@ pub(crate) fn render_virtual_with_runtime_registry(
     (buffer, cursor)
 }
 
-pub(crate) fn render_working_animation_from_frame(
-    app_state: &mut AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
-    mut frame: FrameData,
-) -> Option<FrameData> {
-    let area = Rect::new(0, 0, frame.width, frame.height);
-    crate::ui::compute_view_without_resizing_panes(app_state, terminal_runtimes, area);
-
-    let backend = CursorTrackingBackend::new(area.width, area.height);
-    let mut terminal = ratatui::Terminal::new(backend).ok()?;
-    terminal
-        .draw(|frame| {
-            crate::ui::render_working_animation(app_state, terminal_runtimes, frame);
-        })
-        .ok()?;
-
-    let updated_area = if app_state.view.layout == crate::app::state::ViewLayout::Mobile {
-        app_state.view.mobile_header_rect
-    } else {
-        app_state.view.sidebar_rect
-    };
-    if updated_area.x.saturating_add(updated_area.width) > frame.width
-        || updated_area.y.saturating_add(updated_area.height) > frame.height
-    {
-        return None;
-    }
-
-    let rendered = terminal.backend().buffer();
-    frame.graphics.clear();
-    for y in updated_area.y..updated_area.y.saturating_add(updated_area.height) {
-        for x in updated_area.x..updated_area.x.saturating_add(updated_area.width) {
-            let index = usize::from(y) * usize::from(frame.width) + usize::from(x);
-            let cell = rendered.cell((x, y))?;
-            frame.cells[index] = crate::protocol::CellData::from_ratatui_cell(cell);
-        }
-    }
-    Some(frame)
-}
-
 fn popup_terminal_cursor(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,

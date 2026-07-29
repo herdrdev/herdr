@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -57,7 +56,7 @@ impl App {
                 Some(crate::workspace::GitSpaceMetadata {
                     key: membership.key.clone(),
                     checkout_key: membership.checkout_path.display().to_string(),
-                    label: membership.label.clone(),
+                    repo_name: membership.label.clone(),
                     repo_root: membership.repo_root.clone(),
                     is_linked_worktree: membership.is_linked_worktree,
                 })
@@ -88,7 +87,7 @@ impl App {
                 }
             };
 
-        let repo_name = space.label.clone();
+        let repo_name = space.repo_name.clone();
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_micros().min(u128::from(u64::MAX)) as u64)
@@ -224,7 +223,7 @@ impl App {
             source_checkout_path,
             source_repo_root: space.repo_root,
             repo_key: space.key,
-            repo_name: space.label,
+            repo_name: space.repo_name,
             entries,
             selected: 0,
             query: String::new(),
@@ -864,14 +863,14 @@ impl App {
                         }
                     }
                 }
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
             Err(message) => {
                 tracing::warn!(checkout_path = %create.checkout_path.display(), error = %message, "git worktree add failed");
                 create.creating = false;
                 create.error = Some(message);
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
         }
@@ -942,7 +941,7 @@ impl App {
                 } else {
                     Mode::Navigate
                 };
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
             Err(message) => {
@@ -956,7 +955,7 @@ impl App {
                 } else {
                     remove.error = Some(message);
                 }
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
         }

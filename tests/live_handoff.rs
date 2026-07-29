@@ -414,7 +414,8 @@ fn server_ptmx_fd_count(pid: u32) -> usize {
     entries
         .filter_map(Result::ok)
         .filter_map(|entry| fs::read_link(entry.path()).ok())
-        .filter(|target| target == Path::new("/dev/ptmx"))
+        // ptmx master node: /dev/ptmx or /dev/pts/ptmx (devpts); slaves /dev/pts/<N> excluded.
+        .filter(|target| target == Path::new("/dev/ptmx") || target == Path::new("/dev/pts/ptmx"))
         .count()
 }
 
@@ -443,7 +444,7 @@ fn wait_for_server_ptmx_fd_count(pid: u32, expected: usize, timeout: Duration) {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("server pid {pid} had {last_count} /dev/ptmx fds; expected {expected}");
+    panic!("server pid {pid} had {last_count} ptmx master fds; expected {expected}");
 }
 
 #[cfg(target_os = "linux")]

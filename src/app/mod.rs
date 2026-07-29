@@ -28,14 +28,10 @@ mod worktrees;
 use std::collections::{HashMap, HashSet};
 use std::future::pending;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
-pub(crate) const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
-pub(crate) const HEADLESS_ANIMATION_INTERVAL: Duration = Duration::from_millis(128);
-pub(crate) const HEADLESS_ANIMATION_TICK_STEP: u32 = 8;
 pub(crate) const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
@@ -125,7 +121,6 @@ pub struct App {
     pub(crate) last_pane_click: Option<PaneClickState>,
     pub(crate) pending_url_click_sources: HashSet<InputSourceId>,
     pub(crate) next_resize_poll: Instant,
-    pub(crate) next_animation_tick: Option<Instant>,
     pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
     pub(crate) update_version_check_enabled: bool,
@@ -144,7 +139,7 @@ pub struct App {
         HashMap<(InputSourceId, crossterm::event::KeyCode), PressedTerminalKey>,
     pub(crate) suppressed_repeat_keys: HashSet<(InputSourceId, crossterm::event::KeyCode)>,
     pub render_notify: Arc<Notify>,
-    pub render_dirty: Arc<AtomicBool>,
+    pub(crate) render_dirty: Arc<crate::render_signal::RenderSignal>,
     pub(crate) full_redraw_pending: bool,
     pub(crate) overlay_panes: HashMap<crate::layout::PaneId, OverlayPaneState>,
     pub(crate) local_terminal_notifications: bool,
@@ -385,7 +380,7 @@ impl App {
         crate::kitty_graphics::set_enabled(config.experimental.kitty_graphics);
         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
-        let render_dirty = Arc::new(AtomicBool::new(false));
+        let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
 
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
@@ -664,7 +659,6 @@ impl App {
             local_sound_playback: true,
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
-            spinner_tick: 0,
             palette: theme_palette,
             theme_name,
             theme_runtime,
@@ -753,7 +747,6 @@ impl App {
             last_pane_click: None,
             pending_url_click_sources: HashSet::new(),
             next_resize_poll: Instant::now() + RESIZE_POLL_INTERVAL,
-            next_animation_tick: None,
             next_auto_update_check: version_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             next_agent_manifest_update_check: manifest_check_enabled
@@ -925,7 +918,7 @@ impl App {
 
         while !self.state.should_quit {
             self.reap_finished_custom_commands();
-            if self.render_dirty.load(Ordering::Acquire) {
+            if self.render_dirty.is_pending() {
                 needs_render = true;
             }
             let terminal_title_changed = self.sync_terminal_titles();
@@ -1046,12 +1039,11 @@ impl App {
             }
 
             let now = Instant::now();
-            self.sync_animation_timer(now);
             self.sync_host_mouse_capture(&mut host_mouse_capture_active)?;
             self.sync_host_keyboard_report_all(&mut host_keyboard_report_all_active)?;
 
             if needs_render && self.can_render_now(now) {
-                self.render_dirty.swap(false, Ordering::AcqRel);
+                let _ = self.render_dirty.take();
                 let _sync_output = SyncOutputGuard::begin()?;
                 let kitty_graphics_enabled = self.state.kitty_graphics_enabled;
                 if self.full_redraw_pending {
@@ -1101,7 +1093,7 @@ impl App {
                 }
                 self.sync_pending_agent_resume_deadline(now);
                 if self.start_pending_agent_resumes(self.pending_agent_resume_due(now)) {
-                    self.render_dirty.store(true, Ordering::Release);
+                    self.render_dirty.request_generic();
                     self.render_notify.notify_one();
                 }
                 self.last_render_at = Some(now);
@@ -1151,7 +1143,7 @@ impl App {
                     self.input_rx = None;
                 }
                 LoopEvent::RenderRequested => {
-                    if self.render_dirty.load(Ordering::Acquire) {
+                    if self.render_dirty.is_pending() {
                         needs_render = true;
                     }
                 }
@@ -2172,7 +2164,7 @@ mod tests {
     fn git_status_event_marks_render_dirty_when_status_changes() {
         let mut app = test_app();
         app.state.workspaces.push(Workspace::test_new("one"));
-        app.render_dirty.store(false, Ordering::Release);
+        let _ = app.render_dirty.take();
         let workspace_id = app.state.workspaces[0].id.clone();
         let resolved_identity_cwd = app.state.workspaces[0].resolved_identity_cwd().unwrap();
 
@@ -2190,7 +2182,7 @@ mod tests {
             cache_updates: Vec::new(),
         });
 
-        assert!(app.render_dirty.load(Ordering::Acquire));
+        assert!(app.render_dirty.is_pending());
     }
 
     #[test]
@@ -4672,7 +4664,6 @@ mod tests {
         app.next_resize_poll = now - Duration::from_millis(1);
         app.config_diagnostic_deadline = None;
         app.toast_deadline = None;
-        app.next_animation_tick = None;
         app.next_auto_update_check = None;
         app.session_save_deadline = None;
         app.state.workspaces.clear();
@@ -4764,7 +4755,6 @@ mod tests {
         let now = Instant::now();
         app.next_resize_poll = now + Duration::from_millis(300);
         app.selection_autoscroll_deadline = Some(now + Duration::from_millis(5));
-        app.next_animation_tick = Some(now + Duration::from_millis(100));
         app.session_save_deadline = Some(now + Duration::from_millis(200));
         assert_eq!(
             app.next_loop_deadline(now, false),

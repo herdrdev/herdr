@@ -7,7 +7,6 @@ on:
     branches: [master, windows]
     paths-ignore:
       - "website/**"
-      - ".github/APPROVED_CONTRIBUTORS"
 
 permissions:
   contents: read

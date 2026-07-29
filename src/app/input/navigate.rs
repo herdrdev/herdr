@@ -335,11 +335,17 @@ impl App {
                     super::modal::open_rename_pane(&mut self.state, pane_id);
                 }
             }
-            NavigateAction::FocusPaneLeft => self.focus_pane_direction_via_api(NavDirection::Left),
-            NavigateAction::FocusPaneDown => self.focus_pane_direction_via_api(NavDirection::Down),
-            NavigateAction::FocusPaneUp => self.focus_pane_direction_via_api(NavDirection::Up),
+            NavigateAction::FocusPaneLeft => {
+                self.focus_pane_direction_in_context(NavDirection::Left, context)
+            }
+            NavigateAction::FocusPaneDown => {
+                self.focus_pane_direction_in_context(NavDirection::Down, context)
+            }
+            NavigateAction::FocusPaneUp => {
+                self.focus_pane_direction_in_context(NavDirection::Up, context)
+            }
             NavigateAction::FocusPaneRight => {
-                self.focus_pane_direction_via_api(NavDirection::Right)
+                self.focus_pane_direction_in_context(NavDirection::Right, context)
             }
             NavigateAction::SwapPaneLeft => {
                 self.swap_pane_direction_via_api(NavDirection::Left);
@@ -520,6 +526,15 @@ impl App {
                 direction: api_pane_direction(direction),
             },
         );
+    }
+
+    fn focus_pane_direction_in_context(&mut self, direction: NavDirection, context: ActionContext) {
+        let preserve_navigate_mode =
+            context == ActionContext::Navigate && self.state.mode == Mode::Navigate;
+        self.focus_pane_direction_via_api(direction);
+        if preserve_navigate_mode {
+            self.state.mode = Mode::Navigate;
+        }
     }
 
     pub(crate) fn swap_pane_direction_via_api(&mut self, direction: NavDirection) {
@@ -2937,6 +2952,26 @@ navigate_pane_down = "ctrl+j"
 
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
         assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn navigate_focus_pane_keeps_navigate_mode_active() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        let root = app.state.workspaces[0].tabs[0].root_pane;
+        let below = app.state.workspaces[0].test_split(Direction::Vertical);
+        app.state.workspaces[0].layout.focus_pane(below);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .active_tab()
+            .unwrap()
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.state.mode = Mode::Navigate;
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Navigate);
     }
 
     #[tokio::test]

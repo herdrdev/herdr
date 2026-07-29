@@ -240,9 +240,11 @@ export async function publishVersion(tag) {
     await rm(stableReferencePath, { force: true });
   }
 
-  const nextReadme = `docs/next/README.md`;
-  if (gitPathExists(tag, nextReadme)) {
-    await writeFile(resolve(repoRoot, 'README.md'), git(['show', `${tag}:${nextReadme}`], { binary: true }));
+  for (const readme of ['README.md', 'README.zh-CN.md']) {
+    const nextReadme = `docs/next/${readme}`;
+    if (gitPathExists(tag, nextReadme)) {
+      await writeFile(resolve(repoRoot, readme), git(['show', `${tag}:${nextReadme}`], { binary: true }));
+    }
   }
 
   const entries = new Map(manifest.versions.map((entry) => [entry.version, entry]));
