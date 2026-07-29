@@ -6,6 +6,69 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$installerPath = (Resolve-Path -LiteralPath "$PSScriptRoot\..\website\install.ps1").Path
+$parseErrors = $null
+$tokens = $null
+$installerAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $installerPath,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw ($parseErrors | Out-String)
+}
+foreach ($functionName in @("Prepend-PathEntry", "Update-PathRegistryEntry")) {
+    $definition = $installerAst.FindAll(
+        {
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        },
+        $true
+    ) | Select-Object -First 1
+    if ($null -eq $definition) {
+        throw "installer is missing function $functionName"
+    }
+    Invoke-Expression $definition.Extent.Text
+}
+
+$pathTestVariable = "HERDR_INSTALLER_PATH_TEST"
+$oldPathTestVariable = [Environment]::GetEnvironmentVariable($pathTestVariable, "Process")
+$testRegistryPath = "Software\HerdrInstallerTests-$([Guid]::NewGuid().ToString('N'))"
+$testEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testRegistryPath)
+if ($null -eq $testEnvironmentKey) {
+    throw "unable to create temporary installer test registry key"
+}
+try {
+    [Environment]::SetEnvironmentVariable($pathTestVariable, "C:\expanded", "Process")
+    $testEnvironmentKey.SetValue(
+        "Path",
+        "%$pathTestVariable%\bin;C:\existing",
+        [Microsoft.Win32.RegistryValueKind]::ExpandString
+    )
+    $pathChanged = Update-PathRegistryEntry -EnvironmentKey $testEnvironmentKey -Entry "C:\Herdr\bin"
+    if (-not $pathChanged) {
+        throw "installer PATH update reported no change"
+    }
+    if (Update-PathRegistryEntry -EnvironmentKey $testEnvironmentKey -Entry "C:\Herdr\bin") {
+        throw "installer PATH update was not idempotent"
+    }
+
+    $options = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $rawPath = $testEnvironmentKey.GetValue("Path", $null, $options)
+    $expectedPath = "C:\Herdr\bin;%$pathTestVariable%\bin;C:\existing"
+    if ($rawPath -cne $expectedPath) {
+        throw "installer changed raw PATH: expected '$expectedPath', got '$rawPath'"
+    }
+    if ($testEnvironmentKey.GetValueKind("Path") -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+        throw "installer changed the PATH registry value kind"
+    }
+} finally {
+    $testEnvironmentKey.Dispose()
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testRegistryPath, $false)
+    [Environment]::SetEnvironmentVariable($pathTestVariable, $oldPathTestVariable, "Process")
+}
+
 $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
 $root = Join-Path $env:RUNNER_TEMP ("herdr-installer-test-" + [Guid]::NewGuid().ToString("N"))
 $webRoot = Join-Path $root "web"

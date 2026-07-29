@@ -94,6 +94,55 @@ function Prepend-PathEntry {
     return ($segments -join ";")
 }
 
+function Update-PathRegistryEntry {
+    param(
+        [Microsoft.Win32.RegistryKey]$EnvironmentKey,
+        [string]$Entry
+    )
+
+    $options = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $value = $EnvironmentKey.GetValue("Path", $null, $options)
+    $kind = if ($null -eq $value) {
+        [Microsoft.Win32.RegistryValueKind]::String
+    } else {
+        $EnvironmentKey.GetValueKind("Path")
+    }
+    $newValue = Prepend-PathEntry -PathValue $value -Entry $Entry
+    if ($newValue -ceq $value) {
+        return $false
+    }
+
+    $EnvironmentKey.SetValue("Path", $newValue, $kind)
+    return $true
+}
+
+function Publish-EnvironmentChange {
+    if (-not ("HerdrInstaller.EnvironmentNativeMethods" -as [type])) {
+        Add-Type -Namespace HerdrInstaller -Name EnvironmentNativeMethods -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr SendMessageTimeout(
+    System.IntPtr hWnd,
+    uint message,
+    System.UIntPtr wParam,
+    string lParam,
+    uint flags,
+    uint timeout,
+    out System.UIntPtr result);
+'@
+    }
+
+    $result = [UIntPtr]::Zero
+    [HerdrInstaller.EnvironmentNativeMethods]::SendMessageTimeout(
+        [IntPtr]0xffff,
+        0x1a,
+        [UIntPtr]::Zero,
+        "Environment",
+        0x0002,
+        1000,
+        [ref]$result
+    ) | Out-Null
+}
+
 function Get-ManifestAsset {
     param(
         [object]$Manifest,
@@ -608,10 +657,17 @@ try {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-$newUserPath = Prepend-PathEntry -PathValue $userPath -Entry $visibleBinDir
-if ($newUserPath -cne $userPath) {
-    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+$userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+if ($null -eq $userEnvironmentKey) {
+    throw "Unable to open the current user's environment registry key."
+}
+try {
+    $userPathChanged = Update-PathRegistryEntry -EnvironmentKey $userEnvironmentKey -Entry $visibleBinDir
+} finally {
+    $userEnvironmentKey.Dispose()
+}
+if ($userPathChanged) {
+    Publish-EnvironmentChange
     Write-Step "PATH updated for future PowerShell sessions."
 } else {
     Write-Step "$visibleBinDir is already first on PATH."
