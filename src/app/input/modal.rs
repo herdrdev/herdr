@@ -1996,6 +1996,35 @@ mod tests {
     }
 
     #[test]
+    fn navigator_configurable_filter_key_triggers_and_old_key_does_not() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        state.mode = Mode::Navigator;
+
+        // Override filter_all to use "x" instead of default "a"
+        state.keybinds.navigator.filter_all =
+            crate::config::ActionKeybinds::direct("x");
+
+        // Pressing old key "a" should NOT trigger filter (falls through, no-op)
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.navigator.state_filter, None);
+        assert!(state.navigator.query.is_empty());
+
+        // Pressing new key "x" should trigger filter_all
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.navigator.state_filter, None);
+        assert!(state.navigator.query.is_empty());
+    }
+
+    #[test]
     fn open_rename_active_tab_can_prefill_default_new_tab_name() {
         let mut state = state_with_workspaces(&["test"]);
         state.workspaces[0].test_add_tab(None);

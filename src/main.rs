@@ -222,6 +222,15 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # navigate_pane_up = "k"
 # navigate_pane_right = "l"     # right arrow always focuses the pane to the right
 
+# Navigator modal (prefix+g to open)
+# navigator_up = "k"
+# navigator_down = "j"
+# navigator_filter_all = "a"
+# navigator_filter_blocked = "b"
+# navigator_filter_working = "w"
+# navigator_filter_idle = "i"
+# navigator_filter_done = "d"
+
 # Custom commands use the same binding syntax.
 # type = "shell" runs detached in the background.
 # type = "pane" opens a temporary pane and closes it when the command exits.
