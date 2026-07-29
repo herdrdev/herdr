@@ -1,1 +1,2 @@
 packaging/windows/licenses/* binary
+*.patch text eol=lf

@@ -5,6 +5,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$ProjectZigCache = Join-Path $ProjectRoot ".zig-cache"
+if (-not $env:ZIG_GLOBAL_CACHE_DIR) {
+    $env:ZIG_GLOBAL_CACHE_DIR = $ProjectZigCache
+}
+if (-not $env:ZIG_LOCAL_CACHE_DIR) {
+    $env:ZIG_LOCAL_CACHE_DIR = $ProjectZigCache
+}
+
 function Invoke-Checked {
     param([string]$Command, [string[]]$Arguments)
 
@@ -66,3 +75,4 @@ Invoke-Checked cargo @(
     "server::client_transport::tests"
 )
 Invoke-Checked cargo @("build", "--locked", "--target", "x86_64-pc-windows-msvc")
+Invoke-Checked python @("-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py")

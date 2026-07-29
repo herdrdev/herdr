@@ -56,7 +56,7 @@ class DocsTranslationParityTests(unittest.TestCase):
             errors = check_docs_translation_parity(root)
 
             self.assertEqual(len(errors), 1)
-            self.assertIn("ja/cli-reference.mdx", errors[0])
+            self.assertIn(str(Path("ja") / "cli-reference.mdx"), errors[0])
             self.assertIn("heading outline differs", errors[0])
 
     def test_parity_reports_missing_and_stale_files(self) -> None:

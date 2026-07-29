@@ -184,8 +184,9 @@ async function collectDocsScope(sourceDir, excludedDirectories = new Set()) {
 }
 
 export function rewritePreviewDocContent(content, relativePath = '') {
+  const normalizedContent = content.replace(/\r\n?/g, '\n');
   const rewritten = rewriteRelativeDocPaths(
-    content.replaceAll('/docs/', '/docs/preview/'),
+    normalizedContent.replaceAll('/docs/', '/docs/preview/'),
     1,
   );
   const withEditLink = setGeneratedEditUrl(
@@ -196,7 +197,8 @@ export function rewritePreviewDocContent(content, relativePath = '') {
 }
 
 export function rewriteVersionDocContent(content, { version, tag, sourceRoot, relativePath }) {
-  const taggedContent = content
+  const normalizedContent = content.replace(/\r\n?/g, '\n');
+  const taggedContent = normalizedContent
     .replaceAll('/docs/', `/docs/${version}/`)
     .replaceAll(
       'https://github.com/ogulcancelik/herdr/blob/master/',

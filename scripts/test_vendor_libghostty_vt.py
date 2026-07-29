@@ -91,7 +91,7 @@ class VendorLibghosttyVtTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parent.parent
         metadata = project_root / "vendor" / "libghostty-vt.vendor.json"
         self.assertTrue(metadata.exists())
-        text = metadata.read_text()
+        text = metadata.read_text(encoding="utf-8")
         self.assertIn('"source_commit"', text)
         self.assertIn('"dist_archive"', text)
         self.assertIn('"extracted_dir"', text)
@@ -106,11 +106,11 @@ class VendorLibghosttyVtTests(unittest.TestCase):
             return
 
         self.assertTrue(index.exists())
-        text = index.read_text()
+        text = index.read_text(encoding="utf-8")
         missing = [
-            str(path.relative_to(project_root))
+            path.relative_to(project_root).as_posix()
             for path in patches
-            if str(path.relative_to(project_root)) not in text
+            if path.relative_to(project_root).as_posix() not in text
         ]
         self.assertEqual(missing, [])
 
@@ -119,26 +119,27 @@ class VendorLibghosttyVtTests(unittest.TestCase):
         patch_dir = project_root / "vendor" / "patches" / "libghostty-vt"
 
         for patch in sorted(patch_dir.glob("*.patch")):
+            patch_bytes = patch.read_bytes().replace(b"\r\n", b"\n")
             result = subprocess.run(
-                ["git", "apply", "--check", "--reverse", str(patch.relative_to(project_root))],
+                ["git", "apply", "--check", "--reverse", "-"],
                 cwd=project_root,
-                text=True,
+                input=patch_bytes,
                 capture_output=True,
             )
             self.assertEqual(
                 result.returncode,
                 0,
-                f"{patch.relative_to(project_root)} is not applied cleanly:\n"
-                f"stdout:\n{result.stdout}\n"
-                f"stderr:\n{result.stderr}",
+                f"{patch.relative_to(project_root).as_posix()} is not applied cleanly:\n"
+                f"stdout:\n{result.stdout.decode('utf-8', errors='replace')}\n"
+                f"stderr:\n{result.stderr.decode('utf-8', errors='replace')}",
             )
 
     def test_embedded_libghostty_logging_is_silenced(self) -> None:
         root = Path(__file__).resolve().parent.parent / "vendor" / "libghostty-vt"
         lib_vt = root / "src" / "lib_vt.zig"
         sys_zig = root / "src" / "terminal" / "c" / "sys.zig"
-        lib_text = lib_vt.read_text()
-        sys_text = sys_zig.read_text()
+        lib_text = lib_vt.read_text(encoding="utf-8")
+        sys_text = sys_zig.read_text(encoding="utf-8")
         self.assertIn('.logFn = @import("terminal/c/sys.zig").logFn', lib_text)
         self.assertIn("if (global.log == null) return;", sys_text)
 

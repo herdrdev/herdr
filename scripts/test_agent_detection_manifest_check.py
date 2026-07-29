@@ -35,9 +35,9 @@ def staged_grok_dirs(root: Path) -> tuple[Path, Path]:
     (bundled / "grok.toml").write_bytes(
         (check.DEFAULT_BUNDLED_DIR / "grok.toml").read_bytes()
     )
-    (website / "grok.toml").write_bytes(
-        (check.DEFAULT_WEBSITE_DIR / "grok.toml").read_bytes()
-    )
+    website_manifest = (check.DEFAULT_WEBSITE_DIR / "grok.toml").read_bytes()
+    website_manifest = website_manifest.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    (website / "grok.toml").write_bytes(website_manifest)
     (website / "index.toml").write_text(catalog("grok", "grok.toml"))
     return bundled, website
 

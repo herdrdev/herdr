@@ -103,6 +103,11 @@ def load_toml(path: Path) -> dict:
     return value
 
 
+def normalized_sha256(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def version_tuple(value: str, path: Path) -> tuple[int, ...]:
     if not isinstance(value, str) or not VERSION_RE.fullmatch(value):
         raise CheckError(f"{path}: version must be dotted numeric")
@@ -323,7 +328,7 @@ def validate_catalog(
         bundled_path, bundled_manifest = bundled[agent_id]
         cmp = compare_versions(manifest["version"], bundled_manifest["version"], manifest_path)
         staged_manifest = STAGED_WEBSITE_MANIFESTS.get(agent_id)
-        website_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        website_digest = normalized_sha256(manifest_path)
         stages_new_engine_manifest = (
             staged_manifest
             == (bundled_manifest["version"], manifest["version"], website_digest)
