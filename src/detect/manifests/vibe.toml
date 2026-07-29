@@ -1,0 +1,26 @@
+id = "vibe"
+version = "2026.07.16.1"
+min_engine_version = 3
+updated_at = "2026-07-28T00:00:00Z"
+aliases = ["mistral-vibe"]
+
+# Placeholder manifest. Mistral Vibe renders a full-screen Textual TUI, so
+# screen patterns (idle/working/blocked) require live evidence captured with
+# `herdr agent read <pane> --source detection --format text` and
+# `--format ansi` from a real vibe session.
+#
+# Use the herdr-throwaway-repro skill to drive a disposable session into the
+# target state, capture the bottom-buffer evidence, then encode explicit
+# AND/OR gates here. Copy the refined manifest to
+# ~/.config/herdr/agent-detection/vibe.toml and run
+# `herdr server reload-agent-manifests` to test before committing.
+#
+# Until real rules are added, detection returns Unknown and the pane relies on
+# PTY activity and the post_agent hook for session identity.
+[[rules]]
+id = "placeholder_skip"
+state = "unknown"
+priority = 0
+region = "whole_recent"
+skip_state_update = true
+regex = [".*"]

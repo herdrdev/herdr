@@ -8,6 +8,7 @@ use super::command::{hook_command, legacy_bash_hook_command};
 use super::file_ops::legacy_bash_hook_path;
 use super::{
     HERMES_PLUGIN_INSTALL_NAME, KIMI_CONFIG_BLOCK_BEGIN, KIMI_CONFIG_BLOCK_END, KIMI_HOOK_EVENTS,
+    VIBE_CONFIG_BLOCK_BEGIN, VIBE_CONFIG_BLOCK_END,
 };
 
 pub(crate) fn ensure_hooks_object<'a>(
@@ -788,6 +789,75 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
         }
         if in_block {
             if line.trim() == KIMI_CONFIG_BLOCK_END {
+                in_block = false;
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+
+    if !removed_block {
+        return content.to_string();
+    }
+
+    let mut result = join_toml_lines(lines, trailing_newline);
+    while result.ends_with("\n\n") {
+        result.pop();
+    }
+    if result == "\n" {
+        String::new()
+    } else {
+        result
+    }
+}
+
+/// Merge herdr's vibe `post_agent` hook into the user-owned `~/.vibe/hooks.toml`.
+///
+/// Vibe loads hooks from a single `hooks.toml` (see
+/// `vibe/core/config/harness_files/_harness_manager.py`) as `[[hooks]]`
+/// arrays. Unlike grok, there is no per-plugin merge directory, so herdr
+/// edits this shared file with delimited BEGIN/END markers to stay
+/// idempotent and preserve unrelated user hooks. Re-running install
+/// replaces the block; uninstall removes it.
+pub(crate) fn build_vibe_hooks_config_with_hooks(content: &str, hook_path: &Path) -> String {
+    let mut result = remove_vibe_hooks_config_block(content)
+        .trim_end_matches('\n')
+        .to_string();
+    if !result.is_empty() {
+        result.push('\n');
+        result.push('\n');
+    }
+
+    result.push_str(VIBE_CONFIG_BLOCK_BEGIN);
+    result.push('\n');
+    // Vibe has no action argument; each hook type invokes its own command,
+    // so the hook command is just `bash <script>` with no trailing action.
+    let command = hook_command(hook_path, None);
+    result.push_str(&format!(
+        "[[hooks]]\nname = {}\ntype = {}\ncommand = {}\ntimeout = 10.0\n\n",
+        toml_basic_string("herdr-agent-state"),
+        toml_basic_string("post_agent"),
+        toml_basic_string(&command)
+    ));
+    result.push_str(VIBE_CONFIG_BLOCK_END);
+    result.push('\n');
+    result
+}
+
+pub(crate) fn remove_vibe_hooks_config_block(content: &str) -> String {
+    let trailing_newline = content.ends_with('\n');
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    let mut removed_block = false;
+
+    for line in content.lines() {
+        if line.trim() == VIBE_CONFIG_BLOCK_BEGIN {
+            in_block = true;
+            removed_block = true;
+            continue;
+        }
+        if in_block {
+            if line.trim() == VIBE_CONFIG_BLOCK_END {
                 in_block = false;
             }
             continue;

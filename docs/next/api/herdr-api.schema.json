@@ -2119,7 +2119,8 @@
             "qodercli",
             "cursor",
             "mastracode",
-            "grok"
+            "grok",
+            "vibe"
           ],
           "type": "string"
         },
@@ -7113,7 +7114,8 @@
             "qodercli",
             "cursor",
             "mastracode",
-            "grok"
+            "grok",
+            "vibe"
           ],
           "type": "string"
         },

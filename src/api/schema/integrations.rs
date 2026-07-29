@@ -28,10 +28,11 @@ pub enum IntegrationTarget {
     Cursor,
     Mastracode,
     Grok,
+    Vibe,
 }
 
 impl IntegrationTarget {
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 16] = [
         Self::Pi,
         Self::Omp,
         Self::Claude,
@@ -47,6 +48,7 @@ impl IntegrationTarget {
         Self::Cursor,
         Self::Mastracode,
         Self::Grok,
+        Self::Vibe,
     ];
 }
 
