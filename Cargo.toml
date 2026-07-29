@@ -13,6 +13,7 @@ include = [
     "src/**/*",
     "assets/sounds/*",
     "docs/next/api/herdr-api.schema.json",
+    "skills/herdr/SKILL.md",
     "README.md",
     "LICENSE",
     "Cargo.toml",
