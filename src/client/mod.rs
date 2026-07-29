@@ -1225,7 +1225,8 @@ fn run_client_with_mode(
 
     let should_quit = Arc::new(AtomicBool::new(false));
 
-    // Install Ctrl+C handler.
+    // ctrlc's "termination" feature makes this also catch SIGTERM/SIGHUP, so a
+    // kill or SSH teardown still runs the quit path and TerminalGuard::Drop.
     let quit_flag = should_quit.clone();
     let _ = ctrlc::set_handler(move || {
         quit_flag.store(true, Ordering::Release);
