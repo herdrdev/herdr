@@ -496,6 +496,20 @@ pub struct FrameData {
 }
 
 impl FrameData {
+    /// Validates invariants required by semantic-frame renderers.
+    pub(crate) fn validate(&self) -> Result<(), FramingError> {
+        let expected = (self.width as usize) * (self.height as usize);
+        if self.cells.len() != expected {
+            return Err(FramingError::InvalidMessage(format!(
+                "semantic frame has {} cells, expected {expected} for {}x{}",
+                self.cells.len(),
+                self.width,
+                self.height
+            )));
+        }
+        Ok(())
+    }
+
     /// Creates a `FrameData` from a ratatui `Buffer` and optional cursor.
     ///
     /// This converts ratatui's internal cell representation into the
@@ -800,6 +814,8 @@ pub enum FramingError {
     Io(io::Error),
     /// Bincode serialization or deserialization failed.
     Bincode(String),
+    /// A decoded message violates a required protocol invariant.
+    InvalidMessage(String),
     /// The connection was closed before a complete frame could be read.
     UnexpectedEof,
 }
@@ -812,6 +828,7 @@ impl std::fmt::Display for FramingError {
             }
             FramingError::Io(e) => write!(f, "I/O error: {e}"),
             FramingError::Bincode(e) => write!(f, "bincode error: {e}"),
+            FramingError::InvalidMessage(e) => write!(f, "invalid message: {e}"),
             FramingError::UnexpectedEof => write!(f, "unexpected end of stream"),
         }
     }
@@ -1793,6 +1810,8 @@ mod tests {
         };
         let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
 
+        assert!(frame.validate().is_ok());
+
         // Verify frame dimensions.
         assert_eq!(frame.width, 5);
         assert_eq!(frame.height, 3);
@@ -1854,6 +1873,11 @@ mod tests {
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
+        assert!(matches!(
+            frame.validate(),
+            Err(FramingError::InvalidMessage(message))
+                if message.contains("5 cells") && message.contains("expected 6")
+        ));
         assert!(frame.to_ratatui_buffer().is_none());
     }
 

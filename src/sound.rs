@@ -14,6 +14,7 @@ use std::process::Output;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(any(windows, target_os = "macos")))]
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::warn;
 
@@ -79,9 +80,12 @@ fn play_file(path: &Path) -> Result<(), String> {
 
 fn play_bytes(data: &[u8]) -> Result<(), String> {
     // Write to a temp file because the supported audio players need a file path.
-    let tmp = temp_sound_path();
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    file.write_all(data).map_err(|e| e.to_string())?;
+    let (tmp, mut file) = create_temp_sound_file().map_err(|e| e.to_string())?;
+    if let Err(err) = file.write_all(data) {
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err.to_string());
+    }
     drop(file);
 
     let result = run_player(&tmp);
@@ -96,9 +100,49 @@ fn play_bytes(data: &[u8]) -> Result<(), String> {
 }
 
 fn temp_sound_path() -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
     let id = SOUND_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("herdr-sound-{}-{id}.mp3", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "herdr-sound-{}-{timestamp}-{id}.mp3",
+        std::process::id()
+    ))
 }
+
+fn create_temp_sound_file() -> std::io::Result<(PathBuf, std::fs::File)> {
+    for _ in 0..100 {
+        let path = temp_sound_path();
+        match create_new_sound_file(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to allocate unique sound path",
+    ))
+}
+
+fn create_new_sound_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    restrict_sound_file_options(&mut options);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn restrict_sound_file_options(options: &mut std::fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(windows)]
+fn restrict_sound_file_options(_options: &mut std::fs::OpenOptions) {}
 
 #[cfg(windows)]
 fn run_player(path: &Path) -> Result<Output, String> {
@@ -335,6 +379,36 @@ mod tests {
     #[test]
     fn temp_sound_paths_are_unique() {
         assert_ne!(temp_sound_path(), temp_sound_path());
+    }
+
+    #[test]
+    fn sound_temp_file_does_not_replace_an_existing_file() {
+        let path = temp_sound_path();
+        std::fs::write(&path, b"keep me").expect("test file should be created");
+
+        let err = create_new_sound_file(&path).expect_err("existing file must not be replaced");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(&path).expect("test file should remain readable"),
+            b"keep me"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sound_temp_files_are_unique() {
+        let (first_path, first_file) =
+            create_temp_sound_file().expect("first temp file should be created");
+        let (second_path, second_file) =
+            create_temp_sound_file().expect("second temp file should be created");
+
+        assert_ne!(first_path, second_path);
+
+        drop(first_file);
+        drop(second_file);
+        let _ = std::fs::remove_file(first_path);
+        let _ = std::fs::remove_file(second_path);
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]

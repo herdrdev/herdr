@@ -1,4 +1,7 @@
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::warn;
 
@@ -6,6 +9,8 @@ use super::snapshot::{
     parse_history_snapshot, parse_snapshot, snapshot_file_version, SessionHistorySnapshot,
     SessionSnapshot, SNAPSHOT_VERSION,
 };
+
+static SAVE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn session_path() -> PathBuf {
     crate::session::data_dir().join("session.json")
@@ -51,14 +56,55 @@ fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io:
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(snapshot)?;
-    let tmp_path = target.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &json)?;
+    let (tmp_path, mut tmp_file) = create_temp_file(&target)?;
+    if let Err(err) = tmp_file.write_all(json.as_bytes()) {
+        drop(tmp_file);
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+    drop(tmp_file);
     if let Err(err) = std::fs::rename(&tmp_path, &target) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
     Ok(())
 }
+
+fn create_temp_file(target: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+
+    for _ in 0..100 {
+        let id = SAVE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_path =
+            target.with_extension(format!("json.tmp-{}-{timestamp}-{id}", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        restrict_file_options(&mut options);
+        match options.open(&tmp_path) {
+            Ok(file) => return Ok((tmp_path, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to allocate unique session temp path",
+    ))
+}
+
+#[cfg(unix)]
+fn restrict_file_options(options: &mut std::fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.mode(0o600);
+}
+
+#[cfg(windows)]
+fn restrict_file_options(_options: &mut std::fs::OpenOptions) {}
 
 pub(super) fn save_to_paths(
     session_path: &Path,
@@ -261,6 +307,39 @@ mod tests {
 
         assert!(session_path.exists());
         assert!(!history_path.exists());
+    }
+
+    #[test]
+    fn session_temp_files_are_unique() {
+        let target = temp_session_path("unique-temp");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+        let (first_path, first_file) = create_temp_file(&target).unwrap();
+        let (second_path, second_file) = create_temp_file(&target).unwrap();
+
+        assert_ne!(first_path, second_path);
+
+        drop(first_file);
+        drop(second_file);
+        let _ = std::fs::remove_file(first_path);
+        let _ = std::fs::remove_file(second_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_to_path_uses_private_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = temp_session_path("private-permissions");
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+
+        save_to_path(&path, &empty_snapshot()).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]

@@ -353,6 +353,7 @@ fn setup_terminal_with_capabilities(
     mouse_capture: bool,
 ) -> io::Result<TerminalGuard> {
     ratatui::init();
+    let mut guard = TerminalGuard::new();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let host_color_scheme_reports =
         should_enable_host_color_scheme_reports(enable_client_protocols);
@@ -365,8 +366,10 @@ fn setup_terminal_with_capabilities(
         }
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
+            guard.reset_host_color_scheme_reports = true;
             write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
         }
+        guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
     } else {
         if should_query_host_terminal_theme() {
@@ -386,6 +389,10 @@ fn setup_terminal_with_capabilities(
         } else {
             WindowsVirtualTerminalInputSetup::default()
         };
+    #[cfg(windows)]
+    {
+        guard.restore_windows_input_mode = windows_virtual_terminal_input.restore_mode;
+    }
 
     #[cfg(windows)]
     if enable_client_protocols
@@ -393,30 +400,21 @@ fn setup_terminal_with_capabilities(
         && windows_virtual_terminal_input.active
         && windows_win32_input_mode_enabled()
     {
-        if let Err(err) = enable_windows_win32_input_mode(&mut io::stdout()) {
-            if let Some(mode) = windows_virtual_terminal_input.restore_mode {
-                restore_windows_input_mode_value(mode);
-            }
-            return Err(err);
-        }
+        enable_windows_win32_input_mode(&mut io::stdout())?;
     }
 
     let modify_other_keys_mode = enable_client_protocols
         .then(crate::input::host_modify_other_keys_mode)
         .flatten();
     if let Some(mode) = modify_other_keys_mode {
+        guard.reset_modify_other_keys = true;
         io::stdout().write_all(mode.set_sequence())?;
         io::stdout().flush()?;
     }
 
     execute!(io::stdout(), DisableLineWrap)?;
 
-    Ok(TerminalGuard {
-        reset_modify_other_keys: modify_other_keys_mode.is_some(),
-        reset_host_color_scheme_reports: host_color_scheme_reports,
-        #[cfg(windows)]
-        restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
-    })
+    Ok(guard)
 }
 
 fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
@@ -427,8 +425,23 @@ fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> boo
 struct TerminalGuard {
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    reset_keyboard_enhancements: bool,
+    cleanup_done: Arc<AtomicBool>,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
+}
+
+impl TerminalGuard {
+    fn new() -> Self {
+        Self {
+            reset_modify_other_keys: false,
+            reset_host_color_scheme_reports: false,
+            reset_keyboard_enhancements: false,
+            cleanup_done: Arc::new(AtomicBool::new(false)),
+            #[cfg(windows)]
+            restore_windows_input_mode: None,
+        }
+    }
 }
 
 fn write_host_color_scheme_report_mode(
@@ -569,8 +582,14 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
 fn restore_terminal_state(
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    reset_keyboard_enhancements: bool,
+    cleanup_done: &AtomicBool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) {
+    if cleanup_done.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
     let _ = clear_received_kitty_graphics(&mut io::stdout());
 
     // Reset modifyOtherKeys if we enabled it.
@@ -579,7 +598,9 @@ fn restore_terminal_state(
         let _ = io::stdout().flush();
     }
 
-    let _ = pop_keyboard_enhancement_flags();
+    if reset_keyboard_enhancements {
+        let _ = pop_keyboard_enhancement_flags();
+    }
 
     let _ = execute!(
         io::stdout(),
@@ -650,6 +671,8 @@ impl Drop for TerminalGuard {
         restore_terminal_state(
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
+            self.reset_keyboard_enhancements,
+            &self.cleanup_done,
             #[cfg(windows)]
             self.restore_windows_input_mode,
         );
@@ -1204,6 +1227,8 @@ fn run_client_with_mode(
     // Install a panic hook to restore the terminal on panic (same as monolithic).
     let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
     let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
+    let panic_resets_keyboard_enhancements = terminal_guard.reset_keyboard_enhancements;
+    let panic_cleanup_done = Arc::clone(&terminal_guard.cleanup_done);
     #[cfg(windows)]
     let panic_restore_windows_input_mode = terminal_guard.restore_windows_input_mode;
     let original_hook = std::panic::take_hook();
@@ -1211,6 +1236,8 @@ fn run_client_with_mode(
         restore_terminal_state(
             panic_resets_modify_other_keys,
             panic_resets_host_color_scheme_reports,
+            panic_resets_keyboard_enhancements,
+            &panic_cleanup_done,
             #[cfg(windows)]
             panic_restore_windows_input_mode,
         );
@@ -1516,6 +1543,7 @@ async fn run_client_loop(
             }
             ClientLoopEvent::ServerMessage(msg) => match msg {
                 ServerMessage::Frame(frame_data) => {
+                    frame_data.validate().map_err(ClientError::Protocol)?;
                     let frame_data = if state.draw_host_cursor {
                         render_ansi::frame_with_drawn_cursor(frame_data)
                     } else {

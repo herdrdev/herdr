@@ -1,4 +1,6 @@
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -52,6 +54,64 @@ fn set_host_color_scheme_reports(enabled: bool) -> io::Result<()> {
     };
     io::stdout().write_all(sequence.as_bytes())?;
     io::stdout().flush()
+}
+
+fn restore_monolithic_terminal_state(
+    reset_modify_other_keys: bool,
+    reset_keyboard_enhancements: bool,
+    cleanup_done: &AtomicBool,
+) {
+    use std::io::Write;
+
+    if cleanup_done.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    if reset_modify_other_keys {
+        let _ = io::stdout().write_all(b"\x1b[>4;0m");
+        let _ = io::stdout().flush();
+    }
+    if crate::kitty_graphics::is_enabled() {
+        let _ = crate::kitty_graphics::clear_all_host_graphics();
+    }
+    if reset_keyboard_enhancements {
+        let _ = pop_keyboard_enhancement_flags();
+    }
+    let _ = execute!(
+        io::stdout(),
+        DisableFocusChange,
+        DisableBracketedPaste,
+        DisableMouseCapture
+    );
+    let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
+    let _ = set_host_color_scheme_reports(false);
+    ratatui::restore();
+}
+
+struct MonolithicTerminalGuard {
+    reset_modify_other_keys: bool,
+    reset_keyboard_enhancements: bool,
+    cleanup_done: Arc<AtomicBool>,
+}
+
+impl MonolithicTerminalGuard {
+    fn new() -> Self {
+        Self {
+            reset_modify_other_keys: false,
+            reset_keyboard_enhancements: false,
+            cleanup_done: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl Drop for MonolithicTerminalGuard {
+    fn drop(&mut self) {
+        restore_monolithic_terminal_state(
+            self.reset_modify_other_keys,
+            self.reset_keyboard_enhancements,
+            &self.cleanup_done,
+        );
+    }
 }
 
 mod agent_resume;
@@ -755,29 +815,6 @@ fn main() -> io::Result<()> {
 
     let modify_other_keys_mode = crate::input::host_modify_other_keys_mode();
 
-    let original_hook = std::panic::take_hook();
-    let panic_resets_modify_other_keys = modify_other_keys_mode.is_some();
-    std::panic::set_hook(Box::new(move |info| {
-        tracing::error!("PANIC: {info}");
-        if panic_resets_modify_other_keys {
-            let _ = std::io::Write::write_all(&mut io::stdout(), b"\x1b[>4;0m");
-        }
-        if crate::kitty_graphics::is_enabled() {
-            let _ = crate::kitty_graphics::clear_all_host_graphics();
-        }
-        let _ = execute!(
-            io::stdout(),
-            DisableFocusChange,
-            DisableBracketedPaste,
-            DisableMouseCapture
-        );
-        let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
-        let _ = set_host_color_scheme_reports(false);
-        let _ = pop_keyboard_enhancement_flags();
-        ratatui::restore();
-        original_hook(info);
-    }));
-
     let config = &loaded_config.config;
     let config_diagnostic = config::config_diagnostic_summary(&loaded_config.diagnostics);
     logging::startup("app");
@@ -793,6 +830,7 @@ fn main() -> io::Result<()> {
 
     let result = rt.block_on(async {
         let mut terminal = ratatui::init();
+        let mut terminal_guard = MonolithicTerminalGuard::new();
         crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
         if config.ui.mouse_capture {
             execute!(io::stdout(), EnableMouseCapture)?;
@@ -801,6 +839,7 @@ fn main() -> io::Result<()> {
         }
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         set_host_color_scheme_reports(true)?;
+        terminal_guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
 
         // Some hosts do not honor Kitty keyboard enhancement pushes for
@@ -808,9 +847,24 @@ fn main() -> io::Result<()> {
         // know it is needed and parseable, so modified Enter stays distinct.
         if let Some(mode) = modify_other_keys_mode {
             use std::io::Write;
+            terminal_guard.reset_modify_other_keys = true;
             std::io::stdout().write_all(mode.set_sequence())?;
             std::io::stdout().flush()?;
         }
+
+        let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
+        let panic_resets_keyboard_enhancements = terminal_guard.reset_keyboard_enhancements;
+        let panic_cleanup_done = Arc::clone(&terminal_guard.cleanup_done);
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            tracing::error!("PANIC: {info}");
+            restore_monolithic_terminal_state(
+                panic_resets_modify_other_keys,
+                panic_resets_keyboard_enhancements,
+                &panic_cleanup_done,
+            );
+            original_hook(info);
+        }));
 
         let mut app = app::App::new(
             config,
@@ -821,26 +875,7 @@ fn main() -> io::Result<()> {
         );
         let result = app.run(&mut terminal).await;
 
-        // Reset modifyOtherKeys if we enabled it.
-        if modify_other_keys_mode.is_some() {
-            use std::io::Write;
-            std::io::stdout().write_all(b"\x1b[>4;0m")?;
-            std::io::stdout().flush()?;
-        }
-
-        if crate::kitty_graphics::is_enabled() {
-            crate::kitty_graphics::clear_all_host_graphics()?;
-        }
-        pop_keyboard_enhancement_flags()?;
-        execute!(
-            io::stdout(),
-            DisableFocusChange,
-            DisableBracketedPaste,
-            DisableMouseCapture
-        )?;
-        crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
-        set_host_color_scheme_reports(false)?;
-        ratatui::restore();
+        drop(terminal_guard);
 
         // Drop app (and all workspaces/panes) before runtime shuts down
         drop(app);
