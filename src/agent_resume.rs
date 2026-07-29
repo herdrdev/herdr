@@ -207,6 +207,13 @@ pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> S
     )
 }
 
+pub fn splice_launch_args(plan: &mut AgentResumePlan, launch_args: &[String]) {
+    if launch_args.is_empty() || plan.argv.is_empty() {
+        return;
+    }
+    let _ = plan.argv.splice(1..1, launch_args.iter().cloned());
+}
+
 pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
     matches!(
         (source, agent),
@@ -595,6 +602,26 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+    }
+
+    #[test]
+    fn launch_args_are_spliced_before_resume_flags() {
+        let id = "session-1";
+
+        let mut claude_plan =
+            plan("herdr:claude", "claude", &AgentSessionRef::id(id).unwrap()).unwrap();
+        splice_launch_args(&mut claude_plan, &["--flag".to_string()]);
+        assert_eq!(claude_plan.argv, vec!["claude", "--flag", "--resume", id]);
+
+        let mut codex_plan =
+            plan("herdr:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
+        splice_launch_args(&mut codex_plan, &["--flag".to_string()]);
+        assert_eq!(codex_plan.argv, vec!["codex", "--flag", "resume", id]);
+
+        let mut unchanged =
+            plan("herdr:claude", "claude", &AgentSessionRef::id(id).unwrap()).unwrap();
+        splice_launch_args(&mut unchanged, &[]);
+        assert_eq!(unchanged.argv, vec!["claude", "--resume", id]);
     }
 
     #[test]

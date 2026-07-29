@@ -115,6 +115,8 @@ pub struct PaneAgentSessionSnapshot {
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
     pub value: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_args: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -339,6 +341,7 @@ fn capture_tab(
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
+            let launch_args = terminal.agent_launch_args().to_vec();
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
                     return Some(PaneAgentSessionSnapshot {
@@ -346,6 +349,7 @@ fn capture_tab(
                         agent: authority.agent_label.clone(),
                         kind: session_ref.kind,
                         value: session_ref.value.clone(),
+                        launch_args,
                     });
                 }
             }
@@ -357,6 +361,7 @@ fn capture_tab(
                     agent: session.agent.clone(),
                     kind: session.session_ref.kind,
                     value: session.session_ref.value.clone(),
+                    launch_args,
                 })
         });
         panes.insert(

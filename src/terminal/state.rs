@@ -132,6 +132,7 @@ pub struct TerminalState {
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
     managed_agent: Option<ManagedAgent>,
+    agent_launch_args: Vec<String>,
     hook_report_sequences: HashMap<String, u64>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
     stale_full_lifecycle_hook_sessions: HashMap<String, Vec<StaleFullLifecycleHookSession>>,
@@ -165,6 +166,7 @@ impl TerminalState {
             agent_name: None,
             agent_name_owner: None,
             managed_agent: None,
+            agent_launch_args: Vec::new(),
             hook_report_sequences: HashMap::new(),
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
             stale_full_lifecycle_hook_sessions: HashMap::new(),
@@ -1925,6 +1927,15 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.managed_agent = None;
+        self.agent_launch_args.clear();
+    }
+
+    pub fn agent_launch_args(&self) -> &[String] {
+        &self.agent_launch_args
+    }
+
+    pub fn set_agent_launch_args(&mut self, args: Vec<String>) {
+        self.agent_launch_args = args;
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {

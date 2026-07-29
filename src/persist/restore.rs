@@ -550,6 +550,11 @@ fn restore_tab(
                 (Some(_), None) => {}
                 (None, _) => {}
             }
+            if let Some(session) = saved_agent_session {
+                if !session.launch_args.is_empty() {
+                    terminal.set_agent_launch_args(session.launch_args.clone());
+                }
+            }
             if let Some(agent) = initial_restore_agent {
                 let _ = terminal.set_detected_state_with_screen_signals_at(
                     Some(agent),
@@ -645,6 +650,11 @@ fn restore_tab(
                     (Some(agent_name), None) if was_imported => terminal.set_agent_name(agent_name),
                     (Some(_), None) => {}
                     (None, _) => {}
+                }
+                if let Some(session) = saved_agent_session {
+                    if !session.launch_args.is_empty() {
+                        terminal.set_agent_launch_args(session.launch_args.clone());
+                    }
                 }
                 if let Some(agent) = initial_restore_agent {
                     let _ = terminal.set_detected_state_with_screen_signals_at(
@@ -786,7 +796,10 @@ fn restore_plan_for_snapshot(
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    let mut plan =
+        crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)?;
+    crate::agent_resume::splice_launch_args(&mut plan, &session.launch_args);
+    Some(plan)
 }
 
 fn persisted_agent_session_from_snapshot(
@@ -1014,6 +1027,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
+            launch_args: Vec::new(),
         };
 
         assert!(restore_plan_for_snapshot(&session, false).is_none());
@@ -1027,6 +1041,7 @@ mod tests {
             agent: "claude".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
+            launch_args: Vec::new(),
         };
         assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
     }
@@ -1039,6 +1054,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
+            launch_args: Vec::new(),
         };
         let mut resumed = HashSet::new();
 
@@ -1061,6 +1077,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
+            launch_args: Vec::new(),
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1086,6 +1103,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
+            launch_args: Vec::new(),
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1114,6 +1132,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
+            launch_args: Vec::new(),
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             ansi: "RESTORED_HISTORY\r\n".into(),
@@ -1140,6 +1159,7 @@ mod tests {
             agent: "hermes".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Id,
             value: "hermes-session".into(),
+            launch_args: Vec::new(),
         };
 
         let preserved = restored_terminal_agent_session(Some(&session), false)
@@ -1156,6 +1176,7 @@ mod tests {
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
+            launch_args: Vec::new(),
         };
         let mut resumed = HashSet::new();
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_some());
@@ -1193,6 +1214,7 @@ mod tests {
                                 agent: "opencode".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "opencode-session".into(),
+                                launch_args: Vec::new(),
                             }),
                             launch_argv: None,
                         },
@@ -1353,6 +1375,7 @@ mod tests {
                 agent: "codex".into(),
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "codex-session".into(),
+                launch_args: Vec::new(),
             }),
             launch_argv: None,
         };
@@ -1504,6 +1527,7 @@ mod tests {
                                 agent: "codex".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "codex-session".into(),
+                                launch_args: Vec::new(),
                             }),
                             launch_argv: None,
                         },
