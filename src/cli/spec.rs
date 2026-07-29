@@ -159,6 +159,22 @@ fn server_command() -> Command {
     Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
+        .subcommand(
+            Command::new("live-handoff")
+                .about("Hand off live panes to a new local server")
+                .arg(
+                    path_option("import-exe", "PATH")
+                        .help("Server binary to hand the live panes off to"),
+                )
+                .arg(
+                    option("expected-protocol", "VERSION")
+                        .help("Refuse the handoff unless the new server speaks this protocol"),
+                )
+                .arg(
+                    option("expected-version", "VERSION")
+                        .help("Refuse the handoff unless the new server reports this version"),
+                ),
+        )
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
         .subcommand(
             Command::new("agent-manifests")
@@ -1235,6 +1251,35 @@ mod tests {
         assert!(pane
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait-output"));
+    }
+
+    #[test]
+    fn spec_covers_every_dispatched_server_subcommand() {
+        // Keep in sync with the dispatch table in `super::super::server`. The
+        // spec drives `-h`/`--help` and shell completion, so a subcommand that
+        // is dispatched but unlisted is invisible to users.
+        let cmd = super::command();
+        let server = command_path(&cmd, &["server"]);
+        let names: Vec<&str> = server
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "stop",
+                "live-handoff",
+                "reload-config",
+                "agent-manifests",
+                "update-agent-manifests",
+                "reload-agent-manifests",
+            ]
+        );
+
+        let handoff = command_path(&cmd, &["server", "live-handoff"]);
+        assert!(has_option(handoff, "import-exe"));
+        assert!(has_option(handoff, "expected-protocol"));
+        assert!(has_option(handoff, "expected-version"));
     }
 
     #[test]
