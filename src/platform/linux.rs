@@ -4,6 +4,7 @@ use std::{
     os::fd::RawFd,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 
 use super::{
@@ -12,6 +13,23 @@ use super::{
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
+
+/// gVisor prints this in its kernel log banner and never exposes a terminal
+/// foreground process group.
+const GVISOR_KERNEL_LOG_MARKER: &str = "gvisor";
+
+/// Kernel log bytes read for the sandbox probe. `SYSLOG_ACTION_READ_ALL` returns
+/// the tail of the log, so this has to be large enough to still contain the boot
+/// banner: gVisor's log is a fixed set of lines well under this size, and hosts
+/// with a larger log never carry the marker in the first place.
+const KERNEL_LOG_PROBE_BYTES: usize = 8192;
+
+/// Upper bound on pane shell children inspected on the sandbox path, so the
+/// lookup stays bounded regardless of how many children a shell has.
+const SANDBOX_CHILDREN_SCAN_LIMIT: usize = 64;
+
+/// `SYSLOG_ACTION_READ_ALL`: copy the current kernel log into the caller buffer.
+const SYSLOG_ACTION_READ_ALL: libc::c_int = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcGroupMember {
@@ -43,6 +61,43 @@ fn proc_file_indicates_wsl(path: &str) -> bool {
 fn text_indicates_wsl(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("microsoft") || text.contains("wsl")
+}
+
+/// Sandboxes that emulate the kernel can lack a terminal foreground process
+/// group entirely. gVisor is the known case: it names itself in its kernel log
+/// banner, so the environment is identified directly instead of being inferred
+/// from a detection failure. Probed once per process; an unreadable or
+/// restricted kernel log counts as "not that environment".
+fn running_inside_gvisor() -> bool {
+    static INSIDE_GVISOR: OnceLock<bool> = OnceLock::new();
+    *INSIDE_GVISOR.get_or_init(|| {
+        read_kernel_log(KERNEL_LOG_PROBE_BYTES)
+            .map(|log| kernel_log_indicates_gvisor(&log))
+            .unwrap_or(false)
+    })
+}
+
+fn kernel_log_indicates_gvisor(log: &str) -> bool {
+    log.to_ascii_lowercase().contains(GVISOR_KERNEL_LOG_MARKER)
+}
+
+fn read_kernel_log(limit: usize) -> Option<String> {
+    let mut buffer = vec![0u8; limit];
+    // SAFETY: syslog(2) writes at most `limit` bytes into our own buffer and
+    // returns how many it wrote. No other process state is read or modified.
+    let read = unsafe {
+        libc::syscall(
+            libc::SYS_syslog,
+            SYSLOG_ACTION_READ_ALL,
+            buffer.as_mut_ptr().cast::<libc::c_char>(),
+            limit as libc::c_int,
+        )
+    };
+    if read <= 0 {
+        return None;
+    }
+    let read = (read as usize).min(limit);
+    Some(String::from_utf8_lossy(&buffer[..read]).into_owned())
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
@@ -96,8 +151,22 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    let tpgid = foreground_process_group_id(child_pid)?;
-    let members = foreground_process_group_members(child_pid, tpgid)?;
+    if let Some(tpgid) = foreground_process_group_id(child_pid) {
+        return foreground_job_for_group(child_pid, tpgid);
+    }
+
+    // Only environments without a terminal foreground process group continue.
+    // A missing tpgid on its own never routes here, so normal Linux keeps the
+    // same behavior and cost as before.
+    if !running_inside_gvisor() {
+        return None;
+    }
+
+    foreground_job_for_group(child_pid, sandbox_foreground_process_group(child_pid)?)
+}
+
+fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<ForegroundJob> {
+    let members = foreground_process_group_members(child_pid, process_group_id)?;
     let processes = members
         .into_iter()
         .map(|member| {
@@ -117,9 +186,62 @@ pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     }
 
     Some(ForegroundJob {
-        process_group_id: tpgid,
+        process_group_id,
         processes,
     })
+}
+
+/// Foreground group substitute for sandboxes that never report one. A shell puts
+/// each job in its own process group led by the job's first process, so the pane
+/// shell's direct children carry one group id per job and the highest id is the
+/// most recently started job. Children still in the shell's own group are shell
+/// work rather than a job, so they are skipped. Reads one children list and at
+/// most `SANDBOX_CHILDREN_SCAN_LIMIT` entries.
+fn sandbox_foreground_process_group(child_pid: u32) -> Option<u32> {
+    let shell_group_id = process_pgrp_and_comm(child_pid)
+        .map(|(pgrp, _)| pgrp)
+        .filter(|pgrp| *pgrp > 0)
+        .map(|pgrp| pgrp as u32);
+
+    sandbox_foreground_process_group_with(
+        child_pid,
+        shell_group_id,
+        process_task_ids,
+        process_task_children,
+        |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
+    )
+}
+
+fn sandbox_foreground_process_group_with(
+    child_pid: u32,
+    shell_group_id: Option<u32>,
+    mut task_ids: impl FnMut(u32) -> Vec<u32>,
+    mut task_children: impl FnMut(u32, u32) -> Vec<u32>,
+    mut process_group_id: impl FnMut(u32) -> Option<i32>,
+) -> Option<u32> {
+    let mut newest: Option<u32> = None;
+    let mut scanned = 0usize;
+    for tid in task_ids(child_pid) {
+        for child in task_children(child_pid, tid) {
+            if scanned >= SANDBOX_CHILDREN_SCAN_LIMIT {
+                return newest;
+            }
+            scanned += 1;
+
+            let Some(pgrp) = process_group_id(child) else {
+                continue;
+            };
+            if pgrp <= 0 {
+                continue;
+            }
+            let pgrp = pgrp as u32;
+            if Some(pgrp) == shell_group_id {
+                continue;
+            }
+            newest = Some(newest.map_or(pgrp, |current: u32| current.max(pgrp)));
+        }
+    }
+    newest
 }
 
 fn foreground_process_group_members(
@@ -663,6 +785,89 @@ mod tests {
         assert!(text_indicates_wsl("4.4.0-19041-Microsoft"));
         assert!(!text_indicates_wsl("6.8.0-64-generic"));
         assert!(!text_indicates_wsl(""));
+    }
+
+    #[test]
+    fn gvisor_marker_detection_matches_kernel_log_banner() {
+        assert!(kernel_log_indicates_gvisor(
+            "<6>[    0.000000] Starting gVisor...\n<6>[    0.226686] Feeding the init monster...\n"
+        ));
+        assert!(!kernel_log_indicates_gvisor(
+            "<5>[    0.000000] Linux version 6.8.0-64-generic\n"
+        ));
+        assert!(!kernel_log_indicates_gvisor(""));
+    }
+
+    #[test]
+    fn sandbox_foreground_group_picks_the_newest_job() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![200, 300])]);
+        let groups = HashMap::from([(200, 200), (300, 300)]);
+
+        let group = sandbox_foreground_process_group_with(
+            100,
+            Some(100),
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+    }
+
+    #[test]
+    fn sandbox_foreground_group_skips_the_shell_group_even_when_shell_is_not_leader() {
+        // Pane shell 100 sits in group 90, so its group id differs from its pid:
+        // children left in group 90 are shell work, not a job.
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![150, 160, 300])]);
+        let groups = HashMap::from([(150, 90), (160, 90), (300, 300)]);
+
+        let group = sandbox_foreground_process_group_with(
+            100,
+            Some(90),
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+        assert_eq!(
+            sandbox_foreground_process_group_with(
+                100,
+                Some(90),
+                |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+                |pid, tid| children
+                    .get(&(pid, tid))
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|child| *child != 300)
+                    .collect(),
+                |pid| groups.get(&pid).copied(),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn sandbox_foreground_group_stops_at_the_scan_limit() {
+        let children: Vec<u32> = (1..=(SANDBOX_CHILDREN_SCAN_LIMIT as u32 + 10)).collect();
+        let mut inspected = 0usize;
+
+        let group = sandbox_foreground_process_group_with(
+            100,
+            Some(100),
+            |_| vec![100],
+            |_, _| children.clone(),
+            |pid| {
+                inspected += 1;
+                Some(pid as i32)
+            },
+        );
+
+        assert_eq!(inspected, SANDBOX_CHILDREN_SCAN_LIMIT);
+        assert_eq!(group, Some(SANDBOX_CHILDREN_SCAN_LIMIT as u32));
     }
 
     #[test]
