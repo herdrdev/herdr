@@ -2,7 +2,7 @@
 // renders every number and chart client-side, so the static page never goes stale.
 
 const STATS_URL = "https://assets.herdr.dev/stats/stats.json";
-const REPO_API_URL = "https://api.github.com/repos/ogulcancelik/herdr";
+const REPO_API_URL = "https://api.github.com/repos/herdrdev/herdr";
 
 const LINE_H = 320;
 const BAR_W = 420;

@@ -190,7 +190,7 @@ export function rewritePreviewDocContent(content, relativePath = '') {
   );
   const withEditLink = setGeneratedEditUrl(
     rewritten,
-    `https://github.com/ogulcancelik/herdr/edit/master/docs/next/website/src/content/docs/${relativePath}`,
+    `https://github.com/herdrdev/herdr/edit/master/docs/next/website/src/content/docs/${relativePath}`,
   );
   return insertPreviewNotice(withEditLink, relativePath);
 }
@@ -199,17 +199,17 @@ export function rewriteVersionDocContent(content, { version, tag, sourceRoot, re
   const taggedContent = content
     .replaceAll('/docs/', `/docs/${version}/`)
     .replaceAll(
-      'https://github.com/ogulcancelik/herdr/blob/master/',
-      `https://github.com/ogulcancelik/herdr/blob/${tag}/`,
+      'https://github.com/herdrdev/herdr/blob/master/',
+      `https://github.com/herdrdev/herdr/blob/${tag}/`,
     )
     .replaceAll(
-      'https://raw.githubusercontent.com/ogulcancelik/herdr/master/',
-      `https://raw.githubusercontent.com/ogulcancelik/herdr/${tag}/`,
+      'https://raw.githubusercontent.com/herdrdev/herdr/master/',
+      `https://raw.githubusercontent.com/herdrdev/herdr/${tag}/`,
     );
   const rewritten = rewriteRelativeDocPaths(taggedContent, 2);
   return setGeneratedEditUrl(
     rewritten,
-    `https://github.com/ogulcancelik/herdr/blob/${tag}/${sourceRoot}/${relativePath}`,
+    `https://github.com/herdrdev/herdr/blob/${tag}/${sourceRoot}/${relativePath}`,
   );
 }
 

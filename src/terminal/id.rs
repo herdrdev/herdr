@@ -20,6 +20,10 @@ impl TerminalId {
         let counter = NEXT_TERMINAL_ID.fetch_add(1, Ordering::Relaxed);
         Self(format!("term_{micros:x}{counter:x}"))
     }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for TerminalId {

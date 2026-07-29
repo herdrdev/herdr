@@ -34,8 +34,7 @@ impl App {
         } else {
             Mode::Navigate
         };
-        self.render_dirty
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.render_dirty.request_generic();
         self.render_notify.notify_one();
         true
     }
