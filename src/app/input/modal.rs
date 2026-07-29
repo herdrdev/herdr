@@ -200,6 +200,49 @@ pub(crate) fn handle_navigator_key(
         return;
     }
 
+    // Convert for configurable binding matching
+    let terminal_key = TerminalKey::from(key);
+
+    // Check configurable navigator bindings before hardcoded keys
+    if state.keybinds.navigator.down.matches_direct_key(terminal_key) {
+        state.move_navigator_selection_from(terminal_runtimes, 1);
+        return;
+    }
+    if state.keybinds.navigator.up.matches_direct_key(terminal_key) {
+        state.move_navigator_selection_from(terminal_runtimes, -1);
+        return;
+    }
+    if state.keybinds.navigator.filter_all.matches_direct_key(terminal_key) {
+        state.navigator.query.clear();
+        state.navigator.state_filter = None;
+        state.clamp_navigator_selection_from(terminal_runtimes);
+        return;
+    }
+    if state.keybinds.navigator.filter_blocked.matches_direct_key(terminal_key) {
+        state.navigator.query.clear();
+        state.navigator.state_filter = Some(NavigatorStateFilter::Blocked);
+        state.select_first_navigator_match_from(terminal_runtimes);
+        return;
+    }
+    if state.keybinds.navigator.filter_working.matches_direct_key(terminal_key) {
+        state.navigator.query.clear();
+        state.navigator.state_filter = Some(NavigatorStateFilter::Working);
+        state.select_first_navigator_match_from(terminal_runtimes);
+        return;
+    }
+    if state.keybinds.navigator.filter_idle.matches_direct_key(terminal_key) {
+        state.navigator.query.clear();
+        state.navigator.state_filter = Some(NavigatorStateFilter::Idle);
+        state.select_first_navigator_match_from(terminal_runtimes);
+        return;
+    }
+    if state.keybinds.navigator.filter_done.matches_direct_key(terminal_key) {
+        state.navigator.query.clear();
+        state.navigator.state_filter = Some(NavigatorStateFilter::Done);
+        state.select_first_navigator_match_from(terminal_runtimes);
+        return;
+    }
+
     match key.code {
         KeyCode::Esc => {
             leave_modal(state);
@@ -216,37 +259,8 @@ pub(crate) fn handle_navigator_key(
             state.navigator.state_filter = None;
             state.clamp_navigator_selection_from(terminal_runtimes);
         }
-        KeyCode::Char('a') if key.modifiers.is_empty() => {
-            state.navigator.query.clear();
-            state.navigator.state_filter = None;
-            state.clamp_navigator_selection_from(terminal_runtimes);
-        }
-        KeyCode::Char('b') if key.modifiers.is_empty() => {
-            state.navigator.query.clear();
-            state.navigator.state_filter = Some(NavigatorStateFilter::Blocked);
-            state.select_first_navigator_match_from(terminal_runtimes);
-        }
-        KeyCode::Char('w') if key.modifiers.is_empty() => {
-            state.navigator.query.clear();
-            state.navigator.state_filter = Some(NavigatorStateFilter::Working);
-            state.select_first_navigator_match_from(terminal_runtimes);
-        }
-        KeyCode::Char('i') if key.modifiers.is_empty() => {
-            state.navigator.query.clear();
-            state.navigator.state_filter = Some(NavigatorStateFilter::Idle);
-            state.select_first_navigator_match_from(terminal_runtimes);
-        }
-        KeyCode::Char('d') if key.modifiers.is_empty() => {
-            state.navigator.query.clear();
-            state.navigator.state_filter = Some(NavigatorStateFilter::Done);
-            state.select_first_navigator_match_from(terminal_runtimes);
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.move_navigator_selection_from(terminal_runtimes, 1)
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.move_navigator_selection_from(terminal_runtimes, -1)
-        }
+        KeyCode::Down => state.move_navigator_selection_from(terminal_runtimes, 1),
+        KeyCode::Up => state.move_navigator_selection_from(terminal_runtimes, -1),
         KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => state
             .move_navigator_selection_by_lines_from(
                 terminal_runtimes,
