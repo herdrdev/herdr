@@ -355,6 +355,17 @@ pub(crate) enum ServerEvent {
     QuitSignal,
 }
 
+/// Normalize the terminal identity a client reports for itself.
+///
+/// The value becomes an environment variable on every pane this client spawns, and it
+/// arrives from whatever is on the other end of the socket, including a remote bridge.
+/// No real `TERM_PROGRAM` contains control characters, and an interior NUL cannot survive
+/// the conversion to a C string at spawn time, so treat a malformed value as no identity
+/// rather than letting it reach the spawn path.
+pub(crate) fn normalize_reported_term_program(term_program: Option<String>) -> Option<String> {
+    term_program.filter(|value| !value.is_empty() && !value.contains(char::is_control))
+}
+
 /// Clamp client-reported terminal dimensions to a minimum viable size.
 pub(crate) fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
     let clamped_cols = cols.max(MIN_CLIENT_COLS);
@@ -529,7 +540,7 @@ pub(crate) fn handle_client_handshake(
                 requested_encoding,
                 keybindings,
                 launch_mode == ClientLaunchMode::TerminalAttach,
-                term_program.filter(|value| !value.is_empty()),
+                normalize_reported_term_program(term_program),
             )
         }
         _ => {
@@ -811,6 +822,38 @@ mod tests {
     use super::*;
     use interprocess::local_socket::traits::Listener as _;
     use std::path::PathBuf;
+
+    #[test]
+    fn reported_term_program_keeps_a_plausible_identity() {
+        assert_eq!(
+            normalize_reported_term_program(Some("ghostty".to_string())).as_deref(),
+            Some("ghostty")
+        );
+        assert_eq!(
+            normalize_reported_term_program(Some("iTerm.app".to_string())).as_deref(),
+            Some("iTerm.app")
+        );
+    }
+
+    #[test]
+    fn reported_term_program_rejects_values_that_cannot_be_an_identity() {
+        assert_eq!(normalize_reported_term_program(None), None);
+        assert_eq!(normalize_reported_term_program(Some(String::new())), None);
+        // An interior NUL cannot survive the conversion to a C string at spawn time, so
+        // letting it through would fail every pane spawn for this client.
+        assert_eq!(
+            normalize_reported_term_program(Some("ghost\0ty".to_string())),
+            None
+        );
+        assert_eq!(
+            normalize_reported_term_program(Some("ghost\nty".to_string())),
+            None
+        );
+        assert_eq!(
+            normalize_reported_term_program(Some("ghost\u{1b}[31mty".to_string())),
+            None
+        );
+    }
 
     struct TestSocketPath(PathBuf);
 
