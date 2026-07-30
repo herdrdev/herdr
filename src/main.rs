@@ -741,6 +741,10 @@ fn main() -> io::Result<()> {
 
     init_logging();
 
+    // No client attaches in this mode, so nothing else reports the outer terminal. This
+    // process owns the terminal directly, so its own environment is the right answer.
+    pane::set_outer_term_program(terminal_notify::outer_term_program());
+
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let _api_server = match api::start_server_with_capabilities(api_tx, event_hub.clone(), None) {

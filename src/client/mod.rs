@@ -763,7 +763,10 @@ fn do_handshake(
         } else {
             ClientLaunchMode::App
         },
-        term_program: outer_term_program(),
+        // The server is persistent and its own environment belongs to whichever terminal
+        // started it, so only the client can report this. The remote SSH bridge forwards
+        // no environment, making Hello the only channel that reaches a remote server.
+        term_program: crate::terminal_notify::outer_term_program(),
     };
     protocol::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
@@ -2105,32 +2108,6 @@ fn current_terminal_geometry(kitty_graphics_enabled: bool) -> (u16, u16, u32, u3
     )
 }
 
-/// Identifies the outer terminal emulator that renders this client's output.
-///
-/// The server is a persistent process whose own environment belongs to whichever
-/// terminal happened to start it, so it cannot infer this. Sending it in `Hello` is
-/// the only channel that survives the remote SSH bridge, which forwards no environment.
-fn outer_term_program() -> Option<String> {
-    if let Ok(value) = std::env::var("TERM_PROGRAM") {
-        if !value.is_empty() {
-            return Some(value);
-        }
-    }
-    // Kitty deliberately ships no TERM_PROGRAM, so fall back to the identity
-    // terminal_notify already infers from KITTY_WINDOW_ID/TERM, spelled the way
-    // TERM_PROGRAM-reading consumers expect.
-    use crate::terminal_notify::TerminalNotificationBackend as Backend;
-    Some(
-        match crate::terminal_notify::detect_backend()? {
-            Backend::Ghostty => "ghostty",
-            Backend::Iterm2 => "iTerm.app",
-            Backend::Kitty => "kitty",
-            Backend::WezTerm => "WezTerm",
-        }
-        .to_string(),
-    )
-}
-
 /// Reports polled changes and signalled resizes that return to the same size.
 fn resize_report_required(
     signalled: bool,
@@ -2286,35 +2263,6 @@ mod tests {
             should_draw_host_cursor(crate::config::HostCursorModeConfig::Auto),
             crate::platform::should_draw_host_cursor_by_default()
         );
-    }
-
-    const TERMINAL_IDENTITY_ENV: [&str; 3] = ["TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID"];
-
-    #[test]
-    fn outer_term_program_prefers_the_terminals_own_report() {
-        let _guard = env_lock().lock().unwrap();
-        let _cleared = EnvVarsRemovedGuard::new(&TERMINAL_IDENTITY_ENV);
-        let _env = EnvVarGuard::set("TERM_PROGRAM", "vscode");
-
-        assert_eq!(outer_term_program().as_deref(), Some("vscode"));
-    }
-
-    #[test]
-    fn outer_term_program_infers_kitty_which_sets_no_term_program() {
-        let _guard = env_lock().lock().unwrap();
-        let _cleared = EnvVarsRemovedGuard::new(&TERMINAL_IDENTITY_ENV);
-        let _env = EnvVarGuard::set("KITTY_WINDOW_ID", "3");
-
-        assert_eq!(outer_term_program().as_deref(), Some("kitty"));
-    }
-
-    #[test]
-    fn outer_term_program_is_none_for_an_unidentified_terminal() {
-        let _guard = env_lock().lock().unwrap();
-        let _cleared = EnvVarsRemovedGuard::new(&TERMINAL_IDENTITY_ENV);
-        let _env = EnvVarGuard::set("TERM", "xterm-256color");
-
-        assert_eq!(outer_term_program(), None);
     }
 
     #[test]

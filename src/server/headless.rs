@@ -1050,17 +1050,10 @@ impl HeadlessServer {
     }
 
     fn sync_foreground_client_state(&mut self) {
-        let Some(client_id) = self.foreground_client_id else {
-            self.effective_size = (MIN_COLS, MIN_ROWS);
-            self.app.state.outer_terminal_focus = None;
-            self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
-            crate::pane::set_outer_term_program(None);
-            let server_keybindings = self.server_keybindings.clone();
-            apply_keybindings(&mut self.app, &server_keybindings);
-            self.sync_visible_server_config_diagnostic(false);
-            return;
-        };
-        let Some(client) = self.clients.get(&client_id) else {
+        let Some(client) = self
+            .foreground_client_id
+            .and_then(|client_id| self.clients.get(&client_id))
+        else {
             self.foreground_client_id = None;
             self.effective_size = (MIN_COLS, MIN_ROWS);
             self.app.state.outer_terminal_focus = None;

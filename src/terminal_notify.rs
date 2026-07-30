@@ -8,6 +8,32 @@ pub enum TerminalNotificationBackend {
     WezTerm,
 }
 
+impl TerminalNotificationBackend {
+    /// The `TERM_PROGRAM` value this terminal is identified by.
+    ///
+    /// Kitty deliberately sets no `TERM_PROGRAM`; `"kitty"` is the spelling
+    /// TERM_PROGRAM-reading consumers check for it.
+    pub(crate) fn term_program(self) -> &'static str {
+        match self {
+            Self::Ghostty => "ghostty",
+            Self::Iterm2 => "iTerm.app",
+            Self::Kitty => "kitty",
+            Self::WezTerm => "WezTerm",
+        }
+    }
+}
+
+/// Identifies the outer terminal emulator rendering this process's output.
+///
+/// Prefers the terminal's own report and falls back to the identity inferred from
+/// `TERM`/`KITTY_WINDOW_ID`, so terminals that ship no `TERM_PROGRAM` are still named.
+pub(crate) fn outer_term_program() -> Option<String> {
+    std::env::var("TERM_PROGRAM")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| detect_backend().map(|backend| backend.term_program().to_string()))
+}
+
 pub fn detect_backend() -> Option<TerminalNotificationBackend> {
     let term_program = std::env::var("TERM_PROGRAM").ok();
     let term = std::env::var("TERM").ok();
@@ -108,6 +134,65 @@ fn wrap_tmux_passthrough(sequence: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Terminal identity variables `outer_term_program` reads, cleared so the ambient
+    /// terminal running the suite cannot decide the result.
+    const IDENTITY_ENV: [&str; 3] = ["TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID"];
+
+    struct IdentityEnvGuard {
+        previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl IdentityEnvGuard {
+        fn set(pairs: &[(&'static str, &str)]) -> Self {
+            let previous = IDENTITY_ENV
+                .iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect();
+            for key in IDENTITY_ENV {
+                std::env::remove_var(key);
+            }
+            for (key, value) in pairs {
+                std::env::set_var(key, value);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for IdentityEnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.previous {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn outer_term_program_prefers_the_terminals_own_report() {
+        let _lock = crate::integration::integration_env_lock();
+        let _env = IdentityEnvGuard::set(&[("TERM_PROGRAM", "vscode")]);
+
+        assert_eq!(outer_term_program().as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn outer_term_program_infers_kitty_which_sets_no_term_program() {
+        let _lock = crate::integration::integration_env_lock();
+        let _env = IdentityEnvGuard::set(&[("KITTY_WINDOW_ID", "3")]);
+
+        assert_eq!(outer_term_program().as_deref(), Some("kitty"));
+    }
+
+    #[test]
+    fn outer_term_program_is_none_for_an_unidentified_terminal() {
+        let _lock = crate::integration::integration_env_lock();
+        let _env = IdentityEnvGuard::set(&[("TERM", "xterm-256color")]);
+
+        assert_eq!(outer_term_program(), None);
+    }
 
     #[test]
     fn split_message_splits_title_and_body() {
