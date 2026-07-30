@@ -8,7 +8,7 @@ On Windows, cmd.exe expects the text after /c to remain shell syntax, but
 portable-pty quotes every argv item with ArgvQuote. That escapes embedded
 quotes in the command tail and changes cmd.exe parsing.
 
-Herdr issue: https://github.com/ogulcancelik/herdr/issues/1041
+Herdr issue: https://github.com/herdrdev/herdr/issues/1041
 Vendored base: portable-pty 0.9.0
 ---
  vendor/portable-pty/src/cmdbuilder.rs | 40 +++++++++++++++++++++++++++

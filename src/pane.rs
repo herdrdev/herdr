@@ -381,11 +381,22 @@ fn foreground_group_changed(
         && (foreground_pgid.is_some() || last_foreground_pgid.is_some())
 }
 
+// Only kernel-observed foreground groups drive change detection. Remembering an
+// inferred group would look like a change on every tick while the kernel stays silent.
+fn process_group_for_change_tracking(
+    observed_foreground_pgid: Option<u32>,
+    probed_process_group_id: Option<u32>,
+) -> Option<u32> {
+    observed_foreground_pgid?;
+    probed_process_group_id.or(observed_foreground_pgid)
+}
+
 fn should_skip_process_probe_for_lifecycle_authority(
     full_lifecycle_authority_active: bool,
     input: ProcessProbeInput,
 ) -> bool {
     full_lifecycle_authority_active
+        && input.foreground_pgid.is_some()
         && !input.pending_foreground_shell_clear
         && input.suppressed_agent.is_none()
         && input.has_process_probe
@@ -713,6 +724,8 @@ fn spawn_basic_detection_task(
                 has_process_probe = true;
                 let probe = probe_foreground_process(pid, foreground_pgid);
                 let process_group_id = probe.process_group_id;
+                let tracked_process_group_id =
+                    process_group_for_change_tracking(foreground_pgid, process_group_id);
                 let foreground_is_pane_shell = probe.foreground_is_pane_shell;
                 let mut new_agent = probe.agent;
                 if let Some(suppressed_agent) = suppressed_agent {
@@ -737,17 +750,15 @@ fn spawn_basic_detection_task(
                     &mut pending_foreground_shell_clear,
                     &mut foreground_shell_exit_reported,
                 );
+                last_foreground_pgid = tracked_process_group_id;
                 if new_agent.is_some() {
-                    last_foreground_pgid = process_group_id.or(foreground_pgid);
                     acquisition_started_at = None;
                     last_content_change_at = None;
-                } else if agent_presence.current_agent().is_none() {
-                    last_foreground_pgid = process_group_id.or(foreground_pgid);
-                    if had_process_probe && process_group_changed {
-                        acquisition_started_at = Some(now);
-                    }
-                } else {
-                    last_foreground_pgid = process_group_id.or(foreground_pgid);
+                } else if agent_presence.current_agent().is_none()
+                    && had_process_probe
+                    && process_group_changed
+                {
+                    acquisition_started_at = Some(now);
                 }
                 if changed {
                     agent = agent_presence.current_agent();
@@ -2151,6 +2162,10 @@ impl PaneRuntime {
                             let probe = probe_foreground_process(pid, foreground_pgid);
                             let process_name = probe.process_name;
                             let process_group_id = probe.process_group_id;
+                            let tracked_process_group_id = process_group_for_change_tracking(
+                                foreground_pgid,
+                                process_group_id,
+                            );
                             let foreground_is_pane_shell = probe.foreground_is_pane_shell;
                             let mut new_agent = probe.agent;
 
@@ -2179,20 +2194,17 @@ impl PaneRuntime {
                                 &mut pending_foreground_shell_clear,
                                 &mut foreground_shell_exit_reported,
                             );
+                            last_foreground_pgid = tracked_process_group_id;
                             if new_agent.is_some() {
-                                last_foreground_pgid = process_group_id;
                                 acquisition_started_at = None;
                                 last_content_change_at = None;
-                                pending_restore_probe = false;
-                            } else if agent_presence.current_agent().is_none() {
-                                last_foreground_pgid = process_group_id.or(foreground_pgid);
-                                if had_process_probe && process_group_changed {
-                                    acquisition_started_at = Some(now);
-                                }
-                                pending_restore_probe = false;
-                            } else {
-                                last_foreground_pgid = process_group_id.or(foreground_pgid);
+                            } else if agent_presence.current_agent().is_none()
+                                && had_process_probe
+                                && process_group_changed
+                            {
+                                acquisition_started_at = Some(now);
                             }
+                            pending_restore_probe = false;
                             if changed {
                                 agent = agent_presence.current_agent();
                                 if agent != previous_agent
@@ -3672,6 +3684,19 @@ mod tests {
     }
 
     #[test]
+    fn inferred_group_does_not_trigger_a_probe_on_every_tick() {
+        let tracked = process_group_for_change_tracking(None, Some(300));
+        assert_eq!(tracked, None);
+        assert!(!should_probe_foreground_job(ProcessProbeInput {
+            current_agent: Some(Agent::Claude),
+            foreground_pgid: None,
+            last_foreground_pgid: tracked,
+            elapsed_since_process_check: std::time::Duration::from_millis(300),
+            ..process_probe_input()
+        }));
+    }
+
+    #[test]
     fn pending_shell_clear_and_restore_force_process_probes() {
         assert!(should_probe_foreground_job(ProcessProbeInput {
             current_agent: Some(Agent::Codex),
@@ -3703,6 +3728,21 @@ mod tests {
                 ..process_probe_input()
             }
         ));
+    }
+
+    #[test]
+    fn lifecycle_authority_keeps_periodic_probes_without_an_observed_group() {
+        let input = ProcessProbeInput {
+            current_agent: Some(Agent::Pi),
+            foreground_pgid: None,
+            last_foreground_pgid: None,
+            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+            ..process_probe_input()
+        };
+        assert!(!should_skip_process_probe_for_lifecycle_authority(
+            true, input
+        ));
+        assert!(should_probe_foreground_job(input));
     }
 
     #[test]

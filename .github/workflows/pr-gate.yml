@@ -28,7 +28,7 @@ jobs:
             ]);
             const MAX_EXTERNAL_CHANGED_FILES = 20;
             const MAX_EXTERNAL_CHANGED_LINES = 1000;
-            const REVIEW_LABELS = ['greptile-review', 'coderabbit-review'];
+            const REVIEW_LABELS = ['ai-review'];
             const MAINTAINER_APPROVED_LABEL = 'maintainer-approved';
             const COMMENT_MARKER = '<!-- herdr:pr-gate -->';
 

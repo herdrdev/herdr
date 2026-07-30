@@ -119,6 +119,10 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
 
 fn powershell_agent_script(argv: &[String]) -> Option<String> {
     let (program, args) = argv.split_first()?;
+    if args.is_empty() {
+        return Some(format!("& {}", super::quote_powershell_arg(program)));
+    }
+
     let command_line = args
         .iter()
         .map(|arg| quote_windows_command_line_arg(arg))
@@ -1219,6 +1223,16 @@ mod tests {
     }
 
     #[test]
+    fn powershell_agent_command_omits_argument_list_when_no_arguments_are_passed() {
+        let argv = vec!["opencode".into()];
+
+        assert_eq!(
+            super::interactive_shell_command(&argv, "powershell.exe").as_deref(),
+            Some("& opencode")
+        );
+    }
+
+    #[test]
     fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
         use base64::Engine as _;
 
@@ -1275,25 +1289,38 @@ mod tests {
         ];
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
+        let run_command = |shell: &str, command: &str, capture: &std::path::Path| {
+            let mut process = if shell == "cmd.exe" {
+                let mut process = Command::new("cmd.exe");
+                process.args(["/d", "/c", command]);
+                process
+            } else {
+                let mut process = Command::new("powershell.exe");
+                process.args(["-NoLogo", "-NoProfile", "-Command", command]);
+                process
+            };
+            process
+                .env("PATH", &path)
+                .env("HERDR_ARGV_CAPTURE", capture)
+                .status()
+                .unwrap()
+        };
 
         for shell in ["powershell.exe", "cmd.exe"] {
+            let no_args_capture = base.join(format!("{shell}-no-args.txt"));
+            let no_args_command = super::interactive_shell_command(&["pi".into()], shell).unwrap();
+            let status = run_command(shell, &no_args_command, &no_args_capture);
+            assert!(status.success(), "{shell} argument-free command failed");
+            assert_eq!(
+                fs::read_to_string(no_args_capture)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                "\n\n\n\n\n\n"
+            );
+
             let capture = base.join(format!("{shell}.txt"));
             let command = super::interactive_shell_command(&argv, shell).unwrap();
-            let status = if shell == "cmd.exe" {
-                Command::new("cmd.exe")
-                    .args(["/d", "/c", &command])
-                    .env("PATH", &path)
-                    .env("HERDR_ARGV_CAPTURE", &capture)
-                    .status()
-                    .unwrap()
-            } else {
-                Command::new("powershell.exe")
-                    .args(["-NoLogo", "-NoProfile", "-Command", &command])
-                    .env("PATH", &path)
-                    .env("HERDR_ARGV_CAPTURE", &capture)
-                    .status()
-                    .unwrap()
-            };
+            let status = run_command(shell, &command, &capture);
             assert!(status.success(), "{shell} command failed");
             assert_eq!(
                 fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),

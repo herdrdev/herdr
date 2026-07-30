@@ -7,7 +7,7 @@ Herdr renders libghostty-vt cells directly and requires DEC mode 2027 to
 store multi-codepoint grapheme clusters in one terminal cell. Set it in the
 terminal's default modes so RIS restores clustering instead of disabling it.
 
-Herdr issue: https://github.com/ogulcancelik/herdr/issues/243
+Herdr issue: https://github.com/herdrdev/herdr/issues/243
 Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
 ---
 diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig

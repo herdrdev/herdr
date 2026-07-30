@@ -4136,7 +4136,7 @@ impl HeadlessServer {
             changed = true;
         }
 
-        if geometry_dirty || self.foreground_client_id.is_none() {
+        if geometry_dirty {
             self.app.pending_agent_resume_deadline = None;
         } else {
             self.app.sync_pending_agent_resume_deadline(now);
@@ -6254,34 +6254,16 @@ next_tab = ""
         assert!(server.app.pending_agent_resume_deadline.is_none());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
-    async fn headless_scheduled_tasks_do_not_start_pending_agent_resume_without_foreground_client()
-    {
+    async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_client() {
         let mut server = test_headless_server();
         let workspace = crate::workspace::Workspace::test_new("restored");
         let pane_id = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        server.app.state.view.pane_infos = workspace.tabs[0]
-            .layout
-            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
         server.app.state.workspaces = vec![workspace];
         server.app.state.active = Some(0);
         server.app.state.ensure_test_terminals();
-        server.foreground_client_id = None;
-        server.effective_size = (80, 24);
-        server.app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-            foreground: Some(crate::terminal_theme::RgbColor {
-                r: 220,
-                g: 220,
-                b: 220,
-            }),
-            background: Some(crate::terminal_theme::RgbColor {
-                r: 20,
-                g: 20,
-                b: 20,
-            }),
-            ..Default::default()
-        };
         server
             .app
             .state
@@ -6293,10 +6275,20 @@ next_tab = ""
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
-        server.app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
 
-        assert!(!server.handle_scheduled_tasks_headless(Instant::now(), false));
+        server.render_and_stream();
+        assert_ne!(server.app.state.view.terminal_area, Rect::default());
+
+        let now = Instant::now();
+        assert!(!server.handle_scheduled_tasks_headless(now, false));
         assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+        let deadline = server
+            .app
+            .pending_agent_resume_deadline
+            .expect("clientless resume should wait briefly for a host theme");
+
+        assert!(server.handle_scheduled_tasks_headless(deadline, false));
+        assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
         assert!(server
             .app
             .state
@@ -6304,8 +6296,8 @@ next_tab = ""
             .get(&terminal_id)
             .expect("test terminal should still exist")
             .pending_agent_resume_plan
-            .is_some());
-        assert!(server.app.pending_agent_resume_deadline.is_none());
+            .is_none());
+        shutdown_test_runtimes(&mut server);
     }
 
     #[tokio::test]
