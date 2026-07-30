@@ -493,6 +493,10 @@ impl WindowsInputMapper {
             return Some(vec![0x1b]);
         }
 
+        if record.virtual_scan_code != 0 {
+            return None;
+        }
+
         if !record.key_down
             || record.repeat_count.max(1) != 1
             || windows_key_modifiers(record.control_key_state).bits() != 0
@@ -1790,22 +1794,74 @@ mod tests {
     }
 
     #[test]
-    fn vti_win32_input_mode_printable_key_becomes_char() {
-        let records = "\x1b[65;30;97;1;0;1_\x1b[65;30;97;0;0;1_"
-            .chars()
-            .map(key_char);
-
+    fn vti_win32_input_mode_printable_keys_preserve_physical_records() {
         assert_eq!(
-            translate(records),
-            vec![
-                crate::protocol::ClientInputEvent::Text { codepoint: 'a' },
-                crate::protocol::ClientInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('a'),
-                    modifiers: 0,
-                    kind: crate::protocol::ClientKeyKind::Release,
-                },
-            ]
+            translate(win32_input_mode_encoded_record(WindowsKeyRecord {
+                key_down: true,
+                repeat_count: 1,
+                virtual_key_code: 0,
+                virtual_scan_code: 0,
+                unicode: b'a'.into(),
+                control_key_state: 0,
+            })),
+            vec![crate::protocol::ClientInputEvent::Text { codepoint: 'a' }]
         );
+
+        use crate::protocol::ClientKeyKind::{Press, Release, Repeat};
+        for (repeat_count, expected) in [
+            (1, vec![(Press, true), (Release, false)]),
+            (
+                3,
+                vec![
+                    (Press, true),
+                    (Repeat, true),
+                    (Repeat, true),
+                    (Release, false),
+                ],
+            ),
+        ] {
+            let mut records = win32_input_mode_encoded_record(WindowsKeyRecord {
+                key_down: true,
+                repeat_count,
+                virtual_key_code: 0x41,
+                virtual_scan_code: 30,
+                unicode: b'a'.into(),
+                control_key_state: 0,
+            });
+            records.extend(win32_input_mode_encoded_record(WindowsKeyRecord {
+                key_down: false,
+                repeat_count: 1,
+                virtual_key_code: 0x41,
+                virtual_scan_code: 30,
+                unicode: b'a'.into(),
+                control_key_state: 0,
+            }));
+
+            assert_eq!(
+                translate_with_provenance(records)
+                    .iter()
+                    .map(|event| match event {
+                        crate::protocol::ClientInputEvent::WindowsKey {
+                            code: crate::protocol::ClientKeyCode::Char('a'),
+                            modifiers: 0,
+                            kind,
+                            record:
+                                WindowsKeyRecord {
+                                    repeat_count: 1,
+                                    virtual_key_code: 0x41,
+                                    virtual_scan_code: 30,
+                                    unicode,
+                                    control_key_state: 0,
+                                    key_down,
+                                },
+                        } if *unicode == u16::from(b'a') => (*kind, *key_down),
+                        event => panic!("unexpected printable key event: {event:?}"),
+                    })
+                    .collect::<Vec<_>>(),
+                expected,
+                "repeat_count={repeat_count}"
+            );
+        }
     }
 
     #[test]
