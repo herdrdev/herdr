@@ -712,9 +712,7 @@ fn drain_until_client_exits(
 /// client emits the mouse teardown after that point. The teardown markers also
 /// appear in normal attach output, so only bytes emitted after the trigger
 /// (past the watermark) count.
-fn assert_client_restores_terminal(
-    trigger: impl FnOnce(&mut SpawnedHerdr, &mut SpawnedHerdr),
-) {
+fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedHerdr, &mut SpawnedHerdr)) {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
