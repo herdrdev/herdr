@@ -3,7 +3,7 @@ use std::io;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 
 use bytes::Bytes;
@@ -54,6 +54,22 @@ const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::
 const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
 
+/// Terminal emulator identity reported by the foreground client, or `None` when no
+/// client is attached or it could not be determined.
+///
+/// Panes inherit a snapshot of this process's environment, and the server is persistent:
+/// its own terminal variables belong to whichever terminal started it, which may be a
+/// different terminal from the attached client's, or none at all under a remote SSH
+/// bridge. The attached client is the only authority on what actually renders pane output.
+static OUTER_TERM_PROGRAM: RwLock<Option<String>> = RwLock::new(None);
+
+pub(crate) fn set_outer_term_program(term_program: Option<String>) {
+    match OUTER_TERM_PROGRAM.write() {
+        Ok(mut guard) => *guard = term_program,
+        Err(_) => tracing::warn!("outer terminal identity lock poisoned; panes keep last value"),
+    }
+}
+
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // Each pane is rendered by herdr's own terminal layer, not the outer terminal
     // that launched the app. Advertising the inherited TERM leaks the host terminal
@@ -61,6 +77,18 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
+
+    // TERM_PROGRAM names the emulator that ultimately displays this pane, which is the
+    // client's outer terminal rather than herdr's virtual one. Applications use it to
+    // pick an inline image protocol, so it must track the attached client.
+    let outer_term_program = match OUTER_TERM_PROGRAM.read() {
+        Ok(guard) => guard.clone(),
+        Err(_) => None,
+    };
+    match outer_term_program {
+        Some(term_program) => cmd.env("TERM_PROGRAM", term_program),
+        None => cmd.env_remove("TERM_PROGRAM"),
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2974,6 +3002,13 @@ mod tests {
         assert!(!process_alive_for_shutdown(43, 42, false, |_| false));
     }
 
+    /// Serializes tests that read or write the process-wide outer terminal identity.
+    #[cfg(unix)]
+    fn outer_term_program_lock() -> &'static Mutex<()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     #[cfg(unix)]
     fn capture_shell_output(command: &str, extra_env: &[(&str, &str)]) -> String {
         let pair = native_pty_system()
@@ -2998,6 +3033,9 @@ mod tests {
         cmd.cwd(std::env::current_dir().unwrap());
         cmd.env("TERM", "xterm-ghostty");
         cmd.env("COLORTERM", "falsecolor");
+        // Stand in for the terminal identity a persistent server inherits from whichever
+        // terminal started it, which is not necessarily the attached client's.
+        cmd.env("TERM_PROGRAM", "stale-outer");
         apply_pane_terminal_env(&mut cmd);
         for (key, value) in extra_env {
             cmd.env(key, value);
@@ -3288,6 +3326,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pane_terminal_identity_overrides_outer_terminal_env() {
+        let _guard = outer_term_program_lock().lock();
         let output = capture_shell_output("printf '%s\\n%s\\n' \"$TERM\" \"$COLORTERM\"", &[]);
         assert_eq!(output, "xterm-256color\ntruecolor\n");
     }
@@ -3295,11 +3334,34 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pane_terminal_identity_allows_explicit_override() {
+        let _guard = outer_term_program_lock().lock();
         let output = capture_shell_output(
             "printf '%s\\n%s\\n' \"$TERM\" \"$COLORTERM\"",
             &[("TERM", "vt100"), ("COLORTERM", "24bit")],
         );
         assert_eq!(output, "vt100\n24bit\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_term_program_reports_attached_client_terminal() {
+        let _guard = outer_term_program_lock().lock();
+        set_outer_term_program(Some("kitty".to_string()));
+        let output = capture_shell_output("printf '%s\\n%s\\n' \"$TERM_PROGRAM\" \"$TERM\"", &[]);
+        set_outer_term_program(None);
+        // TERM stays herdr's own virtual terminal; only the outer identity is propagated.
+        assert_eq!(output, "kitty\nxterm-256color\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_term_program_is_cleared_without_an_attached_client() {
+        let _guard = outer_term_program_lock().lock();
+        set_outer_term_program(None);
+        let output = capture_shell_output("printf '%s\\n' \"$TERM_PROGRAM\"", &[]);
+        // A stale identity is worse than none: it makes applications pick a graphics
+        // protocol the real outer terminal may not support.
+        assert_eq!(output, "\n");
     }
 
     #[cfg(unix)]

@@ -48,6 +48,9 @@ pub(crate) struct ClientConnection {
     pub(crate) host_terminal_appearance_explicit: bool,
     /// Last reported focus state for this client's outer terminal.
     pub(crate) outer_terminal_focus: Option<bool>,
+    /// Terminal emulator identity reported by this client at handshake, used as the
+    /// TERM_PROGRAM for panes spawned while this client is in the foreground.
+    pub(crate) term_program: Option<String>,
     /// Stateful parser for app-client input split across transport reads.
     pub(crate) raw_input: crate::raw_input::RawInputFramer,
     /// Monotonic activity stamp used to choose the fallback foreground client.
@@ -93,6 +96,7 @@ impl ClientConnection {
             last_activity,
             render_encoding,
             false,
+            None,
             writer,
         )
     }
@@ -107,6 +111,7 @@ impl ClientConnection {
         last_activity: u64,
         render_encoding: RenderEncoding,
         pending_terminal_attach: bool,
+        term_program: Option<String>,
         writer: Option<ClientWriter>,
     ) -> Self {
         Self {
@@ -121,6 +126,7 @@ impl ClientConnection {
             host_terminal_appearance_explicit: false,
             host_terminal_theme,
             outer_terminal_focus,
+            term_program,
             raw_input: crate::raw_input::RawInputFramer::default(),
             last_activity,
             render_state: ClientRenderState::new(render_encoding),

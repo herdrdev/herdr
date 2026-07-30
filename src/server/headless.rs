@@ -1054,6 +1054,7 @@ impl HeadlessServer {
             self.effective_size = (MIN_COLS, MIN_ROWS);
             self.app.state.outer_terminal_focus = None;
             self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
+            crate::pane::set_outer_term_program(None);
             let server_keybindings = self.server_keybindings.clone();
             apply_keybindings(&mut self.app, &server_keybindings);
             self.sync_visible_server_config_diagnostic(false);
@@ -1064,6 +1065,7 @@ impl HeadlessServer {
             self.effective_size = (MIN_COLS, MIN_ROWS);
             self.app.state.outer_terminal_focus = None;
             self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
+            crate::pane::set_outer_term_program(None);
             let server_keybindings = self.server_keybindings.clone();
             apply_keybindings(&mut self.app, &server_keybindings);
             self.sync_visible_server_config_diagnostic(false);
@@ -1078,6 +1080,7 @@ impl HeadlessServer {
         } else {
             crate::kitty_graphics::HostCellSize::default()
         };
+        let term_program = client.term_program.clone();
         let host_terminal_theme = client.host_terminal_theme;
         let host_terminal_appearance = client.host_terminal_appearance;
         let host_terminal_appearance_explicit = client.host_terminal_appearance_explicit;
@@ -1091,6 +1094,7 @@ impl HeadlessServer {
         self.effective_size = terminal_size;
         self.app.state.outer_terminal_focus = outer_terminal_focus;
         self.app.state.host_cell_size = host_cell_size;
+        crate::pane::set_outer_term_program(term_program);
         apply_keybindings(&mut self.app, &keybindings);
         self.sync_visible_server_config_diagnostic(uses_local_keybindings);
         if outer_terminal_focus == Some(true) {
@@ -2721,6 +2725,7 @@ impl HeadlessServer {
                 writer,
                 render_encoding,
                 direct_attach_requested,
+                term_program,
             } => {
                 if self.handoff_in_progress {
                     if let Ok(message) =
@@ -2761,6 +2766,7 @@ impl HeadlessServer {
                         last_activity,
                         render_encoding,
                         direct_attach_requested,
+                        term_program,
                         Some(writer),
                     ),
                 );
@@ -5086,6 +5092,7 @@ new_tab = "prefix+t"
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_a,
         }));
         assert_eq!(
@@ -5110,6 +5117,7 @@ new_tab = "prefix+t"
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: None,
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5150,6 +5158,7 @@ new_tab = "prefix+t"
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_a,
         }));
         assert_eq!(server.app.state.config_diagnostic, without_keybindings);
@@ -5163,6 +5172,7 @@ new_tab = "prefix+t"
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: None,
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5206,6 +5216,7 @@ next_tab = ""
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
+            term_program: None,
             writer,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -5281,6 +5292,7 @@ next_tab = ""
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: Some(Box::new(local_config.live_keybinds().unwrap())),
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_a,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -5301,6 +5313,7 @@ next_tab = ""
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: None,
             direct_attach_requested: false,
+            term_program: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5335,6 +5348,7 @@ next_tab = ""
             render_encoding: RenderEncoding::TerminalAnsi,
             keybindings: None,
             direct_attach_requested: true,
+            term_program: None,
             writer,
         }));
         assert!(server.clients.contains_key(&7));
@@ -5400,6 +5414,7 @@ next_tab = ""
             render_encoding: RenderEncoding::TerminalAnsi,
             keybindings: None,
             direct_attach_requested: true,
+            term_program: None,
             writer,
         }));
         control_rx
@@ -5702,6 +5717,7 @@ next_tab = ""
             render_encoding,
             keybindings: None,
             direct_attach_requested: false,
+            term_program: None,
             writer,
         }));
 
@@ -5736,6 +5752,7 @@ next_tab = ""
             render_encoding: RenderEncoding::TerminalAnsi,
             keybindings: None,
             direct_attach_requested: true,
+            term_program: None,
             writer,
         }));
 
@@ -5769,6 +5786,7 @@ next_tab = ""
             render_encoding: RenderEncoding::SemanticFrame,
             keybindings: None,
             direct_attach_requested: false,
+            term_program: None,
             writer,
         }));
         assert!(server.has_app_client());
@@ -5869,6 +5887,7 @@ next_tab = ""
             render_encoding: RenderEncoding::TerminalAnsi,
             keybindings: None,
             direct_attach_requested: true,
+            term_program: None,
             writer,
         }));
         assert!(
@@ -7808,6 +7827,7 @@ next_tab = ""
             render_encoding: RenderEncoding::TerminalAnsi,
             keybindings: None,
             direct_attach_requested: true,
+            term_program: None,
             writer,
         }));
         assert!(
@@ -8381,6 +8401,7 @@ next_tab = ""
                 1,
                 RenderEncoding::SemanticFrame,
                 false,
+                None,
                 Some(client_tx),
             ),
         );

@@ -181,6 +181,7 @@ fn client_handshake(
             &encode_varint_u32(0),  // RenderEncoding::SemanticFrame
             &encode_varint_u32(0),  // ClientKeybindings::Server
             &encode_varint_u32(0),  // ClientLaunchMode::App
+            &[0u8],                 // term_program: Option::None
         ],
     );
     let framed = frame_message(&hello_payload);
