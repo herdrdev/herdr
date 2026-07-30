@@ -4373,6 +4373,11 @@ pub fn run_server() -> io::Result<()> {
     init_logging();
     crate::platform::raise_server_nofile_limit();
 
+    // Restored panes are spawned while building the app, before any client can report
+    // its terminal. Seed the identity from whoever launched this server so those panes
+    // are not stranded without one; an attaching client overrides it.
+    crate::pane::set_outer_term_program(crate::pane::launched_outer_term_program());
+
     let args: Vec<String> = std::env::args().collect();
     if args.get(2).map(String::as_str) == Some("--handoff-import") {
         let socket_path = args

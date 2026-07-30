@@ -1634,8 +1634,23 @@ fn confirm_remote_install(
     Ok(())
 }
 
-fn remote_bridge_command(remote_herdr: &RemoteHerdr, session_name: &str) -> String {
-    let mut command = format!("exec {}", remote_herdr.shell_path);
+fn remote_bridge_command(
+    remote_herdr: &RemoteHerdr,
+    session_name: &str,
+    term_program: Option<&str>,
+) -> String {
+    let mut command = String::from("exec ");
+    // The bridge starts the remote server when none is running, and that server restores
+    // panes before any client attaches. `ssh -T` requests no pty, so it forwards neither
+    // TERM_PROGRAM nor TERM; naming the local terminal here is what reaches those panes.
+    if let Some(term_program) = term_program {
+        command.push_str("env ");
+        command.push_str(crate::pane::OUTER_TERM_PROGRAM_ENV_VAR);
+        command.push('=');
+        command.push_str(&shell_quote(term_program));
+        command.push(' ');
+    }
+    command.push_str(&remote_herdr.shell_path);
     if session_name != crate::session::DEFAULT_SESSION_NAME {
         command.push_str(" --session ");
         command.push_str(&shell_quote(session_name));
@@ -1868,10 +1883,11 @@ fn bridge_connection(
 ) -> io::Result<()> {
     let mut command = Command::new("ssh");
     apply_managed_ssh_options(&mut command, ssh_options);
-    command
-        .arg("-T")
-        .arg(target)
-        .arg(remote_bridge_command(remote_herdr, session_name));
+    command.arg("-T").arg(target).arg(remote_bridge_command(
+        remote_herdr,
+        session_name,
+        crate::terminal_notify::outer_term_program().as_deref(),
+    ));
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2430,8 +2446,45 @@ mod tests {
             arch: "x86_64",
         });
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None),
             "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
+        );
+    }
+
+    #[test]
+    fn remote_bridge_command_carries_outer_terminal_to_the_remote_server() {
+        let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
+            os: "linux",
+            arch: "x86_64",
+        });
+        // The bridge starts the remote server, which restores panes before any client
+        // attaches, so the identity has to arrive on this command line.
+        assert_eq!(
+            remote_bridge_command(
+                &remote_herdr,
+                crate::session::DEFAULT_SESSION_NAME,
+                Some("ghostty")
+            ),
+            "exec env HERDR_OUTER_TERM_PROGRAM=ghostty \"$HOME/.local/bin/herdr\" remote-client-bridge"
+        );
+    }
+
+    #[test]
+    fn remote_bridge_command_quotes_a_hostile_terminal_name() {
+        let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
+            os: "linux",
+            arch: "x86_64",
+        });
+        // The value comes from the local environment and is interpolated into a remote
+        // shell command, so it must not be able to break out of its quoting.
+        assert_eq!(
+            remote_bridge_command(
+                &remote_herdr,
+                crate::session::DEFAULT_SESSION_NAME,
+                Some("x'; rm -rf /; echo '")
+            ),
+            "exec env HERDR_OUTER_TERM_PROGRAM='x'\\''; rm -rf /; echo '\\''' \
+             \"$HOME/.local/bin/herdr\" remote-client-bridge"
         );
     }
 
@@ -2445,7 +2498,7 @@ mod tests {
             .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None),
             "exec /usr/bin/herdr remote-client-bridge"
         );
     }
@@ -2461,7 +2514,7 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None),
             "exec '/opt/herdr bin/herdr' remote-client-bridge"
         );
     }
@@ -2477,7 +2530,7 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None),
             "exec /opt/homebrew/bin/herdr remote-client-bridge"
         );
         assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
@@ -2564,7 +2617,7 @@ mod tests {
                 .expect("path binary");
 
         assert_eq!(
-            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
+            remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME, None),
             "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
         );
     }

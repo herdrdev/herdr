@@ -84,6 +84,22 @@ const STALE_TERMINAL_IDENTITY_ENV: [&str; 12] = [
     "ALACRITTY_WINDOW_ID",
 ];
 
+/// Set on a server started for a specific outer terminal that the server process itself
+/// cannot see. A remote server is started over `ssh -T`, which requests no pty and so
+/// forwards neither `TERM_PROGRAM` nor `TERM`.
+pub(crate) const OUTER_TERM_PROGRAM_ENV_VAR: &str = "HERDR_OUTER_TERM_PROGRAM";
+
+/// The outer terminal identity available when this process was launched.
+///
+/// A locally spawned daemon inherits it from the client that started it, so its own
+/// environment is correct at that moment; a remote server is told explicitly.
+pub(crate) fn launched_outer_term_program() -> Option<String> {
+    std::env::var(OUTER_TERM_PROGRAM_ENV_VAR)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(crate::terminal_notify::outer_term_program)
+}
+
 pub(crate) fn set_outer_term_program(term_program: Option<String>) {
     // A poisoned lock must not strand panes on a departed client's identity.
     *OUTER_TERM_PROGRAM
