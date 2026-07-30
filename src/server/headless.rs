@@ -1058,7 +1058,10 @@ impl HeadlessServer {
             self.effective_size = (MIN_COLS, MIN_ROWS);
             self.app.state.outer_terminal_focus = None;
             self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
-            crate::pane::set_outer_term_program(None);
+            // Terminal identity is deliberately not cleared here. This runs before every API
+            // request, including the headless workspace/tab creates that spawn panes at
+            // startup, which would drop the launch seed before any client can attach.
+            // Clearing belongs to the detach path, in promote_latest_remaining_client.
             let server_keybindings = self.server_keybindings.clone();
             apply_keybindings(&mut self.app, &server_keybindings);
             self.sync_visible_server_config_diagnostic(false);
@@ -1438,6 +1441,12 @@ impl HeadlessServer {
         let next_foreground = latest_app_client(&self.clients);
         let changed = next_foreground != self.foreground_client_id;
         self.foreground_client_id = next_foreground;
+        if next_foreground.is_none() {
+            // The last client that could describe an outer terminal is gone, so panes spawned
+            // from here on have no display to name. The launch seed is not restored: it
+            // described whoever started the server, not whoever just left.
+            crate::pane::set_outer_term_program(None);
+        }
         self.sync_foreground_client_state();
         changed
     }
@@ -4657,6 +4666,35 @@ mod tests {
             }),
             RetainedRenderPlan::HiddenPty
         );
+    }
+
+    #[test]
+    fn startup_terminal_identity_survives_headless_requests_without_a_client() {
+        let _guard = crate::pane::outer_term_program_test_lock();
+        let mut server = test_headless_server();
+        crate::pane::set_outer_term_program(Some("ghostty".to_string()));
+
+        // Runs before every API request, including the headless workspace and tab creates
+        // that spawn panes at startup, long before any client can attach.
+        server.sync_foreground_client_state();
+
+        assert_eq!(
+            crate::pane::outer_term_program_for_test().as_deref(),
+            Some("ghostty")
+        );
+    }
+
+    #[test]
+    fn detaching_the_last_client_clears_terminal_identity() {
+        let _guard = crate::pane::outer_term_program_test_lock();
+        let mut server = test_headless_server();
+        crate::pane::set_outer_term_program(Some("ghostty".to_string()));
+        // A client that has already been removed from the map, as on disconnect.
+        server.foreground_client_id = Some(1);
+
+        assert!(server.promote_latest_remaining_client());
+
+        assert_eq!(crate::pane::outer_term_program_for_test(), None);
     }
 
     fn test_headless_server() -> HeadlessServer {

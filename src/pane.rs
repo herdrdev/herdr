@@ -69,7 +69,12 @@ static OUTER_TERM_PROGRAM: RwLock<Option<String>> = RwLock::new(None);
 ///
 /// `LC_TERMINAL` matters most for remote attach: SSH forwards `LC_*` by default, so it
 /// reaches a remote server naming the *local* terminal that started the bridge.
-const STALE_TERMINAL_IDENTITY_ENV: [&str; 12] = [
+///
+/// `HERDR_OUTER_TERM_PROGRAM` is this server's own launch seed. It outranks `TERM_PROGRAM`
+/// in `launched_outer_term_program`, so leaving it set would make a nested persistent herdr
+/// started inside a pane prefer the outer server's identity over the one this pane carries.
+const STALE_TERMINAL_IDENTITY_ENV: [&str; 13] = [
+    OUTER_TERM_PROGRAM_ENV_VAR,
     "TERM_PROGRAM_VERSION",
     "TERM_SESSION_ID",
     "LC_TERMINAL",
@@ -105,6 +110,26 @@ pub(crate) fn set_outer_term_program(term_program: Option<String>) {
     *OUTER_TERM_PROGRAM
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = term_program;
+}
+
+/// Serializes tests that read or write the process-wide outer terminal identity, and
+/// resets it so each starts from a known state regardless of test order.
+#[cfg(test)]
+pub(crate) fn outer_term_program_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_outer_term_program(None);
+    guard
+}
+
+#[cfg(test)]
+pub(crate) fn outer_term_program_for_test() -> Option<String> {
+    OUTER_TERM_PROGRAM
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
@@ -3042,16 +3067,10 @@ mod tests {
         assert!(!process_alive_for_shutdown(43, 42, false, |_| false));
     }
 
-    /// Serializes tests that read or write the process-wide outer terminal identity, and
-    /// resets it so each starts from a known state regardless of test order.
+    /// Shared with the server tests, which exercise the same process-wide identity.
     #[cfg(unix)]
     fn outer_term_program_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let guard = LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        set_outer_term_program(None);
-        guard
+        super::outer_term_program_test_lock()
     }
 
     #[cfg(unix)]
@@ -3082,6 +3101,8 @@ mod tests {
         // terminal started it, which is not necessarily the attached client's.
         cmd.env("TERM_PROGRAM", "stale-outer");
         cmd.env("KITTY_WINDOW_ID", "99");
+        // The launch seed a bridged or locally spawned server carries in its own environment.
+        cmd.env(OUTER_TERM_PROGRAM_ENV_VAR, "stale-launcher");
         apply_pane_terminal_env(&mut cmd);
         for (key, value) in extra_env {
             cmd.env(key, value);
@@ -3400,6 +3421,21 @@ mod tests {
         // TERM stays herdr's own virtual terminal; only the outer identity is propagated,
         // and the server's own stale KITTY_WINDOW_ID does not leak through.
         assert_eq!(output, "kitty\nxterm-256color\n\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_does_not_inherit_the_servers_launch_seed() {
+        let _guard = outer_term_program_lock();
+        set_outer_term_program(Some("ghostty".to_string()));
+        let output = capture_shell_output(
+            &format!("printf '%s\\n%s\\n' \"$TERM_PROGRAM\" \"${OUTER_TERM_PROGRAM_ENV_VAR}\""),
+            &[],
+        );
+        // launched_outer_term_program prefers the seed over TERM_PROGRAM, so a nested
+        // persistent herdr started in this pane would otherwise report the outer server's
+        // terminal instead of the client actually displaying the pane.
+        assert_eq!(output, "ghostty\n\n");
     }
 
     #[cfg(unix)]
