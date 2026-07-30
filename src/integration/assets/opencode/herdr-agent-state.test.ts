@@ -441,6 +441,35 @@ test("resets a deleted root and allows a new root to take over", async () => {
   ]);
 });
 
+test("does not reclaim a deleted root from events before a new root is created", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "root-a", status: { type: "busy" } },
+    },
+  });
+  await plugin.event({ event: { type: "session.deleted", properties: { sessionID: "root-a" } } });
+  await plugin["chat.message"]({ sessionID: "outside-chat" });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "outside-status", status: { type: "busy" } },
+    },
+  });
+  await plugin.event({ event: { type: "session.created", properties: { sessionID: "root-b" } } });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "root-b", status: { type: "busy" } },
+    },
+  });
+
+  expect(requests.map(requestState)).toEqual(["working", "idle", undefined, "working"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-a", undefined, "root-b", "root-b"]);
+});
+
 test("does not treat a normal run session argument as attached ownership", async () => {
   process.argv = ["node", "opencode", "run", "--session", "child-session"];
   const plugin = await loadPlugin();

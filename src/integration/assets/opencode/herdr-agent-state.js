@@ -16,6 +16,7 @@ let reportedRootSessionID;
 const sessionParents = new Map();
 const childStates = new Map();
 let ownedRootSessionID;
+let awaitingRootCreation = false;
 let rootState = "idle";
 const CHILD_EVENT_STATES = new Map([
   ["permission.asked", "blocked"],
@@ -132,6 +133,7 @@ function rootSessionIDFor(sessionID) {
 }
 
 function setOwnedRootSession(sessionID) {
+  awaitingRootCreation = false;
   if (sessionID === ownedRootSessionID) {
     return;
   }
@@ -164,6 +166,7 @@ function resetOwnedRootSession() {
   }
   childStates.clear();
   ownedRootSessionID = undefined;
+  awaitingRootCreation = true;
   reportedRootSessionID = undefined;
   rootState = "idle";
 }
@@ -263,6 +266,9 @@ export const HerdrAgentStatePlugin = async () => {
         : undefined;
     }
     if (!ownedRootSessionID) {
+      if (awaitingRootCreation && !canReplaceOwnedRoot) {
+        return undefined;
+      }
       setOwnedRootSession(rootSessionIDFor(sessionID));
     } else if (!belongsToOwnedTree(sessionID)) {
       // Once a root is owned, only a new session.created event may take over.
