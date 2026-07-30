@@ -691,19 +691,8 @@ pub(super) fn current_transient_default_color_owner(shell_pid: u32) -> Option<u3
     (!foreground_job_is_shell(&job, shell_pid)).then_some(job.process_group_id)
 }
 
-fn foreground_job_uses_droid_scrollback_compat(job: &crate::platform::ForegroundJob) -> bool {
-    job.processes.iter().any(|process| {
-        process.name.eq_ignore_ascii_case("droid")
-            || process
-                .argv0
-                .as_deref()
-                .is_some_and(|argv0| argv0.eq_ignore_ascii_case("droid"))
-            || process.cmdline.as_deref().is_some_and(|cmdline| {
-                cmdline.eq_ignore_ascii_case("droid")
-                    || cmdline.starts_with("droid ")
-                    || cmdline.to_ascii_lowercase().contains("/droid")
-            })
-    })
+fn foreground_job_agent(job: &crate::platform::ForegroundJob) -> Option<crate::detect::Agent> {
+    crate::detect::identify_agent_in_job(job).map(|(agent, _)| agent)
 }
 
 pub(super) fn contains_scrollback_clear_sequence(bytes: &[u8]) -> bool {
@@ -740,17 +729,32 @@ pub(super) fn maybe_filter_primary_screen_scrollback_clear<'a>(
     alternate_screen: bool,
     foreground_job: Option<&crate::platform::ForegroundJob>,
 ) -> Cow<'a, [u8]> {
-    // Droid redraws its primary-screen TUI with CSI 3 J, which erases pane
-    // scrollback inside herdr. Keep the hack scoped to Droid on the primary
-    // screen so normal terminal clear-history behavior still works elsewhere.
+    // Droid redraws its primary-screen TUI with CSI 3 J, including after
+    // SIGWINCH. Keep its established compatibility behavior scoped to Droid
+    // on the primary screen so normal clear-history behavior still works
+    // elsewhere.
     if alternate_screen
         || !contains_scrollback_clear_sequence(bytes)
-        || !foreground_job.is_some_and(foreground_job_uses_droid_scrollback_compat)
+        || !foreground_job
+            .and_then(foreground_job_agent)
+            .is_some_and(|agent| agent == crate::detect::Agent::Droid)
     {
         return Cow::Borrowed(bytes);
     }
 
     strip_scrollback_clear_sequences(bytes)
+}
+
+pub(super) fn should_preserve_primary_screen_scrollback_clear_viewport(
+    bytes: &[u8],
+    alternate_screen: bool,
+    foreground_job: Option<&crate::platform::ForegroundJob>,
+) -> bool {
+    !alternate_screen
+        && contains_scrollback_clear_sequence(bytes)
+        && foreground_job
+            .and_then(foreground_job_agent)
+            .is_some_and(|agent| agent == crate::detect::Agent::Pi)
 }
 
 #[cfg(target_os = "macos")]
@@ -1347,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn droid_scrollback_compat_matches_process_name_and_cmdline() {
+    fn primary_scrollback_compat_identifies_known_agent_jobs() {
         let name_only = crate::platform::ForegroundJob {
             process_group_id: 42,
             processes: vec![crate::platform::ForegroundProcess {
@@ -1361,7 +1365,10 @@ mod tests {
                 cmdline: Some("/opt/factory/droid --resume".to_string()),
             }],
         };
-        assert!(foreground_job_uses_droid_scrollback_compat(&name_only));
+        assert_eq!(
+            foreground_job_agent(&name_only),
+            Some(crate::detect::Agent::Droid)
+        );
 
         let cmdline_only = crate::platform::ForegroundJob {
             process_group_id: 42,
@@ -1377,10 +1384,31 @@ mod tests {
                 cmdline: Some("/home/can/.local/bin/droid --resume".to_string()),
             }],
         };
-        assert!(foreground_job_uses_droid_scrollback_compat(&cmdline_only));
+        assert_eq!(
+            foreground_job_agent(&cmdline_only),
+            Some(crate::detect::Agent::Droid)
+        );
+
+        let pi = crate::platform::ForegroundJob {
+            process_group_id: 43,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 43,
+                name: "node".to_string(),
+                argv0: Some("node".to_string()),
+                argv: Some(vec![
+                    "node".to_string(),
+                    "/opt/node_modules/@earendil-works/pi-coding-agent/dist/cli.js".to_string(),
+                ]),
+                cmdline: Some(
+                    "node /opt/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+                        .to_string(),
+                ),
+            }],
+        };
+        assert_eq!(foreground_job_agent(&pi), Some(crate::detect::Agent::Pi));
 
         let shell = shell_job(7);
-        assert!(!foreground_job_uses_droid_scrollback_compat(&shell));
+        assert_eq!(foreground_job_agent(&shell), None);
     }
 
     #[test]
@@ -1390,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn primary_screen_droid_compat_ignores_scrollback_clear_only_for_droid() {
+    fn primary_screen_compat_filters_scrollback_clear_only_for_droid() {
         let droid_job = crate::platform::ForegroundJob {
             process_group_id: 42,
             processes: vec![crate::platform::ForegroundProcess {
@@ -1419,6 +1447,44 @@ mod tests {
         let alternate =
             maybe_filter_primary_screen_scrollback_clear(b"\x1b[3J\x1b[2J", true, Some(&droid_job));
         assert_eq!(alternate.as_ref(), b"\x1b[3J\x1b[2J");
+    }
+
+    #[test]
+    fn primary_screen_pi_compat_preserves_viewport_while_allowing_rebuild() {
+        let pi_job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 42,
+                name: "pi".to_string(),
+                argv0: Some("pi".to_string()),
+                argv: Some(vec!["pi".to_string()]),
+                cmdline: Some("pi".to_string()),
+            }],
+        };
+        let redraw = b"\x1b[?2026h\x1b[2J\x1b[H\x1b[3J";
+
+        assert!(should_preserve_primary_screen_scrollback_clear_viewport(
+            redraw,
+            false,
+            Some(&pi_job),
+        ));
+        assert!(!should_preserve_primary_screen_scrollback_clear_viewport(
+            redraw,
+            true,
+            Some(&pi_job),
+        ));
+        assert!(!should_preserve_primary_screen_scrollback_clear_viewport(
+            redraw,
+            false,
+            Some(&shell_job(7)),
+        ));
+
+        // Pi redraws its complete rendered transcript after ED3. ED3 must
+        // reach the emulator so repeated resizes replace that transcript
+        // instead of appending another copy; terminal.rs restores the saved
+        // viewport after synchronized output ends.
+        let unfiltered = maybe_filter_primary_screen_scrollback_clear(redraw, false, Some(&pi_job));
+        assert_eq!(unfiltered.as_ref(), redraw);
     }
 
     #[test]

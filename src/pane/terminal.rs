@@ -29,9 +29,11 @@ use super::{
     osc::{
         contains_scrollback_clear_sequence, current_transient_default_color_owner,
         maybe_filter_primary_screen_scrollback_clear, parse_reported_cwd,
-        restore_host_terminal_theme_if_needed, write_host_terminal_theme_selective,
-        AgentOscStateTracker, DefaultColorEvent, DefaultColorEventTracker, DefaultColorOscTracker,
-        DefaultColorQuery, DefaultColorTrackedEvent, OscDebugTracker,
+        restore_host_terminal_theme_if_needed,
+        should_preserve_primary_screen_scrollback_clear_viewport,
+        write_host_terminal_theme_selective, AgentOscStateTracker, DefaultColorEvent,
+        DefaultColorEventTracker, DefaultColorOscTracker, DefaultColorQuery,
+        DefaultColorTrackedEvent, OscDebugTracker,
     },
     xtgettcap::{XtgettcapQueryTracker, XtgettcapResponse},
 };
@@ -172,6 +174,7 @@ pub(crate) struct GhosttyPaneCore {
     pub xtgettcap_query_tracker: XtgettcapQueryTracker,
     decscusr_tracker: DecscusrTracker,
     cursor_settle_state: CursorPositionSettleState,
+    primary_scrollback_redraw_offset_from_bottom: Option<usize>,
     windows_powershell_prompt_cwd_reporting: bool,
 }
 
@@ -933,6 +936,7 @@ impl GhosttyPaneTerminal {
                 xtgettcap_query_tracker: XtgettcapQueryTracker::default(),
                 decscusr_tracker: DecscusrTracker::default(),
                 cursor_settle_state: CursorPositionSettleState::default(),
+                primary_scrollback_redraw_offset_from_bottom: None,
                 windows_powershell_prompt_cwd_reporting: false,
             }),
             key_encoder: Mutex::new(key_encoder),
@@ -1106,10 +1110,29 @@ impl GhosttyPaneTerminal {
             .active_screen()
             .map(|screen| screen == crate::ghostty::ActiveScreen::Alternate)
             .unwrap_or(false);
-        let filtered_bytes = if shell_pid > 0 {
-            let foreground_job = (!alternate_screen && contains_scrollback_clear_sequence(bytes))
+        let foreground_job =
+            (shell_pid > 0 && !alternate_screen && contains_scrollback_clear_sequence(bytes))
                 .then(|| crate::detect::foreground_job(shell_pid))
                 .flatten();
+        let preserve_scrollback_redraw_viewport =
+            should_preserve_primary_screen_scrollback_clear_viewport(
+                bytes,
+                alternate_screen,
+                foreground_job.as_ref(),
+            );
+        if preserve_scrollback_redraw_viewport
+            && core.primary_scrollback_redraw_offset_from_bottom.is_none()
+        {
+            let offset_from_bottom = ghostty_scroll_offset_from_bottom(&core.terminal);
+            core.primary_scrollback_redraw_offset_from_bottom = Some(offset_from_bottom);
+            debug!(
+                pane = pane_id.raw(),
+                shell_pid,
+                offset_from_bottom,
+                "preserving viewport across primary-screen TUI scrollback rebuild"
+            );
+        }
+        let filtered_bytes = if shell_pid > 0 {
             maybe_filter_primary_screen_scrollback_clear(
                 bytes,
                 alternate_screen,
@@ -1121,7 +1144,7 @@ impl GhosttyPaneTerminal {
         if filtered_bytes.len() != bytes.len() {
             debug!(
                 pane = pane_id.raw(),
-                shell_pid, "ignored scrollback clear sequence for droid compatibility"
+                shell_pid, "ignored scrollback clear sequence for primary-screen TUI compatibility"
             );
         }
 
@@ -1167,6 +1190,19 @@ impl GhosttyPaneTerminal {
             .terminal
             .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
             .unwrap_or(false);
+        if !synchronized_output {
+            if let Some(offset_from_bottom) =
+                core.primary_scrollback_redraw_offset_from_bottom.take()
+            {
+                ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset_from_bottom);
+                debug!(
+                    pane = pane_id.raw(),
+                    shell_pid,
+                    offset_from_bottom,
+                    "restored viewport after primary-screen TUI scrollback rebuild"
+                );
+            }
+        }
         if CURSOR_POSITION_SETTLE_ENABLED {
             let cursor_started = crate::render_prof::timer();
             let cursor_after_write = current_cursor_state(&mut core);
@@ -1400,15 +1436,8 @@ impl GhosttyPaneTerminal {
     ) -> Vec<Bytes> {
         if let Ok(mut core) = self.core.lock() {
             let offset_from_bottom = core
-                .terminal
-                .scrollbar()
-                .ok()
-                .map(|scrollbar| {
-                    scrollbar
-                        .total
-                        .saturating_sub(scrollbar.offset + scrollbar.len)
-                })
-                .unwrap_or(0);
+                .primary_scrollback_redraw_offset_from_bottom
+                .unwrap_or_else(|| ghostty_scroll_offset_from_bottom(&core.terminal));
             let bottom_before_resize = ghostty_detection_text(&core)
                 .map(|text| !text.trim().is_empty())
                 .unwrap_or(false);
@@ -2457,6 +2486,18 @@ fn ghostty_recent_read_range(
     let end = total_rows.saturating_sub(1);
     let start = end.saturating_add(1).saturating_sub(lines);
     Ok(Some((start, end, cols)))
+}
+
+fn ghostty_scroll_offset_from_bottom(terminal: &crate::ghostty::Terminal) -> usize {
+    terminal
+        .scrollbar()
+        .ok()
+        .map(|scrollbar| {
+            scrollbar
+                .total
+                .saturating_sub(scrollbar.offset + scrollbar.len)
+        })
+        .unwrap_or(0)
 }
 
 fn ghostty_set_scroll_offset_from_bottom(
@@ -4649,6 +4690,105 @@ mod tests {
 
         let end = pane_terminal.process_pty_bytes(pane_id, 0, b"\x1b[?2026l", &tx);
         assert!(end.request_render);
+    }
+
+    #[test]
+    fn synchronized_primary_scrollback_rebuild_restores_saved_viewport_when_complete() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(20, 5, 10_000).unwrap();
+        for i in 0..100 {
+            terminal.write(format!("OLD-{i:03}\r\n").as_bytes());
+        }
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.set_scroll_offset_from_bottom(17);
+
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.primary_scrollback_redraw_offset_from_bottom =
+                Some(ghostty_scroll_offset_from_bottom(&core.terminal));
+        }
+
+        let mut begin = Vec::from(b"\x1b[?2026h\x1b[2J\x1b[H\x1b[3J".as_slice());
+        for i in 0..20 {
+            if i > 0 {
+                begin.extend_from_slice(b"\r\n");
+            }
+            begin.extend_from_slice(format!("NEW-{i:03}").as_bytes());
+        }
+        let first = pane.process_pty_bytes(pane_id, 0, &begin, &tx);
+        assert!(!first.request_render);
+        assert!(pane
+            .core
+            .lock()
+            .unwrap()
+            .primary_scrollback_redraw_offset_from_bottom
+            .is_some());
+
+        let mut end = Vec::new();
+        for i in 20..80 {
+            end.extend_from_slice(b"\r\n");
+            end.extend_from_slice(format!("NEW-{i:03}").as_bytes());
+        }
+        end.extend_from_slice(b"\x1b[?2026l");
+        let last = pane.process_pty_bytes(pane_id, 0, &end, &tx);
+
+        assert!(last.request_render);
+        assert_eq!(pane.scroll_metrics().unwrap().offset_from_bottom, 17);
+        assert!(pane
+            .core
+            .lock()
+            .unwrap()
+            .primary_scrollback_redraw_offset_from_bottom
+            .is_none());
+        let recent = pane.recent_text(80);
+        assert!(recent.contains("NEW-079"));
+        assert!(!recent.contains("OLD-099"));
+    }
+
+    #[test]
+    fn repeated_primary_scrollback_rebuilds_do_not_drift_or_accumulate() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(10, 5, 10_000).unwrap();
+        write_numbered_lines(&mut terminal, 100);
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.set_scroll_offset_from_bottom(17);
+        let mut narrow_max = None;
+        let mut wide_max = None;
+
+        for cols in [10, 18, 10, 18, 10] {
+            pane.resize(5, cols, 0, 0);
+            {
+                let mut core = pane.core.lock().unwrap();
+                core.primary_scrollback_redraw_offset_from_bottom =
+                    Some(ghostty_scroll_offset_from_bottom(&core.terminal));
+            }
+
+            let line_count = if cols == 10 { 80 } else { 50 };
+            let mut redraw = Vec::from(b"\x1b[?2026h\x1b[2J\x1b[H\x1b[3J".as_slice());
+            for i in 0..line_count {
+                if i > 0 {
+                    redraw.extend_from_slice(b"\r\n");
+                }
+                redraw.extend_from_slice(format!("R-{i:03}").as_bytes());
+            }
+            redraw.extend_from_slice(b"\x1b[?2026l");
+            pane.process_pty_bytes(pane_id, 0, &redraw, &tx);
+
+            let metrics = pane.scroll_metrics().unwrap();
+            assert_eq!(metrics.offset_from_bottom, 17);
+            let expected_max = if cols == 10 {
+                &mut narrow_max
+            } else {
+                &mut wide_max
+            };
+            if let Some(expected) = *expected_max {
+                assert_eq!(metrics.max_offset_from_bottom, expected);
+            } else {
+                *expected_max = Some(metrics.max_offset_from_bottom);
+            }
+        }
     }
 
     #[test]
