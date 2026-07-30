@@ -878,7 +878,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn ctrl_click_url_does_not_forward_release_to_mouse_reporting_pane() {
-        let line = "see https://github.com/ogulcancelik/herdr/issues/1761";
+        let line = "see https://github.com/herdrdev/herdr/issues/1761";
         let col = line.find("github").expect("url host") as u16;
         let (mut app, info) = app_with_screen_bytes(b"");
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
@@ -926,7 +926,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn ctrl_click_url_invokes_plugin_link_handler_but_super_click_does_not() {
-        let line = "see https://github.com/ogulcancelik/herdr/issues/398";
+        let line = "see https://github.com/herdrdev/herdr/issues/398";
         let col = line.find("github").expect("url host") as u16;
 
         let (mut ctrl_app, ctrl_info) = app_with_screen_bytes(line.as_bytes());

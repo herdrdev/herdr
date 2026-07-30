@@ -4,6 +4,7 @@ use std::{
     os::fd::RawFd,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 
 use super::{
@@ -12,6 +13,14 @@ use super::{
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
+const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
+const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessDetectionMode {
+    Native,
+    ChildGroups,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcGroupMember {
@@ -43,6 +52,29 @@ fn proc_file_indicates_wsl(path: &str) -> bool {
 fn text_indicates_wsl(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("microsoft") || text.contains("wsl")
+}
+
+fn parse_process_detection_mode(value: Option<&str>) -> Result<ProcessDetectionMode, &str> {
+    match value {
+        None | Some("") | Some("native") => Ok(ProcessDetectionMode::Native),
+        Some("child-groups") => Ok(ProcessDetectionMode::ChildGroups),
+        Some(value) => Err(value),
+    }
+}
+
+fn process_detection_mode() -> ProcessDetectionMode {
+    static MODE: OnceLock<ProcessDetectionMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        let value = std::env::var(PROCESS_DETECTION_ENV_VAR).ok();
+        parse_process_detection_mode(value.as_deref()).unwrap_or_else(|value| {
+            tracing::warn!(
+                variable = PROCESS_DETECTION_ENV_VAR,
+                %value,
+                "unknown process detection mode; using native detection"
+            );
+            ProcessDetectionMode::Native
+        })
+    })
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
@@ -96,8 +128,19 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    let tpgid = foreground_process_group_id(child_pid)?;
-    let members = foreground_process_group_members(child_pid, tpgid)?;
+    if let Some(tpgid) = foreground_process_group_id(child_pid) {
+        return foreground_job_for_group(child_pid, tpgid);
+    }
+
+    if process_detection_mode() != ProcessDetectionMode::ChildGroups {
+        return None;
+    }
+
+    foreground_job_for_group(child_pid, child_groups_foreground_process_group(child_pid)?)
+}
+
+fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<ForegroundJob> {
+    let members = foreground_process_group_members(child_pid, process_group_id)?;
     let processes = members
         .into_iter()
         .map(|member| {
@@ -117,9 +160,58 @@ pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     }
 
     Some(ForegroundJob {
-        process_group_id: tpgid,
+        process_group_id,
         processes,
     })
+}
+
+/// Best-effort foreground group for environments that do not expose terminal
+/// foreground groups. This mode is explicit because background jobs cannot be
+/// distinguished from foreground jobs without the native terminal signal.
+fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
+    let shell_group_id = process_pgrp_and_comm(child_pid)
+        .map(|(pgrp, _)| pgrp)
+        .filter(|pgrp| *pgrp > 0)? as u32;
+
+    child_groups_foreground_process_group_with(
+        child_pid,
+        shell_group_id,
+        process_task_ids,
+        process_task_children,
+        |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
+    )
+}
+
+fn child_groups_foreground_process_group_with(
+    child_pid: u32,
+    shell_group_id: u32,
+    mut task_ids: impl FnMut(u32) -> Vec<u32>,
+    mut task_children: impl FnMut(u32, u32) -> Vec<u32>,
+    mut process_group_id: impl FnMut(u32) -> Option<i32>,
+) -> Option<u32> {
+    let mut newest = None;
+    let mut scanned = 0usize;
+    for tid in task_ids(child_pid) {
+        for child in task_children(child_pid, tid) {
+            if scanned >= CHILD_GROUPS_SCAN_LIMIT {
+                return None;
+            }
+            scanned += 1;
+
+            let Some(pgrp) = process_group_id(child) else {
+                continue;
+            };
+            if pgrp <= 0 {
+                continue;
+            }
+            let pgrp = pgrp as u32;
+            if pgrp == shell_group_id {
+                continue;
+            }
+            newest = Some(newest.map_or(pgrp, |current: u32| current.max(pgrp)));
+        }
+    }
+    newest.or(Some(shell_group_id))
 }
 
 fn foreground_process_group_members(
@@ -663,6 +755,98 @@ mod tests {
         assert!(text_indicates_wsl("4.4.0-19041-Microsoft"));
         assert!(!text_indicates_wsl("6.8.0-64-generic"));
         assert!(!text_indicates_wsl(""));
+    }
+
+    #[test]
+    fn process_detection_mode_requires_explicit_child_groups_value() {
+        assert_eq!(
+            parse_process_detection_mode(None),
+            Ok(ProcessDetectionMode::Native)
+        );
+        assert_eq!(
+            parse_process_detection_mode(Some("")),
+            Ok(ProcessDetectionMode::Native)
+        );
+        assert_eq!(
+            parse_process_detection_mode(Some("native")),
+            Ok(ProcessDetectionMode::Native)
+        );
+        assert_eq!(
+            parse_process_detection_mode(Some("child-groups")),
+            Ok(ProcessDetectionMode::ChildGroups)
+        );
+        assert_eq!(parse_process_detection_mode(Some("gvisor")), Err("gvisor"));
+    }
+
+    #[test]
+    fn child_groups_foreground_group_picks_the_newest_job() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![200, 300])]);
+        let groups = HashMap::from([(200, 200), (300, 300)]);
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            100,
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+    }
+
+    #[test]
+    fn child_groups_foreground_group_returns_to_the_shell_group() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![150, 160])]);
+        let groups = HashMap::from([(150, 90), (160, 90)]);
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            90,
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(90));
+    }
+
+    #[test]
+    fn child_groups_foreground_group_skips_the_shell_group() {
+        let tasks = HashMap::from([(100, vec![100])]);
+        let children = HashMap::from([((100, 100), vec![150, 160, 300])]);
+        let groups = HashMap::from([(150, 90), (160, 90), (300, 300)]);
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            90,
+            |pid| tasks.get(&pid).cloned().unwrap_or_default(),
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+    }
+
+    #[test]
+    fn child_groups_foreground_group_fails_closed_at_the_scan_limit() {
+        let children: Vec<u32> = (1..=(CHILD_GROUPS_SCAN_LIMIT as u32 + 10)).collect();
+        let mut inspected = 0usize;
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            100,
+            |_| vec![100],
+            |_, _| children.clone(),
+            |pid| {
+                inspected += 1;
+                Some(pid as i32)
+            },
+        );
+
+        assert_eq!(inspected, CHILD_GROUPS_SCAN_LIMIT);
+        assert_eq!(group, None);
     }
 
     #[test]
