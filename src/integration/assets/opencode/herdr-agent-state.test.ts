@@ -5,7 +5,7 @@ const clients: FakeClient[] = [];
 const requestWaiters: Array<() => void> = [];
 let autoAcknowledge = true;
 let importCounter = 0;
-const originalArgv = process.argv;
+const originalArgv = [...process.argv];
 
 type FakeClient = {
   emit: (event: string) => void;
@@ -382,6 +382,88 @@ test("clears deleted child descendants from the aggregate", async () => {
 
   expect(requests.map(requestState)).toEqual(["idle", "working", "blocked", "idle"]);
   expect(requests.map(requestSessionID)).toEqual(["root-session", undefined, undefined, undefined]);
+});
+
+test("resets a deleted root and allows a new root to take over", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "root-session", status: { type: "busy" } },
+    },
+  });
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "child-session", status: { type: "busy" } },
+    },
+  });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "root-session", status: { type: "blocked" } },
+    },
+  });
+  await plugin.event({ event: { type: "session.deleted", properties: { sessionID: "root-session" } } });
+  await plugin.event({ event: { type: "session.created", properties: { sessionID: "new-root" } } });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "new-root", status: { type: "busy" } },
+    },
+  });
+
+  expect(requests.map(requestState)).toEqual([
+    "working",
+    "working",
+    "blocked",
+    "idle",
+    undefined,
+    "working",
+  ]);
+  expect(requests.map(requestSessionID)).toEqual([
+    "root-session",
+    undefined,
+    "root-session",
+    undefined,
+    "new-root",
+    "new-root",
+  ]);
+});
+
+test("does not treat a normal run session argument as attached ownership", async () => {
+  process.argv = ["node", "opencode", "run", "--session", "child-session"];
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.created",
+      properties: {
+        sessionID: "child-session",
+        info: { id: "child-session", parentID: "root-session" },
+      },
+    },
+  });
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "child-session", status: { type: "busy" } },
+    },
+  });
+
+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
+  expect(requests.map(requestState)).toEqual(["working"]);
+  expect(requests.map(requestSessionID)).toEqual([undefined]);
 });
 
 test("tracks an attached child session as the pane session", async () => {

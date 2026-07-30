@@ -158,6 +158,16 @@ function removeSessionSubtree(sessionID) {
   }
 }
 
+function resetOwnedRootSession() {
+  if (ownedRootSessionID) {
+    removeSessionSubtree(ownedRootSessionID);
+  }
+  childStates.clear();
+  ownedRootSessionID = undefined;
+  reportedRootSessionID = undefined;
+  rootState = "idle";
+}
+
 function request(method, params) {
   const pending = requestChain.then(() => requestOnce(method, params));
   requestChain = pending.catch(() => {});
@@ -370,6 +380,10 @@ export const HerdrAgentStatePlugin = async () => {
           await reportRootState("idle", sessionID);
           break;
         case "session.deleted":
+          if (role === "root") {
+            resetOwnedRootSession();
+            await reportState("idle");
+          }
           break;
         default:
           break;
