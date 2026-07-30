@@ -227,6 +227,17 @@ for (const integration of integrations) {
   });
 }
 
+test("OMP accepts POSIX and Windows session paths", async () => {
+  const { isAbsoluteSessionPath } = await importFresh("./omp/herdr-agent-state.ts");
+
+  expect(isAbsoluteSessionPath("/tmp/omp-session.jsonl")).toBe(true);
+  expect(isAbsoluteSessionPath("C:\\Users\\User\\.omp\\agent\\sessions\\omp-session.jsonl")).toBe(
+    true,
+  );
+  expect(isAbsoluteSessionPath("C:/Users/User/.omp/agent/sessions/omp-session.jsonl")).toBe(true);
+  expect(isAbsoluteSessionPath("relative/omp-session.jsonl")).toBe(false);
+});
+
 test("Pi reports idle only after the agent settles", async () => {
   const requests = await startRecordingServer("pi-settled");
   const { handlers, pi } = createExtensionHarness();
