@@ -114,11 +114,23 @@ pub fn session_ref_from_snapshot(
 }
 
 pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<AgentResumePlan> {
+    plan_with_extra_args(source, agent, session_ref, &[])
+}
+
+/// Build a native resume plan, inserting `extra_args` immediately after the
+/// agent executable so global flags apply to subcommands (for example
+/// `codex --yolo resume <id>` and `claude --dangerously-skip-permissions --resume <id>`).
+pub fn plan_with_extra_args(
+    source: &str,
+    agent: &str,
+    session_ref: &AgentSessionRef,
+    extra_args: &[String],
+) -> Option<AgentResumePlan> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
 
-    let argv = match (source, agent, session_ref.kind) {
+    let mut argv = match (source, agent, session_ref.kind) {
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
@@ -192,6 +204,10 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         _ => return None,
     };
+
+    if !extra_args.is_empty() && !argv.is_empty() {
+        argv.splice(1..1, extra_args.iter().cloned());
+    }
 
     Some(AgentResumePlan {
         agent: agent.to_string(),
@@ -434,6 +450,40 @@ mod tests {
             &AgentSessionRef::path(&claude_session).unwrap()
         )
         .is_none());
+    }
+
+    #[test]
+    fn planner_inserts_extra_args_after_executable() {
+        let claude_extra = vec!["--dangerously-skip-permissions".to_string()];
+        assert_eq!(
+            plan_with_extra_args(
+                "herdr:claude",
+                "claude",
+                &AgentSessionRef::id("claude-session").unwrap(),
+                &claude_extra,
+            )
+            .unwrap()
+            .argv,
+            vec![
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "claude-session"
+            ]
+        );
+
+        let codex_extra = vec!["--yolo".to_string()];
+        assert_eq!(
+            plan_with_extra_args(
+                "herdr:codex",
+                "codex",
+                &AgentSessionRef::id("codex-session").unwrap(),
+                &codex_extra,
+            )
+            .unwrap()
+            .argv,
+            vec!["codex", "--yolo", "resume", "codex-session"]
+        );
     }
 
     #[test]

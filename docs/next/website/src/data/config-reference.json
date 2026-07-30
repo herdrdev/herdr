@@ -1022,6 +1022,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Herdr session."
+        },
+        {
+          "key": "session.resume_extra_args",
+          "type": "table of string lists",
+          "default": "{}",
+          "description": "Extra CLI arguments inserted after the agent executable for native session resume. Keys are strict canonical agent ids (for example claude, codex). Example: claude = [\"--dangerously-skip-permissions\"] becomes claude --dangerously-skip-permissions --resume <id>."
         }
       ]
     },

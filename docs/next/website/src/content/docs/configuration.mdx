@@ -418,6 +418,16 @@ resume_agents_on_restore = true
 
 Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
 
+Optional per-agent extra CLI arguments are inserted after the agent executable on resume, so global flags apply before subcommands:
+
+```toml
+[session.resume_extra_args]
+claude = ["--dangerously-skip-permissions"]
+codex = ["--yolo"]
+```
+
+That turns restore into `claude --dangerously-skip-permissions --resume <id>` and `codex --yolo resume <id>`. Keys must be strict canonical agent ids. Changes apply on the next Herdr server restart restore, not to agents already running.
+
 ## IME cursor tracking
 
 On macOS, AI Agent TUIs that hide the hardware cursor can prevent native input-method candidate windows from following the focused pane. Reveal a cursor anchor for those panes with:

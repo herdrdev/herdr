@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -241,20 +244,68 @@ pub struct TerminalConfig {
     pub new_cwd: NewTerminalCwdConfig,
 }
 
+const MAX_RESUME_EXTRA_ARGS: usize = 32;
+const MAX_RESUME_EXTRA_ARG_LEN: usize = 512;
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Extra CLI arguments inserted after the agent executable for native
+    /// session resume. Keys are strict canonical agent ids (`claude`, `codex`,
+    /// …). Default: empty.
+    #[serde(default, deserialize_with = "deserialize_resume_extra_args")]
+    pub resume_extra_args: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            resume_extra_args: BTreeMap::new(),
         }
     }
+}
+
+fn deserialize_resume_extra_args<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    for (agent, args) in &raw {
+        if crate::detect::parse_canonical_agent_label(agent).is_none() {
+            return Err(de::Error::custom(format!(
+                "unknown canonical agent id `{agent}` in session.resume_extra_args"
+            )));
+        }
+        if args.len() > MAX_RESUME_EXTRA_ARGS {
+            return Err(de::Error::custom(format!(
+                "session.resume_extra_args.{agent} has more than {MAX_RESUME_EXTRA_ARGS} arguments"
+            )));
+        }
+        for (index, arg) in args.iter().enumerate() {
+            if arg.is_empty() {
+                return Err(de::Error::custom(format!(
+                    "session.resume_extra_args.{agent}[{index}] must not be empty"
+                )));
+            }
+            if arg.len() > MAX_RESUME_EXTRA_ARG_LEN {
+                return Err(de::Error::custom(format!(
+                    "session.resume_extra_args.{agent}[{index}] exceeds {MAX_RESUME_EXTRA_ARG_LEN} characters"
+                )));
+            }
+            if arg.chars().any(char::is_control) {
+                return Err(de::Error::custom(format!(
+                    "session.resume_extra_args.{agent}[{index}] must not contain control characters"
+                )));
+            }
+        }
+    }
+    Ok(raw)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1200,6 +1251,7 @@ new_cwd = "~/Projects"
     fn resume_agents_on_restore_defaults_on_and_parses() {
         let default_config = Config::default();
         assert!(default_config.session.resume_agents_on_restore);
+        assert!(default_config.session.resume_extra_args.is_empty());
 
         let toml = r#"
 [session]
@@ -1207,6 +1259,37 @@ resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+    }
+
+    #[test]
+    fn resume_extra_args_parses_per_agent_and_rejects_unknown() {
+        let toml = r#"
+[session.resume_extra_args]
+claude = ["--dangerously-skip-permissions"]
+codex = ["--yolo"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            config.session.resume_extra_args.get("claude"),
+            Some(&vec!["--dangerously-skip-permissions".to_string()])
+        );
+        assert_eq!(
+            config.session.resume_extra_args.get("codex"),
+            Some(&vec!["--yolo".to_string()])
+        );
+        assert!(config.session.resume_extra_args.get("pi").is_none());
+
+        let unknown = r#"
+[session.resume_extra_args]
+not-an-agent = ["--flag"]
+"#;
+        assert!(toml::from_str::<Config>(unknown).is_err());
+
+        let empty_arg = r#"
+[session.resume_extra_args]
+claude = [""]
+"#;
+        assert!(toml::from_str::<Config>(empty_arg).is_err());
     }
 
     #[test]
