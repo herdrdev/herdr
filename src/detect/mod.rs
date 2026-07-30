@@ -58,6 +58,7 @@ pub enum Agent {
     Droid,
     Amp,
     Grok,
+    Goose,
     Hermes,
     Kilo,
     Qodercli,
@@ -65,7 +66,7 @@ pub enum Agent {
 }
 
 impl Agent {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -83,13 +84,14 @@ impl Agent {
         Self::Droid,
         Self::Amp,
         Self::Grok,
+        Self::Goose,
         Self::Hermes,
         Self::Kilo,
         Self::Qodercli,
         Self::Maki,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 19] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -105,6 +107,7 @@ impl Agent {
         Self::Droid,
         Self::Amp,
         Self::Grok,
+        Self::Goose,
         Self::Hermes,
         Self::Kilo,
         Self::Qodercli,
@@ -131,6 +134,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Droid => "droid",
         Agent::Amp => "amp",
         Agent::Grok => "grok",
+        Agent::Goose => "goose",
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
@@ -157,6 +161,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Droid => "droid",
         Agent::Amp => "amp",
         Agent::Grok => "grok",
+        Agent::Goose => "goose",
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
@@ -193,6 +198,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "droid" => Some(Agent::Droid),
         "amp" | "amp-local" => Some(Agent::Amp),
         "grok" | "grok-build" => Some(Agent::Grok),
+        "goose" | "goose-cli" => Some(Agent::Goose),
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
@@ -680,6 +686,8 @@ mod tests {
         assert_eq!(identify_agent("ghcs"), Some(Agent::GithubCopilot));
         assert_eq!(identify_agent("grok"), Some(Agent::Grok));
         assert_eq!(identify_agent("grok-build"), Some(Agent::Grok));
+        assert_eq!(identify_agent("goose"), Some(Agent::Goose));
+        assert_eq!(identify_agent("goose-cli"), Some(Agent::Goose));
         assert_eq!(identify_agent("hermes"), Some(Agent::Hermes));
         assert_eq!(identify_agent("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
@@ -708,6 +716,8 @@ mod tests {
         assert_eq!(parse_agent_label("amp-local"), Some(Agent::Amp));
         assert_eq!(parse_agent_label("kiro-cli"), Some(Agent::Kiro));
         assert_eq!(parse_agent_label("grok-build"), Some(Agent::Grok));
+        assert_eq!(parse_agent_label("goose"), Some(Agent::Goose));
+        assert_eq!(parse_agent_label("goose-cli"), Some(Agent::Goose));
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
@@ -742,6 +752,7 @@ mod tests {
             (Agent::Droid, "droid"),
             (Agent::Amp, "amp"),
             (Agent::Grok, "grok"),
+            (Agent::Goose, "goose"),
             (Agent::Hermes, "hermes"),
             (Agent::Kilo, "kilo"),
             (Agent::Qodercli, "qodercli"),

@@ -1,0 +1,67 @@
+id = "goose"
+version = "2026.07.30.1"
+min_engine_version = 2
+updated_at = "2026-07-30T06:00:00Z"
+aliases = ["goose-cli", "herdr:goose"]
+
+[[rules]]
+id = "approval_prompt"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+any = [
+  { contains = ["? Do you allow this tool call?"] },
+  { contains = ["? Goose would like to call the above tool, do you allow?"] },
+  { contains = ["? Approve this action?"] },
+  { contains = ["? Approve?"] },
+]
+all = [
+  { any = [
+    { contains = ["Allow"] },
+    { contains = ["Deny"] },
+  ]},
+]
+
+[[rules]]
+id = "thinking_interrupt"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+contains = ["Ctrl+C to interrupt"]
+
+[[rules]]
+id = "tool_call_working"
+state = "working"
+priority = 400
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s{2}▸']
+
+[[rules]]
+id = "progress_bar_working"
+state = "working"
+priority = 300
+region = "whole_recent"
+visible_working = true
+regex = ['━━━━[━╌]+\s+\d+%']
+
+[[rules]]
+id = "error_blocked"
+state = "blocked"
+priority = 200
+region = "bottom_non_empty_lines(5)"
+visible_blocker = true
+contains = ["Insufficient credits"]
+
+[[rules]]
+id = "banner_idle"
+state = "idle"
+priority = 100
+region = "last_non_empty_above_prompt_box"
+visible_idle = true
+any = [
+  { contains = ["goose is ready"] },
+  { line_regex = ['^\s{2}__\( O\)>'] },
+]
