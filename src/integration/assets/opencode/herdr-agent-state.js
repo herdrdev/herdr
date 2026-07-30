@@ -310,7 +310,10 @@ export const HerdrAgentStatePlugin = async () => {
       const properties = event?.properties ?? {};
       const sessionID = sessionIDFromProperties(properties);
       rememberSessionParent(properties);
-      const role = sessionRole(sessionID, type === "session.created");
+      const canReplaceOwnedRoot =
+        type === "session.created" &&
+        (!awaitingRootCreation || rootSessionIDFor(sessionID) === sessionID);
+      const role = sessionRole(sessionID, canReplaceOwnedRoot);
       const isForeignTopLevelUpdate =
         type === "session.updated" &&
         !attachedSessionID &&
