@@ -589,7 +589,10 @@ impl WindowsInputMapper {
                             code,
                             modifiers,
                             kind,
-                            record: key,
+                            record: WindowsKeyRecord {
+                                repeat_count: 1,
+                                ..key
+                            },
                         },
                         event => event,
                     }
@@ -1469,9 +1472,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             [
-                (Press, true, 3),
-                (Repeat, true, 3),
-                (Repeat, true, 3),
+                (Press, true, 1),
+                (Repeat, true, 1),
+                (Repeat, true, 1),
                 (Release, false, 1)
             ]
         );

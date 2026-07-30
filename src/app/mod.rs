@@ -209,15 +209,6 @@ pub(crate) struct PressedTerminalKey {
     key: crate::input::TerminalKey,
 }
 
-impl PressedTerminalKey {
-    fn release_key(&self, mut key: crate::input::TerminalKey) -> crate::input::TerminalKey {
-        if matches!(self.key.windows_record, Some(record) if record.repeat_count > 1) {
-            key.windows_record = None;
-        }
-        key
-    }
-}
-
 pub(crate) type InputSourceId = u64;
 const LOCAL_INPUT_SOURCE: InputSourceId = 0;
 
@@ -1680,7 +1671,6 @@ impl App {
                             if let Some(pressed) =
                                 self.pressed_terminal_keys.remove(&pressed_key_id)
                             {
-                                let key = pressed.release_key(key);
                                 let _ = self
                                     .forward_terminal_key_to_target_headless(&pressed.target, key);
                             }
@@ -1857,17 +1847,17 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn native_pressed_key_identity_and_grouped_release_follow_press_record() {
+    #[tokio::test]
+    async fn native_pressed_key_identity_and_held_escape_releases_follow_press_record() {
         let record = crate::input::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
-            virtual_key_code: 88,
-            virtual_scan_code: 45,
-            unicode: 120,
+            virtual_key_code: 27,
+            virtual_scan_code: 1,
+            unicode: 27,
             control_key_state: 0,
         };
-        let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
+        let key = crate::input::TerminalKey::new(KeyCode::Esc, KeyModifiers::empty())
             .with_windows_record(record);
         let mut enhanced = key;
         enhanced.windows_record.as_mut().unwrap().control_key_state = 0x0100;
@@ -1875,28 +1865,56 @@ mod tests {
             pressed_key_identity(7, &key),
             pressed_key_identity(7, &enhanced)
         );
-        let encode = |key: crate::input::TerminalKey| {
-            crate::platform::encode_windows_conpty_fallback(key).unwrap_or_else(|| {
-                crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy)
+
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel_capacity(80, 24, 6);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        let release = crate::input::TerminalKey::new(KeyCode::Esc, KeyModifiers::empty())
+            .with_windows_record(crate::input::WindowsKeyRecord {
+                key_down: false,
+                repeat_count: 1,
+                unicode: 0,
+                ..record
             })
-        };
-        assert_eq!(encode(key), b"\x1b[88;45;120;1;0;1_");
-        let grouped = key.with_windows_record(crate::input::WindowsKeyRecord {
-            repeat_count: 2,
-            ..record
-        });
-        let pressed = PressedTerminalKey {
-            target: TerminalInputTarget {
-                terminal_id: crate::terminal::TerminalId::alloc(),
-            },
-            key: grouped,
-        };
-        let mut release = key;
-        release.windows_record.as_mut().unwrap().key_down = false;
-        let release = pressed.release_key(release.with_kind(KeyEventKind::Release));
-        assert_eq!(encode(grouped), b"x");
-        assert_eq!(encode(grouped.with_kind(KeyEventKind::Repeat)), b"x");
-        assert!(encode(release).is_empty());
+            .with_kind(KeyEventKind::Release);
+        app.route_client_events(
+            vec![
+                crate::raw_input::RawInputEvent::Key(key),
+                crate::raw_input::RawInputEvent::Key(key.with_kind(KeyEventKind::Repeat)),
+                crate::raw_input::RawInputEvent::Key(key.with_kind(KeyEventKind::Repeat)),
+                crate::raw_input::RawInputEvent::Key(release),
+                crate::raw_input::RawInputEvent::Key(key),
+                crate::raw_input::RawInputEvent::OuterFocusLost,
+            ],
+            false,
+        );
+
+        for _ in 0..3 {
+            assert_eq!(
+                rx.try_recv().unwrap(),
+                bytes::Bytes::from_static(b"\x1b[27;1;27;1;0;1_")
+            );
+        }
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"\x1b[27;1;0;0;0;1_")
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"\x1b[27;1;27;1;0;1_")
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"\x1b[27;1;27;0;0;1_")
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     fn release_notes_state() -> state::ReleaseNotesState {
