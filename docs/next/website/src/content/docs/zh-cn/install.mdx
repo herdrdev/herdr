@@ -37,16 +37,16 @@ brew install herdr
 mise use -g herdr
 ```
 
-如果 mise 报 `herdr not found in mise tool registry`,请更新 mise 后重试。旧版 mise 早于 Herdr 的注册表条目;`mise use -g github:ogulcancelik/herdr` 可以作为临时兜底。
+如果 mise 报 `herdr not found in mise tool registry`,请更新 mise 后重试。旧版 mise 早于 Herdr 的注册表条目;`mise use -g github:herdrdev/herdr` 可以作为临时兜底。
 
 ## 用 Nix 安装
 
 如果你已经在用 Nix,Herdr 提供了一个从源码构建的 flake:
 
 ```bash
-nix run github:ogulcancelik/herdr/v0.x.y
-nix build github:ogulcancelik/herdr/v0.x.y
-nix profile install github:ogulcancelik/herdr/v0.x.y
+nix run github:herdrdev/herdr/v0.x.y
+nix build github:herdrdev/herdr/v0.x.y
+nix profile install github:herdrdev/herdr/v0.x.y
 ```
 
 把 `v0.x.y` 替换为最新的发布标签。省略标签可以跟踪 `master`,但常规安装建议使用发布标签。
@@ -54,7 +54,7 @@ nix profile install github:ogulcancelik/herdr/v0.x.y
 flake 还提供一个开发 shell:
 
 ```bash
-nix develop github:ogulcancelik/herdr
+nix develop github:herdrdev/herdr
 ```
 
 更新时使用你安装 Herdr 的同一套 Nix 工作流。对于 profile 安装,列出 profile 条目并升级 Herdr 条目:
@@ -72,7 +72,7 @@ nix flake update herdr
 
 ## 手动下载
 
-也可以从 [GitHub releases](https://github.com/ogulcancelik/herdr/releases) 下载二进制文件。
+也可以从 [GitHub releases](https://github.com/herdrdev/herdr/releases) 下载二进制文件。
 
 选择匹配你系统的产物:
 

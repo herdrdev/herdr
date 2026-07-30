@@ -3,7 +3,7 @@ title: エージェントスキルファイル
 description: Claude Code などのコーディングエージェントに Herdr の使い方をインストールします。
 ---
 
-Herdr は再利用可能なエージェントスキルファイルを [`SKILL.md`](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md) として提供しています。
+Herdr は再利用可能なエージェントスキルファイルを [`skills/herdr/SKILL.md`](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md) として提供しています。
 
 このファイルを、再利用可能なスキルやカスタム指示に対応した任意のコーディングエージェントにインストールしてください。このスキルは、Herdr のペイン内から Herdr を制御する方法をエージェントに教えます。
 
@@ -28,15 +28,17 @@ Herdr は別の用途向けに [`herdr.dev/agent-guide.md`](https://herdr.dev/ag
 `npx skills` でスキルをインストールします:
 
 ```bash
-npx skills add ogulcancelik/herdr --skill herdr -g
+npx skills add herdrdev/herdr --skill herdr -g
 ```
+
+スキルがリポジトリのルートにあったときにインストールした場合は、`skills update` ではなく、この add コマンドを一度再実行してください。大きすぎる既存のコピーが置き換えられ、新しい場所が記録されます。
 
 `-g` フラグは、対応エージェントにグローバルインストールします。現在のプロジェクトにインストールする場合は `-g` を省略してください。
 
 手動でのフォールバックおよび信頼できるソースとしては、リポジトリのコピーを使ってください:
 
 ```text
-https://github.com/ogulcancelik/herdr/blob/master/SKILL.md
+https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md
 ```
 
 スキルシステムを持つエージェントには、このファイルを `herdr` という名前のスキルとしてインストールしてください。スキルシステムを持たないエージェントには、ファイルの内容をプロジェクト指示またはユーザー指示に貼り付けてください。
@@ -62,4 +64,4 @@ claude
 
 ソースファイルはこちら:
 
-[GitHub で `SKILL.md` を開く →](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)
+[GitHub で `SKILL.md` を開く →](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md)

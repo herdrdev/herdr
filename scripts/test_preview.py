@@ -31,7 +31,7 @@ class PreviewNotesTests(unittest.TestCase):
             notes = "Preview notes\n"
             content = preview.build_manifest(
                 output=output,
-                repo="ogulcancelik/herdr",
+                repo="herdrdev/herdr",
                 tag="preview-2026-06-02-abcdef123456",
                 build_id="2026-06-02-abcdef123456",
                 commit="abcdef1234567890",
@@ -54,7 +54,7 @@ class PreviewNotesTests(unittest.TestCase):
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["url"],
-                "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
+                "https://github.com/herdrdev/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["sha256"],
@@ -68,7 +68,7 @@ class PreviewNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "windows-x86_64 requires"):
                 preview.build_manifest(
                     output=Path(tmp) / "preview.json",
-                    repo="ogulcancelik/herdr",
+                    repo="herdrdev/herdr",
                     tag="preview-test",
                     build_id="test",
                     commit="abcdef",
@@ -192,7 +192,7 @@ title: Install Herdr
 import ConfigReference from '../../components/ConfigReference.astro';
 
 [Install](/docs/install/)
-[Skill](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)
+[Skill](https://github.com/herdrdev/herdr/blob/master/SKILL.md)
 file: ../../../public/assets/logo.svg
 """
         output = subprocess.check_output(

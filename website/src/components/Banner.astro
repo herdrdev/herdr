@@ -5,7 +5,7 @@ import { docsRoute, docsTargetHref } from '../docs-path';
 const { entry, locale, isFallback } = Astro.locals.starlightRoute;
 const { banner } = entry.data;
 
-const issuesUrl = 'https://github.com/ogulcancelik/herdr/issues/new?template=translation.yml';
+const issuesUrl = 'https://github.com/herdrdev/herdr/issues/new?template=translation.yml';
 const translationNotices = {
   ja: `このページの翻訳は LLM によって生成されています。誤りに気づいた場合は <a href="${issuesUrl}">GitHub で issue を開いて</a>お知らせください。`,
   'zh-cn': `本页面的翻译由 LLM 生成。如果你发现翻译有误,请<a href="${issuesUrl}">在 GitHub 上提交 issue</a> 告诉我们。`,

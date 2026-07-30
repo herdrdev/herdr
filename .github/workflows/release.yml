@@ -163,8 +163,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate product announcement
-        run: python3 scripts/changelog.py validate-product-announcement
+      - name: Validate release inputs
+        run: |
+          python3 scripts/changelog.py validate-product-announcement
+          test -f docs/next/README.md
+          test -f docs/next/README.zh-CN.md
 
   release:
     needs: [build, flake-check, validate-release-inputs]
@@ -377,7 +380,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md docs/versions website/latest.json website/src/content/docs website/src/data/config-reference.json docs/next/product-announcement.json
+          git add README.md README.zh-CN.md docs/versions website/latest.json website/src/content/docs website/src/data/config-reference.json docs/next/product-announcement.json
           git diff --cached --quiet || git commit -m "docs: update website manifest for v$VERSION"
           for attempt in 1 2 3; do
             git pull --rebase origin master

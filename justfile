@@ -80,6 +80,7 @@ release-docs-check:
     python3 scripts/config_reference_check.py
     node website/scripts/docs-versions.mjs check
     @test -f docs/next/README.md
+    @test -f docs/next/README.zh-CN.md
     @if ! diff -u CHANGELOG.md docs/next/CHANGELOG.md; then \
         echo "error: CHANGELOG.md differs from docs/next/CHANGELOG.md; finalize release notes before releasing"; \
         exit 1; \

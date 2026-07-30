@@ -3,7 +3,7 @@ title: Agent skill file
 description: Install Herdr instructions for Claude Code or another coding agent.
 ---
 
-Herdr ships a reusable agent skill file at [`SKILL.md`](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md).
+Herdr ships a reusable agent skill file at [`skills/herdr/SKILL.md`](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md).
 
 Install that file into any coding agent that supports reusable skills or custom instructions. The skill teaches the agent how to control Herdr from inside a Herdr pane.
 
@@ -28,15 +28,17 @@ The skill is not a separate app or service. It is a markdown instruction file fo
 Install the skill with `npx skills`:
 
 ```bash
-npx skills add ogulcancelik/herdr --skill herdr -g
+npx skills add herdrdev/herdr --skill herdr -g
 ```
+
+If you installed the skill while it lived at the repository root, rerun this add command once instead of using `skills update`. The add command replaces the oversized copy and records the new location.
 
 The `-g` flag installs it globally for supported agents. Omit `-g` to install it into the current project.
 
 Use the repository copy as the manual fallback and source of truth:
 
 ```text
-https://github.com/ogulcancelik/herdr/blob/master/SKILL.md
+https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md
 ```
 
 For agents with a skill system, install that file as a skill named `herdr`. For agents without a skill system, paste the file into the agent's project or user instructions.
@@ -62,4 +64,4 @@ The full command guide lives in the skill file itself. It covers pane IDs, `pane
 
 Read the source file here:
 
-[Open `SKILL.md` on GitHub →](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)
+[Open `SKILL.md` on GitHub →](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md)

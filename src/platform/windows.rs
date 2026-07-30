@@ -42,10 +42,13 @@ use windows_sys::{
                     KEYEVENTF_KEYUP,
                 },
             },
-            Shell::{CommandLineToArgvW, ShellExecuteW},
+            Shell::{
+                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
+                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+            },
             WindowsAndMessaging::{
-                GetForegroundWindow, GetWindowThreadProcessId, SendMessageTimeoutW,
-                SMTO_ABORTIFHUNG, WM_IME_CONTROL,
+                CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
+                LoadIconW, SendMessageTimeoutW, IDI_APPLICATION, SMTO_ABORTIFHUNG, WM_IME_CONTROL,
             },
         },
     },
@@ -305,33 +308,16 @@ fn select_pane_foreground_job(
     entries: &[WindowsProcessEntry],
 ) -> Option<ForegroundJob> {
     let shell = entries.iter().find(|entry| entry.pid == shell_pid)?;
-    let shell_job = || ForegroundJob {
-        process_group_id: shell_pid,
-        processes: vec![foreground_process_from_entry(shell)],
-    };
-
     let descendants = descendant_entries(shell_pid, entries);
     let mut candidates = Vec::new();
-    for entry in &descendants {
-        let process = foreground_process_from_entry(entry);
-        let job = ForegroundJob {
-            process_group_id: entry.pid,
-            processes: vec![process],
-        };
-        if let Some((agent, _)) = crate::detect::identify_agent_in_job(&job) {
-            candidates.push((*entry, agent));
+    for entry in std::iter::once(shell).chain(descendants) {
+        if crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some() {
+            candidates.push(entry);
         }
     }
 
-    match candidates.len() {
-        1 => candidates
-            .pop()
-            .map(|(entry, _)| foreground_job_from_entry(entry)),
-        _ => select_single_agent_chain_candidate(&candidates, entries).map_or_else(
-            || Some(shell_job()),
-            |entry| Some(foreground_job_from_entry(entry)),
-        ),
-    }
+    let selected = select_topmost_agent_chain_candidate(&candidates, entries).unwrap_or(shell);
+    Some(foreground_job_from_entry(selected))
 }
 
 fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
@@ -341,22 +327,17 @@ fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
     }
 }
 
-fn select_single_agent_chain_candidate<'a>(
-    candidates: &[(&'a WindowsProcessEntry, crate::detect::Agent)],
+fn select_topmost_agent_chain_candidate<'a>(
+    candidates: &[&'a WindowsProcessEntry],
     entries: &[WindowsProcessEntry],
 ) -> Option<&'a WindowsProcessEntry> {
-    let (_, first_agent) = candidates.first()?;
-    if !candidates.iter().all(|(_, agent)| agent == first_agent) {
-        return None;
-    }
-
     let parent_by_pid: HashMap<u32, u32> = entries
         .iter()
         .map(|entry| (entry.pid, entry.parent_pid))
         .collect();
 
-    candidates.iter().map(|(entry, _)| *entry).find(|entry| {
-        candidates.iter().all(|(other, _)| {
+    candidates.iter().copied().find(|entry| {
+        candidates.iter().all(|other| {
             entry.pid == other.pid || process_is_ancestor(entry.pid, other.pid, &parent_by_pid)
         })
     })
@@ -690,8 +671,110 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     None
 }
 
-pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
-    Ok(false)
+pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+    let title = title.to_owned();
+    let body = body.unwrap_or(&title).to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("herdr-windows-notification".into())
+        .spawn(move || show_desktop_notification_on_thread(&title, &body, ready_tx))?;
+    ready_rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|err| match err {
+            std::sync::mpsc::RecvTimeoutError::Timeout => std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Windows notification setup timed out",
+            ),
+            std::sync::mpsc::RecvTimeoutError::Disconnected => std::io::Error::other(
+                "Windows notification thread exited before reporting readiness",
+            ),
+        })?
+}
+
+fn show_desktop_notification_on_thread(
+    title: &str,
+    body: &str,
+    ready_tx: std::sync::mpsc::SyncSender<std::io::Result<bool>>,
+) {
+    let class_name = wide_null("STATIC");
+    let window_name = wide_null("Herdr notifications");
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            window_name.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            std::ptr::null(),
+        )
+    };
+    if hwnd.is_null() {
+        let _ = ready_tx.send(Err(std::io::Error::last_os_error()));
+        return;
+    }
+
+    let mut notification = unsafe { std::mem::zeroed::<NOTIFYICONDATAW>() };
+    notification.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    notification.hWnd = hwnd;
+    notification.uID = 1;
+    notification.hIcon = unsafe { LoadIconW(null_mut(), IDI_APPLICATION) };
+    notification.uFlags = NIF_TIP;
+    if !notification.hIcon.is_null() {
+        notification.uFlags |= NIF_ICON;
+    }
+    copy_wide_truncated(&mut notification.szTip, "Herdr");
+
+    if unsafe { Shell_NotifyIconW(NIM_ADD, &notification) } == 0 {
+        let _ = ready_tx.send(Err(std::io::Error::other(
+            "failed to add Herdr notification-area icon",
+        )));
+        unsafe {
+            DestroyWindow(hwnd);
+        }
+        return;
+    }
+
+    notification.uFlags = NIF_INFO;
+    notification.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+    copy_wide_truncated(&mut notification.szInfoTitle, title);
+    copy_wide_truncated(&mut notification.szInfo, body);
+    if unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) } == 0 {
+        unsafe {
+            Shell_NotifyIconW(NIM_DELETE, &notification);
+            DestroyWindow(hwnd);
+        }
+        let _ = ready_tx.send(Err(std::io::Error::other(
+            "failed to show Herdr desktop notification",
+        )));
+        return;
+    }
+
+    let _ = ready_tx.send(Ok(true));
+    std::thread::sleep(Duration::from_secs(10));
+    unsafe {
+        Shell_NotifyIconW(NIM_DELETE, &notification);
+        DestroyWindow(hwnd);
+    }
+}
+
+fn copy_wide_truncated<const N: usize>(destination: &mut [u16; N], value: &str) {
+    destination.fill(0);
+    let mut offset = 0;
+    for ch in value.chars() {
+        let mut units = [0; 2];
+        let encoded = ch.encode_utf16(&mut units);
+        if offset + encoded.len() >= N {
+            break;
+        }
+        destination[offset..offset + encoded.len()].copy_from_slice(encoded);
+        offset += encoded.len();
+    }
 }
 
 fn wide_null(value: &str) -> Vec<u16> {
@@ -1127,6 +1210,15 @@ mod tests {
     };
 
     #[test]
+    fn windows_notification_text_is_null_terminated_and_unicode_safe() {
+        let mut destination = [u16::MAX; 6];
+        super::copy_wide_truncated(&mut destination, "abc😀def");
+
+        assert_eq!(String::from_utf16(&destination[..5]).unwrap(), "abc😀");
+        assert_eq!(destination[5], 0);
+    }
+
+    #[test]
     fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
         use base64::Engine as _;
 
@@ -1531,16 +1623,39 @@ mod tests {
     }
 
     #[test]
-    fn windows_process_tree_selects_topmost_claude_process_in_single_agent_chain() {
+    fn windows_process_tree_keeps_topmost_agent_over_different_agent_descendant() {
         let entries = vec![
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 10, "claude.exe", &["claude.exe"]),
-            test_entry(30, 20, "claude.exe", &["claude.exe", "mcp-server"]),
+            test_entry(
+                30,
+                20,
+                "cmd.exe",
+                &["cmd.exe", "/D", "/S", "/C", "codex mcp-server"],
+            ),
         ];
 
         let job = super::select_pane_foreground_job(10, &entries).unwrap();
 
         assert_eq!(job.process_group_id, 20);
+        assert_eq!(job.processes[0].name, "claude.exe");
+    }
+
+    #[test]
+    fn windows_process_tree_keeps_root_agent_over_agent_descendant() {
+        let entries = vec![
+            test_entry(10, 1, "claude.exe", &["claude.exe"]),
+            test_entry(
+                20,
+                10,
+                "cmd.exe",
+                &["cmd.exe", "/D", "/S", "/C", "codex mcp-server"],
+            ),
+        ];
+
+        let job = super::select_pane_foreground_job(10, &entries).unwrap();
+
+        assert_eq!(job.process_group_id, 10);
         assert_eq!(job.processes[0].name, "claude.exe");
     }
 
