@@ -708,12 +708,13 @@ fn drain_until_client_exits(
     full.get(since..).unwrap_or_default().to_string()
 }
 
-/// The `--remote` ssh-death path: killing the bridge closes the socket, the
-/// client sees EOF and unwinds normally, so the terminal is restored. This is
-/// the path that does NOT deliver a signal to the client. Guards against a
-/// regression that would leave mouse reporting on after an ssh disconnect.
-#[test]
-fn client_restores_terminal_on_server_eof() {
+/// Attaches a thin client, runs `trigger` to force an exit, and asserts the
+/// client emits the mouse teardown after that point. The teardown markers also
+/// appear in normal attach output, so only bytes emitted after the trigger
+/// (past the watermark) count.
+fn assert_client_restores_terminal(
+    trigger: impl FnOnce(&mut SpawnedHerdr, &mut SpawnedHerdr),
+) {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -724,28 +725,37 @@ fn client_restores_terminal_on_server_eof() {
     let (mut spawned_server, mut thin_client, pty_output) =
         attach_thin_client(&config_home, &runtime_dir, &api_socket, &client_socket);
 
-    // Watermark before the trigger: teardown markers also appear in normal
-    // attach output, so only bytes emitted after this point are meaningful.
     let since = output_len(&pty_output);
-
-    // Kill the server unexpectedly; the client socket closes and the client
-    // reader hits EOF, mirroring the ssh bridge dying under `herdr --remote`.
-    if let Some(pid) = spawned_server.child.process_id() {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
-        }
-    }
-    spawned_server.close_master();
+    trigger(&mut spawned_server, &mut thin_client);
 
     let output = drain_until_client_exits(&mut thin_client, &pty_output, since);
     assert!(
         output_has_mouse_teardown(&output),
-        "client must emit mouse teardown after server EOF; output after trigger: {output:?}"
+        "client must emit mouse teardown after trigger; output after trigger: {output:?}"
     );
 
     // SpawnedHerdr::Drop kills and reaps both processes with a bounded wait.
     drop(spawned_server);
     cleanup_spawned_herdr(thin_client, base);
+}
+
+/// The `--remote` ssh-death path: killing the bridge closes the socket, the
+/// client sees EOF and unwinds normally, so the terminal is restored. This is
+/// the path that does NOT deliver a signal to the client. Guards against a
+/// regression that would leave mouse reporting on after an ssh disconnect.
+#[test]
+fn client_restores_terminal_on_server_eof() {
+    assert_client_restores_terminal(|server, _client| {
+        // Kill the server unexpectedly; the client socket closes and the
+        // client reader hits EOF, mirroring the ssh bridge dying under
+        // `herdr --remote`.
+        if let Some(pid) = server.child.process_id() {
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+        server.close_master();
+    });
 }
 
 /// The path this PR actually fixes: a direct SIGHUP/SIGTERM to the client (e.g.
@@ -755,35 +765,12 @@ fn client_restores_terminal_on_server_eof() {
 /// process would die un-unwound and leak mouse reporting.
 #[test]
 fn client_restores_terminal_on_sighup() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let (spawned_server, mut thin_client, pty_output) =
-        attach_thin_client(&config_home, &runtime_dir, &api_socket, &client_socket);
-
-    // Watermark before the trigger: teardown markers also appear in normal
-    // attach output, so only bytes emitted after this point are meaningful.
-    let since = output_len(&pty_output);
-
-    // Signal the client process directly.
-    let client_pid = thin_client.child.process_id().expect("thin client pid") as libc::pid_t;
-    unsafe {
-        libc::kill(client_pid, libc::SIGHUP);
-    }
-
-    let output = drain_until_client_exits(&mut thin_client, &pty_output, since);
-    assert!(
-        output_has_mouse_teardown(&output),
-        "client must emit mouse teardown after SIGHUP; output after trigger: {output:?}"
-    );
-
-    // SpawnedHerdr::Drop kills and reaps both processes with a bounded wait.
-    drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    assert_client_restores_terminal(|_server, client| {
+        let pid = client.child.process_id().expect("thin client pid") as libc::pid_t;
+        unsafe {
+            libc::kill(pid, libc::SIGHUP);
+        }
+    });
 }
 
 #[test]
