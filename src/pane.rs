@@ -63,6 +63,17 @@ const PANE_COLORTERM: &str = "truecolor";
 /// bridge. The attached client is the only authority on what actually renders pane output.
 static OUTER_TERM_PROGRAM: RwLock<Option<String>> = RwLock::new(None);
 
+/// Stale terminal identity leaked from this process's environment. Applications read
+/// these to select graphics protocols, so a value from the wrong terminal is worse than
+/// no value at all.
+const STALE_TERMINAL_IDENTITY_ENV: [&str; 5] = [
+    "TERM_PROGRAM_VERSION",
+    "KITTY_WINDOW_ID",
+    "WEZTERM_PANE",
+    "ITERM_SESSION_ID",
+    "GHOSTTY_RESOURCES_DIR",
+];
+
 pub(crate) fn set_outer_term_program(term_program: Option<String>) {
     match OUTER_TERM_PROGRAM.write() {
         Ok(mut guard) => *guard = term_program,
@@ -88,6 +99,9 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     match outer_term_program {
         Some(term_program) => cmd.env("TERM_PROGRAM", term_program),
         None => cmd.env_remove("TERM_PROGRAM"),
+    }
+    for key in STALE_TERMINAL_IDENTITY_ENV {
+        cmd.env_remove(key);
     }
 }
 
@@ -3036,6 +3050,7 @@ mod tests {
         // Stand in for the terminal identity a persistent server inherits from whichever
         // terminal started it, which is not necessarily the attached client's.
         cmd.env("TERM_PROGRAM", "stale-outer");
+        cmd.env("KITTY_WINDOW_ID", "99");
         apply_pane_terminal_env(&mut cmd);
         for (key, value) in extra_env {
             cmd.env(key, value);
@@ -3347,10 +3362,14 @@ mod tests {
     fn pane_term_program_reports_attached_client_terminal() {
         let _guard = outer_term_program_lock().lock();
         set_outer_term_program(Some("kitty".to_string()));
-        let output = capture_shell_output("printf '%s\\n%s\\n' \"$TERM_PROGRAM\" \"$TERM\"", &[]);
+        let output = capture_shell_output(
+            "printf '%s\\n%s\\n%s\\n' \"$TERM_PROGRAM\" \"$TERM\" \"$KITTY_WINDOW_ID\"",
+            &[],
+        );
         set_outer_term_program(None);
-        // TERM stays herdr's own virtual terminal; only the outer identity is propagated.
-        assert_eq!(output, "kitty\nxterm-256color\n");
+        // TERM stays herdr's own virtual terminal; only the outer identity is propagated,
+        // and the server's own stale KITTY_WINDOW_ID does not leak through.
+        assert_eq!(output, "kitty\nxterm-256color\n\n");
     }
 
     #[cfg(unix)]
@@ -3358,10 +3377,13 @@ mod tests {
     fn pane_term_program_is_cleared_without_an_attached_client() {
         let _guard = outer_term_program_lock().lock();
         set_outer_term_program(None);
-        let output = capture_shell_output("printf '%s\\n' \"$TERM_PROGRAM\"", &[]);
+        let output = capture_shell_output(
+            "printf '%s\\n%s\\n' \"$TERM_PROGRAM\" \"$KITTY_WINDOW_ID\"",
+            &[],
+        );
         // A stale identity is worse than none: it makes applications pick a graphics
         // protocol the real outer terminal may not support.
-        assert_eq!(output, "\n");
+        assert_eq!(output, "\n\n");
     }
 
     #[cfg(unix)]
