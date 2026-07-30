@@ -12,15 +12,21 @@ let reportSeq = Date.now() * 1000;
 let requestChain = Promise.resolve();
 let reportedRootSessionID;
 
-// Track child sessions so their events cannot replace the pane's root session.
-// Their user prompts still project state without attaching the child session id.
-const childSessions = new Set();
+// Track the owning root's session tree so child state never leaks across roots.
+const sessionParents = new Map();
+const childStates = new Map();
+let ownedRootSessionID;
+let rootState = "idle";
 const CHILD_EVENT_STATES = new Map([
   ["permission.asked", "blocked"],
   ["question.asked", "blocked"],
   ["permission.replied", "working"],
   ["question.replied", "working"],
   ["question.rejected", "working"],
+  ["tool.execute.before", "working"],
+  ["tool.execute.after", "working"],
+  ["session.compacted", "working"],
+  ["session.error", "blocked"],
 ]);
 
 function nextReportSeq() {
@@ -37,6 +43,7 @@ function sessionIDFromProperties(properties) {
 const SESSION_STATE_BY_STATUS = new Map([
   ["idle", "idle"],
   ["active", "working"],
+  ["blocked", "blocked"],
   ["busy", "working"],
   ["pending", "working"],
   ["retry", "working"],
@@ -50,6 +57,105 @@ function stateFromSessionStatus(status) {
   return typeof kind === "string"
     ? SESSION_STATE_BY_STATUS.get(kind.toLowerCase())
     : undefined;
+}
+
+function attachedSessionIDFromArgv(argv) {
+  // `process.argv[2]` is the OpenCode subcommand. Do not treat an arbitrary
+  // argument named "attach" as one, such as a normal session id or URL.
+  if (argv[2] !== "attach") {
+    return undefined;
+  }
+
+  for (let index = 3; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--session") {
+      return argv[index + 1] || undefined;
+    }
+    if (argument.startsWith("--session=")) {
+      return argument.slice("--session=".length) || undefined;
+    }
+  }
+  return undefined;
+}
+
+function childAggregateState() {
+  let hasWorking = rootState === "working";
+  if (rootState === "blocked") {
+    return "blocked";
+  }
+  for (const state of childStates.values()) {
+    if (state === "blocked") {
+      return "blocked";
+    }
+    if (state === "working") {
+      hasWorking = true;
+    }
+  }
+  return hasWorking ? "working" : rootState;
+}
+
+function rememberSessionParent(properties) {
+  const info = properties?.info;
+  if (!info?.id) {
+    return;
+  }
+  if (info.parentID) {
+    sessionParents.set(info.id, info.parentID);
+  } else {
+    sessionParents.delete(info.id);
+  }
+}
+
+function belongsToOwnedTree(sessionID) {
+  const visited = new Set();
+  let currentSessionID = sessionID;
+  while (currentSessionID && !visited.has(currentSessionID)) {
+    if (currentSessionID === ownedRootSessionID) {
+      return true;
+    }
+    visited.add(currentSessionID);
+    currentSessionID = sessionParents.get(currentSessionID);
+  }
+  return false;
+}
+
+function rootSessionIDFor(sessionID) {
+  const visited = new Set();
+  let rootSessionID = sessionID;
+  let parentSessionID = sessionParents.get(rootSessionID);
+  while (parentSessionID && !visited.has(parentSessionID)) {
+    visited.add(rootSessionID);
+    rootSessionID = parentSessionID;
+    parentSessionID = sessionParents.get(rootSessionID);
+  }
+  return rootSessionID;
+}
+
+function setOwnedRootSession(sessionID) {
+  if (sessionID === ownedRootSessionID) {
+    return;
+  }
+  ownedRootSessionID = sessionID;
+  childStates.clear();
+  rootState = "idle";
+}
+
+function removeSessionSubtree(sessionID) {
+  const removedSessionIDs = new Set([sessionID]);
+  let foundDescendant = true;
+  while (foundDescendant) {
+    foundDescendant = false;
+    for (const [childSessionID, parentSessionID] of sessionParents) {
+      if (removedSessionIDs.has(parentSessionID) && !removedSessionIDs.has(childSessionID)) {
+        removedSessionIDs.add(childSessionID);
+        foundDescendant = true;
+      }
+    }
+  }
+  for (const removedSessionID of removedSessionIDs) {
+    childStates.delete(removedSessionID);
+    sessionParents.delete(removedSessionID);
+  }
 }
 
 function request(method, params) {
@@ -131,26 +237,97 @@ export const HerdrAgentStatePlugin = async () => {
     return {};
   }
 
+  const attachedSessionID = attachedSessionIDFromArgv(process.argv);
+  if (attachedSessionID) {
+    setOwnedRootSession(attachedSessionID);
+  }
+  const sessionRole = (sessionID, canReplaceOwnedRoot = false) => {
+    if (!sessionID) {
+      return undefined;
+    }
+    if (attachedSessionID) {
+      return belongsToOwnedTree(sessionID)
+        ? sessionID === ownedRootSessionID
+          ? "root"
+          : "child"
+        : undefined;
+    }
+    if (!ownedRootSessionID) {
+      setOwnedRootSession(rootSessionIDFor(sessionID));
+    } else if (!belongsToOwnedTree(sessionID)) {
+      // Once a root is owned, only a new session.created event may take over.
+      // Stale status, idle, deletion, or update events from a prior top-level
+      // session must not reclaim ownership.
+      if (sessionParents.has(sessionID) || !canReplaceOwnedRoot) {
+        return undefined;
+      }
+      setOwnedRootSession(sessionID);
+    }
+    return sessionID === ownedRootSessionID ? "root" : "child";
+  };
+  const reportChildState = async (sessionID, state) => {
+    childStates.set(sessionID, state);
+    const aggregateState = childAggregateState();
+    if (aggregateState) {
+      await reportState(aggregateState);
+    }
+  };
+  const reportRootState = async (state, sessionID) => {
+    rootState = state;
+    await reportState(childAggregateState(), sessionID);
+  };
+
   return {
     "chat.message": async ({ sessionID }) => {
-      if (sessionID && childSessions.has(sessionID)) {
+      const role = sessionRole(sessionID);
+      if (sessionID && !role) {
         return;
       }
-      await reportState("working", sessionID);
+      if (role === "child") {
+        await reportChildState(sessionID, "working");
+        return;
+      }
+      await reportRootState("working", sessionID);
     },
     event: async ({ event }) => {
       const type = event?.type;
       const properties = event?.properties ?? {};
       const sessionID = sessionIDFromProperties(properties);
+      rememberSessionParent(properties);
+      const role = sessionRole(sessionID, type === "session.created");
+      const isForeignTopLevelUpdate =
+        type === "session.updated" &&
+        !attachedSessionID &&
+        sessionID &&
+        !role &&
+        !sessionParents.has(sessionID);
 
-      const info = properties.info;
-      if (info?.id && info.parentID) {
-        childSessions.add(info.id);
+      if (sessionID && !role && !isForeignTopLevelUpdate) {
+        return;
       }
-      if (sessionID && childSessions.has(sessionID)) {
+      if (role === "child") {
         const state = CHILD_EVENT_STATES.get(type);
         if (state) {
-          await reportState(state);
+          await reportChildState(sessionID, state);
+          return;
+        }
+        if (type === "session.status") {
+          const statusState = stateFromSessionStatus(properties.status);
+          if (statusState) {
+            await reportChildState(sessionID, statusState);
+          }
+          return;
+        }
+        if (type === "session.idle") {
+          await reportChildState(sessionID, "idle");
+          return;
+        }
+        if (type === "session.deleted") {
+          removeSessionSubtree(sessionID);
+          const aggregateState = childAggregateState();
+          if (aggregateState) {
+            await reportState(aggregateState);
+          }
         }
         return;
       }
@@ -163,14 +340,14 @@ export const HerdrAgentStatePlugin = async () => {
           await reportSession(sessionID, "new");
           break;
         case "session.updated":
-          if (sessionID && sessionID !== reportedRootSessionID) {
+          if (isForeignTopLevelUpdate || (sessionID && sessionID !== reportedRootSessionID)) {
             await reportSession(sessionID);
           }
           break;
         case "session.status": {
           const state = stateFromSessionStatus(properties.status);
           if (state) {
-            await reportState(state, sessionID);
+            await reportRootState(state, sessionID);
           } else {
             await reportSession(sessionID);
           }
@@ -182,15 +359,15 @@ export const HerdrAgentStatePlugin = async () => {
         case "question.replied":
         case "question.rejected":
         case "session.compacted":
-          await reportState("working", sessionID);
+          await reportRootState("working", sessionID);
           break;
         case "permission.asked":
         case "question.asked":
         case "session.error":
-          await reportState("blocked", sessionID);
+          await reportRootState("blocked", sessionID);
           break;
         case "session.idle":
-          await reportState("idle", sessionID);
+          await reportRootState("idle", sessionID);
           break;
         case "session.deleted":
           break;
