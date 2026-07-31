@@ -1627,6 +1627,14 @@ impl App {
             match event {
                 crate::raw_input::RawInputEvent::Key(key) => {
                     let pressed_key_id = pressed_key_identity(source_id, &key);
+                    let key = if key.kind == crossterm::event::KeyEventKind::Press
+                        && key.windows_record.is_some()
+                        && self.pressed_terminal_keys.contains_key(&pressed_key_id)
+                    {
+                        key.with_kind(crossterm::event::KeyEventKind::Repeat)
+                    } else {
+                        key
+                    };
                     match key.kind {
                         crossterm::event::KeyEventKind::Press => {
                             if self.state.popup_pane.is_some() || self.state.mode == Mode::Terminal
@@ -1848,7 +1856,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn native_pressed_key_identity_and_held_escape_releases_follow_press_record() {
+    async fn native_repeats_and_releases_follow_the_pressed_pane() {
         let record = crate::input::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
@@ -1868,9 +1876,16 @@ mod tests {
 
         let mut app = test_app();
         let mut workspace = Workspace::test_new("test");
-        let focused = workspace.focused_pane_id().unwrap();
-        let (runtime, mut rx) = TerminalRuntime::test_with_channel_capacity(80, 24, 6);
-        workspace.tabs[0].runtimes.insert(focused, runtime);
+        let pressed_pane = workspace.focused_pane_id().unwrap();
+        let other_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        workspace.tabs[0].layout.focus_pane(pressed_pane);
+        let (pressed_runtime, mut pressed_rx) =
+            TerminalRuntime::test_with_channel_capacity(80, 24, 6);
+        let (other_runtime, mut other_rx) = TerminalRuntime::test_with_channel_capacity(80, 24, 6);
+        workspace.tabs[0]
+            .runtimes
+            .insert(pressed_pane, pressed_runtime);
+        workspace.tabs[0].runtimes.insert(other_pane, other_runtime);
         app.state.workspaces = vec![workspace];
         app.state.active = Some(0);
         app.state.selected = 0;
@@ -1884,10 +1899,11 @@ mod tests {
                 ..record
             })
             .with_kind(KeyEventKind::Release);
+        app.route_client_events(vec![crate::raw_input::RawInputEvent::Key(key)], false);
+        assert!(app.state.focus_pane_in_workspace(0, other_pane));
         app.route_client_events(
             vec![
                 crate::raw_input::RawInputEvent::Key(key),
-                crate::raw_input::RawInputEvent::Key(key.with_kind(KeyEventKind::Repeat)),
                 crate::raw_input::RawInputEvent::Key(key.with_kind(KeyEventKind::Repeat)),
                 crate::raw_input::RawInputEvent::Key(release),
                 crate::raw_input::RawInputEvent::Key(key),
@@ -1898,23 +1914,25 @@ mod tests {
 
         for _ in 0..3 {
             assert_eq!(
-                rx.try_recv().unwrap(),
+                pressed_rx.try_recv().unwrap(),
                 bytes::Bytes::from_static(b"\x1b[27;1;27;1;0;1_")
             );
         }
         assert_eq!(
-            rx.try_recv().unwrap(),
+            pressed_rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"\x1b[27;1;0;0;0;1_")
         );
+        assert!(pressed_rx.try_recv().is_err());
+
         assert_eq!(
-            rx.try_recv().unwrap(),
+            other_rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"\x1b[27;1;27;1;0;1_")
         );
         assert_eq!(
-            rx.try_recv().unwrap(),
+            other_rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"\x1b[27;1;27;0;0;1_")
         );
-        assert!(rx.try_recv().is_err());
+        assert!(other_rx.try_recv().is_err());
     }
 
     fn release_notes_state() -> state::ReleaseNotesState {
