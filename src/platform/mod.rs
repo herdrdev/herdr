@@ -59,6 +59,11 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
     }
 }
 
+#[cfg(not(windows))]
+pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
+    command.spawn().map(|child| child.id())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;

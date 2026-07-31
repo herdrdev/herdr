@@ -2013,6 +2013,7 @@ mod tests {
                 lines: Some(2),
                 format: crate::api::schema::ReadFormat::Text,
                 strip_ansi: true,
+                intent: crate::api::schema::ReadIntent::Interactive,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();

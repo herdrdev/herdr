@@ -2,10 +2,11 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=7
+// HERDR_INTEGRATION_VERSION=8
 // @ts-nocheck
 
 import net from "node:net";
+import path from "node:path";
 
 const HERDR_ENV = process.env.HERDR_ENV;
 const socketPath = process.env.HERDR_SOCKET_PATH;
@@ -84,11 +85,17 @@ function nextReportSeq(): number {
   return reportSeq;
 }
 
+export function isAbsoluteSessionPath(file: unknown): file is string {
+  return (
+    typeof file === "string" &&
+    (path.posix.isAbsolute(file) || path.win32.isAbsolute(file))
+  );
+}
+
 function updateSessionRef(ctx: any): void {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
-    currentAgentSessionPath =
-      typeof file === "string" && file.startsWith("/") ? file : undefined;
+    currentAgentSessionPath = isAbsoluteSessionPath(file) ? file : undefined;
   } catch {
     currentAgentSessionPath = undefined;
   }
