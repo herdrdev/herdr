@@ -702,13 +702,7 @@
           "key": "ui.sidebar.spaces.row_gap",
           "type": "integer",
           "default": "0",
-          "description": "Blank terminal rows between expanded Space sidebar entries. Set to 1 to restore the previous spacing. It does not affect gaps between consecutive indented worktree children; use ui.sidebar.spaces.group_gap for that."
-        },
-        {
-          "key": "ui.sidebar.spaces.group_gap",
-          "type": "integer",
-          "default": "0",
-          "description": "Blank terminal rows between consecutive indented children of a worktree group. Set to 0 to keep worktree groups tight, or match row_gap for uniform spacing. The parent hugs its first child (no gap); row_gap governs the gap after the group and between top-level spaces."
+          "description": "Blank terminal rows between expanded Space sidebar entries. Set to 1 to restore the previous spacing. Worktree parents and their indented children stay packed as one group; row_gap applies only between complete groups or unrelated top-level spaces."
         },
         {
           "key": "ui.sidebar.spaces.rows",

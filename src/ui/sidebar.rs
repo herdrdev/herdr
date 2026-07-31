@@ -230,25 +230,16 @@ fn workspace_row_height_in_body(
     workspace_row_height(app, workspace, indented).min(body_height)
 }
 
-fn workspace_entry_gap(
-    app: &AppState,
-    entries: &[WorkspaceListEntry],
-    entry_idx: usize,
-    indented: bool,
-) -> u16 {
+fn workspace_entry_gap(app: &AppState, entries: &[WorkspaceListEntry], entry_idx: usize) -> u16 {
     if entry_idx + 1 >= entries.len() {
         return 0;
     }
-    let next_is_child = next_entry_is_indented_workspace(entries, entry_idx);
-    // Between consecutive indented children: group_gap.
-    if indented && next_is_child {
-        return app.sidebar_spaces.group_gap;
-    }
-    // Parent under first child: no gap (parent hugs its first child).
-    if !indented && next_is_child {
+    // Pack worktree parents with their children: no gap when the next entry
+    // is part of the same group (parent -> first child, or consecutive children).
+    // Apply row_gap only between complete groups or unrelated top-level spaces.
+    if next_entry_is_indented_workspace(entries, entry_idx) {
         return 0;
     }
-    // Everything else (top-level to top-level, last child to next space): row_gap.
     app.sidebar_spaces.row_gap
 }
 
@@ -483,7 +474,7 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                 };
                 (
                     workspace_row_height_in_body(app, ws, *indented, body.height),
-                    workspace_entry_gap(app, &entries, entry_idx, *indented),
+                    workspace_entry_gap(app, &entries, entry_idx),
                 )
             }
         };
@@ -507,7 +498,7 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
         let Some(workspace) = app.workspaces.get(*ws_idx) else {
             continue;
         };
-        let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
+        let gap = workspace_entry_gap(app, &entries, entry_idx);
         let needed = workspace_row_height_in_body(app, workspace, *indented, body.height)
             .saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
@@ -698,7 +689,7 @@ pub(crate) fn compute_workspace_list_areas(
                     continue;
                 };
                 let row_height = workspace_row_height_in_body(app, ws, *indented, body.height);
-                let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
+                let gap = workspace_entry_gap(app, &entries, entry_idx);
                 if row_y.saturating_add(row_height) > body_bottom {
                     break;
                 }
@@ -2487,7 +2478,6 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             workspace_with_worktree_space("issue", Some("repo-key"), "/repo/herdr-issue"),
         ];
         app.sidebar_spaces.row_gap = 1;
-        app.sidebar_spaces.group_gap = 1;
 
         let (cards, headers) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 20));
 
@@ -2510,26 +2500,26 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         ];
         app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
         app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 2;
         let (spacious, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
+        // Worktree group stays packed: parent and children hug with no gap.
         assert_eq!(
             spacious[1].rect.y,
             spacious[0].rect.y + spacious[0].rect.height
         );
         assert_eq!(
             spacious[2].rect.y,
-            spacious[1].rect.y + spacious[1].rect.height + 2
+            spacious[1].rect.y + spacious[1].rect.height
         );
+        // row_gap applies between the group and the unrelated top-level space.
         assert_eq!(
             spacious[3].rect.y,
             spacious[2].rect.y + spacious[2].rect.height + 2
         );
         let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
-        assert_eq!(spacious_metrics.viewport_rows, 2);
+        assert_eq!(spacious_metrics.viewport_rows, 3);
         assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
 
         app.sidebar_spaces.row_gap = 0;
-        app.sidebar_spaces.group_gap = 0;
         let (packed, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
         assert!(packed
             .windows(2)
@@ -2862,11 +2852,10 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn workspace_entry_gap_returns_zero_at_parent_to_child_transition() {
+    fn workspace_entry_gap_packs_parent_with_first_child() {
         let mut app = crate::app::state::AppState::test_new();
         app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 1;
-        // Parent(false) -> Child(true): parent hugs first child, no gap.
+        // Parent -> first child: packed, no gap.
         let entries = vec![
             WorkspaceListEntry::Workspace {
                 ws_idx: 0,
@@ -2877,14 +2866,57 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 indented: true,
             },
         ];
-        assert_eq!(workspace_entry_gap(&app, &entries, 0, false), 0);
+        assert_eq!(workspace_entry_gap(&app, &entries, 0), 0);
     }
 
     #[test]
-    fn workspace_entry_gap_returns_row_gap_at_top_level_to_top_level() {
+    fn workspace_entry_gap_packs_consecutive_children() {
         let mut app = crate::app::state::AppState::test_new();
         app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 1;
+        // Parent, child, child: middle child -> next child is packed.
+        let entries = vec![
+            WorkspaceListEntry::Workspace {
+                ws_idx: 0,
+                indented: false,
+            },
+            WorkspaceListEntry::Workspace {
+                ws_idx: 1,
+                indented: true,
+            },
+            WorkspaceListEntry::Workspace {
+                ws_idx: 2,
+                indented: true,
+            },
+        ];
+        assert_eq!(workspace_entry_gap(&app, &entries, 1), 0);
+    }
+
+    #[test]
+    fn workspace_entry_gap_applies_row_gap_after_last_child_of_group() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_spaces.row_gap = 2;
+        // Parent, child, next top-level space: last child -> next space.
+        let entries = vec![
+            WorkspaceListEntry::Workspace {
+                ws_idx: 0,
+                indented: false,
+            },
+            WorkspaceListEntry::Workspace {
+                ws_idx: 1,
+                indented: true,
+            },
+            WorkspaceListEntry::Workspace {
+                ws_idx: 2,
+                indented: false,
+            },
+        ];
+        assert_eq!(workspace_entry_gap(&app, &entries, 1), 2);
+    }
+
+    #[test]
+    fn workspace_entry_gap_applies_row_gap_between_top_level_spaces() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_spaces.row_gap = 2;
         // Two top-level spaces, neither indented.
         let entries = vec![
             WorkspaceListEntry::Workspace {
@@ -2896,64 +2928,17 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 indented: false,
             },
         ];
-        assert_eq!(workspace_entry_gap(&app, &entries, 0, false), 2);
-    }
-
-    #[test]
-    fn workspace_entry_gap_returns_group_gap_between_consecutive_children() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 1;
-        // Parent(false), Child(true), Child(true): middle child → next child.
-        let entries = vec![
-            WorkspaceListEntry::Workspace {
-                ws_idx: 0,
-                indented: false,
-            },
-            WorkspaceListEntry::Workspace {
-                ws_idx: 1,
-                indented: true,
-            },
-            WorkspaceListEntry::Workspace {
-                ws_idx: 2,
-                indented: true,
-            },
-        ];
-        assert_eq!(workspace_entry_gap(&app, &entries, 1, true), 1);
-    }
-
-    #[test]
-    fn workspace_entry_gap_returns_row_gap_after_last_child_of_group() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 1;
-        // Parent(false), Child(true), NextSpace(false): last child → next space.
-        let entries = vec![
-            WorkspaceListEntry::Workspace {
-                ws_idx: 0,
-                indented: false,
-            },
-            WorkspaceListEntry::Workspace {
-                ws_idx: 1,
-                indented: true,
-            },
-            WorkspaceListEntry::Workspace {
-                ws_idx: 2,
-                indented: false,
-            },
-        ];
-        assert_eq!(workspace_entry_gap(&app, &entries, 1, true), 2);
+        assert_eq!(workspace_entry_gap(&app, &entries, 0), 2);
     }
 
     #[test]
     fn workspace_entry_gap_returns_zero_past_last_entry() {
         let mut app = crate::app::state::AppState::test_new();
         app.sidebar_spaces.row_gap = 2;
-        app.sidebar_spaces.group_gap = 1;
         let entries = vec![WorkspaceListEntry::Workspace {
             ws_idx: 0,
             indented: false,
         }];
-        assert_eq!(workspace_entry_gap(&app, &entries, 0, false), 0);
+        assert_eq!(workspace_entry_gap(&app, &entries, 0), 0);
     }
 }
