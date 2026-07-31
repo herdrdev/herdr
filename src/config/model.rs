@@ -772,6 +772,14 @@ pub struct WorktreesConfig {
     pub directory: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TabBarPositionConfig {
+    #[default]
+    Top,
+    Bottom,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -812,6 +820,8 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
+    /// Desktop tab row placement. Default: top.
+    pub tab_bar_position: TabBarPositionConfig,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Expanded sidebar row composition.
@@ -1014,6 +1024,7 @@ impl Default for UiConfig {
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            tab_bar_position: TabBarPositionConfig::Top,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
@@ -1245,6 +1256,10 @@ agent_panel_scope = "current"
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
         assert!(!default_config.ui.hide_tab_bar_when_single_tab);
+        assert_eq!(
+            default_config.ui.tab_bar_position,
+            TabBarPositionConfig::Top
+        );
 
         let toml = r#"
 [ui]
@@ -1252,12 +1267,14 @@ pane_borders = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 hide_tab_bar_when_single_tab = true
+tab_bar_position = "bottom"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(config.ui.hide_tab_bar_when_single_tab);
+        assert_eq!(config.ui.tab_bar_position, TabBarPositionConfig::Bottom);
     }
 
     #[test]

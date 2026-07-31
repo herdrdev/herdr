@@ -671,6 +671,16 @@
           "description": "Hide the tab row when the workspace has one tab."
         },
         {
+          "key": "ui.tab_bar_position",
+          "type": "enum",
+          "default": "\"top\"",
+          "description": "Place the desktop tab row above or below the terminal panes.",
+          "values": [
+            "top",
+            "bottom"
+          ]
+        },
+        {
           "key": "ui.agent_panel_sort",
           "type": "enum",
           "default": "\"spaces\"",

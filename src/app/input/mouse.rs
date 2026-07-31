@@ -483,6 +483,10 @@ impl AppState {
                     }
                 }
 
+                if self.mode_bar_covers_tab_row(mouse.column, mouse.row) {
+                    return None;
+                }
+
                 if self.on_tab_scroll_left_button(mouse.column, mouse.row) {
                     self.scroll_tabs_left();
                     return None;
@@ -913,6 +917,9 @@ impl AppState {
             }
 
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.mode_bar_covers_tab_row(mouse.column, mouse.row) => {}
+
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 if self.on_tab_bar(mouse.column, mouse.row) =>
             {
                 match mouse.kind {
@@ -1063,7 +1070,8 @@ impl AppState {
             }
 
             MouseEventKind::Down(MouseButton::Right)
-                if self.tab_at(mouse.column, mouse.row).is_some() =>
+                if !self.mode_bar_covers_tab_row(mouse.column, mouse.row)
+                    && self.tab_at(mouse.column, mouse.row).is_some() =>
             {
                 if let (Some(ws_idx), Some(tab_idx)) =
                     (self.active, self.tab_at(mouse.column, mouse.row))
@@ -1270,6 +1278,15 @@ impl AppState {
                     && col < area.x + area.width)
                     .then_some(idx)
             })
+    }
+
+    fn mode_bar_covers_tab_row(&self, col: u16, row: u16) -> bool {
+        self.tab_bar_position == crate::config::TabBarPositionConfig::Bottom
+            && matches!(
+                self.mode,
+                Mode::Navigate | Mode::Prefix | Mode::Copy | Mode::Resize
+            )
+            && self.on_tab_bar(col, row)
     }
 
     pub(super) fn on_tab_bar(&self, col: u16, row: u16) -> bool {
@@ -3390,6 +3407,63 @@ mod tests {
             tab_bar.y,
         ));
         assert_eq!(app.state.workspaces[0].active_tab, 0);
+    }
+
+    #[test]
+    fn bottom_mode_bar_consumes_hidden_tab_mouse_actions() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("one");
+        ws.test_add_tab(Some("two"));
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+        app.state.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let second_tab = app.state.view.tab_hit_areas[1];
+        let new_tab = app.state.view.new_tab_hit_area;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::ScrollDown,
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            second_tab.x,
+            second_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            new_tab.x,
+            new_tab.y,
+        ));
+
+        app.state.drag = Some(DragState {
+            target: DragTarget::SidebarDivider,
+        });
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            second_tab.x,
+            second_tab.y,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 2);
+        assert!(app.state.context_menu.is_none());
+        assert!(app.state.tab_press.is_none());
+        assert!(app.state.drag.is_none());
     }
 
     #[test]
