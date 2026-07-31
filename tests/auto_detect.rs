@@ -761,6 +761,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
         .env("HERDR_SOCKET_PATH", &api_socket)
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
         .env("HERDR_ENV", "1")
+        .env_remove("TMUX")
         .output()
         .unwrap();
 

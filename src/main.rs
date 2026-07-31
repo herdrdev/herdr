@@ -10,6 +10,10 @@ use crossterm::execute;
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
+// `TMUX` is set inside every tmux pane. herdr panes never set it, so a set
+// `TMUX` means `HERDR_ENV` was inherited from a tmux server whose launch shell
+// was a herdr pane, not set by herdr for this shell.
+const TMUX_ENV_VAR: &str = "TMUX";
 const NESTED_HERDR_MESSAGES: [&str; 6] = [
     "inception detected. we need to go deeper... said no one ever.",
     "recursion is a pathway to many abilities some consider to be... unnatural.",
@@ -432,11 +436,22 @@ pane_history = false
 const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
-    should_block_nested_for_env(config, std::env::var(HERDR_ENV_VAR).ok().as_deref())
+    let herdr_env = std::env::var(HERDR_ENV_VAR).ok();
+    let inherited_from_tmux = std::env::var_os(TMUX_ENV_VAR).is_some();
+    should_block_nested_for_env(config, herdr_env.as_deref(), inherited_from_tmux)
 }
 
-fn should_block_nested_for_env(config: &config::Config, herdr_env: Option<&str>) -> bool {
-    !config.experimental.allow_nested && herdr_env == Some(HERDR_ENV_VALUE)
+fn should_block_nested_for_env(
+    config: &config::Config,
+    herdr_env: Option<&str>,
+    inherited_from_tmux: bool,
+) -> bool {
+    // `HERDR_ENV` is injected into every herdr-managed pane, but it leaks into
+    // the server-global environment when a tmux server is started from inside a
+    // herdr pane. Every session on that server then inherits `HERDR_ENV` even
+    // though those panes are not herdr-managed, so ignore the marker while
+    // inside tmux and let the launch proceed.
+    !config.experimental.allow_nested && herdr_env == Some(HERDR_ENV_VALUE) && !inherited_from_tmux
 }
 
 fn random_nested_message() -> &'static str {
@@ -865,20 +880,40 @@ mod tests {
     #[test]
     fn nested_herdr_blocks_when_env_is_set() {
         let config = config::Config::default();
-        assert!(should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(should_block_nested_for_env(
+            &config,
+            Some(HERDR_ENV_VALUE),
+            false
+        ));
     }
 
     #[test]
     fn nested_herdr_does_not_block_when_allowed() {
         let config: config::Config =
             toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
-        assert!(!should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(!should_block_nested_for_env(
+            &config,
+            Some(HERDR_ENV_VALUE),
+            false
+        ));
     }
 
     #[test]
     fn nested_herdr_does_not_block_without_env() {
         let config = config::Config::default();
-        assert!(!should_block_nested_for_env(&config, None));
+        assert!(!should_block_nested_for_env(&config, None, false));
+    }
+
+    #[test]
+    fn nested_herdr_does_not_block_when_env_leaked_from_tmux() {
+        // A tmux server started from a herdr pane exports HERDR_ENV to every
+        // session, so the marker alone must not trigger the guard there.
+        let config = config::Config::default();
+        assert!(!should_block_nested_for_env(
+            &config,
+            Some(HERDR_ENV_VALUE),
+            true
+        ));
     }
 
     #[test]
