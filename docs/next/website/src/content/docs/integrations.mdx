@@ -266,7 +266,7 @@ Install the Antigravity CLI hook:
 herdr integration install antigravity-cli
 ```
 
-Herdr uses `~/.gemini/antigravity-cli/` by default, or `ANTIGRAVITY_CLI_CONFIG_DIR` when set. The directory is created if it does not exist. Install writes `hooks/herdr-agent-state.sh` (or `herdr-agent-state.ps1` on Windows) and adds Herdr entries to `hooks.json`. Uninstall removes the matching hook entries and deletes the hook script.
+Herdr uses `~/.gemini/config/` by default, or `ANTIGRAVITY_CLI_CONFIG_DIR` when set. This is the directory Antigravity CLI reads global customizations from, and it must already exist. Install writes `hooks/herdr-agent-state.sh` (or `herdr-agent-state.ps1` on Windows) and adds a Herdr-owned `herdr` block to `hooks.json`. Antigravity CLI keys `hooks.json` by hook name, so install rewrites only that block and leaves other named hooks untouched. Uninstall removes the `herdr` block and deletes the hook script.
 
 After Antigravity CLI emits a session-bearing event, Herdr can use the reported conversation ID to resume the pane with `agy --conversation <id>` after a Herdr server restart.
 

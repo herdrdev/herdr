@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::command::{hook_command, shell_single_quote};
 use super::config_edit::{
@@ -31,15 +31,15 @@ use super::types::{
     OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
 };
 use super::{
-    ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_EVENTS, ANTIGRAVITY_CLI_HOOK_INSTALL_NAME,
-    CLAUDE_HOOK_ASSET, CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME,
-    COPILOT_HOOK_ASSET, COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME,
-    COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME,
-    DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
-    DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET, DROID_HOOK_EVENTS,
-    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, GROK_HOOK_ASSET,
-    GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
-    HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
+    ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
+    ANTIGRAVITY_CLI_HOOK_INSTALL_NAME, ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC, CLAUDE_HOOK_ASSET,
+    CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET,
+    COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME, COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS,
+    DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
+    DROID_HOOK_EVENTS, DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
+    HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
     KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
@@ -1236,19 +1236,12 @@ pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths
         ))
     })?;
 
-    // Add hooks for each mapped event
-    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
-        // Clear out any old versions of this command
-        remove_hook_commands(hooks, event, &hook_path, Some(action))?;
-        // Ensure new command hook is registered
-        ensure_command_hook(
-            hooks,
-            event,
-            hook_command(&hook_path, Some(action)),
-            10,
-            Some("*"),
-        )?;
-    }
+    // The Herdr block is Herdr-owned, so rewrite it wholesale and leave every
+    // other named hook untouched.
+    hooks.insert(
+        ANTIGRAVITY_CLI_HOOK_BLOCK_NAME.to_string(),
+        antigravity_cli_hook_block(&hook_path),
+    );
 
     fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
@@ -1256,6 +1249,28 @@ pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths
         hook_path,
         hooks_path,
     })
+}
+
+/// Builds the Herdr-owned `hooks.json` block for Antigravity CLI.
+///
+/// `PreToolUse` and `PostToolUse` take a `matcher`/`hooks` group; the
+/// lifecycle events take a flat handler list.
+fn antigravity_cli_hook_block(hook_path: &Path) -> Value {
+    let mut block = Map::new();
+    for (event, action, grouped) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+        let handler = json!({
+            "type": "command",
+            "command": hook_command(hook_path, Some(action)),
+            "timeout": ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
+        });
+        let entries = if grouped {
+            json!([{ "matcher": "*", "hooks": [handler] }])
+        } else {
+            json!([handler])
+        };
+        block.insert(event.to_string(), entries);
+    }
+    Value::Object(block)
 }
 
 pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallResult> {
@@ -1277,9 +1292,7 @@ pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallR
             ))
         })?;
 
-        for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
-            updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
-        }
+        updated_hooks = hooks.remove(ANTIGRAVITY_CLI_HOOK_BLOCK_NAME).is_some();
 
         if updated_hooks {
             fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;

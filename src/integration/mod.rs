@@ -196,23 +196,30 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
 const CURSOR_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const CURSOR_HOOK_ASSET: &str = include_str!("assets/cursor/herdr-agent-state.sh");
 const CURSOR_INTEGRATION_VERSION: u32 = 1;
-const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
-    "herdr-agent-state.ps1"
-} else {
-    "herdr-agent-state.sh"
-};
-const ANTIGRAVITY_CLI_HOOK_ASSET: &str = if cfg!(windows) {
-    include_str!("assets/antigravity_cli/herdr-agent-state.ps1")
-} else {
-    include_str!("assets/antigravity_cli/herdr-agent-state.sh")
-};
+#[cfg(windows)]
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+#[cfg(not(windows))]
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+#[cfg(windows)]
+const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
+    include_str!("assets/antigravity_cli/herdr-agent-state.ps1");
+#[cfg(not(windows))]
+const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
+    include_str!("assets/antigravity_cli/herdr-agent-state.sh");
 const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 1;
-const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 5] = [
-    ("PreInvocation", "working"),
-    ("PreToolUse", "working"),
-    ("PostToolUse", "working"),
-    ("PostInvocation", "idle"),
-    ("Stop", "release"),
+/// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
+/// under one Herdr-owned block that install rewrites and uninstall removes.
+const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
+const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
+/// `(event, reported action, grouped)`. Antigravity CLI only accepts a
+/// `matcher`/`hooks` wrapper for the tool events; the lifecycle events take a
+/// flat handler list and reject the wrapper, which invalidates the whole file.
+const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str, bool); 5] = [
+    ("PreInvocation", "working", false),
+    ("PreToolUse", "working", true),
+    ("PostToolUse", "working", true),
+    ("PostInvocation", "idle", false),
+    ("Stop", "release", false),
 ];
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";

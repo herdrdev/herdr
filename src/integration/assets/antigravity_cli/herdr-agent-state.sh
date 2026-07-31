@@ -30,7 +30,7 @@ import socket
 import time
 
 source = "herdr:antigravity_cli"
-agent = "antigravity-cli"
+agent = "agy"
 action = os.environ.get("HERDR_ACTION", "")
 pane_id = os.environ.get("HERDR_PANE_ID")
 socket_path = os.environ.get("HERDR_SOCKET_PATH")

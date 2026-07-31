@@ -40,7 +40,7 @@ if (-not [string]::IsNullOrWhiteSpace($conversationId)) {
             "--source",
             "herdr:antigravity_cli",
             "--agent",
-            "antigravity-cli",
+            "agy",
             "--seq",
             "$seq",
             "--agent-session-id",
@@ -56,35 +56,35 @@ if (-not [string]::IsNullOrWhiteSpace($conversationId)) {
 # Report status or release
 try {
     if ($Action -eq "release") {
-        $args = @(
+        $reportArgs = @(
             "pane",
             "release-agent",
             $env:HERDR_PANE_ID,
             "--source",
             "herdr:antigravity_cli",
             "--agent",
-            "antigravity-cli",
+            "agy",
             "--seq",
             "$seq"
         )
-        & herdr @args 2>$null | Out-Null
+        & herdr @reportArgs 2>$null | Out-Null
     } else {
-        $args = @(
+        $reportArgs = @(
             "pane",
             "report-agent",
             $env:HERDR_PANE_ID,
             "--source",
             "herdr:antigravity_cli",
             "--agent",
-            "antigravity-cli",
+            "agy",
             "--state",
             $Action,
             "--seq",
             "$seq"
         )
         if (-not [string]::IsNullOrWhiteSpace($conversationId)) {
-            $args += @("--agent-session-id", "$conversationId")
+            $reportArgs += @("--agent-session-id", "$conversationId")
         }
-        & herdr @args 2>$null | Out-Null
+        & herdr @reportArgs 2>$null | Out-Null
     }
 } catch {}

@@ -339,7 +339,10 @@ fn integration_specs() -> [(
         ),
         (
             crate::api::schema::IntegrationTarget::AntigravityCli,
-            antigravity_cli_dir().map(|dir| dir.join("hooks").join(super::ANTIGRAVITY_CLI_HOOK_INSTALL_NAME)),
+            antigravity_cli_dir().map(|dir| {
+                dir.join("hooks")
+                    .join(super::ANTIGRAVITY_CLI_HOOK_INSTALL_NAME)
+            }),
             super::ANTIGRAVITY_CLI_INTEGRATION_VERSION,
         ),
         (

@@ -144,7 +144,10 @@ pub(crate) fn mastracode_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn antigravity_cli_dir() -> io::Result<PathBuf> {
-    config_dir_from_env_or_home(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &[".gemini", "antigravity-cli"])
+    // Antigravity CLI discovers global customizations (hooks.json included)
+    // from ~/.gemini/config; ~/.gemini/antigravity-cli holds runtime data and
+    // is never read for hooks.
+    config_dir_from_env_or_home(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &[".gemini", "config"])
 }
 
 pub(crate) fn grok_dir() -> io::Result<PathBuf> {
