@@ -1933,6 +1933,7 @@ mod tests {
             bytes::Bytes::from_static(b"\x1b[27;1;27;0;0;1_")
         );
         assert!(other_rx.try_recv().is_err());
+        assert!(app.pressed_terminal_keys.is_empty());
     }
 
     fn release_notes_state() -> state::ReleaseNotesState {
