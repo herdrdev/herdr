@@ -16,7 +16,7 @@ pub use self::{
     keybinds::{
         format_key_combo, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, Keybinds, LiveKeybindConfig,
+        IndexedKeybind, Keybinds, LiveKeybindConfig, NavigatorKeybinds,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,

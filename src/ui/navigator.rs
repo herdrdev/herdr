@@ -16,6 +16,7 @@ use crate::app::state::{
     navigator_display_lines, AppState, NavigatorDisplayLine, NavigatorRow, NavigatorStateFilter,
     NavigatorTarget,
 };
+use crate::config::NavigatorKeybinds;
 use crate::terminal::TerminalRuntimeRegistry;
 
 pub(super) fn render_navigator_overlay(
@@ -551,20 +552,46 @@ fn render_footer(app: &AppState, frame: &mut Frame, area: Rect) {
             Span::styled(" back", dim),
         ])
     } else {
+        let (filter_keys, move_keys) = navigator_footer_keys(&app.keybinds.navigator);
         Line::from(vec![
             Span::styled(" enter", key),
             Span::styled(" switch  ", dim),
             Span::styled("/", key),
             Span::styled(" search  ", dim),
-            Span::styled("b/w/i/d/a", key),
+            Span::styled(filter_keys, key),
             Span::styled(" states  ", dim),
-            Span::styled("j/k/↑↓", key),
+            Span::styled(format!("{move_keys}/↑↓"), key),
             Span::styled(" move  ", dim),
             Span::styled("esc", key),
             Span::styled(" close", dim),
         ])
     };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// Join the configured navigator binding labels into footer key hints.
+///
+/// Returns `(filter_keys, move_keys)` in the same order the legacy footer
+/// showed them: blocked/working/idle/done/all for filters, down/up for
+/// movement. Unset bindings fall back to `"-"`.
+fn navigator_footer_keys(keybinds: &NavigatorKeybinds) -> (String, String) {
+    let filter_keys = [
+        &keybinds.filter_blocked,
+        &keybinds.filter_working,
+        &keybinds.filter_idle,
+        &keybinds.filter_done,
+        &keybinds.filter_all,
+    ]
+    .iter()
+    .map(|kb| kb.label().unwrap_or_else(|| "-".to_string()))
+    .collect::<Vec<_>>()
+    .join("/");
+    let move_keys = [&keybinds.down, &keybinds.up]
+        .iter()
+        .map(|kb| kb.label().unwrap_or_else(|| "-".to_string()))
+        .collect::<Vec<_>>()
+        .join("/");
+    (filter_keys, move_keys)
 }
 
 #[cfg(test)]
@@ -639,5 +666,32 @@ mod tests {
         let rows = multi_tab_rows();
         assert!(!has_following_sibling_at_depth(&rows, 5, 1));
         assert!(!has_following_sibling_at_depth(&rows, 5, 2));
+    }
+
+    #[test]
+    fn footer_keys_default_to_legacy_hints() {
+        let kb = crate::config::Config::default().keybinds().navigator;
+        assert_eq!(
+            navigator_footer_keys(&kb),
+            ("b/w/i/d/a".to_string(), "j/k".to_string())
+        );
+    }
+
+    #[test]
+    fn footer_keys_reflect_configured_bindings() {
+        use crate::config::ActionKeybinds;
+        let kb = NavigatorKeybinds {
+            up: ActionKeybinds::direct("k"),
+            down: ActionKeybinds::direct("ctrl+j"),
+            filter_all: ActionKeybinds::direct("a"),
+            filter_blocked: ActionKeybinds::direct("ctrl+b"),
+            filter_working: ActionKeybinds::direct("w"),
+            filter_idle: ActionKeybinds::direct("i"),
+            filter_done: ActionKeybinds::direct("d"),
+        };
+        assert_eq!(
+            navigator_footer_keys(&kb),
+            ("ctrl+b/w/i/d/a".to_string(), "ctrl+j/k".to_string())
+        );
     }
 }
