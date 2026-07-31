@@ -303,6 +303,13 @@ impl AppState {
         }
     }
 
+    fn record_workspace_focus_after_navigation(&mut self, previous: Option<usize>) {
+        let current = self.active;
+        if previous != current {
+            self.previous_workspace_idx = previous;
+        }
+    }
+
     fn sync_selection_after_focus_navigation(&mut self) {
         if self.copy_mode.is_some() {
             self.sync_copy_mode_with_focus();
@@ -1111,6 +1118,7 @@ impl AppState {
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
             let previous_focus = self.current_pane_focus_target();
+            let previous_workspace = self.active;
             self.active = Some(idx);
             self.selected = idx;
             let workspace_id = self.workspaces[idx].id.clone();
@@ -1127,6 +1135,7 @@ impl AppState {
             self.tab_scroll_follow_active = true;
             self.refresh_tab_bar_view();
             self.record_pane_focus_after_navigation(previous_focus);
+            self.record_workspace_focus_after_navigation(previous_workspace);
             self.sync_selection_after_focus_navigation();
         }
     }
@@ -1905,6 +1914,25 @@ impl AppState {
             self.previous_pane_focus = current;
             self.mark_session_dirty();
         }
+    }
+
+    #[cfg(test)]
+    pub fn last_workspace(&mut self) {
+        let Some(target_idx) = self.previous_workspace_idx else {
+            return;
+        };
+        if target_idx >= self.workspaces.len() {
+            self.previous_workspace_idx = None;
+            return;
+        }
+        let current = self.active;
+        if current == Some(target_idx) {
+            self.previous_workspace_idx = None;
+            return;
+        }
+
+        self.switch_workspace(target_idx);
+        // switch_workspace already recorded previous_workspace_idx via record_workspace_focus_after_navigation
     }
 
     pub(crate) fn apply_pane_zoom(
@@ -3333,6 +3361,13 @@ impl AppState {
             let selected_workspace_id = self.workspaces.get(self.selected).map(|ws| ws.id.clone());
             self.workspaces.remove(ws_idx);
             self.remove_unattached_terminal_ids(workspace_terminal_ids);
+            if let Some(prev_idx) = self.previous_workspace_idx {
+                if prev_idx == ws_idx {
+                    self.previous_workspace_idx = None;
+                } else if prev_idx > ws_idx {
+                    self.previous_workspace_idx = Some(prev_idx - 1);
+                }
+            }
             if self.workspaces.is_empty() {
                 self.active = None;
                 self.selected = 0;
@@ -4492,6 +4527,42 @@ mod tests {
         let mut state = app_with_workspaces(&["a"]);
         state.switch_workspace(5);
         assert_eq!(state.active, Some(0));
+    }
+
+    #[test]
+    fn last_workspace_toggles_to_previous_focus() {
+        let mut state = app_with_workspaces(&["one", "two", "three"]);
+        state.switch_workspace(0);
+        state.switch_workspace(1);
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(0));
+
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(1));
+    }
+
+    #[test]
+    fn last_workspace_does_nothing_if_no_previous_workspace() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        state.switch_workspace(0);
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(0));
+    }
+
+    #[test]
+    fn last_workspace_clears_history_if_previous_workspace_was_removed() {
+        let mut state = app_with_workspaces(&["a", "b", "c"]);
+        state.switch_workspace(0);
+        state.switch_workspace(1);
+        state.workspaces.remove(0);
+
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(1));
+        assert!(state.previous_workspace_idx.is_none());
     }
 
     #[test]

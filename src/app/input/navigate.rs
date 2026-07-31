@@ -272,6 +272,10 @@ impl App {
                     leave_navigate_mode(&mut self.state);
                 }
             }
+            NavigateAction::LastWorkspace => {
+                self.last_workspace_via_api();
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::PreviousAgent => {
                 if let Some((idx, ws_idx, pane_id)) = self.relative_agent_entry(false) {
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
@@ -648,6 +652,21 @@ impl App {
             return;
         }
         self.focus_pane_internal_via_api(ws_idx, target.pane_id);
+    }
+
+    pub(crate) fn last_workspace_via_api(&mut self) {
+        let Some(target_idx) = self.state.previous_workspace_idx else {
+            return;
+        };
+        if target_idx >= self.state.workspaces.len() {
+            self.state.previous_workspace_idx = None;
+            return;
+        };
+        if self.state.active == Some(target_idx) {
+            self.state.previous_workspace_idx = None;
+            return;
+        }
+        self.focus_workspace_idx_via_api(target_idx);
     }
 
     pub(crate) fn focus_toast_target_via_api(&mut self) {
@@ -1336,6 +1355,7 @@ pub(crate) enum NavigateAction {
     WorkspacePicker,
     PreviousWorkspace,
     NextWorkspace,
+    LastWorkspace,
     PreviousAgent,
     NextAgent,
     NewTab,
@@ -1477,6 +1497,7 @@ fn non_indexed_action_for_key(
         (&kb.close_workspace, NavigateAction::CloseWorkspace),
         (&kb.previous_workspace, NavigateAction::PreviousWorkspace),
         (&kb.next_workspace, NavigateAction::NextWorkspace),
+        (&kb.last_workspace, NavigateAction::LastWorkspace),
         (&kb.previous_agent, NavigateAction::PreviousAgent),
         (&kb.next_agent, NavigateAction::NextAgent),
         (&kb.new_tab, NavigateAction::NewTab),

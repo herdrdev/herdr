@@ -1426,6 +1426,7 @@ pub struct AppState {
     pub workspaces: Vec<Workspace>,
     pub active: Option<usize>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
+    pub(crate) previous_workspace_idx: Option<usize>,
     pub selected: usize,
     pub mode: Mode,
     pub should_quit: bool,
@@ -1802,6 +1803,7 @@ impl AppState {
             workspaces: Vec::new(),
             active: None,
             previous_pane_focus: None,
+            previous_workspace_idx: None,
             selected: 0,
             mode: Mode::Navigate,
             should_quit: false,
@@ -2014,6 +2016,10 @@ impl AppState {
                 "empty app state must not keep previous pane focus"
             );
             assert!(
+                self.previous_workspace_idx.is_none(),
+                "empty app state must not keep previous workspace focus"
+            );
+            assert!(
                 self.plugin_panes.is_empty(),
                 "empty app state must not keep plugin pane records"
             );
@@ -2164,6 +2170,12 @@ impl AppState {
         }
         if let Some(focus) = &self.previous_pane_focus {
             assert_workspace_pane(&focus.workspace_id, focus.pane_id, "previous pane focus");
+        }
+        if let Some(ws_idx) = self.previous_workspace_idx {
+            assert!(
+                ws_idx < self.workspaces.len(),
+                "previous workspace index out of bounds: {ws_idx}"
+            );
         }
         if let Some(toast) = &self.toast {
             if let Some(target) = &toast.target {
