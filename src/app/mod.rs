@@ -1629,7 +1629,8 @@ impl App {
                     let pressed_key_id = pressed_key_identity(source_id, &key);
                     let key = if key.kind == crossterm::event::KeyEventKind::Press
                         && key.windows_record.is_some()
-                        && self.pressed_terminal_keys.contains_key(&pressed_key_id)
+                        && (self.pressed_terminal_keys.contains_key(&pressed_key_id)
+                            || self.suppressed_repeat_keys.contains(&pressed_key_id))
                     {
                         key.with_kind(crossterm::event::KeyEventKind::Repeat)
                     } else {

@@ -165,11 +165,13 @@ mod tests {
 
         app.route_client_events_from(
             source_id,
-            vec![crate::raw_input::RawInputEvent::Key(
-                ctrl_c.with_kind(KeyEventKind::Repeat),
-            )],
+            vec![
+                crate::raw_input::RawInputEvent::Key(ctrl_c),
+                crate::raw_input::RawInputEvent::Key(ctrl_c.with_kind(KeyEventKind::Repeat)),
+            ],
             false,
         );
+        assert_eq!(app.suppressed_repeat_keys.len(), 1);
         assert!(app.event_rx.try_recv().is_err());
         assert!(input_rx.try_recv().is_err());
 
