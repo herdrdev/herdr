@@ -824,6 +824,21 @@ impl Terminal {
         }
     }
 
+    pub fn default_palette(&self) -> Result<[RgbColor; 256], Error> {
+        let mut out = [ffi::GhosttyColorRgb::default(); 256];
+        // SAFETY: self.raw is a live terminal handle, and out is exactly the
+        // 256-entry array this data kind writes.
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw,
+                ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                out.as_mut_ptr().cast(),
+            )
+            .into_result()?;
+        }
+        Ok(out.map(Into::into))
+    }
+
     pub fn resize(
         &mut self,
         cols: u16,
