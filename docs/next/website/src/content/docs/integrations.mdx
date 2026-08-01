@@ -268,7 +268,9 @@ herdr integration install antigravity-cli
 
 Herdr uses `~/.gemini/config/` by default, or `ANTIGRAVITY_CLI_CONFIG_DIR` when set. This is the directory Antigravity CLI reads global customizations from, and it must already exist. Install writes `hooks/herdr-agent-state.sh` (or `herdr-agent-state.ps1` on Windows) and adds a Herdr-owned `herdr` block to `hooks.json`. Antigravity CLI keys `hooks.json` by hook name, so install rewrites only that block and leaves other named hooks untouched. Uninstall removes the `herdr` block and deletes the hook script.
 
-After Antigravity CLI emits a session-bearing event, Herdr can use the reported conversation ID to resume the pane with `agy --conversation <id>` after a Herdr server restart.
+This integration is session-only. It reports the conversation the pane is running and does not report agent state, so Herdr keeps deriving working, idle, and blocked from what Antigravity CLI draws on screen.
+
+The hook runs on `PreInvocation`, so Herdr learns the conversation once the first prompt is sent. From then on Herdr can resume the pane with `agy --conversation <id>` after a Herdr server restart.
 
 ## Grok CLI
 

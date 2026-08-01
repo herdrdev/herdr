@@ -4,87 +4,54 @@
 # HERDR_INTEGRATION_ID=antigravity_cli
 # HERDR_INTEGRATION_VERSION=1
 
+# Session-only: this hook reports the Antigravity conversation so Herdr can
+# resume the pane. Lifecycle state comes from Herdr's screen detection.
+
 param([string]$Action = "")
 
-if ($Action -ne "working" -and $Action -ne "idle" -and $Action -ne "release") { exit 0 }
-if ($env:HERDR_ENV -ne "1") { exit 0 }
-if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
+# Antigravity CLI expects a JSON object on stdout and this hook never injects
+# anything, so every exit path emits an empty object.
+function Exit-Hook {
+    Write-Output "{}"
+    exit 0
+}
+
+if ($Action -ne "session") { Exit-Hook }
+if ($env:HERDR_ENV -ne "1") { Exit-Hook }
+if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { Exit-Hook }
 
 $inputText = [Console]::In.ReadToEnd()
 try {
     $payload = if ([string]::IsNullOrWhiteSpace($inputText)) { $null } else { $inputText | ConvertFrom-Json }
 } catch {
-    $payload = $null
+    Exit-Hook
 }
 
-$conversationId = $null
-$transcriptPath = $null
-if ($null -ne $payload) {
-    if ($payload.conversationId -is [string]) {
-        $conversationId = $payload.conversationId
-    }
-    if ($payload.transcriptPath -is [string]) {
-        $transcriptPath = $payload.transcriptPath
-    }
-}
+if ($null -eq $payload) { Exit-Hook }
+
+$conversationId = if ($payload.conversationId -is [string]) { $payload.conversationId } else { $null }
+if ([string]::IsNullOrWhiteSpace($conversationId)) { Exit-Hook }
 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-
-# Report session if we have a conversationId
-if (-not [string]::IsNullOrWhiteSpace($conversationId)) {
-    try {
-        $sessionArgs = @(
-            "pane",
-            "report-agent-session",
-            $env:HERDR_PANE_ID,
-            "--source",
-            "herdr:antigravity_cli",
-            "--agent",
-            "agy",
-            "--seq",
-            "$seq",
-            "--agent-session-id",
-            "$conversationId"
-        )
-        if (-not [string]::IsNullOrWhiteSpace($transcriptPath)) {
-            $sessionArgs += @("--agent-session-path", "$transcriptPath")
-        }
-        & herdr @sessionArgs 2>$null | Out-Null
-    } catch {}
+try {
+    $sessionArgs = @(
+        "pane",
+        "report-agent-session",
+        $env:HERDR_PANE_ID,
+        "--source",
+        "herdr:antigravity_cli",
+        "--agent",
+        "agy",
+        "--seq",
+        "$seq",
+        "--agent-session-id",
+        "$conversationId"
+    )
+    if ($payload.transcriptPath -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcriptPath)) {
+        $sessionArgs += @("--agent-session-path", "$($payload.transcriptPath)")
+    }
+    & herdr @sessionArgs 2>$null | Out-Null
+} catch {
 }
 
-# Report status or release
-try {
-    if ($Action -eq "release") {
-        $reportArgs = @(
-            "pane",
-            "release-agent",
-            $env:HERDR_PANE_ID,
-            "--source",
-            "herdr:antigravity_cli",
-            "--agent",
-            "agy",
-            "--seq",
-            "$seq"
-        )
-        & herdr @reportArgs 2>$null | Out-Null
-    } else {
-        $reportArgs = @(
-            "pane",
-            "report-agent",
-            $env:HERDR_PANE_ID,
-            "--source",
-            "herdr:antigravity_cli",
-            "--agent",
-            "agy",
-            "--state",
-            $Action,
-            "--seq",
-            "$seq"
-        )
-        if (-not [string]::IsNullOrWhiteSpace($conversationId)) {
-            $reportArgs += @("--agent-session-id", "$conversationId")
-        }
-        & herdr @reportArgs 2>$null | Out-Null
-    }
-} catch {}
+Exit-Hook

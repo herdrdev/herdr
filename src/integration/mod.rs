@@ -211,16 +211,16 @@ const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 1;
 /// under one Herdr-owned block that install rewrites and uninstall removes.
 const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
 const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
-/// `(event, reported action, grouped)`. Antigravity CLI only accepts a
-/// `matcher`/`hooks` wrapper for the tool events; the lifecycle events take a
-/// flat handler list and reject the wrapper, which invalidates the whole file.
-const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str, bool); 5] = [
-    ("PreInvocation", "working", false),
-    ("PreToolUse", "working", true),
-    ("PostToolUse", "working", true),
-    ("PostInvocation", "idle", false),
-    ("Stop", "release", false),
-];
+/// `(event, reported action)`. Session-only: `PreInvocation` is the only event
+/// we need because it carries `conversationId`. The others cannot express
+/// lifecycle safely — Antigravity CLI has no blocked event, `PostInvocation` is
+/// skipped on interruption, and `Stop` is end-of-turn rather than process exit.
+/// Screen detection owns agent state instead.
+///
+/// `PreInvocation` takes a flat handler list; only the `PreToolUse`/`PostToolUse`
+/// events accept a `matcher`/`hooks` wrapper, and sending one here would
+/// invalidate the whole file.
+const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const MASTRACODE_HOOK_ASSET: &str = include_str!("assets/mastracode/herdr-agent-state.sh");

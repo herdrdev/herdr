@@ -1253,22 +1253,17 @@ pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths
 
 /// Builds the Herdr-owned `hooks.json` block for Antigravity CLI.
 ///
-/// `PreToolUse` and `PostToolUse` take a `matcher`/`hooks` group; the
-/// lifecycle events take a flat handler list.
+/// Every event Herdr registers takes a flat handler list; the `matcher`/`hooks`
+/// group is only valid for the tool events, which Herdr does not use.
 fn antigravity_cli_hook_block(hook_path: &Path) -> Value {
     let mut block = Map::new();
-    for (event, action, grouped) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let handler = json!({
             "type": "command",
             "command": hook_command(hook_path, Some(action)),
             "timeout": ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
         });
-        let entries = if grouped {
-            json!([{ "matcher": "*", "hooks": [handler] }])
-        } else {
-            json!([handler])
-        };
-        block.insert(event.to_string(), entries);
+        block.insert(event.to_string(), json!([handler]));
     }
     Value::Object(block)
 }

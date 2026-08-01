@@ -3683,25 +3683,17 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
         .and_then(Value::as_object)
         .unwrap();
 
-    for (event, action, grouped) in ANTIGRAVITY_CLI_HOOK_EVENTS {
+    for (event, action) in ANTIGRAVITY_CLI_HOOK_EVENTS {
         let entries = block.get(event).and_then(Value::as_array).unwrap();
         assert_eq!(entries.len(), 1, "{event} should hold one Herdr entry");
-        let entry = &entries[0];
+        let handler = &entries[0];
 
-        // Tool events use the matcher/hooks wrapper; lifecycle events must be
-        // a flat handler list or Antigravity CLI rejects the whole file.
-        let handler = if grouped {
-            assert_eq!(entry.get("matcher").and_then(Value::as_str), Some("*"));
-            let nested = entry.get("hooks").and_then(Value::as_array).unwrap();
-            assert_eq!(nested.len(), 1);
-            &nested[0]
-        } else {
-            assert!(
-                entry.get("matcher").is_none() && entry.get("hooks").is_none(),
-                "{event} must be a flat handler, got {entry}"
-            );
-            entry
-        };
+        // Handlers must be a flat list; the matcher/hooks wrapper is only
+        // valid for tool events and invalidates the whole file here.
+        assert!(
+            handler.get("matcher").is_none() && handler.get("hooks").is_none(),
+            "{event} must be a flat handler, got {handler}"
+        );
 
         assert_eq!(handler.get("type").and_then(Value::as_str), Some("command"));
         assert_eq!(
@@ -3711,6 +3703,17 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
         let command = handler.get("command").and_then(Value::as_str).unwrap();
         assert!(command.contains("herdr-agent-state"));
         assert!(command.ends_with(action));
+    }
+
+    // The integration is session-only. Antigravity CLI cannot express blocked
+    // state, skips PostInvocation on interruption, and fires Stop at end of
+    // turn rather than process exit, so Herdr never claims lifecycle authority
+    // here and screen detection owns agent state.
+    for event in ["PreToolUse", "PostToolUse", "PostInvocation", "Stop"] {
+        assert!(
+            block.get(event).is_none(),
+            "{event} must not be registered; lifecycle stays with screen detection"
+        );
     }
 
     // Other named hooks are left untouched.
@@ -3735,11 +3738,11 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
     let base = unique_base();
     let agy_dir = base.join(".gemini").join("config");
     fs::create_dir_all(&agy_dir).unwrap();
-    // An older Herdr install wrapped every event in matcher/hooks and left
-    // entries Antigravity CLI now rejects.
+    // An older Herdr install claimed lifecycle authority, wrapped events in
+    // matcher/hooks, and left entries Antigravity CLI now rejects.
     fs::write(
         agy_dir.join("hooks.json"),
-        r#"{"herdr":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"stale"}]}],"Legacy":[]}}"#,
+        r#"{"herdr":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"stale"}]}],"PostInvocation":[{"type":"command","command":"stale idle"}],"Legacy":[]}}"#,
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -3753,11 +3756,20 @@ fn install_antigravity_cli_rewrites_stale_herdr_block() {
         .and_then(Value::as_object)
         .unwrap();
 
-    assert!(block.get("Legacy").is_none(), "stale event should be gone");
-    let stop = block.get("Stop").and_then(Value::as_array).unwrap();
-    assert_eq!(stop.len(), 1);
-    assert!(stop[0].get("hooks").is_none());
-    assert!(stop[0]
+    // The block is Herdr-owned and rewritten wholesale, so a stale lifecycle
+    // install is migrated to session-only rather than merged with.
+    assert_eq!(
+        block.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["PreInvocation"],
+        "stale lifecycle events should be gone"
+    );
+    let entries = block
+        .get("PreInvocation")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].get("hooks").is_none());
+    assert!(entries[0]
         .get("command")
         .and_then(Value::as_str)
         .is_some_and(|command| command.contains("herdr-agent-state")));
