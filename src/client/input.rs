@@ -39,11 +39,16 @@ pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
+    host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     #[cfg(windows)]
     {
-        let _ = (host_color_query_sent, host_mouse_capture_active);
+        let _ = (
+            host_color_query_sent,
+            host_cell_size_query_sent,
+            host_mouse_capture_active,
+        );
         windows_stdin_reader_loop(event_tx, should_quit);
     }
 
@@ -52,6 +57,7 @@ pub fn stdin_reader_loop(
         event_tx,
         should_quit,
         host_color_query_sent,
+        host_cell_size_query_sent,
         host_mouse_capture_active,
     );
 }
@@ -61,16 +67,18 @@ fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
+    host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let mut scratch = [0u8; 4096];
     let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-    if host_color_query_sent {
-        framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
-    }
+    arm_host_reply_holds(
+        &mut framer,
+        host_color_query_sent,
+        host_cell_size_query_sent,
+    );
     let mut pending_palette = Vec::new();
 
     while !should_quit.load(Ordering::Acquire) {
@@ -120,6 +128,23 @@ fn unix_stdin_reader_loop(
                 break;
             }
         }
+    }
+}
+
+/// Tells the framer which host terminal replies are outstanding so a reply that
+/// is split at its ESC introducer is not released as a plain Escape key.
+#[cfg(unix)]
+fn arm_host_reply_holds(
+    framer: &mut crate::raw_input::RawInputByteFramer,
+    host_color_query_sent: bool,
+    host_cell_size_query_sent: bool,
+) {
+    if host_color_query_sent {
+        framer.host_color_query_sent();
+        framer.enable_host_color_scheme_change_tracking();
+    }
+    if host_cell_size_query_sent {
+        framer.host_cell_size_query_sent();
     }
 }
 
@@ -509,6 +534,29 @@ mod tests {
             2
         );
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn cell_size_query_holds_reply_split_at_its_escape_introducer() {
+        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+        arm_host_reply_holds(&mut framer, false, true);
+
+        assert!(framer.push(b"\x1b").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(
+            framer.push(b"[6;21;10t"),
+            vec![b"\x1b[6;21;10t".to_vec()],
+            "the split cell size reply must not leak as an Escape key"
+        );
+    }
+
+    #[test]
+    fn escape_is_not_held_when_no_host_query_was_sent() {
+        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+        arm_host_reply_holds(&mut framer, false, false);
+
+        assert!(framer.push(b"\x1b").is_empty());
+        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
     }
 
     #[test]

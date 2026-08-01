@@ -1326,6 +1326,12 @@ async fn run_client_loop(
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme =
         state.attach_escape.is_none() && should_query_host_terminal_theme();
+    // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
+    // host terminal directly instead of falling back to an assumed cell size.
+    // This is decided before the reader starts so the framer knows that a reply
+    // is outstanding.
+    let will_query_host_cell_size = state.attach_escape.is_none()
+        && host_cell_size_query_required(state.kitty_graphics_enabled);
     let stdin_quit = should_quit.clone();
     let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
@@ -1334,6 +1340,7 @@ async fn run_client_loop(
             stdin_tx,
             &stdin_quit,
             will_query_host_terminal_theme,
+            will_query_host_cell_size,
             stdin_mouse_capture_active,
         );
     });
@@ -1342,10 +1349,6 @@ async fn run_client_loop(
         query_host_terminal_theme();
     }
 
-    // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
-    // host terminal directly instead of falling back to an assumed cell size.
-    let will_query_host_cell_size = state.attach_escape.is_none()
-        && host_cell_size_query_required(state.kitty_graphics_enabled);
     if will_query_host_cell_size {
         query_host_cell_size();
     }
