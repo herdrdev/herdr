@@ -160,7 +160,7 @@ fn probe_stream_closed(stream: &mut LocalStream) -> io::Result<bool> {
     let mut probe = [0u8; 1];
     let status = match stream.read(&mut probe) {
         Ok(0) => Ok(true),
-        Ok(_) => Ok(true),
+        Ok(_) => Ok(false),
         Err(err)
             if matches!(
                 err.kind(),
