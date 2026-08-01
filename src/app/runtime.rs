@@ -6,8 +6,8 @@ use std::time::Duration;
 use crossterm::terminal;
 
 use super::{
-    background_update_check_enabled, pressed_key_identity, App, AUTO_UPDATE_CHECK_INTERVAL,
-    MIN_RENDER_INTERVAL, RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
+    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
+    RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
 };
 fn retain_custom_command_after_wait(
     pid: u32,
@@ -30,12 +30,20 @@ impl App {
             .retain_mut(|child| retain_custom_command_after_wait(child.id(), child.try_wait()));
     }
 
+    pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::terminal::TerminalId) {
+        let target = super::TerminalInputTarget {
+            terminal_id: terminal_id.clone(),
+        };
+        self.release_input_target_headless(&target);
+        if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
+            runtime.shutdown();
+        }
+    }
+
     pub(crate) fn shutdown_detached_terminal_runtimes(&mut self) {
         let terminal_ids = std::mem::take(&mut self.state.terminal_runtime_shutdowns);
         for terminal_id in terminal_ids {
-            if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
-                runtime.shutdown();
-            }
+            self.shutdown_terminal_runtime(terminal_id);
         }
     }
 
@@ -103,6 +111,65 @@ impl App {
         changed
     }
 
+    async fn execute_repeat_plan(
+        &mut self,
+        lease_key: super::input::InputLeaseKey,
+        key: crate::input::TerminalKey,
+        plan: super::input::RepeatPlan,
+    ) -> bool {
+        match plan {
+            super::input::RepeatPlan::Forwarded(target) => {
+                if !self.forward_terminal_key_to_target(&target, key).await {
+                    self.input_leases.remove(&lease_key);
+                }
+                true
+            }
+            super::input::RepeatPlan::Reprocess {
+                context,
+                repetitions,
+                tracked,
+            } => {
+                let key = key
+                    .with_kind(crossterm::event::KeyEventKind::Repeat)
+                    .with_repeat_count(1);
+                let mut forwarded_target = None;
+                for _ in 0..repetitions {
+                    if let Some(target) = &forwarded_target {
+                        if !self
+                            .forward_terminal_key_to_target(target, key.clone())
+                            .await
+                        {
+                            self.input_leases.remove(&lease_key);
+                            break;
+                        }
+                        continue;
+                    }
+                    let current_context = self.terminal_input_context();
+                    if !self.input_leases.reprocess_allowed(
+                        lease_key,
+                        &context,
+                        current_context.as_ref(),
+                        tracked,
+                    ) {
+                        break;
+                    }
+                    if let Some(target) = self.handle_key(key.clone()).await {
+                        if tracked {
+                            self.input_leases.insert_forwarded(
+                                lease_key,
+                                target.clone(),
+                                key.clone(),
+                            );
+                            forwarded_target = Some(target);
+                        }
+                    }
+                }
+                true
+            }
+            super::input::RepeatPlan::Ignore => false,
+        }
+    }
+
     pub(super) async fn handle_raw_input_event(
         &mut self,
         event: crate::raw_input::RawInputEvent,
@@ -110,59 +177,45 @@ impl App {
         let previous_mode = self.state.mode;
         let changed = match event {
             crate::raw_input::RawInputEvent::Key(key) => {
-                let pressed_key_id = pressed_key_identity(super::LOCAL_INPUT_SOURCE, &key);
+                let lease_key = super::input::InputLeaseKey::new(super::LOCAL_INPUT_SOURCE, &key);
+                let key = self.input_leases.normalize_press(&lease_key, key);
                 match key.kind {
                     crossterm::event::KeyEventKind::Press => {
-                        if self.state.popup_pane.is_some()
-                            || self.state.mode == crate::app::Mode::Terminal
-                        {
-                            self.suppressed_repeat_keys.remove(&pressed_key_id);
-                        } else {
-                            self.suppressed_repeat_keys.insert(pressed_key_id);
-                        }
-                        if let Some(target) = self.handle_key(key).await {
-                            if !key.is_text_commit {
-                                self.pressed_terminal_keys.insert(
-                                    pressed_key_id,
-                                    super::PressedTerminalKey { target, key },
-                                );
-                            }
-                        } else {
-                            self.pressed_terminal_keys.remove(&pressed_key_id);
-                        }
+                        let initial_context = self.terminal_input_context();
+                        let target = self.handle_key(key.clone()).await;
+                        let resulting_context = self.terminal_input_context();
+                        let plan = self.input_leases.complete_press(
+                            lease_key,
+                            &key,
+                            initial_context.as_ref(),
+                            resulting_context.as_ref(),
+                            target,
+                        );
+                        self.execute_repeat_plan(lease_key, key, plan).await;
                         true
                     }
                     crossterm::event::KeyEventKind::Repeat => {
-                        if let Some(pressed) =
-                            self.pressed_terminal_keys.get(&pressed_key_id).cloned()
-                        {
-                            if !self
-                                .forward_terminal_key_to_target(&pressed.target, key)
-                                .await
-                            {
-                                self.pressed_terminal_keys.remove(&pressed_key_id);
-                            }
-                            true
-                        } else if (self.state.popup_pane.is_some()
-                            || self.state.mode == crate::app::Mode::Terminal)
-                            && !self.suppressed_repeat_keys.contains(&pressed_key_id)
-                        {
-                            self.handle_key(key).await;
-                            true
-                        } else {
-                            false
-                        }
+                        let current_context = self.terminal_input_context();
+                        let plan = self.input_leases.plan_repeat(
+                            lease_key,
+                            &key,
+                            current_context.as_ref(),
+                        );
+                        self.execute_repeat_plan(lease_key, key, plan).await
                     }
                     crossterm::event::KeyEventKind::Release => {
-                        self.suppressed_repeat_keys.remove(&pressed_key_id);
-                        if let Some(pressed) = self.pressed_terminal_keys.remove(&pressed_key_id) {
+                        if let Some(lease) = self.input_leases.remove_forwarded(&lease_key) {
                             let _ = self
-                                .forward_terminal_key_to_target(&pressed.target, key)
+                                .forward_terminal_key_to_target(&lease.target, key)
                                 .await;
                         }
                         false
                     }
                 }
+            }
+            crate::raw_input::RawInputEvent::Text(text) => {
+                self.handle_text_commit(text.into_string()).await;
+                true
             }
             crate::raw_input::RawInputEvent::Paste(text) => {
                 self.handle_paste(text).await;

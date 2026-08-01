@@ -309,7 +309,7 @@ pub(super) fn keybind_help_back(state: &mut AppState) {
 
 pub(crate) fn handle_keybind_help_key(state: &mut AppState, key: TerminalKey) {
     if state.keybind_help.search_focused {
-        let text_char = keybind_help_text_char(key);
+        let text_char = keybind_help_text_char(key.clone());
         match key.code {
             KeyCode::Up => state.scroll_keybind_help(-1),
             KeyCode::Down => state.scroll_keybind_help(1),
@@ -343,13 +343,13 @@ pub(crate) fn handle_keybind_help_key(state: &mut AppState, key: TerminalKey) {
         KeyCode::PageDown => state.scroll_keybind_help(8),
         KeyCode::Home => state.keybind_help.scroll = 0,
         KeyCode::End => state.keybind_help.scroll = state.keybind_help_max_scroll(),
-        _ if keybind_help_text_char(key) == Some('/') => {
+        _ if keybind_help_text_char(key.clone()) == Some('/') => {
             state.keybind_help.search_focused = true;
             state.keybind_help.scroll = 0;
         }
         KeyCode::Esc => keybind_help_back(state),
         KeyCode::Enter => leave_modal(state),
-        _ if keybind_help_text_char(key) == Some('?') => leave_modal(state),
+        _ if keybind_help_text_char(key.clone()) == Some('?') => leave_modal(state),
         _ => {}
     }
 }
@@ -712,8 +712,8 @@ pub(crate) fn handle_resize_key(state: &mut AppState, raw_key: TerminalKey) {
     let key = raw_key.as_key_event();
     if key.code == KeyCode::Esc
         || key.code == KeyCode::Enter
-        || state.keybinds.resize_mode.matches_prefix_key(raw_key)
-        || state.keybinds.resize_mode.matches_direct_key(raw_key)
+        || state.keybinds.resize_mode.matches_prefix_key(&raw_key)
+        || state.keybinds.resize_mode.matches_direct_key(&raw_key)
     {
         if state.active.is_some() {
             state.mode = Mode::Terminal;
@@ -1128,8 +1128,8 @@ impl App {
         let key = raw_key.as_key_event();
         if key.code == KeyCode::Esc
             || key.code == KeyCode::Enter
-            || self.state.keybinds.resize_mode.matches_prefix_key(raw_key)
-            || self.state.keybinds.resize_mode.matches_direct_key(raw_key)
+            || self.state.keybinds.resize_mode.matches_prefix_key(&raw_key)
+            || self.state.keybinds.resize_mode.matches_direct_key(&raw_key)
         {
             self.state.mode = if self.state.active.is_some() {
                 Mode::Terminal

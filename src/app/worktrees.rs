@@ -997,14 +997,12 @@ impl App {
         ws_idx: usize,
     ) {
         for terminal_id in self.state.terminal_ids_for_workspace(ws_idx) {
-            if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
-                tracing::debug!(
-                    workspace_index = ws_idx,
-                    terminal_id = %terminal_id,
-                    "shutting down terminal runtime before worktree removal"
-                );
-                runtime.shutdown();
-            }
+            tracing::debug!(
+                workspace_index = ws_idx,
+                terminal_id = %terminal_id,
+                "shutting down terminal runtime before worktree removal"
+            );
+            self.shutdown_terminal_runtime(terminal_id);
         }
     }
 }

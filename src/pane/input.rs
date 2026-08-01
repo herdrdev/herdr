@@ -1,5 +1,5 @@
 pub(super) fn ghostty_key_event_from_terminal_key(
-    key: crate::input::TerminalKey,
+    key: &crate::input::TerminalKey,
 ) -> Option<crate::ghostty::KeyEvent> {
     let mut event = crate::ghostty::KeyEvent::new().ok()?;
     event.set_action(match key.kind {
@@ -32,7 +32,7 @@ pub(super) fn ghostty_key_event_from_terminal_key(
     Some(event)
 }
 
-pub(super) fn ghostty_prefers_herdr_text_encoding(key: crate::input::TerminalKey) -> bool {
+pub(super) fn ghostty_prefers_herdr_text_encoding(key: &crate::input::TerminalKey) -> bool {
     matches!(key.code, crossterm::event::KeyCode::Char(_))
 }
 
@@ -168,7 +168,7 @@ pub(super) fn ghostty_mouse_event_from_wheel_kind(
     Some(event)
 }
 
-fn ghostty_key_text(key: crate::input::TerminalKey) -> Option<String> {
+fn ghostty_key_text(key: &crate::input::TerminalKey) -> Option<String> {
     match key.code {
         crossterm::event::KeyCode::Char(c) => Some(
             key.shifted_codepoint
@@ -180,7 +180,7 @@ fn ghostty_key_text(key: crate::input::TerminalKey) -> Option<String> {
     }
 }
 
-fn ghostty_unshifted_codepoint(key: crate::input::TerminalKey) -> Option<u32> {
+fn ghostty_unshifted_codepoint(key: &crate::input::TerminalKey) -> Option<u32> {
     match key.code {
         crossterm::event::KeyCode::Char(c) => Some(c as u32),
         _ => None,

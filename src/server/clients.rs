@@ -257,6 +257,7 @@ pub(crate) fn events_include_interaction(events: &[crate::raw_input::RawInputEve
         matches!(
             event,
             crate::raw_input::RawInputEvent::Key(_)
+                | crate::raw_input::RawInputEvent::Text(_)
                 | crate::raw_input::RawInputEvent::Mouse(_)
                 | crate::raw_input::RawInputEvent::Paste(_)
                 | crate::raw_input::RawInputEvent::OuterFocusGained

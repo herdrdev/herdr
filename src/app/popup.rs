@@ -26,9 +26,7 @@ impl App {
             .direct_attach_resize_locks
             .remove(&popup.terminal_id);
         self.state.terminals.remove(&popup.terminal_id);
-        if let Some(runtime) = self.terminal_runtimes.remove(&popup.terminal_id) {
-            runtime.shutdown();
-        }
+        self.shutdown_terminal_runtime(popup.terminal_id);
         self.state.mode = if self.state.active.is_some() {
             Mode::Terminal
         } else {
