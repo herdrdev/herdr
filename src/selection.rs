@@ -304,9 +304,12 @@ fn is_wsl() -> bool {
 fn should_prefer_osc52_for_env(
     ssh_connection: Option<&OsStr>,
     ssh_tty: Option<&OsStr>,
-    wsl: bool,
+    _wsl: bool,
 ) -> bool {
-    ssh_connection.is_some() || ssh_tty.is_some() || wsl
+    // WSL has a native clipboard bridge available to local terminal apps.
+    // Keep OSC 52 as the preferred path for SSH, where the remote process
+    // cannot access the attaching terminal's native clipboard directly.
+    ssh_connection.is_some() || ssh_tty.is_some()
 }
 
 fn should_prefer_osc52() -> bool {
@@ -366,8 +369,8 @@ mod tests {
     }
 
     #[test]
-    fn wsl_sessions_prefer_osc52() {
-        assert!(should_prefer_osc52_for_env(None, None, true));
+    fn wsl_sessions_use_native_clipboard_when_local() {
+        assert!(!should_prefer_osc52_for_env(None, None, true));
     }
 
     #[test]
