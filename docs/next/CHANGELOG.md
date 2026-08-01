@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added `ui.pane_scrollbars = false` to hide terminal pane scrollbars and reclaim their reserved column.
 - Added `ui.tab_bar_position = "bottom"` to place the desktop tab row below terminal panes.
 
 ### Changed
@@ -27,6 +28,8 @@
 - Known-agent integrations now leave pane ownership to confirmed process exit, so restarting Pi with the same saved session restores lifecycle state even with custom working UI. (#1792)
 - OMP integration install, status, and uninstall now respect `PI_CONFIG_DIR` when `PI_CODING_AGENT_DIR` is not set, and installation refuses extension-directory collisions with Pi. (#1696)
 - Physical Escape key records on native Windows now bypass raw VT report framing, so pane applications receive Escape immediately and reliably. (#1736)
+- Native Windows key presses, grouped repeats, and releases now preserve their physical lifecycle and stay with the pane that received the initial press. (#2077)
+- Windows `pane send-keys` and `agent send-keys` now deliver semantic Escape as a complete key tap, preventing a following key from being interpreted as an Alt chord.
 - Windows now shows `system` notifications and completes MP3 notification sounds without leaving PowerShell players waiting for a timeout. (#1330)
 
 ## [0.7.5] - 2026-07-21

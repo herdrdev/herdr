@@ -6,6 +6,7 @@ on:
 
 jobs:
   check-contributor:
+    if: github.repository == 'herdrdev/herdr' || github.repository == 'ogulcancelik/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -17,10 +18,6 @@ jobs:
         with:
           github-token: ${{ secrets.KANGAL_GITHUB_TOKEN }}
           script: |
-            const CANONICAL_REPOSITORIES = new Set([
-              'ogulcancelik/herdr',
-              'herdrdev/herdr',
-            ]);
             const KANGAL_USER_ID = 285672167;
             const CI_ONLY_PR_AUTHOR_IDS = new Set([
               49699333, // dependabot[bot]
@@ -36,12 +33,6 @@ jobs:
             const reopener = context.payload.sender?.login ?? null;
             const action = context.payload.action;
             const defaultBranch = context.payload.repository.default_branch;
-            const repositoryName = context.payload.repository.full_name.toLowerCase();
-
-            if (!CANONICAL_REPOSITORIES.has(repositoryName)) {
-              core.setFailed(`PR Gate only runs for ${[...CANONICAL_REPOSITORIES].join(' or ')}`);
-              return;
-            }
 
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,

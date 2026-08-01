@@ -2678,7 +2678,7 @@ mod tests {
             rx.try_recv().expect("forwarded release after pane move"),
             bytes::Bytes::from_static(b"\x1b[106;1:3u")
         );
-        assert!(app.pressed_terminal_keys.is_empty());
+        assert!(app.input_leases.is_empty());
     }
 
     #[test]

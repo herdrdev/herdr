@@ -64,15 +64,39 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
 
-pub(crate) fn encode_windows_conpty_shift_enter(key: crate::input::TerminalKey) -> Option<Vec<u8>> {
+/// Encode native or targeted semantic Win32 input for a compatible ConPTY destination.
+pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
-    if key.code != KeyCode::Enter || key.modifiers != KeyModifiers::SHIFT {
-        return None;
-    }
+    let (virtual_key_code, virtual_scan_code, unicode, control_key_state) =
+        if let Some(record) = key.windows_record() {
+            (
+                record.virtual_key_code,
+                record.virtual_scan_code,
+                record.unicode,
+                record.control_key_state,
+            )
+        } else if key.code == KeyCode::Esc
+            && key.modifiers.is_empty()
+            && key.kind == KeyEventKind::Press
+            && key.vt_bytes().is_none()
+        {
+            return Some(b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_".to_vec());
+        } else if key.code == KeyCode::Enter && key.modifiers == KeyModifiers::SHIFT {
+            (13, 28, 13, 16)
+        } else {
+            return None;
+        };
+    let key_down = key.kind != KeyEventKind::Release;
+    let repeat_count = if key_down { key.repeat_count.max(1) } else { 1 };
 
-    let key_down = !matches!(key.kind, KeyEventKind::Release);
-    Some(format!("\x1b[13;28;13;{};16;1_", u8::from(key_down)).into_bytes())
+    Some(
+        format!(
+            "\x1b[{virtual_key_code};{virtual_scan_code};{unicode};{};{control_key_state};{repeat_count}_",
+            u8::from(key_down),
+        )
+        .into_bytes(),
+    )
 }
 
 #[derive(Debug)]
@@ -1388,6 +1412,93 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn windows_conpty_native_encoder_uses_canonical_phase_and_repeat_count() {
+        let key = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::empty(),
+        )
+        .with_windows_record(crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 3,
+            virtual_key_code: 27,
+            virtual_scan_code: 1,
+            unicode: 27,
+            control_key_state: 0,
+        });
+
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&key),
+            Some(b"\x1b[27;1;27;1;0;3_".to_vec())
+        );
+        let mut release = key.with_kind(crossterm::event::KeyEventKind::Release);
+        release.repeat_count = 3;
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&release),
+            Some(b"\x1b[27;1;27;0;0;1_".to_vec())
+        );
+    }
+
+    #[test]
+    fn windows_conpty_native_encoder_preserves_semantic_escape_fallback() {
+        let escape = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::empty(),
+        );
+
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&escape),
+            Some(b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_".to_vec())
+        );
+        assert_eq!(
+            super::encode_windows_conpty_fallback(
+                &escape
+                    .clone()
+                    .with_kind(crossterm::event::KeyEventKind::Repeat),
+            ),
+            None
+        );
+        assert_eq!(
+            super::encode_windows_conpty_fallback(
+                &escape
+                    .clone()
+                    .with_kind(crossterm::event::KeyEventKind::Release),
+            ),
+            None
+        );
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&escape.clone().with_vt_bytes(vec![27])),
+            None
+        );
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::ALT,
+            ),),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_conpty_native_encoder_preserves_semantic_shift_enter_fallback() {
+        let shift_enter = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::SHIFT,
+        );
+
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&shift_enter),
+            Some(b"\x1b[13;28;13;1;16;1_".to_vec())
+        );
+        assert_eq!(
+            super::encode_windows_conpty_fallback(&crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            )),
+            None
+        );
+    }
 
     #[test]
     fn windows_notification_text_is_null_terminated_and_unicode_safe() {
