@@ -6,6 +6,7 @@
 - Added `ui.tab_bar_position = "bottom"` to place the desktop tab row below terminal panes.
 
 ### Changed
+- Experimental options are no longer exposed in the Settings TUI and remain available through the config file.
 - Agent status indicators now use the same static workspace marks across the sidebar, navigator, and mobile views, eliminating continuous spinner rendering while agents work.
 - Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.
 

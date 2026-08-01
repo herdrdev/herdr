@@ -994,7 +994,6 @@ pub enum SettingsSection {
     Sound,
     Toast,
     PaneLabels,
-    Experiments,
     Integrations,
 }
 
@@ -1005,7 +1004,6 @@ impl SettingsSection {
         Self::Toast,
         Self::PaneLabels,
         Self::Integrations,
-        Self::Experiments,
     ];
 
     pub fn label(self) -> &'static str {
@@ -1014,36 +1012,7 @@ impl SettingsSection {
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
-            Self::Experiments => "experiments",
             Self::Integrations => "integrations",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExperimentSetting {
-    PaneHistory,
-    SwitchAsciiInputSourceInPrefix,
-}
-
-impl ExperimentSetting {
-    pub(crate) const ALL: [Self; 2] = [Self::PaneHistory, Self::SwitchAsciiInputSourceInPrefix];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::PaneHistory => "pane screen history",
-            Self::SwitchAsciiInputSourceInPrefix => {
-                "switch to ascii input source in prefix (macOS/Windows)"
-            }
-        }
-    }
-
-    pub(crate) fn enabled(self, state: &AppState) -> bool {
-        match self {
-            Self::PaneHistory => state.pane_history_persistence_enabled(),
-            Self::SwitchAsciiInputSourceInPrefix => {
-                state.switch_ascii_input_source_in_prefix_enabled()
-            }
         }
     }
 }
@@ -1622,14 +1591,6 @@ impl AppState {
 
     pub fn agent_border_labels_enabled(&self) -> bool {
         self.show_agent_labels_on_pane_borders
-    }
-
-    pub fn pane_history_persistence_enabled(&self) -> bool {
-        self.pane_history_persistence
-    }
-
-    pub fn switch_ascii_input_source_in_prefix_enabled(&self) -> bool {
-        self.switch_ascii_input_source_in_prefix
     }
 
     pub(crate) fn pane_exposes_host_cursor(

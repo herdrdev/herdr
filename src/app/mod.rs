@@ -3327,31 +3327,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_save_pane_history_persists_then_applies_live_config() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("settings-save-pane-history");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "onboarding = false\n").unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        assert!(!app.persist_pane_history);
-        assert!(!app.state.pane_history_persistence);
-
-        app.save_pane_history_persistence(true);
-
-        assert!(app.persist_pane_history);
-        assert!(app.state.pane_history_persistence);
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("[experimental]"));
-        assert!(content.contains("pane_history = true"));
-        assert!(app.state.config_diagnostic.is_none());
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn reload_config_keeps_current_state_on_invalid_toml() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-invalid-toml");

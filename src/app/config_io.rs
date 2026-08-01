@@ -92,27 +92,6 @@ impl App {
         }
     }
 
-    pub(super) fn save_pane_history_persistence(&mut self, enabled: bool) {
-        if self.update_config_file("pane screen history", |content| {
-            crate::config::upsert_section_bool(content, "experimental", "pane_history", enabled)
-        }) {
-            self.apply_config_from_disk(false);
-        }
-    }
-
-    pub(super) fn save_switch_ascii_input_source_in_prefix(&mut self, enabled: bool) {
-        if self.update_config_file("prefix ascii input source", |content| {
-            crate::config::upsert_section_bool(
-                content,
-                "experimental",
-                "switch_ascii_input_source_in_prefix",
-                enabled,
-            )
-        }) {
-            self.apply_config_from_disk(false);
-        }
-    }
-
     pub(super) fn save_agent_panel_sort(&mut self, sort: crate::app::state::AgentPanelSort) {
         let value = match sort {
             crate::app::state::AgentPanelSort::Spaces => {

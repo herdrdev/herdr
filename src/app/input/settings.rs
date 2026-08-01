@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 
 use crate::{
     app::{
-        state::{AppState, ExperimentSetting, SettingsSection, THEME_NAMES},
+        state::{AppState, SettingsSection, THEME_NAMES},
         App, Mode,
     },
     config::ToastDelivery,
@@ -17,23 +17,7 @@ pub(super) enum SettingsAction {
     SaveSound(bool),
     SaveToastDelivery(ToastDelivery),
     SaveAgentBorderLabels(bool),
-    SavePaneHistory(bool),
-    SaveSwitchAsciiInputSourceInPrefix(bool),
     InstallRecommendedIntegrations,
-}
-
-/// Map an Experiments row index to the toggle action that flips it.
-fn experiment_toggle_action(state: &AppState, idx: usize) -> Option<SettingsAction> {
-    match ExperimentSetting::ALL.get(idx).copied()? {
-        ExperimentSetting::PaneHistory => Some(SettingsAction::SavePaneHistory(
-            !ExperimentSetting::PaneHistory.enabled(state),
-        )),
-        ExperimentSetting::SwitchAsciiInputSourceInPrefix => {
-            Some(SettingsAction::SaveSwitchAsciiInputSourceInPrefix(
-                !ExperimentSetting::SwitchAsciiInputSourceInPrefix.enabled(state),
-            ))
-        }
-    }
 }
 
 impl App {
@@ -46,12 +30,6 @@ impl App {
                 SettingsAction::SaveToastDelivery(delivery) => self.save_toast_delivery(delivery),
                 SettingsAction::SaveAgentBorderLabels(enabled) => {
                     self.save_agent_border_labels(enabled)
-                }
-                SettingsAction::SavePaneHistory(enabled) => {
-                    self.save_pane_history_persistence(enabled)
-                }
-                SettingsAction::SaveSwitchAsciiInputSourceInPrefix(enabled) => {
-                    self.save_switch_ascii_input_source_in_prefix(enabled)
                 }
                 SettingsAction::InstallRecommendedIntegrations => {
                     self.install_recommended_integrations()
@@ -171,7 +149,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = usize::from(!state.sound_enabled());
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Experiments;
+                state.settings.section = SettingsSection::Integrations;
                 state.settings.list.selected = 0;
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
@@ -251,30 +229,6 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
         },
-        SettingsSection::Experiments => match key.code {
-            KeyCode::Up | KeyCode::Char('k') => state.settings.list.move_prev(),
-            KeyCode::Down | KeyCode::Char('j') => {
-                state.settings.list.move_next(ExperimentSetting::ALL.len())
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                return experiment_toggle_action(state, state.settings.list.selected);
-            }
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Integrations;
-                state.settings.list.selected = 0;
-            }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                state.settings.section = SettingsSection::Theme;
-                state.settings.list.selected = current_theme_index(&state.theme_name);
-            }
-            _ => {
-                if let Some(super::modal::ModalAction::Close) =
-                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
-                {
-                    cancel_settings(state);
-                }
-            }
-        },
         SettingsSection::Integrations => match key.code {
             KeyCode::Enter | KeyCode::Char(' ') if integrations_need_install(state) => {
                 return Some(SettingsAction::InstallRecommendedIntegrations);
@@ -284,8 +238,8 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = usize::from(!state.agent_border_labels_enabled());
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                state.settings.section = SettingsSection::Experiments;
-                state.settings.list.selected = 0;
+                state.settings.section = SettingsSection::Theme;
+                state.settings.list.selected = current_theme_index(&state.theme_name);
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
                 Some(super::modal::ModalAction::Apply) => return apply_settings(state),
@@ -312,7 +266,6 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
         SettingsSection::Sound => usize::from(!state.sound_enabled()),
         SettingsSection::Toast => toast_delivery_index(state.toast_delivery()),
         SettingsSection::PaneLabels => usize::from(!state.agent_border_labels_enabled()),
-        SettingsSection::Experiments => 0,
         SettingsSection::Integrations => 0,
     };
     state.mode = Mode::Settings;
@@ -407,14 +360,6 @@ impl AppState {
                     None
                 }
             }
-            SettingsSection::Experiments => {
-                let list_y = area.y + 3;
-                if row >= list_y && row < list_y + ExperimentSetting::ALL.len() as u16 {
-                    Some((row - list_y) as usize)
-                } else {
-                    None
-                }
-            }
             SettingsSection::Integrations => None,
         }
     }
@@ -431,7 +376,6 @@ impl AppState {
                         SettingsSection::PaneLabels => {
                             usize::from(!self.agent_border_labels_enabled())
                         }
-                        SettingsSection::Experiments => 0,
                         SettingsSection::Integrations => 0,
                     });
                     return None;
@@ -455,7 +399,6 @@ impl AppState {
                             let enabled = idx == 0;
                             Some(SettingsAction::SaveAgentBorderLabels(enabled))
                         }
-                        SettingsSection::Experiments => experiment_toggle_action(self, idx),
                         SettingsSection::Integrations => None,
                     };
                 }
@@ -543,46 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_experiments_toggles_pane_history() {
-        let mut state = state_with_workspaces(&["test"]);
-        state.pane_history_persistence = false;
-        open_settings_at(&mut state, SettingsSection::Experiments);
-
-        let action = update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
-        );
-
-        assert_eq!(action, Some(SettingsAction::SavePaneHistory(true)));
-        assert_eq!(state.mode, Mode::Settings);
-    }
-
-    #[test]
-    fn settings_experiments_down_then_toggle_switches_ascii_input_source() {
-        let mut state = state_with_workspaces(&["test"]);
-        state.switch_ascii_input_source_in_prefix = false;
-        open_settings_at(&mut state, SettingsSection::Experiments);
-
-        update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
-        );
-        assert_eq!(state.settings.list.selected, 1);
-
-        let action = update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
-        );
-
-        assert_eq!(
-            action,
-            Some(SettingsAction::SaveSwitchAsciiInputSourceInPrefix(true))
-        );
-        assert_eq!(state.mode, Mode::Settings);
-    }
-
-    #[test]
-    fn settings_tab_cycle_places_experiments_last() {
+    fn settings_tab_cycle_wraps_after_integrations() {
         let mut state = state_with_workspaces(&["test"]);
         open_settings_at(&mut state, SettingsSection::PaneLabels);
 
@@ -596,19 +500,7 @@ mod tests {
             &mut state,
             KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
         );
-        assert_eq!(state.settings.section, SettingsSection::Experiments);
-
-        update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
-        );
         assert_eq!(state.settings.section, SettingsSection::Theme);
-
-        update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
-        );
-        assert_eq!(state.settings.section, SettingsSection::Experiments);
 
         update_settings_state(
             &mut state,
@@ -651,43 +543,6 @@ mod tests {
         app.handle_mouse(mouse(MouseEventKind::Moved, area.x + 2, area.y + 2));
 
         assert_eq!(app.state.settings.list.selected, 0);
-    }
-
-    #[test]
-    fn settings_mouse_click_toggles_pane_history() {
-        let mut app = app_for_mouse_test();
-        app.state.pane_history_persistence = false;
-        open_settings_at(&mut app.state, SettingsSection::Experiments);
-
-        let area = app.state.settings_content_rect();
-        let action = app.state.handle_settings_mouse(mouse(
-            MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            area.x + 2,
-            area.y + 3,
-        ));
-
-        assert_eq!(action, Some(SettingsAction::SavePaneHistory(true)));
-        assert_eq!(app.state.settings.list.selected, 0);
-    }
-
-    #[test]
-    fn settings_mouse_click_toggles_switch_ascii_input_source_row() {
-        let mut app = app_for_mouse_test();
-        app.state.switch_ascii_input_source_in_prefix = false;
-        open_settings_at(&mut app.state, SettingsSection::Experiments);
-
-        let area = app.state.settings_content_rect();
-        let action = app.state.handle_settings_mouse(mouse(
-            MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            area.x + 2,
-            area.y + 4,
-        ));
-
-        assert_eq!(
-            action,
-            Some(SettingsAction::SaveSwitchAsciiInputSourceInPrefix(true))
-        );
-        assert_eq!(app.state.settings.list.selected, 1);
     }
 
     #[test]

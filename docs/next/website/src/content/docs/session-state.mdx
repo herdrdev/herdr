@@ -38,7 +38,7 @@ Snapshot restore does not preserve running shells, servers, tests, or arbitrary 
 
 Pane screen history restores recent terminal contents after a full server restart. It restores what Herdr can show, not the old process.
 
-This is off by default because pane output can include secrets, tokens, prompts, and command output. Enable it from Settings > Experiments > pane screen history or with:
+This is off by default because pane output can include secrets, tokens, prompts, and command output. Enable it in the config file:
 
 ```toml
 [experimental]
