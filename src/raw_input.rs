@@ -139,6 +139,13 @@ pub enum RawInputEvent {
         colors: Vec<(u8, RgbColor)>,
     },
     HostColorSchemeChanged(HostAppearance),
+    // Read only by the Unix client; other targets parse and route the report
+    // without inspecting the dimensions.
+    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
+    HostCellSizeReport {
+        width_px: u32,
+        height_px: u32,
+    },
     Unsupported,
 }
 
@@ -748,6 +755,16 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
             return Some((RawInputEvent::HostColorSchemeChanged(appearance), seq_len));
         }
 
+        if let Some((width_px, height_px)) = parse_host_cell_size_report(&buffer[..seq_len]) {
+            return Some((
+                RawInputEvent::HostCellSizeReport {
+                    width_px,
+                    height_px,
+                },
+                seq_len,
+            ));
+        }
+
         if let Some(mouse) = parse_sgr_mouse(seq) {
             return Some((RawInputEvent::Mouse(mouse), seq_len));
         }
@@ -796,6 +813,27 @@ fn parse_host_color_scheme_report(buffer: &[u8]) -> Option<HostAppearance> {
         GHOSTTY_COLOR_SCHEME_LIGHT_REPORT => Some(HostAppearance::Light),
         _ => None,
     }
+}
+
+/// Parses an XTWINOPS cell size report (`CSI 6 ; height ; width t`).
+///
+/// The report orders height before width, while the result is returned as
+/// `(width_px, height_px)` to match the rest of the cell size plumbing. Reports
+/// with a different leading parameter (for example the `CSI 4 t` window pixel
+/// report), a different parameter count, or a zero dimension are rejected.
+fn parse_host_cell_size_report(buffer: &[u8]) -> Option<(u32, u32)> {
+    let body = buffer.strip_prefix(b"\x1b[")?.strip_suffix(b"t")?;
+    let text = std::str::from_utf8(body).ok()?;
+    let mut params = text.split(';');
+    if params.next()? != "6" {
+        return None;
+    }
+    let height_px = params.next()?.parse::<u32>().ok()?;
+    let width_px = params.next()?.parse::<u32>().ok()?;
+    if params.next().is_some() || width_px == 0 || height_px == 0 {
+        return None;
+    }
+    Some((width_px, height_px))
 }
 
 fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
@@ -1383,6 +1421,65 @@ mod tests {
             events[0],
             RawInputEvent::HostColorSchemeChanged(HostAppearance::Dark)
         ));
+    }
+
+    #[test]
+    fn parses_host_cell_size_report() {
+        let events = parse_raw_input_bytes_sync(b"\x1b[6;21;10t");
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            RawInputEvent::HostCellSizeReport {
+                width_px: 10,
+                height_px: 21,
+            }
+        ));
+    }
+
+    #[test]
+    fn raw_input_framer_reassembles_split_host_cell_size_report() {
+        let mut framer = RawInputFramer::default();
+
+        assert!(framer.push(b"\x1b[6;21").is_empty());
+        let events = framer.push(b";10t");
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            RawInputEvent::HostCellSizeReport {
+                width_px: 10,
+                height_px: 21,
+            }
+        ));
+    }
+
+    #[test]
+    fn host_cell_size_report_parser_is_exact() {
+        for bytes in [
+            // Zero dimensions carry no usable cell size.
+            b"\x1b[6;0;10t".as_slice(),
+            b"\x1b[6;21;0t".as_slice(),
+            // Missing or extra parameters.
+            b"\x1b[6;21t".as_slice(),
+            b"\x1b[6;21;10;3t".as_slice(),
+            // Other XTWINOPS reports must not be mistaken for a cell size.
+            b"\x1b[4;1610;777t".as_slice(),
+            b"\x1b[8;37;161t".as_slice(),
+            // Non-numeric parameters.
+            b"\x1b[6;21;1-t".as_slice(),
+        ] {
+            assert!(
+                parse_host_cell_size_report(bytes).is_none(),
+                "bytes: {bytes:?}"
+            );
+            let events = parse_raw_input_bytes_sync(bytes);
+            assert_eq!(events.len(), 1, "bytes: {bytes:?}");
+            assert!(
+                !matches!(events[0], RawInputEvent::HostCellSizeReport { .. }),
+                "bytes: {bytes:?}"
+            );
+        }
     }
 
     #[test]
