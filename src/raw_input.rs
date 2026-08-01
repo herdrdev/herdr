@@ -258,10 +258,16 @@ impl RawInputByteFramer {
     /// reply split at its ESC introducer stitches back together instead of
     /// leaking, same as the host color reply window above.
     ///
+    /// The cell size query is re-sent on every resize, so outstanding replies
+    /// accumulate instead of resetting: a reply that arrives while another
+    /// query is still in flight must keep the hold window open.
+    ///
     /// Only the Unix client sends the cell size query.
     #[cfg(any(unix, test))]
     pub(crate) fn host_cell_size_query_sent(&mut self) {
-        self.host_cell_size_replies_awaited = HOST_CELL_SIZE_QUERY_REPLIES;
+        self.host_cell_size_replies_awaited = self
+            .host_cell_size_replies_awaited
+            .saturating_add(HOST_CELL_SIZE_QUERY_REPLIES);
         self.held_pending_host_reply_esc = false;
     }
 
@@ -2639,6 +2645,29 @@ mod tests {
         );
 
         // Window closed: a later lone Escape flushes immediately.
+        assert!(framer.push(b"\x1b").is_empty());
+        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
+    }
+
+    #[test]
+    fn holds_split_cell_size_reply_while_a_second_query_is_outstanding() {
+        let mut framer = RawInputByteFramer::default();
+        // The initial query plus a resize re-query are both outstanding.
+        framer.host_cell_size_query_sent();
+        framer.host_cell_size_query_sent();
+
+        assert_eq!(
+            framer.push(b"\x1b[6;21;10t"),
+            vec![b"\x1b[6;21;10t".to_vec()]
+        );
+
+        // The second reply is split at its ESC introducer and must still be
+        // held, because one query remains unanswered.
+        assert!(framer.push(b"\x1b").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(framer.push(b"[6;42;20t"), vec![b"\x1b[6;42;20t".to_vec()]);
+
+        // Both replies arrived: a later lone Escape flushes immediately.
         assert!(framer.push(b"\x1b").is_empty());
         assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
     }

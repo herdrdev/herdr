@@ -16,7 +16,7 @@ mod input;
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -1328,19 +1328,22 @@ async fn run_client_loop(
         state.attach_escape.is_none() && should_query_host_terminal_theme();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
-    // This is decided before the reader starts so the framer knows that a reply
-    // is outstanding.
     let will_query_host_cell_size = state.attach_escape.is_none()
         && host_cell_size_query_required(state.kitty_graphics_enabled);
+    // Cell size queries outstanding towards the host terminal. The stdin reader
+    // drains this counter so the framer holds every reply, including the ones
+    // triggered by later resizes.
+    let pending_host_cell_size_queries = Arc::new(AtomicU16::new(0));
     let stdin_quit = should_quit.clone();
     let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
+    let stdin_pending_cell_size_queries = pending_host_cell_size_queries.clone();
     std::thread::spawn(move || {
         input::stdin_reader_loop(
             stdin_tx,
             &stdin_quit,
             will_query_host_terminal_theme,
-            will_query_host_cell_size,
+            stdin_pending_cell_size_queries,
             stdin_mouse_capture_active,
         );
     });
@@ -1350,7 +1353,7 @@ async fn run_client_loop(
     }
 
     if will_query_host_cell_size {
-        query_host_cell_size();
+        query_host_cell_size(&pending_host_cell_size_queries);
     }
 
     // Spawn the resize poller thread.
@@ -1550,7 +1553,7 @@ async fn run_client_loop(
                 // A resize can also follow a font size change, so re-ask the host
                 // terminal for its cell size whenever it is the size authority.
                 if will_query_host_cell_size {
-                    query_host_cell_size();
+                    query_host_cell_size(&pending_host_cell_size_queries);
                 }
             }
             ClientLoopEvent::ServerMessage(msg) => match msg {
@@ -2256,8 +2259,23 @@ fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()>
 /// XTWINOPS request for the host terminal cell size in pixels.
 const HOST_CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
 
-fn query_host_cell_size() {
+/// Sends the cell size query and registers it with the stdin framer.
+///
+/// Every issued query has to be registered because the query is re-sent on
+/// resize, so more than one reply can be in flight.
+fn query_host_cell_size(pending_queries: &AtomicU16) {
+    register_pending_host_cell_size_query(pending_queries);
     let _ = write_host_cell_size_query(io::stdout());
+}
+
+/// Counts one more outstanding cell size reply for the stdin reader thread.
+///
+/// This runs before the query reaches stdout, so the reply can never be framed
+/// before the reader knows that it is coming.
+fn register_pending_host_cell_size_query(pending_queries: &AtomicU16) {
+    let _ = pending_queries.fetch_update(Ordering::AcqRel, Ordering::Acquire, |awaited| {
+        Some(awaited.saturating_add(1))
+    });
 }
 
 fn should_query_host_cell_size() -> bool {
@@ -2635,6 +2653,20 @@ mod tests {
     #[test]
     fn host_cell_size_query_is_limited_to_pane_graphics_clients() {
         assert!(!host_cell_size_query_required(false));
+    }
+
+    #[test]
+    fn pending_host_cell_size_queries_accumulate_and_saturate() {
+        let pending = AtomicU16::new(0);
+        register_pending_host_cell_size_query(&pending);
+        register_pending_host_cell_size_query(&pending);
+
+        assert_eq!(pending.load(Ordering::Acquire), 2);
+
+        pending.store(u16::MAX, Ordering::Release);
+        register_pending_host_cell_size_query(&pending);
+
+        assert_eq!(pending.load(Ordering::Acquire), u16::MAX);
     }
 
     #[test]
