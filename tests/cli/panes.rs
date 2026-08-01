@@ -566,3 +566,34 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
 
     cleanup_spawned_herdr(herdr, base);
 }
+
+#[test]
+fn pane_read_and_wait_output_reject_invalid_values_with_usage_errors() {
+    // Invalid option values fail as CLI usage errors before any server
+    // contact: exit 2 with the plain parser message, not the old
+    // `Error: Custom { ... }` io::Error wrapper from main.
+    let socket_path = Path::new("/tmp/herdr-cli-invalid-values-no-server.sock");
+
+    let read = run_cli(socket_path, &["pane", "read", "w1:p1", "--source", "bogus"]);
+    assert_eq!(read.status.code(), Some(2));
+    let read_stderr = String::from_utf8_lossy(&read.stderr);
+    assert_eq!(read_stderr.trim(), "invalid read source: bogus");
+    assert!(!read_stderr.contains("Error: Custom"));
+
+    let wait = run_cli(
+        socket_path,
+        &[
+            "pane",
+            "wait-output",
+            "w1:p1",
+            "--match",
+            "ready",
+            "--timeout",
+            "nope",
+        ],
+    );
+    assert_eq!(wait.status.code(), Some(2));
+    let wait_stderr = String::from_utf8_lossy(&wait.stderr);
+    assert_eq!(wait_stderr.trim(), "invalid value for --timeout: nope");
+    assert!(!wait_stderr.contains("Error: Custom"));
+}

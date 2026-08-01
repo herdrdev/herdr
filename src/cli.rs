@@ -913,6 +913,25 @@ pub(super) fn parse_u64_flag(flag: &str, value: &str) -> std::io::Result<u64> {
         .map_err(|_| std::io::Error::other(format!("invalid value for {flag}: {value}")))
 }
 
+/// Expand `--flag=value` tokens into separate `--flag` and `value` tokens so
+/// the hand-rolled subcommand parsers accept the same `--flag=value` form the
+/// clap-generated help and completions imply. Only `value_options` are split:
+/// boolean and unknown options keep their attached value so they still reach
+/// the parser's unknown-option branch.
+pub(super) fn expand_equals_args(args: &[String], value_options: &[&str]) -> Vec<String> {
+    let mut expanded = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg.split_once('=') {
+            Some((flag, value)) if value_options.contains(&flag) => {
+                expanded.push(flag.to_string());
+                expanded.push(value.to_string());
+            }
+            _ => expanded.push(arg.clone()),
+        }
+    }
+    expanded
+}
+
 fn parse_session_json_only(args: &[String], usage: &str) -> Result<bool, i32> {
     match args {
         [] => Ok(false),
@@ -1120,5 +1139,45 @@ mod tests {
             &client,
         );
         assert!(!super::server_not_running::was_reported(&mapped));
+    }
+
+    #[test]
+    fn expand_equals_args_splits_long_option_values() {
+        let args = vec![
+            "w1:p1".to_string(),
+            "--source=recent".to_string(),
+            "--lines=5".to_string(),
+            "--raw".to_string(),
+        ];
+        assert_eq!(
+            super::expand_equals_args(&args, &["--source", "--lines", "--format"]),
+            vec!["w1:p1", "--source", "recent", "--lines", "5", "--raw"]
+        );
+    }
+
+    #[test]
+    fn expand_equals_args_leaves_other_tokens_alone() {
+        let args = vec![
+            "--match=a=b".to_string(),
+            "name=value".to_string(),
+            "--flag".to_string(),
+        ];
+        assert_eq!(
+            super::expand_equals_args(&args, &["--match"]),
+            vec!["--match", "a=b", "name=value", "--flag"]
+        );
+    }
+
+    #[test]
+    fn expand_equals_args_keeps_values_on_boolean_and_unknown_options() {
+        let args = vec![
+            "--raw=value".to_string(),
+            "--ansi=value".to_string(),
+            "--bogus=value".to_string(),
+        ];
+        assert_eq!(
+            super::expand_equals_args(&args, &["--source", "--lines", "--format"]),
+            vec!["--raw=value", "--ansi=value", "--bogus=value"]
+        );
     }
 }

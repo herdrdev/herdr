@@ -441,42 +441,55 @@ fn pane_rename(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_read(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-        return Ok(2);
+    let params = match parse_pane_read_args(args) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
     };
 
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+    let response = super::send_request(&Request {
+        id: "cli:pane:read".into(),
+        method: Method::PaneRead(params),
+    })?;
+
+    super::print_read_response(&response)
+}
+
+fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
+    const USAGE: &str = "usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
+
+    let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
+    let mut pane_id = None;
     let mut source = ReadSource::Recent;
     let mut lines = None;
     let mut format = ReadFormat::Text;
     let mut strip_ansi = true;
 
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--source" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
+                    return Err("missing value for --source".into());
                 };
-                source = super::parse_read_source(value)?;
+                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--lines" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
+                    return Err("missing value for --lines".into());
                 };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
+                lines =
+                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--format" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --format");
-                    return Ok(2);
+                    return Err("missing value for --format".into());
                 };
-                format = super::parse_read_format(value)?;
+                format = super::parse_read_format(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--ansi" => {
@@ -488,26 +501,31 @@ fn pane_read(args: &[String]) -> std::io::Result<i32> {
                 strip_ansi = false;
                 index += 1;
             }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
+            option if option.starts_with('-') => {
+                return Err(format!("unknown option: {option}"));
+            }
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
 
-    let response = super::send_request(&Request {
-        id: "cli:pane:read".into(),
-        method: Method::PaneRead(PaneReadParams {
-            pane_id,
-            source,
-            lines,
-            format,
-            strip_ansi,
-            intent: crate::api::schema::ReadIntent::Interactive,
-        }),
-    })?;
+    let Some(pane_id) = pane_id else {
+        return Err(USAGE.into());
+    };
 
-    super::print_read_response(&response)
+    Ok(PaneReadParams {
+        pane_id,
+        source,
+        lines,
+        format,
+        strip_ansi,
+        intent: crate::api::schema::ReadIntent::Interactive,
+    })
 }
 
 fn pane_split(args: &[String]) -> std::io::Result<i32> {
@@ -936,28 +954,42 @@ fn pane_run(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
-        return Ok(2);
+    let params = match parse_pane_wait_output_args(args) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
     };
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:pane:wait-output".into(),
+        method: Method::PaneWaitForOutput(params),
+    })?)
+}
+
+fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParams, String> {
+    const USAGE: &str = "usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
+
+    let args = super::expand_equals_args(
+        args,
+        &["--match", "--regex", "--source", "--lines", "--timeout"],
+    );
+    let mut pane_id = None;
     let mut source = ReadSource::Recent;
     let mut lines = None;
     let mut timeout_ms = None;
     let mut strip_ansi = true;
     let mut matcher = None;
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--match" | "--regex" => {
-                let option = args[index].as_str();
+            option @ ("--match" | "--regex") => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for {option}");
-                    return Ok(2);
+                    return Err(format!("missing value for {option}"));
                 };
                 if matcher.is_some() {
-                    eprintln!("--match and --regex are mutually exclusive");
-                    return Ok(2);
+                    return Err("--match and --regex are mutually exclusive".into());
                 }
                 matcher = Some(if option == "--regex" {
                     OutputMatch::Regex {
@@ -972,53 +1004,57 @@ fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
             }
             "--source" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
+                    return Err("missing value for --source".into());
                 };
-                source = super::parse_read_source(value)?;
+                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--lines" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
+                    return Err("missing value for --lines".into());
                 };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
+                lines =
+                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--timeout" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --timeout");
-                    return Ok(2);
+                    return Err("missing value for --timeout".into());
                 };
-                timeout_ms = Some(super::parse_u64_flag("--timeout", value)?);
+                timeout_ms =
+                    Some(super::parse_u64_flag("--timeout", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--raw" => {
                 strip_ansi = false;
                 index += 1;
             }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
+            option if option.starts_with('-') => {
+                return Err(format!("unknown option: {option}"));
+            }
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
-    let Some(matcher) = matcher else {
-        eprintln!("missing required --match or --regex");
-        return Ok(2);
+    let Some(pane_id) = pane_id else {
+        return Err(USAGE.into());
     };
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:wait-output".into(),
-        method: Method::PaneWaitForOutput(PaneWaitForOutputParams {
-            pane_id,
-            source,
-            lines,
-            r#match: matcher,
-            timeout_ms,
-            strip_ansi,
-        }),
-    })?)
+    let Some(matcher) = matcher else {
+        return Err("missing required --match or --regex".into());
+    };
+    Ok(PaneWaitForOutputParams {
+        pane_id,
+        source,
+        lines,
+        r#match: matcher,
+        timeout_ms,
+        strip_ansi,
+    })
 }
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
@@ -1764,5 +1800,211 @@ mod tests {
         assert_eq!(params.pane_id, Some("issue-2".into()));
         assert_eq!(params.direction, PaneDirection::Left);
         assert_eq!(params.amount, Some(0.125));
+    }
+
+    #[test]
+    fn parse_pane_read_args_defaults_with_bare_pane_id() {
+        let params = parse_pane_read_args(&args(&["issue-1"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Recent);
+        assert_eq!(params.lines, None);
+        assert_eq!(params.format, ReadFormat::Text);
+        assert!(params.strip_ansi);
+    }
+
+    #[test]
+    fn parse_pane_read_args_accepts_space_separated_options() {
+        let params = parse_pane_read_args(&args(&[
+            "issue-1", "--source", "visible", "--lines", "5", "--ansi",
+        ]))
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Visible);
+        assert_eq!(params.lines, Some(5));
+        assert_eq!(params.format, ReadFormat::Ansi);
+    }
+
+    #[test]
+    fn parse_pane_read_args_accepts_equals_options() {
+        let params =
+            parse_pane_read_args(&args(&["issue-1", "--source=recent", "--lines=5"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Recent);
+        assert_eq!(params.lines, Some(5));
+    }
+
+    #[test]
+    fn parse_pane_read_args_accepts_options_before_pane_id() {
+        let params =
+            parse_pane_read_args(&args(&["--source", "visible", "--lines", "5", "issue-1"]))
+                .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Visible);
+        assert_eq!(params.lines, Some(5));
+    }
+
+    #[test]
+    fn parse_pane_read_args_requires_pane_id() {
+        let err = parse_pane_read_args(&args(&[])).unwrap_err();
+        assert!(err.contains("usage: herdr pane read"));
+
+        let err = parse_pane_read_args(&args(&["--source", "recent"])).unwrap_err();
+        assert!(err.contains("usage: herdr pane read"));
+    }
+
+    #[test]
+    fn parse_pane_read_args_rejects_unknown_option() {
+        let err = parse_pane_read_args(&args(&["issue-1", "--bogus"])).unwrap_err();
+        assert_eq!(err, "unknown option: --bogus");
+
+        let err = parse_pane_read_args(&args(&["issue-1", "--bogus=1"])).unwrap_err();
+        assert_eq!(err, "unknown option: --bogus=1");
+    }
+
+    #[test]
+    fn parse_pane_read_args_rejects_values_on_boolean_options() {
+        let err = parse_pane_read_args(&args(&["--raw=issue-1"])).unwrap_err();
+        assert_eq!(err, "unknown option: --raw=issue-1");
+
+        let err = parse_pane_read_args(&args(&["--ansi=issue-1"])).unwrap_err();
+        assert_eq!(err, "unknown option: --ansi=issue-1");
+    }
+
+    #[test]
+    fn parse_pane_read_args_rejects_invalid_option_values() {
+        let err = parse_pane_read_args(&args(&["issue-1", "--source", "bogus"])).unwrap_err();
+        assert_eq!(err, "invalid read source: bogus");
+
+        let err = parse_pane_read_args(&args(&["issue-1", "--format", "bogus"])).unwrap_err();
+        assert_eq!(err, "invalid read format: bogus");
+
+        let err = parse_pane_read_args(&args(&["issue-1", "--lines", "nope"])).unwrap_err();
+        assert_eq!(err, "invalid value for --lines: nope");
+
+        let err = parse_pane_read_args(&args(&["issue-1", "--source=bogus"])).unwrap_err();
+        assert_eq!(err, "invalid read source: bogus");
+    }
+
+    #[test]
+    fn parse_pane_read_args_rejects_extra_positional() {
+        let err = parse_pane_read_args(&args(&["issue-1", "issue-2"])).unwrap_err();
+        assert_eq!(err, "unexpected argument: issue-2");
+    }
+
+    #[test]
+    fn parse_pane_read_args_rejects_missing_option_value() {
+        let err = parse_pane_read_args(&args(&["issue-1", "--lines"])).unwrap_err();
+        assert_eq!(err, "missing value for --lines");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_accepts_space_separated_options() {
+        let params = parse_pane_wait_output_args(&args(&[
+            "issue-1",
+            "--match",
+            "ready",
+            "--timeout",
+            "5000",
+        ]))
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(
+            params.r#match,
+            OutputMatch::Substring {
+                value: "ready".into()
+            }
+        );
+        assert_eq!(params.timeout_ms, Some(5000));
+        assert_eq!(params.source, ReadSource::Recent);
+        assert!(params.strip_ansi);
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_accepts_equals_options() {
+        let params =
+            parse_pane_wait_output_args(&args(&["issue-1", "--match=ready", "--timeout=5000"]))
+                .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(
+            params.r#match,
+            OutputMatch::Substring {
+                value: "ready".into()
+            }
+        );
+        assert_eq!(params.timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_accepts_options_before_pane_id() {
+        let params = parse_pane_wait_output_args(&args(&[
+            "--regex",
+            "rea+y",
+            "--timeout",
+            "100",
+            "issue-1",
+        ]))
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(
+            params.r#match,
+            OutputMatch::Regex {
+                value: "rea+y".into()
+            }
+        );
+        assert_eq!(params.timeout_ms, Some(100));
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_positional_marker() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1", "ready", "--timeout", "500"]))
+            .unwrap_err();
+        assert_eq!(err, "unexpected argument: ready");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_requires_matcher() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1"])).unwrap_err();
+        assert_eq!(err, "missing required --match or --regex");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_conflicting_matchers() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--regex", "b"]))
+            .unwrap_err();
+        assert_eq!(err, "--match and --regex are mutually exclusive");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_unknown_option() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--bogus=1"]))
+            .unwrap_err();
+        assert_eq!(err, "unknown option: --bogus=1");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_values_on_boolean_options() {
+        let err =
+            parse_pane_wait_output_args(&args(&["--raw=issue-1", "--match", "ready"])).unwrap_err();
+        assert_eq!(err, "unknown option: --raw=issue-1");
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_invalid_option_values() {
+        let err =
+            parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--timeout", "nope"]))
+                .unwrap_err();
+        assert_eq!(err, "invalid value for --timeout: nope");
+
+        let err =
+            parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--source=bogus"]))
+                .unwrap_err();
+        assert_eq!(err, "invalid read source: bogus");
     }
 }
