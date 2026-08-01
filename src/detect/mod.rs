@@ -293,7 +293,10 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
 }
 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
-    (source, agent_label) == ("herdr:hermes", "hermes")
+    matches!(
+        (source, agent_label),
+        ("herdr:hermes", "hermes") | ("herdr:antigravity_cli", "agy")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -771,10 +774,15 @@ mod tests {
     }
 
     #[test]
-    fn hermes_session_integration_leaves_state_to_screen_detection() {
-        assert!(!full_lifecycle_hook_authority("herdr:hermes", "hermes"));
-        assert!(session_identity_only_integration("herdr:hermes", "hermes"));
-        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Hermes));
+    fn session_identity_integrations_leave_state_to_screen_detection() {
+        for (source, label, agent) in [
+            ("herdr:hermes", "hermes", Agent::Hermes),
+            ("herdr:antigravity_cli", "agy", Agent::Antigravity),
+        ] {
+            assert!(!full_lifecycle_hook_authority(source, label));
+            assert!(session_identity_only_integration(source, label));
+            assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
+        }
     }
 
     #[test]
