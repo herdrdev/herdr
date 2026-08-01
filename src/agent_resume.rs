@@ -89,6 +89,7 @@ pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
             | ("herdr:qodercli", "qodercli")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
+            | ("herdr:agy", "agy")
     )
 }
 
@@ -190,6 +191,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:agy", "agy", AgentSessionRefKind::Id) => {
+            vec!["agy".into(), "--resume".into(), session_ref.value.clone()]
+        }
         _ => return None,
     };
 
@@ -225,6 +229,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:kilo", "kilo")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
+            | ("herdr:agy", "agy")
     )
 }
 

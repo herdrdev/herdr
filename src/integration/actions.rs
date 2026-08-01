@@ -2,12 +2,12 @@ use std::io;
 
 use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
-    install_claude, install_codex, install_copilot, install_cursor, install_devin, install_droid,
-    install_grok, install_hermes, install_kilo, install_kimi, install_mastracode, install_omp,
-    install_opencode, install_pi, install_qodercli, uninstall_claude, uninstall_codex,
-    uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok,
-    uninstall_hermes, uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp,
-    uninstall_opencode, uninstall_pi, uninstall_qodercli,
+    install_agy, install_claude, install_codex, install_copilot, install_cursor, install_devin,
+    install_droid, install_grok, install_hermes, install_kilo, install_kimi, install_mastracode,
+    install_omp, install_opencode, install_pi, install_qodercli, uninstall_agy, uninstall_claude,
+    uninstall_codex, uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid,
+    uninstall_grok, uninstall_hermes, uninstall_kilo, uninstall_kimi, uninstall_mastracode,
+    uninstall_omp, uninstall_opencode, uninstall_pi, uninstall_qodercli,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -214,6 +214,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 format!(
                     "registered grok hook config at {}",
                     installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Agy => {
+            let installed = install_agy()?;
+            vec![
+                format!(
+                    "installed antigravity integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured antigravity hooks at {}",
+                    installed.hooks_path.display()
                 ),
             ]
         }
@@ -594,6 +607,33 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no grok hook config found at {}",
                     result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Agy => {
+            let result = uninstall_agy()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed antigravity hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no antigravity hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_hooks {
+                messages.push(format!(
+                    "removed herdr antigravity hook entries from {}",
+                    result.hooks_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr antigravity hook entries found in {}",
+                    result.hooks_path.display()
                 ));
             }
             messages

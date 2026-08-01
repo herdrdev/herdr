@@ -21,6 +21,8 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
+pub(crate) const AGY_CONFIG_DIR_ENV_VAR: &str = "AGY_CONFIG_DIR";
+pub(crate) const ANTIGRAVITY_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CONFIG_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -152,6 +154,16 @@ pub(crate) fn grok_dir() -> io::Result<PathBuf> {
     // The grok CLI honors GROK_HOME as its config home (config.toml,
     // auth.json, hooks/); mirror it so hook installs land where grok looks.
     config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
+}
+
+pub(crate) fn agy_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(AGY_CONFIG_DIR_ENV_VAR)
+        .or_else(|| std::env::var_os(ANTIGRAVITY_CONFIG_DIR_ENV_VAR))
+        .filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+    config_dir_from_env_or_home(AGY_CONFIG_DIR_ENV_VAR, &[".gemini", "antigravity-cli"])
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {

@@ -13,32 +13,32 @@ use super::config_edit::{
     remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
 };
 use super::env::{
-    claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir, grok_dir, hermes_dir,
-    hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir, opencode_dir,
-    pi_extension_dir, qodercli_dir,
+    agy_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir, grok_dir,
+    hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
+    opencode_dir, pi_extension_dir, qodercli_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
 };
 use super::types::{
-    ClaudeInstallPaths, ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult,
-    CopilotInstallPaths, CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult,
-    DevinInstallPaths, DevinUninstallResult, DroidInstallPaths, DroidUninstallResult,
-    GrokInstallPaths, GrokUninstallResult, HermesInstallPaths, HermesUninstallResult,
-    KiloInstallPaths, KiloUninstallResult, KimiInstallPaths, KimiUninstallResult,
-    MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult,
-    OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths,
-    QodercliUninstallResult,
+    AgyInstallPaths, AgyUninstallResult, ClaudeInstallPaths, ClaudeUninstallResult,
+    CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths, CopilotUninstallResult,
+    CursorInstallPaths, CursorUninstallResult, DevinInstallPaths, DevinUninstallResult,
+    DroidInstallPaths, DroidUninstallResult, GrokInstallPaths, GrokUninstallResult,
+    HermesInstallPaths, HermesUninstallResult, KiloInstallPaths, KiloUninstallResult,
+    KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult,
+    OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult,
+    PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
 };
 use super::{
-    CLAUDE_HOOK_ASSET, CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME,
-    COPILOT_HOOK_ASSET, COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME,
-    COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS, CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME,
-    DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS, DEVIN_HOOK_INSTALL_NAME,
-    DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET, DROID_HOOK_EVENTS,
-    DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS, GROK_HOOK_ASSET,
-    GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME, HERMES_PLUGIN_INIT_ASSET,
-    HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
+    AGY_HOOK_ASSET, AGY_HOOK_EVENTS, AGY_HOOK_INSTALL_NAME, CLAUDE_HOOK_ASSET,
+    CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET,
+    COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME, COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS,
+    DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
+    DROID_HOOK_EVENTS, DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
+    HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
     KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
@@ -1270,5 +1270,87 @@ pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
         config_path,
         removed_hook_file,
         removed_config_file,
+    })
+}
+
+pub(crate) fn install_agy() -> io::Result<AgyInstallPaths> {
+    let dir = agy_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "antigravity config directory not found at {}. install antigravity (agy) first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(AGY_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, AGY_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let hooks_path = dir.join("hooks.json");
+    let mut hooks_file = if hooks_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?).map_err(|err| {
+            io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut hooks_file,
+        &hooks_path,
+        "antigravity hooks file",
+        "antigravity hooks file hooks",
+    )?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+    ensure_command_hook(
+        hooks,
+        "SessionStart",
+        hook_command(&hook_path, Some("session")),
+        10,
+        None,
+    )?;
+    remove_legacy_bash_hook_file(&hook_path)?;
+
+    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+
+    Ok(AgyInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_agy() -> io::Result<AgyUninstallResult> {
+    let dir = agy_dir()?;
+    let hook_path = dir.join("hooks").join(AGY_HOOK_INSTALL_NAME);
+    let hooks_path = dir.join("hooks.json");
+    let mut updated_hooks = false;
+
+    if hooks_path.is_file() {
+        let mut hooks_file = serde_json::from_str::<Value>(&fs::read_to_string(&hooks_path)?)
+            .map_err(|err| {
+                io::Error::other(format!("failed to parse {}: {err}", hooks_path.display()))
+            })?;
+        if let Some(hooks) =
+            hooks_object_if_present(&mut hooks_file, &hooks_path, "agy hooks", "agy hooks")?
+        {
+            for (event, action) in AGY_HOOK_EVENTS {
+                updated_hooks |= remove_hook_commands(hooks, event, &hook_path, Some(action))?;
+            }
+            if updated_hooks {
+                fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            }
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(AgyUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        updated_hooks,
     })
 }

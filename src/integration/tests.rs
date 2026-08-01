@@ -104,6 +104,8 @@ fn clear_integration_path_env() {
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(AGY_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(ANTIGRAVITY_CONFIG_DIR_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -3783,6 +3785,101 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     );
 
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn agy_hook_asset_headers_are_valid() {
+    assert!(AGY_HOOK_ASSET.contains("installed by herdr"));
+    assert!(AGY_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=agy"));
+    assert!(AGY_HOOK_ASSET.contains("HERDR_INTEGRATION_VERSION=1"));
+    assert!(AGY_HOOK_ASSET.contains("herdr:agy"));
+}
+
+#[test]
+fn install_agy_writes_hook_and_hooks_json() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    std::env::set_var(AGY_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    let installed = install_agy().unwrap();
+    assert_eq!(
+        installed.hook_path,
+        agy_dir.join("hooks").join(AGY_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.hooks_path, agy_dir.join("hooks.json"));
+    assert!(installed.hook_path.is_file());
+    assert!(installed.hooks_path.is_file());
+
+    let hooks_file: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.hooks_path).unwrap()).unwrap();
+    assert!(hooks_file.get("hooks").is_some());
+
+    let status = installed_integration_statuses()
+        .into_iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Agy)
+        .expect("agy integration status");
+    assert_eq!(status.state, IntegrationStatusKind::Current);
+    assert_eq!(status.installed_version, Some(AGY_INTEGRATION_VERSION));
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_agy_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    std::env::set_var(AGY_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    install_agy().unwrap();
+    let first = fs::read_to_string(agy_dir.join("hooks.json")).unwrap();
+    install_agy().unwrap();
+    let second = fs::read_to_string(agy_dir.join("hooks.json")).unwrap();
+    assert_eq!(first, second);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_agy_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let missing = base.join(".gemini").join("antigravity-cli");
+    std::env::set_var(AGY_CONFIG_DIR_ENV_VAR, &missing);
+
+    let err = install_agy().unwrap_err().to_string();
+    assert!(
+        err.contains("antigravity config directory not found"),
+        "expected missing config dir error, got: {err}"
+    );
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_agy_removes_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("antigravity-cli");
+    fs::create_dir_all(&agy_dir).unwrap();
+    std::env::set_var(AGY_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    install_agy().unwrap();
+    let result = uninstall_agy().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_hooks);
+
+    let again = uninstall_agy().unwrap();
+    assert!(!again.removed_hook_file);
+
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }
