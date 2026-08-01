@@ -116,13 +116,22 @@ fn unix_stdin_reader_loop(
                             &reader,
                             crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
                         ) == Some(false)
-                        && !send_unix_input_chunks(
+                    {
+                        // A resize re-query may have registered while waiting on
+                        // the held escape; drain it so the flush keeps holding
+                        // for the reply in flight instead of releasing the
+                        // escape as a plain Escape key.
+                        arm_pending_host_cell_size_queries(
+                            &mut framer,
+                            &pending_host_cell_size_queries,
+                        );
+                        if !send_unix_input_chunks(
                             framer.flush_timeout(),
                             &event_tx,
                             &mut pending_palette,
-                        )
-                    {
-                        return;
+                        ) {
+                            return;
+                        }
                     }
                 }
             }
@@ -618,6 +627,38 @@ mod tests {
         // No query is left outstanding, so Escape stays responsive.
         assert!(framer.push(b"\x1b").is_empty());
         assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
+    }
+
+    #[test]
+    fn second_held_escape_flush_drains_a_requery_registered_while_waiting() {
+        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+        let pending = AtomicU16::new(1);
+        arm_pending_host_cell_size_queries(&mut framer, &pending);
+
+        // First timeout flush: the escape introducer of the reply arrives
+        // alone, so it is held rather than released as a plain Escape.
+        assert!(framer.push(b"\x1b").is_empty());
+        let had_pending = framer.has_pending_input();
+        let chunks = framer.flush_timeout();
+        assert!(had_pending && chunks.is_empty(), "escape must be held");
+
+        // A resize re-query is registered on the shared counter while this
+        // thread waits for stdin to go quiet again, before the second flush.
+        pending.store(1, Ordering::Release);
+
+        // Draining the counter before the second flush must keep the framer
+        // holding for the reply in flight instead of releasing the held
+        // escape as a plain Escape key.
+        arm_pending_host_cell_size_queries(&mut framer, &pending);
+        assert_eq!(
+            framer.flush_timeout(),
+            Vec::<Vec<u8>>::new(),
+            "the held escape must not leak once a requery is drained"
+        );
+
+        // The delayed, split reply must still reassemble into a single
+        // HostCellSizeReport instead of leaking through as loose bytes.
+        assert_eq!(framer.push(b"[6;21;10t"), vec![b"\x1b[6;21;10t".to_vec()]);
     }
 
     #[test]
