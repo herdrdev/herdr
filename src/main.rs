@@ -471,12 +471,8 @@ where
     args.into_iter()
         .enumerate()
         .map(|(index, arg)| {
-            arg.into_string().map_err(|arg| {
-                format!(
-                    "argument {index} is not valid UTF-8: {}",
-                    arg.to_string_lossy()
-                )
-            })
+            arg.into_string()
+                .map_err(|_| format!("argument {index} is not valid UTF-8"))
         })
         .collect()
 }
@@ -958,7 +954,9 @@ mod tests {
             std::ffi::OsString::from("pane"),
             invalid_utf8_arg(),
         ];
-        let err = args_as_utf8(args).unwrap_err();
-        assert!(err.starts_with("argument 2 is not valid UTF-8:"), "{err}");
+        assert_eq!(
+            args_as_utf8(args).unwrap_err(),
+            "argument 2 is not valid UTF-8"
+        );
     }
 }
