@@ -291,6 +291,9 @@ impl RawInputByteFramer {
         let mut chunks = self.drain_available_chunks();
 
         if let Some(family) = self.discard_until {
+            if family == ControlStringFamily::HostReplyCsi {
+                return chunks;
+            }
             if family == ControlStringFamily::OrphanedSgrMouseTail {
                 self.buffer.clear();
                 self.discard_until = None;
@@ -361,12 +364,37 @@ impl RawInputByteFramer {
             return chunks;
         }
 
+        if self.host_cell_size_replies_awaited > 0 && self.buffer.as_slice() == b"\x1b[" {
+            if !self.held_pending_host_reply_esc {
+                self.held_pending_host_reply_esc = true;
+                tracing::trace!("holding incomplete cell size reply one flush");
+                return chunks;
+            }
+            self.host_cell_size_replies_awaited = 0;
+            self.held_pending_host_reply_esc = false;
+        }
+
+        if self.host_cell_size_replies_awaited > 0
+            && starts_with_incomplete_host_cell_size_report(&self.buffer)
+        {
+            tracing::debug!(
+                len = self.buffer.len(),
+                "discarding incomplete host cell size report after input timeout"
+            );
+            self.host_cell_size_replies_awaited = 0;
+            self.held_pending_host_reply_esc = false;
+            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
+            self.discarded_tail_bytes = 0;
+            self.buffer.clear();
+            return chunks;
+        }
+
         if starts_with_incomplete_host_color_scheme_report(&self.buffer) {
             tracing::debug!(
                 len = self.buffer.len(),
                 "discarding incomplete host color scheme report after input timeout"
             );
-            self.discard_until = Some(ControlStringFamily::HostColorSchemeCsi);
+            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
             self.discarded_tail_bytes = 0;
             self.buffer.clear();
             return chunks;
@@ -444,6 +472,15 @@ impl RawInputByteFramer {
             }
 
             if let Some(family) = self.discard_until {
+                if family == ControlStringFamily::HostReplyCsi {
+                    if discard_host_reply_csi_tail(&mut self.buffer, &mut self.discarded_tail_bytes)
+                    {
+                        self.discard_until = None;
+                        self.discarded_tail_bytes = 0;
+                        continue;
+                    }
+                    break;
+                }
                 if family == ControlStringFamily::OrphanedSgrMouseTail {
                     if discard_orphaned_sgr_mouse_tail(
                         &mut self.buffer,
@@ -524,9 +561,7 @@ fn plausible_control_string_tail(family: ControlStringFamily, buffer: &[u8]) -> 
                 )
         }),
         ControlStringFamily::StTerminated => buffer.last() == Some(&ESC),
-        ControlStringFamily::HostColorSchemeCsi => buffer
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b';' | b'?' | b'n')),
+        ControlStringFamily::HostReplyCsi => false,
         ControlStringFamily::OrphanedSgrMouseTail => buffer
             .iter()
             .all(|byte| byte.is_ascii_digit() || matches!(*byte, b';' | b'M' | b'm')),
@@ -810,7 +845,7 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
 enum ControlStringFamily {
     Osc,
     StTerminated,
-    HostColorSchemeCsi,
+    HostReplyCsi,
     OrphanedSgrMouseTail,
 }
 
@@ -864,6 +899,26 @@ fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
         && (GHOSTTY_COLOR_SCHEME_DARK_REPORT.starts_with(buffer)
             || GHOSTTY_COLOR_SCHEME_LIGHT_REPORT.starts_with(buffer))
         && buffer.len() < GHOSTTY_COLOR_SCHEME_DARK_REPORT.len()
+}
+
+fn starts_with_incomplete_host_cell_size_report(buffer: &[u8]) -> bool {
+    let Some(body) = buffer.strip_prefix(b"\x1b[") else {
+        return false;
+    };
+    if body.is_empty() || body.last() == Some(&b't') {
+        return false;
+    }
+
+    let mut params = body.split(|byte| *byte == b';');
+    if params.next() != Some(b"6".as_slice()) {
+        return false;
+    }
+    let height = params.next();
+    let width = params.next();
+    params.next().is_none()
+        && height.is_none_or(|value| value.iter().all(u8::is_ascii_digit))
+        && width.is_none_or(|value| value.iter().all(u8::is_ascii_digit))
+        && !(height.is_some_and(<[u8]>::is_empty) && width.is_some())
 }
 
 fn control_string(buffer: &[u8]) -> Option<ControlString> {
@@ -1011,6 +1066,29 @@ fn discard_or_buffer_orphaned_sgr_mouse_tail(
     }
 }
 
+fn discard_host_reply_csi_tail(buffer: &mut Vec<u8>, discarded_tail_bytes: &mut usize) -> bool {
+    let remaining = MAX_DISCARDED_CONTROL_TAIL_BYTES.saturating_sub(*discarded_tail_bytes);
+    let inspected = buffer.len().min(remaining);
+
+    for index in 0..inspected {
+        match buffer[index] {
+            0x20..=0x3f => {}
+            0x40..=0x7e => {
+                buffer.drain(..=index);
+                return true;
+            }
+            _ => {
+                buffer.drain(..index);
+                return true;
+            }
+        }
+    }
+
+    buffer.drain(..inspected);
+    *discarded_tail_bytes = discarded_tail_bytes.saturating_add(inspected);
+    *discarded_tail_bytes >= MAX_DISCARDED_CONTROL_TAIL_BYTES
+}
+
 fn discard_orphaned_sgr_mouse_tail(buffer: &mut Vec<u8>, discarded_tail_bytes: &mut usize) -> bool {
     let remaining = MAX_DISCARDED_CONTROL_TAIL_BYTES.saturating_sub(*discarded_tail_bytes);
     let inspected = buffer.len().min(remaining);
@@ -1065,10 +1143,7 @@ fn control_string_terminator_for_family(
     match family {
         ControlStringFamily::Osc => osc_string_terminator(buffer),
         ControlStringFamily::StTerminated => st_string_terminator(buffer),
-        ControlStringFamily::HostColorSchemeCsi => buffer
-            .iter()
-            .position(|byte| *byte == b'n')
-            .map(|idx| idx + 1),
+        ControlStringFamily::HostReplyCsi => None,
         ControlStringFamily::OrphanedSgrMouseTail => buffer
             .iter()
             .position(|byte| matches!(*byte, b'M' | b'm'))
@@ -2578,6 +2653,66 @@ mod tests {
                 height_px: 21,
             }
         ));
+    }
+
+    #[test]
+    fn timed_out_host_cell_size_reply_fragments_do_not_leak() {
+        for (prefix, tail) in [
+            (b"\x1b[6".as_slice(), b";21;10t".as_slice()),
+            (b"\x1b[6;".as_slice(), b"21;10t".as_slice()),
+            (b"\x1b[6;21;".as_slice(), b"10t".as_slice()),
+        ] {
+            let mut framer = RawInputByteFramer::default();
+            framer.host_cell_size_query_sent();
+
+            assert!(framer.push(prefix).is_empty(), "prefix: {prefix:?}");
+            assert!(framer.flush_timeout().is_empty(), "prefix: {prefix:?}");
+            assert!(framer.push(tail).is_empty(), "tail: {tail:?}");
+            assert_eq!(framer.push(b"a"), vec![b"a".to_vec()]);
+        }
+    }
+
+    #[test]
+    fn split_host_cell_size_reply_after_csi_intro_gets_one_more_flush() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_cell_size_query_sent();
+
+        assert!(framer.push(b"\x1b[").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(framer.push(b"6;21;10t"), vec![b"\x1b[6;21;10t".to_vec()]);
+
+        let mut alt_bracket = RawInputByteFramer::default();
+        alt_bracket.host_cell_size_query_sent();
+        assert!(alt_bracket.push(b"\x1b[").is_empty());
+        assert!(alt_bracket.flush_timeout().is_empty());
+        assert_eq!(alt_bracket.flush_timeout(), vec![b"\x1b[".to_vec()]);
+    }
+
+    #[test]
+    fn malformed_host_reply_tail_preserves_following_input() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_cell_size_query_sent();
+
+        assert!(framer.push(b"\x1b[6;21").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(
+            framer.push(b";10xabc"),
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
+    }
+
+    #[test]
+    fn host_reply_tail_discard_is_bounded_across_pushes() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_cell_size_query_sent();
+
+        assert!(framer.push(b"\x1b[6;21").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert!(framer.push(&[b'1'; 64]).is_empty());
+        assert_eq!(
+            framer.push(&[b'2'; 67]),
+            vec![b"2".to_vec(), b"2".to_vec(), b"2".to_vec()]
+        );
     }
 
     #[test]
