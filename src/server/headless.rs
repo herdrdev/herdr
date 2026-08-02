@@ -6469,6 +6469,22 @@ next_tab = ""
     }
 
     #[test]
+    fn terminal_attach_page_key_host_scrolls_shell_like_decckm_with_bracketed_paste() {
+        with_terminal_attach_page_key_runtime(b"\x1b[?1h\x1b[?2004h", 0, |runtime, input_rx| {
+            apply_terminal_attach_page_up(runtime);
+
+            assert_eq!(
+                runtime
+                    .scroll_metrics()
+                    .expect("scroll metrics")
+                    .offset_from_bottom,
+                4
+            );
+            assert!(input_rx.try_recv().is_err());
+        });
+    }
+
+    #[test]
     fn terminal_attach_page_key_forwards_in_alternate_screen_without_mouse_reporting() {
         with_terminal_attach_page_key_runtime(b"\x1b[?1049h", 3, |runtime, input_rx| {
             apply_terminal_attach_page_up(runtime);

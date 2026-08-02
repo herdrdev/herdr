@@ -1970,4 +1970,42 @@ mod tests {
             .expect("scroll metrics after PageUp");
         assert_eq!(end_metrics.offset_from_bottom, 0);
     }
+
+    #[tokio::test]
+    async fn page_up_scrolls_shell_like_decckm_with_bracketed_paste() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        // zsh enables DECCKM via smkx and bracketed paste together; bash/fish do not.
+        let mut bytes = b"\x1b[?1h\x1b[?2004h".to_vec();
+        bytes.extend_from_slice(&numbered_lines_bytes(64));
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                16 * 1024,
+                &bytes,
+                4,
+            );
+        ws.tabs[0].runtimes.insert(pane_id, runtime);
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::empty()));
+
+        assert!(
+            input_rx.try_recv().is_err(),
+            "PageUp should not reach the shell"
+        );
+        assert_eq!(
+            pane_scroll_offset(&app, pane_id),
+            info.inner_rect.height as usize
+        );
+    }
 }
