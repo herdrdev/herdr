@@ -20,6 +20,8 @@ pub struct ApiWorktreeAddRequest {
     pub source_repo_root: std::path::PathBuf,
     pub repo_key: String,
     pub repo_name: String,
+    pub branch: String,
+    pub permit: Option<crate::api::schema::WorktreeExactPermit>,
     pub label: Option<String>,
     pub focus: bool,
     pub respond_to: std::sync::mpsc::Sender<String>,
@@ -29,6 +31,7 @@ pub struct ApiWorktreeAddRequest {
 pub struct WorktreeAddResult {
     pub path: std::path::PathBuf,
     pub api_request: Option<ApiWorktreeAddRequest>,
+    pub receipt: Option<crate::api::schema::WorktreeMutationReceipt>,
     pub result: Result<(), String>,
 }
 
@@ -37,6 +40,7 @@ pub struct ApiWorktreeRemoveRequest {
     pub id: String,
     pub operation_id: u64,
     pub checkout_key: std::path::PathBuf,
+    pub permit: Option<crate::api::schema::WorktreeExactPermit>,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }
 
@@ -47,6 +51,7 @@ pub struct WorktreeRemoveResult {
     pub workspace: Option<Box<crate::api::schema::WorkspaceInfo>>,
     pub worktree: Option<Box<crate::api::schema::WorktreeInfo>>,
     pub forced: bool,
+    pub receipt: Option<crate::api::schema::WorktreeMutationReceipt>,
     pub api_request: Option<ApiWorktreeRemoveRequest>,
     pub result: Result<(), String>,
 }

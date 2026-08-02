@@ -455,6 +455,8 @@ pub enum EventData {
     WorktreeCreated {
         workspace: WorkspaceInfo,
         worktree: WorktreeInfo,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<super::worktrees::WorktreeMutationReceipt>,
     },
     WorktreeOpened {
         workspace: WorkspaceInfo,
@@ -467,6 +469,8 @@ pub enum EventData {
         workspace: Option<WorkspaceInfo>,
         worktree: WorktreeInfo,
         forced: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<super::worktrees::WorktreeMutationReceipt>,
     },
     TabCreated {
         tab: TabInfo,

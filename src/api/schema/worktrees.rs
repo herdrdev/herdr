@@ -8,6 +8,23 @@ pub struct WorktreeListParams {
     pub cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorktreeExactPermit {
+    pub repo_common_dir: String,
+    pub checkout_path: String,
+    pub branch: String,
+    pub head_oid: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorktreeMutationReceipt {
+    pub operation: String,
+    pub repo_common_dir: String,
+    pub checkout_path: String,
+    pub branch: String,
+    pub head_oid: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct WorktreeCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,6 +41,8 @@ pub struct WorktreeCreateParams {
     pub label: Option<String>,
     #[serde(default)]
     pub focus: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permit: Option<WorktreeExactPermit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
@@ -47,6 +66,8 @@ pub struct WorktreeRemoveParams {
     pub workspace_id: String,
     #[serde(default)]
     pub force: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permit: Option<WorktreeExactPermit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -557,6 +557,7 @@ impl App {
                 WorktreeAddResult {
                     path,
                     api_request: None,
+                    receipt: None,
                     result,
                 },
             )));
@@ -599,6 +600,7 @@ impl App {
                 base: Some("HEAD".into()),
                 focus: true,
                 label: None,
+                permit: None,
             },
         );
         if let Some(message) = immediate_api_error_message(immediate_response.as_deref()) {
@@ -700,6 +702,7 @@ impl App {
                     workspace: workspace_snapshot,
                     worktree: worktree_snapshot,
                     forced: force,
+                    receipt: None,
                     api_request: None,
                     result,
                 },
@@ -767,6 +770,7 @@ impl App {
             crate::api::schema::WorktreeRemoveParams {
                 workspace_id,
                 force,
+                permit: None,
             },
         );
         if let Some(message) = immediate_api_error_message(immediate_response.as_deref()) {
@@ -1767,6 +1771,7 @@ mod tests {
         app.handle_worktree_add_finished(WorktreeAddResult {
             path: checkout.clone(),
             api_request: None,
+            receipt: None,
             result: Ok(()),
         });
 
@@ -1806,6 +1811,7 @@ mod tests {
         let crate::api::schema::EventData::WorktreeCreated {
             workspace,
             worktree,
+            ..
         } = &worktree_created.data
         else {
             panic!("unexpected event data");
@@ -1862,6 +1868,7 @@ mod tests {
         app.handle_worktree_add_finished(WorktreeAddResult {
             path: checkout.clone(),
             api_request: None,
+            receipt: None,
             result: Ok(()),
         });
 
@@ -2121,6 +2128,7 @@ mod tests {
             worktree: None,
             forced: false,
             api_request: None,
+            receipt: None,
             result: Err(
                 "fatal: '/w/herdr/dirty' contains modified or untracked files, use --force to delete it"
                     .into(),
@@ -2153,6 +2161,7 @@ mod tests {
             worktree: None,
             forced: false,
             api_request: None,
+            receipt: None,
             result: Err("fatal: '/w/herdr/missing' is not a working tree".into()),
         });
 
@@ -2214,6 +2223,7 @@ mod tests {
             workspace: None,
             worktree: None,
             forced: false,
+            receipt: None,
             api_request: None,
             result: Ok(()),
         });
@@ -2267,6 +2277,7 @@ mod tests {
             workspace: Some(Box::new(workspace_snapshot.clone())),
             worktree: Some(Box::new(worktree_snapshot)),
             forced: true,
+            receipt: None,
             api_request: None,
             result: Ok(()),
         });
@@ -2283,6 +2294,7 @@ mod tests {
                     workspace: Some(workspace),
                     worktree,
                     forced,
+                    ..
                 } if workspace_id == &workspace_snapshot.workspace_id
                     && workspace.workspace_id == workspace_snapshot.workspace_id
                     && worktree.branch.as_deref() == Some("worktree/issue")

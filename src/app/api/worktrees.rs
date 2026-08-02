@@ -602,11 +602,21 @@ impl App {
     }
 
     pub(crate) fn emit_worktree_created_event(&mut self, ws_idx: usize, worktree: WorktreeInfo) {
+        self.emit_worktree_created_event_with_receipt(ws_idx, worktree, None);
+    }
+
+    pub(crate) fn emit_worktree_created_event_with_receipt(
+        &mut self,
+        ws_idx: usize,
+        worktree: WorktreeInfo,
+        receipt: Option<crate::api::schema::WorktreeMutationReceipt>,
+    ) {
         self.emit_event(EventEnvelope {
             event: EventKind::WorktreeCreated,
             data: EventData::WorktreeCreated {
                 workspace: self.workspace_info(ws_idx),
                 worktree,
+                receipt,
             },
         });
     }
@@ -642,6 +652,23 @@ impl App {
         worktree: WorktreeInfo,
         forced: bool,
     ) {
+        self.emit_worktree_removed_event_with_receipt(
+            workspace_id,
+            workspace,
+            worktree,
+            forced,
+            None,
+        );
+    }
+
+    pub(crate) fn emit_worktree_removed_event_with_receipt(
+        &mut self,
+        workspace_id: String,
+        workspace: Option<crate::api::schema::WorkspaceInfo>,
+        worktree: WorktreeInfo,
+        forced: bool,
+        receipt: Option<crate::api::schema::WorktreeMutationReceipt>,
+    ) {
         self.emit_event(EventEnvelope {
             event: EventKind::WorktreeRemoved,
             data: EventData::WorktreeRemoved {
@@ -649,6 +676,7 @@ impl App {
                 workspace,
                 worktree,
                 forced,
+                receipt,
             },
         });
     }
@@ -898,6 +926,7 @@ mod tests {
             tab,
             root_pane,
             worktree,
+            ..
         } = success.result
         else {
             panic!("expected worktree_created response");
@@ -927,6 +956,7 @@ mod tests {
                 EventData::WorktreeCreated {
                     workspace: event_workspace,
                     worktree: event_worktree,
+                    ..
                 } if event_workspace.workspace_id == workspace.workspace_id
                     && event_worktree.branch.as_deref() == Some("worktree/api-create")
                     && event_worktree.is_linked_worktree
@@ -1191,10 +1221,13 @@ mod tests {
                 source_repo_root: repo.clone(),
                 repo_key: "repo-key".into(),
                 repo_name: "herdr".into(),
+                branch: "worktree/test".into(),
+                permit: None,
                 label: None,
                 focus: false,
                 respond_to,
             }),
+            receipt: None,
             result: Ok(()),
         });
 
@@ -1767,6 +1800,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id.clone(),
                     force: false,
+                    permit: None,
                 }),
             },
         );
@@ -1782,6 +1816,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id,
                     force: true,
+                    permit: None,
                 }),
             },
         );
@@ -1838,6 +1873,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id.clone(),
                     force: false,
+                    permit: None,
                 }),
             },
         );
@@ -1869,6 +1905,7 @@ mod tests {
                     workspace: Some(workspace),
                     worktree,
                     forced,
+                    ..
                 } if workspace_id == &child_id
                     && workspace.workspace_id == child_id
                     && worktree.branch.as_deref() == Some("worktree/api-remove-event")
@@ -1923,6 +1960,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id.clone(),
                     force: false,
+                    permit: None,
                 }),
             },
             respond_to,
@@ -1996,6 +2034,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id.clone(),
                     force: false,
+                    permit: None,
                 }),
             },
             first_tx,
@@ -2006,6 +2045,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id,
                     force: false,
+                    permit: None,
                 }),
             },
             second_tx,
@@ -2065,6 +2105,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: first_id,
                     force: true,
+                    permit: None,
                 }),
             },
             first_tx,
@@ -2075,6 +2116,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: second_id,
                     force: true,
+                    permit: None,
                 }),
             },
             second_tx,
@@ -2110,6 +2152,7 @@ mod tests {
                     path: Some(checkout.display().to_string()),
                     label: None,
                     focus: false,
+                    permit: None,
                 }),
             },
             respond_to,
@@ -2164,6 +2207,7 @@ mod tests {
                 method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
                     workspace_id: child_id,
                     force: false,
+                    permit: None,
                 }),
             },
             respond_to,
@@ -2220,9 +2264,11 @@ mod tests {
                 id: "req".into(),
                 operation_id: 7,
                 checkout_key: crate::worktree::canonical_or_original(&checkout),
+                permit: None,
                 respond_to,
             }),
             result: Ok(()),
+            receipt: None,
         });
 
         let response = response_rx

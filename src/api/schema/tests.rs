@@ -760,6 +760,7 @@ fn worktree_request_and_response_round_trip() {
                 open_workspace_id: Some("w_1".into()),
                 label: "herdr".into(),
             },
+            receipt: None,
         },
     };
     let json = serde_json::to_string(&response).unwrap();
@@ -822,6 +823,7 @@ fn worktree_lifecycle_events_round_trip() {
             event: EventKind::WorktreeCreated,
             data: EventData::WorktreeCreated {
                 workspace: workspace.clone(),
+                receipt: None,
                 worktree: worktree.clone(),
             },
         },
@@ -843,6 +845,7 @@ fn worktree_lifecycle_events_round_trip() {
                     ..worktree.clone()
                 },
                 forced: false,
+                receipt: None,
             },
         },
         EventEnvelope {
