@@ -228,9 +228,12 @@ export default function (pi) {
     }
     rootSession = true;
     updateSessionRef(ctx);
+    // Read isIdle synchronously: the captured ctx goes stale (and throws) if the
+    // session is replaced/reloaded while reportSession is in flight.
+    const wasActive = ctx?.isIdle?.() === false;
     await reportSession(event?.reason);
     // A reload can replace this extension mid-run without emitting another agent_start.
-    agentActive = ctx?.isIdle?.() === false;
+    agentActive = wasActive;
     publishState(true);
   });
 
