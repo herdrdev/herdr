@@ -39,6 +39,7 @@
 
 ### Changed
 - Experimental options are no longer exposed in the Settings TUI and remain available through the config file.
+- Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 - Agent status indicators now use the same static workspace marks across the sidebar, navigator, and mobile views, eliminating continuous spinner rendering while agents work.
 - Hidden pane output no longer triggers unnecessary TUI rendering.
 - Windows preview downloads now include Herdr and a modern app-local ConPTY runtime in one archive. (#1533, #1644, #1828)

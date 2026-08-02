@@ -465,31 +465,32 @@ impl TerminalRuntime {
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_button(kind, column, row, modifiers)
+        self.0.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_motion(kind, column, row, modifiers)
+        self.0.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_wheel(kind, column, row, modifiers)
+        self.0.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        self.0.pixel_size()
     }
 
     pub fn encode_alternate_scroll(

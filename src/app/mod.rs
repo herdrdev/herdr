@@ -16,6 +16,7 @@ mod creation;
 mod git_refresh;
 mod ids;
 mod input;
+pub(crate) mod pane_graphics;
 mod popup;
 mod runtime;
 mod runtime_mutations;
@@ -95,6 +96,10 @@ impl PaneClickState {
 
 pub struct App {
     pub state: AppState,
+    pub(crate) pane_graphics: pane_graphics::Runtime,
+    pub(crate) pane_graphics_files: Arc<crate::pane_graphics_files::FileStore>,
+    pub(crate) direct_graphics_available: bool,
+    pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
@@ -671,9 +676,6 @@ impl App {
             integration_install_messages: Vec::new(),
             installed_plugins: load_plugin_registry(no_session),
             plugin_panes: std::collections::HashMap::new(),
-            pane_graphics_layers: std::collections::HashMap::new(),
-            pane_graphics_streams: std::collections::HashMap::new(),
-            pane_graphics_revision: 0,
             popup_pane: None,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,
@@ -681,6 +683,7 @@ impl App {
             global_menu: state::MenuListState::new(0),
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
+            host_mouse_pixels: None,
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
         };
@@ -725,6 +728,10 @@ impl App {
             copy_feedback_deadline: None,
             last_api_notification_at: None,
             state,
+            pane_graphics: pane_graphics::Runtime::default(),
+            pane_graphics_files: Arc::new(crate::pane_graphics_files::FileStore::default()),
+            direct_graphics_available: false,
+            pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,
             event_tx,
             event_rx,
@@ -1032,6 +1039,10 @@ impl App {
                 needs_render = true;
             }
 
+            if self.pane_graphics.retain_live_panes(&self.state) {
+                needs_render = true;
+            }
+
             let now = Instant::now();
             self.sync_host_mouse_capture(&mut host_mouse_capture_active)?;
             self.sync_host_keyboard_report_all(&mut host_keyboard_report_all_active)?;
@@ -1047,18 +1058,19 @@ impl App {
                     terminal.swap_buffers();
                     self.full_redraw_pending = false;
                 }
-                let mut cell_size = crate::kitty_graphics::HostCellSize::default();
+                let mut cell_size = self.state.host_cell_size;
                 terminal.draw(|frame| {
                     let area = frame.area();
                     if kitty_graphics_enabled {
-                        let observed_cell_size =
-                            crate::kitty_graphics::HostCellSize::try_from_terminal(area);
-                        if let Some(observed_cell_size) = observed_cell_size {
+                        if let Some(observed_cell_size) =
+                            crate::kitty_graphics::HostCellSize::try_from_terminal(area)
+                        {
                             self.state.host_cell_size = observed_cell_size;
+                            cell_size = observed_cell_size;
+                        } else if !cell_size.is_known() {
+                            cell_size =
+                                crate::kitty_graphics::HostCellSize::fallback_for_area(area);
                         }
-                        cell_size = observed_cell_size.unwrap_or_else(|| {
-                            crate::kitty_graphics::HostCellSize::fallback_for_area(area)
-                        });
                         crate::ui::compute_view_with_cell_size(
                             &mut self.state,
                             &self.terminal_runtimes,
@@ -1081,6 +1093,7 @@ impl App {
                 if kitty_graphics_enabled {
                     crate::kitty_graphics::paint_local_pane_graphics(
                         &self.state,
+                        &self.pane_graphics,
                         &self.terminal_runtimes,
                         cell_size,
                     )?;
@@ -1466,8 +1479,7 @@ impl App {
             crate::kitty_graphics::set_enabled(config.experimental.kitty_graphics);
             if was_kitty_graphics_enabled && !config.experimental.kitty_graphics {
                 let _ = crate::kitty_graphics::clear_all_host_graphics();
-                self.state.pane_graphics_layers.clear();
-                self.state.pane_graphics_streams.clear();
+                self.pane_graphics.clear();
                 self.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
             }
             self.state.reveal_hidden_cursor_for_cjk_ime =
@@ -1659,6 +1671,31 @@ impl App {
     pub(crate) fn route_client_input(&mut self, data: Vec<u8>) {
         let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
         self.route_client_events(events, true);
+    }
+
+    pub(crate) fn route_client_pixel_mouse(
+        &mut self,
+        source_id: InputSourceId,
+        data: &[u8],
+        geometry: crate::input::mouse::HostGeometry,
+    ) -> bool {
+        let Some((x, y)) = crate::input::mouse::parse_report(data) else {
+            return false;
+        };
+        let Some((column, row)) = geometry.cell(x, y) else {
+            return false;
+        };
+        let Some(cell_report) = crate::input::mouse::report_at_cell(data, column, row) else {
+            return false;
+        };
+        let mut events = crate::raw_input::parse_raw_input_bytes_sync(&cell_report);
+        if events.len() != 1 || !matches!(events[0], crate::raw_input::RawInputEvent::Mouse(_)) {
+            return false;
+        }
+        self.state.host_mouse_pixels = Some(crate::input::mouse::HostPixels { x, y, geometry });
+        self.route_client_events_from(source_id, std::mem::take(&mut events), false);
+        self.state.host_mouse_pixels = None;
+        true
     }
 
     pub(crate) fn route_client_events(

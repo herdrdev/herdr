@@ -1102,6 +1102,9 @@ impl App {
             Method::PaneGraphicsStreamSet(params) => {
                 return self.handle_pane_graphics_stream_set(request.id, params);
             }
+            Method::PaneGraphicsStreamDirect(params) => {
+                return self.handle_pane_graphics_stream_direct(request.id, params);
+            }
             Method::PaneGraphicsStreamOpen(params) => {
                 return self.handle_pane_graphics_stream_open(request.id, params);
             }
