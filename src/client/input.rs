@@ -10,7 +10,7 @@
 //! - We avoid duplicating parsing logic in the client
 //! - Host terminal control replies can be buffered or discarded before they leak
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -39,14 +39,14 @@ pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
-    pending_host_cell_size_queries: Arc<AtomicU16>,
+    host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     #[cfg(windows)]
     {
         let _ = (
             host_color_query_sent,
-            pending_host_cell_size_queries,
+            host_cell_size_query_sent,
             host_mouse_capture_active,
         );
         windows_stdin_reader_loop(event_tx, should_quit);
@@ -57,7 +57,7 @@ pub fn stdin_reader_loop(
         event_tx,
         should_quit,
         host_color_query_sent,
-        pending_host_cell_size_queries,
+        host_cell_size_query_sent,
         host_mouse_capture_active,
     );
 }
@@ -67,23 +67,26 @@ fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
-    pending_host_cell_size_queries: Arc<AtomicU16>,
+    host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
 ) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let mut scratch = [0u8; 4096];
     let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-    arm_host_reply_holds(&mut framer, host_color_query_sent);
+    if host_color_query_sent {
+        framer.host_color_query_sent();
+        framer.enable_host_color_scheme_change_tracking();
+    }
+    if host_cell_size_query_sent {
+        framer.host_cell_size_query_sent();
+    }
     let mut pending_palette = Vec::new();
 
     while !should_quit.load(Ordering::Acquire) {
         match reader.read(&mut scratch) {
             Ok(0) => break,
             Ok(n) => {
-                // The main loop counts a query before writing it, so every reply
-                // in this read is covered by draining the counter first.
-                arm_pending_host_cell_size_queries(&mut framer, &pending_host_cell_size_queries);
                 if !send_unix_input_chunks(
                     framer.push(&scratch[..n]),
                     &event_tx,
@@ -97,12 +100,6 @@ fn unix_stdin_reader_loop(
                     host_mouse_capture_active.load(Ordering::Acquire),
                 );
                 if stdin_read_ready(&reader, timeout_ms) == Some(false) {
-                    // A query may have been issued while this thread waited, and
-                    // its reply must not be released as a plain Escape below.
-                    arm_pending_host_cell_size_queries(
-                        &mut framer,
-                        &pending_host_cell_size_queries,
-                    );
                     let had_pending = framer.has_pending_input();
                     let chunks = framer.flush_timeout();
                     let held_escape = had_pending && chunks.is_empty();
@@ -116,22 +113,13 @@ fn unix_stdin_reader_loop(
                             &reader,
                             crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
                         ) == Some(false)
-                    {
-                        // A resize re-query may have registered while waiting on
-                        // the held escape; drain it so the flush keeps holding
-                        // for the reply in flight instead of releasing the
-                        // escape as a plain Escape key.
-                        arm_pending_host_cell_size_queries(
-                            &mut framer,
-                            &pending_host_cell_size_queries,
-                        );
-                        if !send_unix_input_chunks(
+                        && !send_unix_input_chunks(
                             framer.flush_timeout(),
                             &event_tx,
                             &mut pending_palette,
-                        ) {
-                            return;
-                        }
+                        )
+                    {
+                        return;
                     }
                 }
             }
@@ -142,31 +130,6 @@ fn unix_stdin_reader_loop(
                 break;
             }
         }
-    }
-}
-
-/// Tells the framer that host color replies are outstanding so a reply that is
-/// split at its ESC introducer is not released as a plain Escape key.
-#[cfg(unix)]
-fn arm_host_reply_holds(
-    framer: &mut crate::raw_input::RawInputByteFramer,
-    host_color_query_sent: bool,
-) {
-    if host_color_query_sent {
-        framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
-    }
-}
-
-/// Registers the cell size queries the main loop has issued since the last
-/// drain, so their replies are held even when several are in flight.
-#[cfg(unix)]
-fn arm_pending_host_cell_size_queries(
-    framer: &mut crate::raw_input::RawInputByteFramer,
-    pending_host_cell_size_queries: &AtomicU16,
-) {
-    for _ in 0..pending_host_cell_size_queries.swap(0, Ordering::AcqRel) {
-        framer.host_cell_size_query_sent();
     }
 }
 
@@ -556,109 +519,6 @@ mod tests {
             2
         );
         assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn cell_size_query_holds_reply_split_at_its_escape_introducer() {
-        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-        let pending = AtomicU16::new(1);
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-        assert_eq!(pending.load(Ordering::Acquire), 0);
-
-        assert!(framer.push(b"\x1b").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        assert_eq!(
-            framer.push(b"[6;21;10t"),
-            vec![b"\x1b[6;21;10t".to_vec()],
-            "the split cell size reply must not leak as an Escape key"
-        );
-    }
-
-    #[test]
-    fn escape_is_not_held_when_no_host_query_was_sent() {
-        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-        arm_host_reply_holds(&mut framer, false);
-        arm_pending_host_cell_size_queries(&mut framer, &AtomicU16::new(0));
-
-        assert!(framer.push(b"\x1b").is_empty());
-        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
-    }
-
-    #[test]
-    fn concurrent_cell_size_queries_hold_every_reply() {
-        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-        // The initial query and a resize re-query are drained in one batch.
-        let pending = AtomicU16::new(2);
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-
-        assert_eq!(
-            framer.push(b"\x1b[6;21;10t"),
-            vec![b"\x1b[6;21;10t".to_vec()]
-        );
-
-        assert!(framer.push(b"\x1b").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        assert_eq!(
-            framer.push(b"[6;42;20t"),
-            vec![b"\x1b[6;42;20t".to_vec()],
-            "the second reply must not leak as an Escape key either"
-        );
-    }
-
-    #[test]
-    fn resize_requery_rearms_the_framer_after_the_first_reply() {
-        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-        let pending = AtomicU16::new(1);
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-
-        assert_eq!(
-            framer.push(b"\x1b[6;21;10t"),
-            vec![b"\x1b[6;21;10t".to_vec()]
-        );
-
-        // A resize re-query is registered before its reply is framed.
-        pending.store(1, Ordering::Release);
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-
-        assert!(framer.push(b"\x1b").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        assert_eq!(framer.push(b"[6;42;20t"), vec![b"\x1b[6;42;20t".to_vec()]);
-
-        // No query is left outstanding, so Escape stays responsive.
-        assert!(framer.push(b"\x1b").is_empty());
-        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
-    }
-
-    #[test]
-    fn second_held_escape_flush_drains_a_requery_registered_while_waiting() {
-        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
-        let pending = AtomicU16::new(1);
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-
-        // First timeout flush: the escape introducer of the reply arrives
-        // alone, so it is held rather than released as a plain Escape.
-        assert!(framer.push(b"\x1b").is_empty());
-        let had_pending = framer.has_pending_input();
-        let chunks = framer.flush_timeout();
-        assert!(had_pending && chunks.is_empty(), "escape must be held");
-
-        // A resize re-query is registered on the shared counter while this
-        // thread waits for stdin to go quiet again, before the second flush.
-        pending.store(1, Ordering::Release);
-
-        // Draining the counter before the second flush must keep the framer
-        // holding for the reply in flight instead of releasing the held
-        // escape as a plain Escape key.
-        arm_pending_host_cell_size_queries(&mut framer, &pending);
-        assert_eq!(
-            framer.flush_timeout(),
-            Vec::<Vec<u8>>::new(),
-            "the held escape must not leak once a requery is drained"
-        );
-
-        // The delayed, split reply must still reassemble into a single
-        // HostCellSizeReport instead of leaking through as loose bytes.
-        assert_eq!(framer.push(b"[6;21;10t"), vec![b"\x1b[6;21;10t".to_vec()]);
     }
 
     #[test]

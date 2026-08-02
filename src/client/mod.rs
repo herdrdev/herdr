@@ -16,7 +16,7 @@ mod input;
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -1330,20 +1330,15 @@ async fn run_client_loop(
     // host terminal directly instead of falling back to an assumed cell size.
     let will_query_host_cell_size = state.attach_escape.is_none()
         && host_cell_size_query_required(state.kitty_graphics_enabled);
-    // Cell size queries outstanding towards the host terminal. The stdin reader
-    // drains this counter so the framer holds every reply, including the ones
-    // triggered by later resizes.
-    let pending_host_cell_size_queries = Arc::new(AtomicU16::new(0));
     let stdin_quit = should_quit.clone();
     let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
-    let stdin_pending_cell_size_queries = pending_host_cell_size_queries.clone();
     std::thread::spawn(move || {
         input::stdin_reader_loop(
             stdin_tx,
             &stdin_quit,
             will_query_host_terminal_theme,
-            stdin_pending_cell_size_queries,
+            will_query_host_cell_size,
             stdin_mouse_capture_active,
         );
     });
@@ -1353,7 +1348,7 @@ async fn run_client_loop(
     }
 
     if will_query_host_cell_size {
-        query_host_cell_size(&pending_host_cell_size_queries);
+        query_host_cell_size();
     }
 
     // Spawn the resize poller thread.
@@ -1549,11 +1544,6 @@ async fn run_client_loop(
                 };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
-                }
-                // A resize can also follow a font size change, so re-ask the host
-                // terminal for its cell size whenever it is the size authority.
-                if will_query_host_cell_size {
-                    query_host_cell_size(&pending_host_cell_size_queries);
                 }
             }
             ClientLoopEvent::ServerMessage(msg) => match msg {
@@ -2130,9 +2120,6 @@ const DEFAULT_CELL_WIDTH_PX: u32 = 8;
 const DEFAULT_CELL_HEIGHT_PX: u32 = 16;
 
 /// Cell size derived from the terminal size ioctl, if it reports pixels.
-///
-/// Terminals behind ConPTY (WSL) always report zero pixels here, which is what
-/// makes the XTWINOPS query below necessary.
 fn ioctl_cell_size() -> Option<(u32, u32)> {
     let size = crossterm::terminal::window_size().ok()?;
     if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
@@ -2144,8 +2131,7 @@ fn ioctl_cell_size() -> Option<(u32, u32)> {
     ))
 }
 
-/// Cell size used when the ioctl reports no pixels: the size reported by the
-/// host terminal if one arrived, otherwise the historical default.
+/// Cell size used when the ioctl reports no pixels.
 fn cell_size_fallback(reported: u64) -> (u32, u32) {
     unpack_cell_size(reported).unwrap_or((DEFAULT_CELL_WIDTH_PX, DEFAULT_CELL_HEIGHT_PX))
 }
@@ -2174,12 +2160,8 @@ fn current_terminal_geometry(
     (cols, rows, cell_width_px, cell_height_px)
 }
 
-/// Reads the terminal geometry before the handshake is sent.
-///
-/// At this point the host terminal cannot have reported a cell size yet (the
-/// query is only sent after the handshake completes), so this always reads
-/// geometry with no reported cell size available, leaving the ioctl and the
-/// default fallback as the only sources.
+/// Reads the terminal geometry before the handshake, before any host cell
+/// size report can exist.
 fn initial_terminal_geometry(kitty_graphics_enabled: bool) -> (u16, u16, u32, u32) {
     current_terminal_geometry(kitty_graphics_enabled, &AtomicU64::new(0))
 }
@@ -2195,13 +2177,9 @@ fn resize_report_required(
 
 /// Watches the terminal size and sends resize events when it changes.
 ///
-/// `initial_cell_width`/`initial_cell_height` must match the cell size sent
-/// to the server during the handshake, so the poller's baseline agrees with
-/// what the server already knows. Reading a fresh baseline here instead would
-/// race the host terminal's CSI 16t response: if it lands in the shared
-/// `reported_cell_size` cache before this thread starts, `last_size` would
-/// already reflect the reported value and the first real change would never
-/// be detected as a difference.
+/// The baseline cell size must match what the handshake sent to the server:
+/// reading a fresh one here would race the host cell size reply and could
+/// swallow the first change.
 fn resize_poll_loop(
     resize_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
     initial_cols: u16,
@@ -2259,34 +2237,16 @@ fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()>
 /// XTWINOPS request for the host terminal cell size in pixels.
 const HOST_CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
 
-/// Sends the cell size query and registers it with the stdin framer.
-///
-/// Every issued query has to be registered because the query is re-sent on
-/// resize, so more than one reply can be in flight.
-fn query_host_cell_size(pending_queries: &AtomicU16) {
-    register_pending_host_cell_size_query(pending_queries);
+fn query_host_cell_size() {
     let _ = write_host_cell_size_query(io::stdout());
-}
-
-/// Counts one more outstanding cell size reply for the stdin reader thread.
-///
-/// This runs before the query reaches stdout, so the reply can never be framed
-/// before the reader knows that it is coming.
-fn register_pending_host_cell_size_query(pending_queries: &AtomicU16) {
-    let _ = pending_queries.fetch_update(Ordering::AcqRel, Ordering::Acquire, |awaited| {
-        Some(awaited.saturating_add(1))
-    });
 }
 
 fn should_query_host_cell_size() -> bool {
     !cfg!(windows)
 }
 
-/// Returns whether the host terminal has to be asked for its cell size.
-///
-/// Only pane graphics need pixel dimensions, and the query is limited to hosts
-/// whose terminal size ioctl reports no pixels, so terminals that already
-/// answer the ioctl keep their current behaviour.
+/// Only pane graphics need pixel dimensions, and only when the ioctl cannot
+/// provide them.
 fn host_cell_size_query_required(kitty_graphics_enabled: bool) -> bool {
     kitty_graphics_enabled && should_query_host_cell_size() && ioctl_cell_size().is_none()
 }
@@ -2296,10 +2256,6 @@ fn write_host_cell_size_query(mut writer: impl io::Write) -> io::Result<()> {
     writer.flush()
 }
 
-/// Records a host cell size report so the resize poller picks it up.
-///
-/// Only the byte-oriented (Unix) stdin path can observe these reports; Windows
-/// clients never send the query.
 #[cfg(any(unix, test))]
 fn store_reported_cell_size(reported_cell_size: &AtomicU64, width_px: u32, height_px: u32) {
     let packed = pack_cell_size(width_px, height_px);
@@ -2651,62 +2607,20 @@ mod tests {
     }
 
     #[test]
-    fn host_cell_size_query_is_limited_to_pane_graphics_clients() {
-        assert!(!host_cell_size_query_required(false));
-    }
-
-    #[test]
-    fn pending_host_cell_size_queries_accumulate_and_saturate() {
-        let pending = AtomicU16::new(0);
-        register_pending_host_cell_size_query(&pending);
-        register_pending_host_cell_size_query(&pending);
-
-        assert_eq!(pending.load(Ordering::Acquire), 2);
-
-        pending.store(u16::MAX, Ordering::Release);
-        register_pending_host_cell_size_query(&pending);
-
-        assert_eq!(pending.load(Ordering::Acquire), u16::MAX);
-    }
-
-    #[test]
     fn cell_size_fallback_prefers_reported_size_over_default() {
         assert_eq!(cell_size_fallback(0), (8, 16));
         assert_eq!(cell_size_fallback(pack_cell_size(10, 21)), (10, 21));
-        // Partial reports never reach the cache, but must not be trusted anyway.
         assert_eq!(cell_size_fallback(pack_cell_size(10, 0)), (8, 16));
         assert_eq!(cell_size_fallback(pack_cell_size(0, 21)), (8, 16));
     }
 
     #[test]
     fn reported_cell_size_is_taken_from_host_cell_size_events() {
-        let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[6;21;10t");
-        assert_eq!(reported_cell_size_from_events(&events), Some((10, 21)));
-
         let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
         assert_eq!(reported_cell_size_from_events(&events), None);
-    }
 
-    #[test]
-    fn reported_cell_size_from_events_uses_the_last_report_in_a_batch() {
         let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[6;21;10t\x1b[6;18;9t");
         assert_eq!(reported_cell_size_from_events(&events), Some((9, 18)));
-    }
-
-    #[test]
-    fn stored_cell_size_reaches_the_resize_poller_fallback() {
-        let reported = AtomicU64::new(0);
-        assert_eq!(
-            cell_size_fallback(reported.load(Ordering::Acquire)),
-            (8, 16)
-        );
-
-        store_reported_cell_size(&reported, 10, 21);
-
-        assert_eq!(
-            cell_size_fallback(reported.load(Ordering::Acquire)),
-            (10, 21)
-        );
     }
 
     #[test]

@@ -257,8 +257,7 @@ impl App {
                 self.query_host_terminal_theme();
                 self.set_host_terminal_appearance(appearance, true)
             }
-            // Host cell size reports are consumed by the thin client, which owns the
-            // host terminal size; the monolithic runtime has no use for them.
+            // Cell size reports are consumed by the thin client, not the runtime.
             crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => false,
             crate::raw_input::RawInputEvent::Unsupported => false,
         };

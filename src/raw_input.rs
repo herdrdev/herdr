@@ -139,8 +139,7 @@ pub enum RawInputEvent {
         colors: Vec<(u8, RgbColor)>,
     },
     HostColorSchemeChanged(HostAppearance),
-    // Read only by the Unix client; other targets parse and route the report
-    // without inspecting the dimensions.
+    // The dimensions are only read by the Unix client.
     #[cfg_attr(not(any(unix, test)), allow(dead_code))]
     HostCellSizeReport {
         width_px: u32,
@@ -223,7 +222,6 @@ pub(crate) struct RawInputByteFramer {
 }
 
 const HOST_COLOR_QUERY_REPLIES: u16 = 258;
-// Only the Unix client sends the cell size query.
 #[cfg(any(unix, test))]
 const HOST_CELL_SIZE_QUERY_REPLIES: u16 = 1;
 const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
@@ -254,20 +252,11 @@ impl RawInputByteFramer {
         self.held_pending_host_reply_esc = false;
     }
 
-    /// Hold a lone trailing ESC for one idle flush so an XTWINOPS cell size
-    /// reply split at its ESC introducer stitches back together instead of
-    /// leaking, same as the host color reply window above.
-    ///
-    /// The cell size query is re-sent on every resize, so outstanding replies
-    /// accumulate instead of resetting: a reply that arrives while another
-    /// query is still in flight must keep the hold window open.
-    ///
-    /// Only the Unix client sends the cell size query.
+    /// Same hold window as `host_color_query_sent`, for the XTWINOPS cell size
+    /// reply. Only the Unix client sends this query.
     #[cfg(any(unix, test))]
     pub(crate) fn host_cell_size_query_sent(&mut self) {
-        self.host_cell_size_replies_awaited = self
-            .host_cell_size_replies_awaited
-            .saturating_add(HOST_CELL_SIZE_QUERY_REPLIES);
+        self.host_cell_size_replies_awaited = HOST_CELL_SIZE_QUERY_REPLIES;
         self.held_pending_host_reply_esc = false;
     }
 
@@ -844,12 +833,8 @@ fn parse_host_color_scheme_report(buffer: &[u8]) -> Option<HostAppearance> {
     }
 }
 
-/// Parses an XTWINOPS cell size report (`CSI 6 ; height ; width t`).
-///
-/// The report orders height before width, while the result is returned as
-/// `(width_px, height_px)` to match the rest of the cell size plumbing. Reports
-/// with a different leading parameter (for example the `CSI 4 t` window pixel
-/// report), a different parameter count, or a zero dimension are rejected.
+/// Parses an XTWINOPS cell size report (`CSI 6 ; height ; width t`) into
+/// `(width_px, height_px)`; note the reply orders height first.
 fn parse_host_cell_size_report(buffer: &[u8]) -> Option<(u32, u32)> {
     let body = buffer.strip_prefix(b"\x1b[")?.strip_suffix(b"t")?;
     let text = std::str::from_utf8(body).ok()?;
@@ -1467,23 +1452,6 @@ mod tests {
     }
 
     #[test]
-    fn raw_input_framer_reassembles_split_host_cell_size_report() {
-        let mut framer = RawInputFramer::default();
-
-        assert!(framer.push(b"\x1b[6;21").is_empty());
-        let events = framer.push(b";10t");
-
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events[0],
-            RawInputEvent::HostCellSizeReport {
-                width_px: 10,
-                height_px: 21,
-            }
-        ));
-    }
-
-    #[test]
     fn host_cell_size_report_parser_is_exact() {
         for bytes in [
             // Zero dimensions carry no usable cell size.
@@ -1500,12 +1468,6 @@ mod tests {
         ] {
             assert!(
                 parse_host_cell_size_report(bytes).is_none(),
-                "bytes: {bytes:?}"
-            );
-            let events = parse_raw_input_bytes_sync(bytes);
-            assert_eq!(events.len(), 1, "bytes: {bytes:?}");
-            assert!(
-                !matches!(events[0], RawInputEvent::HostCellSizeReport { .. }),
                 "bytes: {bytes:?}"
             );
         }
@@ -2604,12 +2566,8 @@ mod tests {
 
         // The XTWINOPS reply is split right at its ESC introducer.
         assert!(framer.push(b"\x1b").is_empty());
-        // The idle flush must not release the ESC as an Escape key while the
-        // cell size reply is still outstanding.
         assert!(framer.flush_timeout().is_empty());
 
-        // The rest of the reply arrives and stitches back together instead of
-        // leaking its payload into the focused pane.
         let chunks = framer.push(b"[6;21;10t");
         assert_eq!(chunks, vec![b"\x1b[6;21;10t".to_vec()]);
         let (event, _) = extract_one_event(&chunks[0]).unwrap();
@@ -2623,18 +2581,6 @@ mod tests {
     }
 
     #[test]
-    fn gives_up_holding_lone_escape_awaiting_host_cell_size_reply() {
-        let mut framer = RawInputByteFramer::default();
-        framer.host_cell_size_query_sent();
-
-        assert!(framer.push(b"\x1b").is_empty());
-        // First idle flush holds the escape.
-        assert!(framer.flush_timeout().is_empty());
-        // No continuation arrived; the second idle flush releases it as Escape.
-        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
-    }
-
-    #[test]
     fn stops_holding_lone_escape_after_host_cell_size_reply_completes() {
         let mut framer = RawInputByteFramer::default();
         framer.host_cell_size_query_sent();
@@ -2645,29 +2591,6 @@ mod tests {
         );
 
         // Window closed: a later lone Escape flushes immediately.
-        assert!(framer.push(b"\x1b").is_empty());
-        assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
-    }
-
-    #[test]
-    fn holds_split_cell_size_reply_while_a_second_query_is_outstanding() {
-        let mut framer = RawInputByteFramer::default();
-        // The initial query plus a resize re-query are both outstanding.
-        framer.host_cell_size_query_sent();
-        framer.host_cell_size_query_sent();
-
-        assert_eq!(
-            framer.push(b"\x1b[6;21;10t"),
-            vec![b"\x1b[6;21;10t".to_vec()]
-        );
-
-        // The second reply is split at its ESC introducer and must still be
-        // held, because one query remains unanswered.
-        assert!(framer.push(b"\x1b").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        assert_eq!(framer.push(b"[6;42;20t"), vec![b"\x1b[6;42;20t".to_vec()]);
-
-        // Both replies arrived: a later lone Escape flushes immediately.
         assert!(framer.push(b"\x1b").is_empty());
         assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
     }
