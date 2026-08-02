@@ -53,10 +53,10 @@ herdr integration uninstall grok
 
 Herdr uses integrations in two different ways:
 
-| Integration type    | Agents                                                                                          | Effect                                                                                                                                                                                                 |
-| ------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, MastraCode                       | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
-| Session identity    | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Cursor Agent CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection.                                                                               |
+| Integration type | Agents | Effect |
+| --- | --- | --- |
+| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
+| Session identity | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Cursor Agent CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection. |
 
 Custom socket integrations can also report state when they define state that is not visible in the native terminal UI.
 
