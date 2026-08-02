@@ -108,6 +108,8 @@ herdr integration install claude
 
 Herdr はデフォルトで `~/.claude` を使い、`CLAUDE_CONFIG_DIR` が設定されていればそちらを使います。Claude の設定ディレクトリはあらかじめ存在している必要があります。インストールは `hooks/herdr-agent-state.sh` を書き込み、`settings.json` に Herdr のフックエントリを追加します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
 
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` を設定しないでください。状態検出が機能しなくなります。調査の詳細は [Herdr issue #1630](https://github.com/herdrdev/herdr/issues/1630) を参照してください。
+
 ## Codex
 
 Codex フックをインストールします:

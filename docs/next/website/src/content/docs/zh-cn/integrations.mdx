@@ -108,6 +108,8 @@ herdr integration install claude
 
 Herdr 默认使用 `~/.claude`,设置了 `CLAUDE_CONFIG_DIR` 时使用后者。Claude 配置目录必须已经存在。安装会写入 `hooks/herdr-agent-state.sh`,并向 `settings.json` 添加 Herdr 钩子条目。卸载会移除匹配的钩子条目并删除钩子脚本。
 
+避免设置 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`,否则状态检测会失效。调查详情见 [Herdr issue #1630](https://github.com/herdrdev/herdr/issues/1630)。
+
 ## Codex
 
 安装 Codex 钩子:

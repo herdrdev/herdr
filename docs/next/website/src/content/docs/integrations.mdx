@@ -53,10 +53,10 @@ herdr integration uninstall grok
 
 Herdr uses integrations in two different ways:
 
-| Integration type | Agents | Effect |
-| --- | --- | --- |
-| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
-| Session identity | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Cursor Agent CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection. |
+| Integration type    | Agents                                                                                          | Effect                                                                                                                                                                                                 |
+| ------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, MastraCode                       | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
+| Session identity    | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Cursor Agent CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection.                                                                               |
 
 Custom socket integrations can also report state when they define state that is not visible in the native terminal UI.
 
@@ -109,6 +109,8 @@ herdr integration install claude
 The hook reports Claude Code session identity to the local Herdr socket on session start. Claude Code state comes from Herdr's screen manifest detection.
 
 Herdr uses `~/.claude` by default, or `CLAUDE_CONFIG_DIR` when set. The Claude config directory must already exist. Install writes `hooks/herdr-agent-state.sh` and updates `settings.json` with Herdr hook entries. Uninstall removes the matching hook entries and deletes the hook script.
+
+Avoid setting `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` because it breaks Claude Code state detection. See [Herdr issue #1630](https://github.com/herdrdev/herdr/issues/1630).
 
 ## Codex
 
