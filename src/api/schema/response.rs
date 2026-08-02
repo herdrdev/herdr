@@ -71,6 +71,8 @@ pub enum ResponseResult {
         tab: TabInfo,
         root_pane: PaneInfo,
         worktree: WorktreeInfo,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<super::worktrees::WorktreeMutationReceipt>,
     },
     WorktreeOpened {
         workspace: WorkspaceInfo,
@@ -83,6 +85,8 @@ pub enum ResponseResult {
         workspace_id: String,
         path: String,
         forced: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<super::worktrees::WorktreeMutationReceipt>,
     },
     TabInfo {
         tab: TabInfo,

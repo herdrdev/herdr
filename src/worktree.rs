@@ -151,6 +151,63 @@ pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorktreeIdentity {
+    pub repo_common_dir: PathBuf,
+    pub checkout_path: PathBuf,
+    pub branch: Option<String>,
+    pub head_oid: String,
+}
+
+fn git_trimmed_output(path: &Path, args: &[&str]) -> Result<String, String> {
+    let output = crate::noninteractive_process::command("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if output.status.success() {
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !value.is_empty() {
+            return Ok(value);
+        }
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Err(if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("git command failed with status {}", output.status)
+    })
+}
+
+pub(crate) fn resolve_git_revision(repo_root: &Path, revision: &str) -> Result<String, String> {
+    git_trimmed_output(
+        repo_root,
+        &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+    )
+}
+
+pub(crate) fn read_worktree_identity(path: &Path) -> Result<WorktreeIdentity, String> {
+    let common_dir = git_trimmed_output(path, &["rev-parse", "--git-common-dir"])?;
+    let common_dir = PathBuf::from(common_dir);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        path.join(common_dir)
+    };
+    let branch = git_trimmed_output(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let head_oid = git_trimmed_output(path, &["rev-parse", "--verify", "HEAD"])?;
+    Ok(WorktreeIdentity {
+        repo_common_dir: canonical_or_original(&common_dir),
+        checkout_path: canonical_or_original(path),
+        branch,
+        head_oid,
+    })
+}
+
 pub(crate) fn default_checkout_path(root: &Path, repo_name: &str, branch: &str) -> PathBuf {
     root.join(repo_name).join(branch_to_path_slug(branch))
 }
@@ -289,6 +346,31 @@ pub(crate) fn local_branch_exists(repo_root: &Path, branch: &str) -> Result<bool
     } else {
         Err(format!("git show-ref failed with status {}", output.status))
     }
+}
+
+pub(crate) fn delete_local_branch_if_matches(
+    repo_root: &Path,
+    branch: &str,
+    expected_head_oid: &str,
+) -> Result<(), String> {
+    let ref_name = format!("refs/heads/{branch}");
+    let actual_head_oid = resolve_git_revision(repo_root, &ref_name)?;
+    if !actual_head_oid.eq_ignore_ascii_case(expected_head_oid) {
+        return Err(format!(
+            "refusing to delete {ref_name}: expected {expected_head_oid}, observed {actual_head_oid}"
+        ));
+    }
+    run_worktree_command(&WorktreeCommand {
+        program: "git".to_string(),
+        args: vec![
+            "-C".to_string(),
+            repo_root.display().to_string(),
+            "update-ref".to_string(),
+            "-d".to_string(),
+            ref_name,
+            actual_head_oid,
+        ],
+    })
 }
 
 pub(crate) fn run_worktree_add_command(
@@ -860,6 +942,30 @@ prunable stale
         let remove = build_worktree_remove_command(&repo, &checkout, false);
         run_worktree_command(&remove).unwrap();
         assert!(!checkout.exists());
+
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn local_branch_cleanup_requires_exact_head() {
+        let repo = create_committed_repo("worktree-branch-cleanup-repo");
+        let checkout = unique_temp_path("worktree-branch-cleanup-checkout");
+        let branch = "worktree/cleanup";
+        let add = build_worktree_add_new_branch_command(&repo, &checkout, branch, "HEAD");
+        run_worktree_command(&add).unwrap();
+        let head_oid = resolve_git_revision(&checkout, "HEAD").unwrap();
+        let remove = build_worktree_remove_command(&repo, &checkout, false);
+        run_worktree_command(&remove).unwrap();
+
+        assert!(delete_local_branch_if_matches(
+            &repo,
+            branch,
+            "0000000000000000000000000000000000000000"
+        )
+        .is_err());
+        assert!(local_branch_exists(&repo, branch).unwrap());
+        delete_local_branch_if_matches(&repo, branch, &head_oid).unwrap();
+        assert!(!local_branch_exists(&repo, branch).unwrap());
 
         let _ = std::fs::remove_dir_all(repo);
     }

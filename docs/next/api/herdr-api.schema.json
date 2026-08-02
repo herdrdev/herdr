@@ -254,6 +254,16 @@
             },
             {
               "properties": {
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "type": {
                   "const": "worktree_created",
                   "type": "string"
@@ -300,6 +310,16 @@
               "properties": {
                 "forced": {
                   "type": "boolean"
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/event/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": {
                   "const": "worktree_removed",
@@ -1200,6 +1220,33 @@
             "is_prunable",
             "is_linked_worktree",
             "label"
+          ],
+          "type": "object"
+        },
+        "WorktreeMutationReceipt": {
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "checkout_path": {
+              "type": "string"
+            },
+            "head_oid": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            },
+            "repo_common_dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "repo_common_dir",
+            "checkout_path",
+            "branch",
+            "head_oid"
           ],
           "type": "object"
         }
@@ -4343,6 +4390,16 @@
                 "null"
               ]
             },
+            "permit": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/WorktreeExactPermit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "workspace_id": {
               "type": [
                 "string",
@@ -4350,6 +4407,29 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "WorktreeExactPermit": {
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "checkout_path": {
+              "type": "string"
+            },
+            "head_oid": {
+              "type": "string"
+            },
+            "repo_common_dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo_common_dir",
+            "checkout_path",
+            "branch",
+            "head_oid"
+          ],
           "type": "object"
         },
         "WorktreeListParams": {
@@ -4413,6 +4493,16 @@
             "force": {
               "default": false,
               "type": "boolean"
+            },
+            "permit": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/WorktreeExactPermit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "workspace_id": {
               "type": "string"
@@ -6527,6 +6617,16 @@
             },
             {
               "properties": {
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "type": {
                   "const": "worktree_created",
                   "type": "string"
@@ -6573,6 +6673,16 @@
               "properties": {
                 "forced": {
                   "type": "boolean"
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": {
                   "const": "worktree_removed",
@@ -8754,6 +8864,16 @@
             },
             {
               "properties": {
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "root_pane": {
                   "$ref": "#/schemas/success_response/$defs/PaneInfo"
                 },
@@ -8819,6 +8939,16 @@
                 },
                 "path": {
                   "type": "string"
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/WorktreeMutationReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "type": {
                   "const": "worktree_removed",
@@ -10049,6 +10179,33 @@
             "is_prunable",
             "is_linked_worktree",
             "label"
+          ],
+          "type": "object"
+        },
+        "WorktreeMutationReceipt": {
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "checkout_path": {
+              "type": "string"
+            },
+            "head_oid": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            },
+            "repo_common_dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "repo_common_dir",
+            "checkout_path",
+            "branch",
+            "head_oid"
           ],
           "type": "object"
         },

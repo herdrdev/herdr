@@ -3,13 +3,92 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, Request, ResponseResult, WorktreeCreateParams,
-    WorktreeRemoveParams,
+    WorktreeExactPermit, WorktreeMutationReceipt, WorktreeRemoveParams,
 };
 use crate::app::App;
 use crate::events::{ApiWorktreeAddRequest, ApiWorktreeRemoveRequest, AppEvent};
 
 use super::super::responses::{encode_error, encode_success};
 use super::{absolute_user_path, WorktreeSource};
+
+fn validate_permit(permit: &WorktreeExactPermit) -> Result<(), (&'static str, &'static str)> {
+    if permit.repo_common_dir.trim().is_empty()
+        || permit.checkout_path.trim().is_empty()
+        || permit.branch.trim().is_empty()
+        || permit.head_oid.trim().is_empty()
+    {
+        return Err(("incomplete_permit", "all exact permit fields are required"));
+    }
+    if !Path::new(&permit.repo_common_dir).is_absolute()
+        || !Path::new(&permit.checkout_path).is_absolute()
+    {
+        return Err(("invalid_permit", "permit paths must be absolute"));
+    }
+    if !matches!(permit.head_oid.len(), 40 | 64)
+        || !permit.head_oid.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return Err((
+            "invalid_permit",
+            "permit head_oid must be a full hexadecimal object ID",
+        ));
+    }
+    Ok(())
+}
+
+fn oid_matches(actual: &str, permitted: &str) -> bool {
+    actual.eq_ignore_ascii_case(permitted)
+}
+
+fn identity_matches(
+    identity: &crate::worktree::WorktreeIdentity,
+    permit: &WorktreeExactPermit,
+) -> bool {
+    crate::worktree::canonical_or_original(Path::new(&permit.repo_common_dir))
+        == identity.repo_common_dir
+        && crate::worktree::canonical_or_original(Path::new(&permit.checkout_path))
+            == identity.checkout_path
+        && identity.branch.as_deref() == Some(permit.branch.as_str())
+        && oid_matches(&identity.head_oid, &permit.head_oid)
+}
+
+fn receipt_from_identity(
+    operation: &str,
+    identity: &crate::worktree::WorktreeIdentity,
+) -> Result<WorktreeMutationReceipt, &'static str> {
+    let Some(branch) = identity.branch.clone() else {
+        return Err("identity mismatch: worktree is detached");
+    };
+    Ok(WorktreeMutationReceipt {
+        operation: operation.to_string(),
+        repo_common_dir: identity.repo_common_dir.display().to_string(),
+        checkout_path: identity.checkout_path.display().to_string(),
+        branch,
+        head_oid: identity.head_oid.clone(),
+    })
+}
+
+fn rollback_invalid_managed_create(
+    source_checkout_path: &Path,
+    checkout_path: &Path,
+    permit: &WorktreeExactPermit,
+    mismatch: &str,
+) -> String {
+    let cleanup =
+        crate::worktree::build_worktree_remove_command(source_checkout_path, checkout_path, false);
+    let cleanup_result = crate::worktree::run_worktree_command(&cleanup).and_then(|()| {
+        crate::worktree::delete_local_branch_if_matches(
+            source_checkout_path,
+            &permit.branch,
+            &permit.head_oid,
+        )
+    });
+    match cleanup_result {
+        Ok(()) => format!("identity mismatch: {mismatch}"),
+        Err(cleanup_error) => {
+            format!("identity mismatch: {mismatch}; managed cleanup failed: {cleanup_error}")
+        }
+    }
+}
 
 impl App {
     pub(crate) fn handle_deferred_worktree_api_request(
@@ -97,8 +176,27 @@ impl App {
         params: WorktreeCreateParams,
         respond_to: std::sync::mpsc::Sender<String>,
     ) {
+        let managed_permit = params.permit.clone();
+        if let Some(permit) = managed_permit.as_ref() {
+            if let Err((code, message)) = validate_permit(permit) {
+                Self::send_api_response(respond_to, encode_error(id, code, message));
+                return;
+            }
+            if params.path.is_none() || params.branch.is_none() || params.base.is_none() {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "incomplete_permit",
+                        "managed create requires explicit path, branch, and base",
+                    ),
+                );
+                return;
+            }
+        }
         let branch = params
             .branch
+            .clone()
             .unwrap_or_else(|| {
                 let seed = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -115,7 +213,7 @@ impl App {
             );
             return;
         }
-        let base = params.base.unwrap_or_else(|| "HEAD".into());
+        let base = params.base.clone().unwrap_or_else(|| "HEAD".into());
         let source = match self.resolve_worktree_source(params.workspace_id, params.cwd) {
             Ok(source) => source,
             Err(err) => {
@@ -123,6 +221,55 @@ impl App {
                 return;
             }
         };
+        if let Some(permit) = managed_permit.as_ref() {
+            let identity =
+                match crate::worktree::read_worktree_identity(&source.source_checkout_path) {
+                    Ok(identity) => identity,
+                    Err(message) => {
+                        Self::send_api_response(
+                            respond_to,
+                            encode_error(id, "identity_mismatch", message),
+                        );
+                        return;
+                    }
+                };
+            if crate::worktree::canonical_or_original(Path::new(&permit.repo_common_dir))
+                != identity.repo_common_dir
+                || branch != permit.branch
+            {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "identity_mismatch",
+                        "live source identity does not match permit",
+                    ),
+                );
+                return;
+            }
+            let resolved_base =
+                match crate::worktree::resolve_git_revision(&source.source_checkout_path, &base) {
+                    Ok(oid) => oid,
+                    Err(message) => {
+                        Self::send_api_response(
+                            respond_to,
+                            encode_error(id, "identity_mismatch", message),
+                        );
+                        return;
+                    }
+                };
+            if !oid_matches(&resolved_base, &permit.head_oid) {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "identity_mismatch",
+                        "resolved base does not match permit head_oid",
+                    ),
+                );
+                return;
+            }
+        }
         let checkout_path = match params.path {
             Some(path) => match absolute_user_path(&path) {
                 Ok(path) => path,
@@ -137,6 +284,21 @@ impl App {
                 &branch,
             ),
         };
+        if let Some(permit) = managed_permit.as_ref() {
+            if crate::worktree::canonical_or_original(Path::new(&permit.checkout_path))
+                != crate::worktree::canonical_or_original(&checkout_path)
+            {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "identity_mismatch",
+                        "checkout path does not match permit",
+                    ),
+                );
+                return;
+            }
+        }
         let checkout_key = crate::worktree::canonical_or_original(&checkout_path);
         if self
             .pending_api_worktree_creates
@@ -180,6 +342,8 @@ impl App {
             source_repo_root: source.source_repo_root,
             repo_key: source.repo_key,
             repo_name: source.repo_name,
+            branch,
+            permit: managed_permit,
             label: params.label,
             focus: params.focus,
             respond_to,
@@ -188,23 +352,69 @@ impl App {
         let source_checkout_path = api_request.source_checkout_path.clone();
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
-            let result = if let Some(parent_dir) = parent_dir {
-                std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
+            let (result, receipt) = if let Some(permit) = api_request.permit.as_ref() {
+                let result = if let Some(parent_dir) = parent_dir {
+                    std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
+                } else {
+                    Ok(())
+                }
+                .and_then(|()| {
+                    let command = crate::worktree::build_worktree_add_new_branch_command(
+                        &source_checkout_path,
+                        &path,
+                        &api_request.branch,
+                        &permit.head_oid,
+                    );
+                    crate::worktree::run_worktree_command(&command)
+                })
+                .and_then(|()| {
+                    let identity = match crate::worktree::read_worktree_identity(&path) {
+                        Ok(identity) => identity,
+                        Err(message) => {
+                            return Err(rollback_invalid_managed_create(
+                                &source_checkout_path,
+                                &path,
+                                permit,
+                                &message,
+                            ));
+                        }
+                    };
+                    if !identity_matches(&identity, permit) {
+                        return Err(rollback_invalid_managed_create(
+                            &source_checkout_path,
+                            &path,
+                            permit,
+                            "created worktree does not match permit",
+                        ));
+                    }
+                    receipt_from_identity("create", &identity)
+                        .map_err(|message| message.to_string())
+                });
+                match result {
+                    Ok(receipt) => (Ok(()), Some(receipt)),
+                    Err(message) => (Err(message), None),
+                }
             } else {
-                Ok(())
-            }
-            .and_then(|()| {
-                crate::worktree::run_worktree_add_command(
-                    &source_checkout_path,
-                    &path,
-                    &branch,
-                    &base,
-                )
-            });
+                let result = if let Some(parent_dir) = parent_dir {
+                    std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
+                } else {
+                    Ok(())
+                }
+                .and_then(|()| {
+                    crate::worktree::run_worktree_add_command(
+                        &source_checkout_path,
+                        &path,
+                        &api_request.branch,
+                        &base,
+                    )
+                });
+                (result, None)
+            };
             let _ = event_tx.blocking_send(AppEvent::WorktreeAddFinished(Box::new(
                 crate::events::WorktreeAddResult {
                     path,
                     api_request: Some(api_request),
+                    receipt,
                     result,
                 },
             )));
@@ -254,6 +464,37 @@ impl App {
                 ),
             );
             return;
+        }
+        let managed_permit = params.permit.clone();
+        if let Some(permit) = managed_permit.as_ref() {
+            if let Err((code, message)) = validate_permit(permit) {
+                Self::send_api_response(respond_to, encode_error(id, code, message));
+                return;
+            }
+            if params.force {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "forbidden_force",
+                        "force is forbidden for managed worktree removal",
+                    ),
+                );
+                return;
+            }
+            if crate::worktree::canonical_or_original(Path::new(&permit.checkout_path))
+                != crate::worktree::canonical_or_original(&space.checkout_path)
+            {
+                Self::send_api_response(
+                    respond_to,
+                    encode_error(
+                        id,
+                        "identity_mismatch",
+                        "checkout path does not match permit",
+                    ),
+                );
+                return;
+            }
         }
 
         #[cfg(windows)]
@@ -307,15 +548,11 @@ impl App {
             .insert(checkout_key.clone(), operation_id);
         let workspace_snapshot = self.workspace_info(ws_idx);
         let worktree = self.worktree_info_for_membership(&space, None);
-        let command = crate::worktree::build_worktree_remove_command(
-            &space.repo_root,
-            &space.checkout_path,
-            params.force,
-        );
         let api_request = ApiWorktreeRemoveRequest {
             id,
             operation_id,
             checkout_key,
+            permit: managed_permit.clone(),
             respond_to,
         };
         let repo_root = space.repo_root;
@@ -323,9 +560,42 @@ impl App {
         let force = params.force;
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
-            let result = crate::worktree::run_worktree_remove_command_with_recovery(
-                &command, &repo_root, &path, force,
-            );
+            let (result, receipt) = if let Some(permit) = api_request.permit.as_ref() {
+                match crate::worktree::read_worktree_identity(&path) {
+                    Ok(identity) if identity_matches(&identity, permit) => {
+                        let receipt = receipt_from_identity("remove", &identity)
+                            .map_err(|message| message.to_string());
+                        let command = crate::worktree::build_worktree_remove_command(
+                            &repo_root, &path, false,
+                        );
+                        let result = receipt.and_then(|receipt| {
+                            crate::worktree::run_worktree_command(&command)?;
+                            if crate::worktree::worktree_list_contains_path(&repo_root, &path)? {
+                                return Err("worktree removal did not clear Git inventory".into());
+                            }
+                            Ok(receipt)
+                        });
+                        match result {
+                            Ok(receipt) => (Ok(()), Some(receipt)),
+                            Err(message) => (Err(message), None),
+                        }
+                    }
+                    Ok(_) => (
+                        Err("identity mismatch: live worktree does not match permit".into()),
+                        None,
+                    ),
+                    Err(message) => (Err(format!("identity mismatch: {message}")), None),
+                }
+            } else {
+                let command =
+                    crate::worktree::build_worktree_remove_command(&repo_root, &path, force);
+                (
+                    crate::worktree::run_worktree_remove_command_with_recovery(
+                        &command, &repo_root, &path, force,
+                    ),
+                    None,
+                )
+            };
             let _ = event_tx.blocking_send(AppEvent::WorktreeRemoveFinished(Box::new(
                 crate::events::WorktreeRemoveResult {
                     workspace_id: workspace_internal_id,
@@ -333,6 +603,7 @@ impl App {
                     workspace: Some(Box::new(workspace_snapshot)),
                     worktree: Some(Box::new(worktree)),
                     forced: force,
+                    receipt,
                     api_request: Some(api_request),
                     result,
                 },
@@ -372,9 +643,22 @@ impl App {
                     create.error = Some(err.clone());
                 }
             }
+            let code = if api.permit.is_some() && err.starts_with("identity mismatch") {
+                "identity_mismatch"
+            } else {
+                "worktree_create_failed"
+            };
+            Self::send_api_response(api.respond_to, encode_error(api.id, code, err));
+            return;
+        }
+        if api.permit.is_some() && result.receipt.is_none() {
             Self::send_api_response(
                 api.respond_to,
-                encode_error(api.id, "worktree_create_failed", err),
+                encode_error(
+                    api.id,
+                    "identity_mismatch",
+                    "managed create completed without an exact receipt",
+                ),
             );
             return;
         }
@@ -448,12 +732,13 @@ impl App {
                 encode_error(
                     api.id,
                     "worktree_open_failed",
-                    "created worktree but failed to record workspace membership",
+                    "created workspace has no linked worktree identity",
                 ),
             );
             return;
         };
-        self.emit_worktree_created_event(ws_idx, worktree.clone());
+        let receipt = result.receipt.clone();
+        self.emit_worktree_created_event_with_receipt(ws_idx, worktree.clone(), receipt.clone());
         let tab_idx = self.state.workspaces[ws_idx].active_tab;
         let response = encode_success(
             api.id,
@@ -466,6 +751,7 @@ impl App {
                     .root_pane_info(ws_idx, tab_idx)
                     .expect("created worktree workspace should have an active root pane"),
                 worktree,
+                receipt,
             },
         );
         Self::send_api_response(api.respond_to, response);
@@ -503,12 +789,13 @@ impl App {
             .remove(&api.checkout_key);
 
         if let Err(message) = result.result {
-            let code =
-                if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
-                    "dirty_worktree_requires_force"
-                } else {
-                    "worktree_remove_failed"
-                };
+            let code = if api.permit.is_some() && message.starts_with("identity mismatch") {
+                "identity_mismatch"
+            } else if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
+                "dirty_worktree_requires_force"
+            } else {
+                "worktree_remove_failed"
+            };
             if let Some(remove) = &mut self.state.worktree_remove {
                 if remove.workspace_id == result.workspace_id && remove.path == result.path {
                     remove.removing = false;
@@ -575,11 +862,24 @@ impl App {
             );
             return;
         };
-        self.emit_worktree_removed_event(
+        if api.permit.is_some() && result.receipt.is_none() {
+            Self::send_api_response(
+                api.respond_to,
+                encode_error(
+                    api.id,
+                    "identity_mismatch",
+                    "managed remove completed without an exact receipt",
+                ),
+            );
+            return;
+        }
+        let receipt = result.receipt.clone();
+        self.emit_worktree_removed_event_with_receipt(
             workspace_id.clone(),
             workspace_snapshot,
             worktree,
             result.forced,
+            receipt.clone(),
         );
         if self.state.worktree_remove.as_ref().is_some_and(|remove| {
             remove.workspace_id == result.workspace_id && remove.path == result.path
@@ -597,8 +897,59 @@ impl App {
                 workspace_id,
                 path: result.path.display().to_string(),
                 forced: result.forced,
+                receipt,
             },
         );
         Self::send_api_response(api.respond_to, response);
+    }
+}
+
+#[cfg(test)]
+mod permit_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn permit() -> WorktreeExactPermit {
+        WorktreeExactPermit {
+            repo_common_dir: "/repo/.git".into(),
+            checkout_path: "/repo/worktree".into(),
+            branch: "feature".into(),
+            head_oid: "0123456789abcdef0123456789abcdef01234567".into(),
+        }
+    }
+
+    #[test]
+    fn incomplete_permit_is_rejected() {
+        let mut permit = permit();
+        permit.branch.clear();
+        assert_eq!(
+            validate_permit(&permit),
+            Err(("incomplete_permit", "all exact permit fields are required"))
+        );
+    }
+
+    #[test]
+    fn identity_mismatch_is_fail_closed() {
+        let identity = crate::worktree::WorktreeIdentity {
+            repo_common_dir: Path::new("/repo/.git").to_path_buf(),
+            checkout_path: Path::new("/repo/worktree").to_path_buf(),
+            branch: Some("other".into()),
+            head_oid: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        assert!(!identity_matches(&identity, &permit()));
+    }
+
+    #[test]
+    fn receipt_uses_git_identity_and_operation() {
+        let identity = crate::worktree::WorktreeIdentity {
+            repo_common_dir: Path::new("/repo/.git").to_path_buf(),
+            checkout_path: Path::new("/repo/worktree").to_path_buf(),
+            branch: Some("feature".into()),
+            head_oid: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        let receipt = receipt_from_identity("remove", &identity).unwrap();
+        assert_eq!(receipt.operation, "remove");
+        assert_eq!(receipt.branch, "feature");
+        assert_eq!(receipt.head_oid, identity.head_oid);
     }
 }

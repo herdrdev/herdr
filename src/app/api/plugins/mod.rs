@@ -2251,6 +2251,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                     open_workspace_id: Some(workspace.workspace_id),
                     label: "feature".into(),
                 },
+                receipt: None,
             },
         });
         assert_eq!(app.state.plugin_command_logs.len(), logs_before);
@@ -2526,6 +2527,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
                     open_workspace_id: Some(target_workspace.workspace_id.clone()),
                     label: "feature".into(),
                 },
+                receipt: None,
             },
         });
 
@@ -2664,6 +2666,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
                     workspace: Some(workspace.clone()),
                     worktree: worktree.clone(),
                     forced: true,
+                    receipt: None,
                 },
             },
             "worktree.removed",
@@ -2685,6 +2688,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
                     workspace: Some(workspace),
                     worktree,
                     forced: true,
+                    receipt: None,
                 },
             },
             "worktree.removed",
