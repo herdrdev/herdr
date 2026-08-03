@@ -3088,6 +3088,7 @@ mod tests {
             mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Default,
             mouse_alternate_scroll: false,
             modify_other_keys: false,
+            color_scheme_reporting: false,
         }
         .plain_page_keys_use_host_scrollback());
     }
