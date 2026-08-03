@@ -310,18 +310,19 @@ fn cursor_run_everything_status_is_not_an_approval_prompt() {
             Some("approval_prompt")
         );
 
-        let status_fragments = [
+        let non_approval_screens = [
             "Run Everything",
             "Run Everythin\nG",
             "Run G\nEverything T",
             "Run\nG Everyt\nP hing",
+            "(y) was selected; the command will allow execution",
         ];
-        for screen in status_fragments {
+        for screen in non_approval_screens {
             let status = explain(Agent::Cursor, screen);
             assert_eq!(
                 status.state,
                 AgentState::Idle,
-                "status-only screen must stay idle: {screen:?}"
+                "non-approval screen must stay idle: {screen:?}"
             );
             assert!(status.matched_rule.is_none());
         }

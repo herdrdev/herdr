@@ -29,7 +29,7 @@ any = [
   { line_regex = ['(?i)^\s*allow .*\(y\)'] },
   { contains = ["keep (n)"] },
   { contains = ["skip (esc or n)"] },
-  { line_regex = ['(?i)^\s*((?:→\s*)?run .*\(y\)|.*\(y\).*(allow|run \(once\)|→ run))'] },
+  { line_regex = ['(?i)^\s*(?:→\s*)?run .*\(y\)'] },
 ]
 
 [[rules]]
