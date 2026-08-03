@@ -4154,7 +4154,9 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
         .unwrap();
     assert!(status.success());
     for _ in 0..500 {
-        if previous_output.is_file() {
+        if fs::read_to_string(&previous_output)
+            .is_ok_and(|content| content == "forwarded:without-python")
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -4214,7 +4216,9 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     assert_eq!(request["params"]["session_start_source"], "resume");
 
     for _ in 0..500 {
-        if previous_output.is_file() {
+        if fs::read_to_string(&previous_output)
+            .is_ok_and(|content| content == "forwarded:jcode-session-123")
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
