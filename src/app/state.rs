@@ -1497,6 +1497,7 @@ pub struct AppState {
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
     pub hide_tab_bar_when_single_tab: bool,
+    pub show_tab_indices: bool,
     pub tab_bar_position: TabBarPositionConfig,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
@@ -1865,6 +1866,7 @@ impl AppState {
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            show_tab_indices: false,
             tab_bar_position: TabBarPositionConfig::Top,
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,

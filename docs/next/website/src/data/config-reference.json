@@ -677,6 +677,12 @@
           "description": "Hide the tab row when the workspace has one tab."
         },
         {
+          "key": "ui.show_tab_indices",
+          "type": "boolean",
+          "default": "false",
+          "description": "Show each custom-named tab's current visual index in the desktop tab row. Indices update when tabs are reordered."
+        },
+        {
           "key": "ui.tab_bar_position",
           "type": "enum",
           "default": "\"top\"",

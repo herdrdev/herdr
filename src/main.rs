@@ -319,6 +319,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # New tabs can still be created with the configured keybinding.
 # hide_tab_bar_when_single_tab = false
 
+# Show current visual tab indices alongside custom tab names.
+# Indices update when tabs are reordered.
+# show_tab_indices = false
+
 # Desktop tab row placement: "top" or "bottom".
 # tab_bar_position = "top"
 

@@ -258,6 +258,15 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
+Show the current visual index alongside custom tab names with:
+
+```toml
+[ui]
+show_tab_indices = true
+```
+
+The index follows the tab's current position, so it updates after tabs are reordered. Unnamed tabs already display their visual index and are not repeated.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

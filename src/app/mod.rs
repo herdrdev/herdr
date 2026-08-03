@@ -634,6 +634,7 @@ impl App {
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+            show_tab_indices: config.ui.show_tab_indices,
             tab_bar_position: config.ui.tab_bar_position,
             pane_history_persistence: config.experimental.pane_history,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
@@ -1443,7 +1444,12 @@ impl App {
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
                 self.state.hide_tab_bar_when_single_tab = config.ui.hide_tab_bar_when_single_tab;
+                let tab_indices_changed = self.state.show_tab_indices != config.ui.show_tab_indices;
+                self.state.show_tab_indices = config.ui.show_tab_indices;
                 self.state.tab_bar_position = config.ui.tab_bar_position;
+                if tab_indices_changed {
+                    self.state.refresh_tab_bar_view();
+                }
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
@@ -2950,6 +2956,32 @@ mod tests {
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
         assert_eq!(toast.title, "reloaded config");
         assert_eq!(toast.context, "using config.toml");
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_reflows_tab_bar_for_visual_indices() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-tab-indices");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[ui]\nshow_tab_indices = true\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.workspaces[0].tabs[0].set_custom_name("logs".into());
+        app.state.view.tab_bar_rect = ratatui::layout::Rect::new(0, 0, 30, 1);
+        app.state.refresh_tab_bar_view();
+        let width_before = app.state.view.tab_hit_areas[0].width;
+
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert!(app.state.show_tab_indices);
+        assert!(app.state.view.tab_hit_areas[0].width > width_before);
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added `ui.show_tab_indices = true` to display current visual indices alongside custom tab names in the desktop tab row.
 - Added `ui.pane_scrollbars = false` to hide terminal pane scrollbars and reclaim their reserved column.
 - Added `ui.tab_bar_position = "bottom"` to place the desktop tab row below terminal panes.
 
