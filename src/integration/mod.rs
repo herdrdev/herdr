@@ -247,7 +247,6 @@ const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
 const GROK_HOOK_ASSET: &str = include_str!("assets/grok/herdr-agent-state.sh");
 const GROK_INTEGRATION_VERSION: u32 = 1;
 const JCODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
-const JCODE_PREVIOUS_HOOK_INSTALL_NAME: &str = "herdr-session-start.previous";
 const JCODE_HOOK_ASSET: &str = include_str!("assets/jcode/herdr-agent-state.sh");
 const JCODE_INTEGRATION_VERSION: u32 = 1;
 

@@ -9,12 +9,12 @@ use super::claude_settings::{
 };
 use super::command::{hook_command, shell_single_quote};
 use super::config_edit::{
-    build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
-    ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
-    ensure_hooks_object, ensure_simple_command_hook, hooks_object_if_present,
-    jcode_session_start_command, remove_direct_hook_commands, remove_flat_command_hook,
-    remove_hermes_plugin_enabled, remove_hook_commands, remove_kimi_config_block,
-    remove_simple_command_hook, set_jcode_session_start_command,
+    append_jcode_session_start_command, build_codex_config_with_hooks,
+    build_kimi_config_with_hooks, ensure_command_hook, ensure_direct_command_hook,
+    ensure_flat_command_hook, ensure_hermes_plugin_enabled, ensure_hooks_object,
+    ensure_simple_command_hook, hooks_object_if_present, remove_direct_hook_commands,
+    remove_flat_command_hook, remove_hermes_plugin_enabled, remove_hook_commands,
+    remove_jcode_session_start_command, remove_kimi_config_block, remove_simple_command_hook,
 };
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
@@ -46,13 +46,12 @@ use super::{
     GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
     HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, JCODE_HOOK_ASSET, JCODE_HOOK_INSTALL_NAME,
-    JCODE_PREVIOUS_HOOK_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME, KIMI_HOOK_ASSET,
-    KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
-    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
-    OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
-    OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME,
-    QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME,
-    QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME, KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME,
+    MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS, MASTRACODE_HOOK_INSTALL_NAME,
+    MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS, OMP_EXTENSION_ASSET,
+    OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET, OPENCODE_PLUGIN_INSTALL_NAME,
+    PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS,
+    QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -93,7 +92,6 @@ pub(crate) fn install_jcode() -> io::Result<JcodeInstallPaths> {
     let hooks_dir = dir.join("hooks");
     fs::create_dir_all(&hooks_dir)?;
     let hook_path = hooks_dir.join(JCODE_HOOK_INSTALL_NAME);
-    let previous_hook_path = hooks_dir.join(JCODE_PREVIOUS_HOOK_INSTALL_NAME);
     let config_path = dir.join("config.toml");
     let existing_config = if config_path.is_file() {
         fs::read_to_string(&config_path)?
@@ -101,21 +99,11 @@ pub(crate) fn install_jcode() -> io::Result<JcodeInstallPaths> {
         String::new()
     };
     let command = jcode_hook_command(&hook_path);
-    let current = jcode_session_start_command(&existing_config, &config_path)?;
-
-    if current.as_deref() != Some(command.as_str()) {
-        match current.as_deref().filter(|value| !value.trim().is_empty()) {
-            Some(previous) => write_jcode_previous_hook(&previous_hook_path, previous)?,
-            None => {
-                remove_file_if_exists(&previous_hook_path)?;
-            }
-        }
-    }
+    let updated_config =
+        append_jcode_session_start_command(&existing_config, &config_path, &command)?;
 
     fs::write(&hook_path, JCODE_HOOK_ASSET)?;
     make_executable(&hook_path)?;
-    let updated_config =
-        set_jcode_session_start_command(&existing_config, &config_path, Some(&command))?;
     if updated_config != existing_config {
         fs::write(&config_path, updated_config)?;
     }
@@ -1376,35 +1364,20 @@ pub(crate) fn uninstall_jcode() -> io::Result<JcodeUninstallResult> {
     let dir = jcode_dir()?;
     let hooks_dir = dir.join("hooks");
     let hook_path = hooks_dir.join(JCODE_HOOK_INSTALL_NAME);
-    let previous_hook_path = hooks_dir.join(JCODE_PREVIOUS_HOOK_INSTALL_NAME);
     let config_path = dir.join("config.toml");
     let mut updated_config = false;
 
     if config_path.is_file() {
         let existing_config = fs::read_to_string(&config_path)?;
         let command = jcode_hook_command(&hook_path);
-        if jcode_session_start_command(&existing_config, &config_path)?.as_deref()
-            == Some(command.as_str())
-        {
-            let previous = match fs::read_to_string(&previous_hook_path) {
-                Ok(previous) if !previous.trim().is_empty() => Some(previous.trim().to_string()),
-                Ok(_) => None,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-                Err(err) => return Err(err),
-            };
-            let new_config = set_jcode_session_start_command(
-                &existing_config,
-                &config_path,
-                previous.as_deref(),
-            )?;
-            if new_config != existing_config {
-                fs::write(&config_path, new_config)?;
-                updated_config = true;
-            }
+        let new_config =
+            remove_jcode_session_start_command(&existing_config, &config_path, &command)?;
+        if new_config != existing_config {
+            fs::write(&config_path, new_config)?;
+            updated_config = true;
         }
     }
 
-    remove_file_if_exists(&previous_hook_path)?;
     let removed_hook_file = remove_file_if_exists(&hook_path)?;
     Ok(JcodeUninstallResult {
         hook_path,
@@ -1412,14 +1385,4 @@ pub(crate) fn uninstall_jcode() -> io::Result<JcodeUninstallResult> {
         removed_hook_file,
         updated_config,
     })
-}
-
-fn write_jcode_previous_hook(path: &Path, command: &str) -> io::Result<()> {
-    fs::write(path, command)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
 }

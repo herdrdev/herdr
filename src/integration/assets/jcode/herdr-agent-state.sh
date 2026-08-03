@@ -3,21 +3,6 @@
 # HERDR_INTEGRATION_ID=jcode
 # HERDR_INTEGRATION_VERSION=1
 
-# Jcode currently has one command slot per lifecycle event. Herdr saves any
-# pre-existing session_start command beside this script and forwards the event
-# to it, preserving the user's observer while adding session identity.
-script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || exit 0
-previous_hook_file="$script_dir/herdr-session-start.previous"
-
-# Preserve the exact shell semantics of the observer Jcode previously ran.
-# This happens independently of Python so installing Herdr never disables it.
-if [ -s "$previous_hook_file" ]; then
-    previous_command=$(cat -- "$previous_hook_file" 2>/dev/null) || previous_command=
-    if [ -n "$previous_command" ]; then
-        (sh -c "$previous_command" </dev/null >/dev/null 2>&1 &)
-    fi
-fi
-
 command -v python3 >/dev/null 2>&1 || exit 0
 python3 - <<'PY'
 import json

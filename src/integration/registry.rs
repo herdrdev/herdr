@@ -418,10 +418,12 @@ fn jcode_hook_config_is_valid(hook_path: &Path) -> bool {
     fs::read_to_string(&config_path)
         .ok()
         .and_then(|content| {
-            super::config_edit::jcode_session_start_command(&content, &config_path).ok()
+            super::config_edit::jcode_session_start_commands(&content, &config_path).ok()
         })
-        .flatten()
-        .is_some_and(|command| command == super::targets::jcode_hook_command(hook_path))
+        .is_some_and(|commands| {
+            let hook_command = super::targets::jcode_hook_command(hook_path);
+            commands.iter().any(|command| command == &hook_command)
+        })
 }
 
 pub(crate) fn integration_status_at(
@@ -462,8 +464,8 @@ pub(crate) fn integration_status_at(
         && state == super::IntegrationStatusKind::Current
         && !jcode_hook_config_is_valid(&path)
     {
-        // Jcode only invokes the adapter while its single session_start slot
-        // points at the managed hook, so a broken config is nonfunctional.
+        // Jcode only invokes the adapter while session_start includes the
+        // managed hook, so a broken config is nonfunctional.
         state = super::IntegrationStatusKind::Outdated;
     }
 
