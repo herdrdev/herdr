@@ -60,6 +60,7 @@ struct PtyResizeRequest {
 struct SharedPtyControls {
     resize: Option<PtyResizeRequest>,
     nudge: Option<PtyResize>,
+    terminal_responses: Vec<Bytes>,
 }
 
 pub(crate) struct PtyIoActorConfig {
@@ -90,6 +91,7 @@ pub(crate) struct PtyIoActorHandle {
     wake: fd::WakeWriter,
     user_writes: Arc<Mutex<UserWriteGate>>,
     controls: Arc<Mutex<SharedPtyControls>>,
+    response_order: Arc<Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -154,6 +156,24 @@ impl PtyIoActorHandle {
             Err(mpsc::error::TrySendError::Closed(PtyIoDataCommand::WriteUserInput(bytes))) => {
                 Err(mpsc::error::TrySendError::Closed(bytes))
             }
+        }
+    }
+
+    pub(crate) fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
+        let _order = self
+            .response_order
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(bytes) = response() else {
+            return;
+        };
+        if !bytes.is_empty() {
+            self.controls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .terminal_responses
+                .push(bytes);
+            self.wake_actor();
         }
     }
 
@@ -349,12 +369,14 @@ impl PtyIoActor {
             accepting: !config.initially_quiesced,
         }));
         let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
+        let response_order = Arc::new(Mutex::new(()));
         let handle = PtyIoActorHandle {
             data_tx,
             control_tx,
             wake: wake_pipe.writer,
             user_writes,
             controls: Arc::clone(&controls),
+            response_order: Arc::clone(&response_order),
         };
 
         let mut runner = PtyIoActorRunner {
@@ -371,6 +393,7 @@ impl PtyIoActor {
             current_write_offset: 0,
             wake_read_fd: wake_pipe.read_fd,
             controls,
+            response_order,
             on_read: config.on_read,
             on_reader_exit: config.on_reader_exit,
             poll_observer,
@@ -402,6 +425,7 @@ struct PtyIoActorRunner {
     current_write_offset: usize,
     wake_read_fd: OwnedFd,
     controls: Arc<Mutex<SharedPtyControls>>,
+    response_order: Arc<Mutex<()>>,
     on_read: ReadCallback,
     on_reader_exit: Option<ReaderExitCallback>,
     poll_observer: Option<std_mpsc::Sender<()>>,
@@ -625,12 +649,16 @@ impl PtyIoActorRunner {
     }
 
     fn apply_pending_controls(&mut self) {
-        let (resize, nudge) = {
+        let (resize, nudge, terminal_responses) = {
             let mut controls = self
                 .controls
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            (controls.resize.take(), controls.nudge.take())
+            (
+                controls.resize.take(),
+                controls.nudge.take(),
+                std::mem::take(&mut controls.terminal_responses),
+            )
         };
         if self.state == ActorState::Released {
             return;
@@ -642,6 +670,7 @@ impl PtyIoActorRunner {
         if let Some(nudge) = nudge {
             self.nudge(nudge);
         }
+        self.enqueue_terminal_responses(terminal_responses);
     }
 
     fn read_once(&mut self) -> bool {
@@ -655,8 +684,25 @@ impl PtyIoActorRunner {
                 false
             }
             Ok(n) => {
+                let response_order = Arc::clone(&self.response_order);
+                let _order = response_order
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 let result = (self.on_read)(&buf[..n]);
-                self.enqueue_terminal_responses(result.terminal_responses);
+                self.controls
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .terminal_responses
+                    .extend(result.terminal_responses);
+                drop(_order);
+                let terminal_responses = std::mem::take(
+                    &mut self
+                        .controls
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .terminal_responses,
+                );
+                self.enqueue_terminal_responses(terminal_responses);
                 true
             }
         }
@@ -769,6 +815,7 @@ mod tests {
         io::{Read, Write},
         os::fd::{AsRawFd, FromRawFd, IntoRawFd},
         os::unix::net::UnixStream,
+        sync::atomic::{AtomicBool, Ordering},
     };
 
     fn test_wake_pair() -> (fd::WakeWriter, OwnedFd) {
@@ -834,6 +881,7 @@ mod tests {
             current_write_offset: 0,
             wake_read_fd: wake_pipe.read_fd,
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
             on_read: Box::new(|_| PtyReadResult::empty()),
             on_reader_exit: None,
             poll_observer: None,
@@ -1099,11 +1147,13 @@ mod tests {
             wake,
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::clone(&controls),
+            response_order: Arc::new(Mutex::new(())),
         };
 
         handle.resize(20, 80, 8, 16, vec![Bytes::from_static(b"old")]);
         handle.resize(40, 120, 9, 18, vec![Bytes::from_static(b"new")]);
         handle.nudge_child_redraw_after_handoff(41, 121, 10, 20);
+        handle.write_terminal_response(|| Some(Bytes::from_static(b"response")));
 
         let controls = controls.lock().expect("controls lock");
         assert_eq!(
@@ -1126,6 +1176,84 @@ mod tests {
                 cell_width_px: 10,
                 cell_height_px: 20,
             })
+        );
+        assert_eq!(
+            controls.terminal_responses,
+            vec![Bytes::from_static(b"response")]
+        );
+    }
+
+    #[test]
+    fn appearance_transition_report_precedes_query_of_new_scheme() {
+        let (actor_socket, mut peer) = UnixStream::pair().expect("socket pair");
+        actor_socket
+            .set_nonblocking(true)
+            .expect("actor socket nonblocking");
+        let owned = unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) };
+        let (data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
+        let (control_tx, control_rx) = std_mpsc::channel();
+        let wake_pipe = fd::create_wake_pipe().expect("wake pipe");
+        let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
+        let response_order = Arc::new(Mutex::new(()));
+        let light = Arc::new(AtomicBool::new(false));
+        let query_light = Arc::clone(&light);
+        let runner = PtyIoActorRunner {
+            pane_id: 1,
+            file: std::fs::File::from(owned),
+            data_rx,
+            control_rx,
+            state: ActorState::Running,
+            pending_writes: VecDeque::new(),
+            current_write_offset: 0,
+            wake_read_fd: wake_pipe.read_fd,
+            controls: Arc::clone(&controls),
+            response_order: Arc::clone(&response_order),
+            on_read: Box::new(move |_| PtyReadResult {
+                terminal_responses: vec![if query_light.load(Ordering::Acquire) {
+                    Bytes::from_static(b"query-light")
+                } else {
+                    Bytes::from_static(b"query-dark")
+                }],
+            }),
+            on_reader_exit: None,
+            poll_observer: None,
+        };
+        let handle = PtyIoActorHandle {
+            data_tx,
+            control_tx,
+            wake: wake_pipe.writer,
+            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+            controls,
+            response_order,
+        };
+        let (changed_tx, changed_rx) = std_mpsc::channel();
+        let (continue_tx, continue_rx) = std_mpsc::channel();
+
+        let appearance = std::thread::spawn(move || {
+            handle.write_terminal_response(|| {
+                light.store(true, Ordering::Release);
+                changed_tx.send(()).expect("notify appearance change");
+                continue_rx.recv().expect("continue appearance report");
+                Some(Bytes::from_static(b"live-light"))
+            });
+        });
+        changed_rx.recv().expect("appearance changed");
+        peer.write_all(b"query").expect("write query");
+        let reader = std::thread::spawn(move || {
+            let mut runner = runner;
+            assert!(runner.read_once());
+            runner
+        });
+        continue_tx.send(()).expect("release appearance report");
+        appearance.join().expect("appearance thread joins");
+        let runner = reader.join().expect("reader thread joins");
+
+        assert_eq!(
+            runner.pending_writes,
+            VecDeque::from([
+                Bytes::from_static(b"live-light"),
+                Bytes::from_static(b"query-light"),
+            ])
         );
     }
 
@@ -1159,6 +1287,7 @@ mod tests {
             wake,
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
         };
 
         let write = tokio::spawn(async move {
@@ -1204,6 +1333,7 @@ mod tests {
             wake,
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
         };
         let write_handle = handle.clone();
         let write = tokio::spawn(async move {
@@ -1258,6 +1388,7 @@ mod tests {
             wake,
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
         };
 
         let handoff = std::thread::spawn(move || handle.begin_handoff(Duration::from_secs(1)));
@@ -1302,6 +1433,7 @@ mod tests {
             current_write_offset: 0,
             wake_read_fd: fd::create_wake_pipe().expect("wake pipe").read_fd,
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
             on_read: Box::new(|_| PtyReadResult::empty()),
             on_reader_exit: None,
             poll_observer: None,

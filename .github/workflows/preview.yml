@@ -57,8 +57,8 @@ jobs:
             commit="$(python3 scripts/preview.py select-commit --ref origin/master)"
           fi
           current_preview="$(python3 scripts/preview.py current-commit --manifest website/preview.json || true)"
-          if [ "$current_preview" = "$commit" ]; then
-            echo "Preview already points at $commit; skipping."
+          if [ "$current_preview" = "$commit" ] && node website/scripts/docs-preview.mjs check; then
+            echo "Preview and documentation already point at $commit; skipping."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -286,6 +286,9 @@ jobs:
     needs: [preflight, build]
     if: needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
+    concurrency:
+      group: docs-publish-master
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
@@ -300,6 +303,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
 
       - name: Record previous preview commit
         id: previous-preview
@@ -353,8 +361,9 @@ jobs:
             artifacts/herdr-macos-aarch64/herdr-macos-aarch64
             artifacts/herdr-windows-x86_64.zip/herdr-windows-x86_64.zip
 
-      - name: Update preview manifest
+      - name: Update preview documentation and manifest
         run: |
+          node website/scripts/docs-preview.mjs snapshot '${{ needs.preflight.outputs.commit }}'
           python3 scripts/preview.py manifest \
             --output website/preview.json \
             --tag '${{ needs.preflight.outputs.tag }}' \
@@ -366,18 +375,22 @@ jobs:
             --notes PREVIEW_NOTES.md \
             --sha-file preview-sha256.json \
             --retain 30
+          (cd website && bun install --frozen-lockfile)
 
-      - name: Commit preview manifest
+      - name: Commit preview publication
         env:
           KANGAL_GITHUB_TOKEN: ${{ secrets.KANGAL_GITHUB_TOKEN }}
         run: |
           git config user.name "kangal-bot"
           git config user.email "285672167+kangal-bot@users.noreply.github.com"
-          git add website/preview.json
-          git diff --cached --quiet || git commit -m "docs: update preview manifest"
+          git add -A docs/preview website/preview.json
+          git diff --cached --quiet || git commit -m "docs: publish preview documentation"
           remote="https://x-access-token:${KANGAL_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for attempt in 1 2 3; do
             git pull --rebase "$remote" master
+            node website/scripts/docs-preview.mjs check
+            node website/scripts/docs-versions.mjs check
+            (cd website && bun run build)
             if git push "$remote" HEAD:master; then
               exit 0
             fi
@@ -386,8 +399,19 @@ jobs:
               sleep $((attempt * 2))
             fi
           done
-          echo "failed to publish preview manifest after 3 attempts" >&2
+          echo "failed to publish preview documentation after 3 attempts" >&2
           exit 1
+
+      - name: Trigger website deploy
+        env:
+          DEPLOY_HOOK: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "CLOUDFLARE_PAGES_DEPLOY_HOOK not set; relying on Cloudflare git auto-deploy"
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
+          echo "Triggered Cloudflare Pages production deploy"
 
       - name: Mark preview-released issues
         continue-on-error: true

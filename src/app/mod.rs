@@ -1768,6 +1768,7 @@ impl App {
                         self.set_host_terminal_appearance(appearance, true);
                     }
                 }
+                crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => {}
                 crate::raw_input::RawInputEvent::Unsupported => {}
             }
             self.sync_prefix_input_source(previous_mode);

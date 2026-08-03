@@ -2665,7 +2665,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
 fn bundled_integration_assets_report_session_refs() {
     assert!(PI_EXTENSION_ASSET.contains("agent_session_path"));
     assert!(PI_EXTENSION_ASSET.contains("agent_session_id"));
-    assert!(PI_EXTENSION_ASSET.contains("ctx?.hasUI !== true"));
+    assert!(PI_EXTENSION_ASSET.contains("ctx?.mode !== \"tui\""));
     assert!(PI_EXTENSION_ASSET.contains("pane.report_agent_session"));
     assert!(PI_EXTENSION_ASSET.contains("pane.report_agent\""));
     assert!(PI_EXTENSION_ASSET.contains("pi.on(\"agent_start\""));

@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "stable_source": "legacy",
   "current": "0.7.5",
   "versions": [
     {
