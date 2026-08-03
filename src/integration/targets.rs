@@ -90,7 +90,6 @@ pub(crate) fn install_jcode() -> io::Result<JcodeInstallPaths> {
     }
 
     let hooks_dir = dir.join("hooks");
-    fs::create_dir_all(&hooks_dir)?;
     let hook_path = hooks_dir.join(JCODE_HOOK_INSTALL_NAME);
     let config_path = dir.join("config.toml");
     let existing_config = if config_path.is_file() {
@@ -102,6 +101,8 @@ pub(crate) fn install_jcode() -> io::Result<JcodeInstallPaths> {
     let updated_config =
         append_jcode_session_start_command(&existing_config, &config_path, &command)?;
 
+    // Validate the user's config before creating any managed filesystem state.
+    fs::create_dir_all(&hooks_dir)?;
     fs::write(&hook_path, JCODE_HOOK_ASSET)?;
     make_executable(&hook_path)?;
     if updated_config != existing_config {
