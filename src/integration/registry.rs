@@ -462,6 +462,8 @@ pub(crate) fn integration_status_at(
         && state == super::IntegrationStatusKind::Current
         && !jcode_hook_config_is_valid(&path)
     {
+        // Jcode only invokes the adapter while its single session_start slot
+        // points at the managed hook, so a broken config is nonfunctional.
         state = super::IntegrationStatusKind::Outdated;
     }
 

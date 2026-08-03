@@ -635,6 +635,9 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+
+        let jcode_plan = plan("herdr:jcode", "jcode", &AgentSessionRef::id(id).unwrap()).unwrap();
+        assert_eq!(jcode_plan.argv, vec!["jcode", "--resume", id]);
     }
 
     #[test]
@@ -644,6 +647,7 @@ mod tests {
         let kilo_session = absolute_test_path("kilo-session");
         let copilot_session = absolute_test_path("copilot-session");
         let devin_session = absolute_test_path("devin-session");
+        let jcode_session = absolute_test_path("jcode-session");
         assert!(plan(
             "herdr:hermes",
             "hermes",
@@ -672,6 +676,12 @@ mod tests {
             "herdr:devin",
             "devin",
             &AgentSessionRef::path(&devin_session).unwrap()
+        )
+        .is_none());
+        assert!(plan(
+            "herdr:jcode",
+            "jcode",
+            &AgentSessionRef::path(&jcode_session).unwrap()
         )
         .is_none());
         assert!(session_ref_from_snapshot(

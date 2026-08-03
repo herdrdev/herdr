@@ -105,7 +105,7 @@ pub(crate) fn install_jcode() -> io::Result<JcodeInstallPaths> {
 
     if current.as_deref() != Some(command.as_str()) {
         match current.as_deref().filter(|value| !value.trim().is_empty()) {
-            Some(previous) => fs::write(&previous_hook_path, previous)?,
+            Some(previous) => write_jcode_previous_hook(&previous_hook_path, previous)?,
             None => {
                 remove_file_if_exists(&previous_hook_path)?;
             }
@@ -1387,7 +1387,7 @@ pub(crate) fn uninstall_jcode() -> io::Result<JcodeUninstallResult> {
             == Some(command.as_str())
         {
             let previous = match fs::read_to_string(&previous_hook_path) {
-                Ok(previous) if !previous.trim().is_empty() => Some(previous),
+                Ok(previous) if !previous.trim().is_empty() => Some(previous.trim().to_string()),
                 Ok(_) => None,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => None,
                 Err(err) => return Err(err),
@@ -1412,4 +1412,14 @@ pub(crate) fn uninstall_jcode() -> io::Result<JcodeUninstallResult> {
         removed_hook_file,
         updated_config,
     })
+}
+
+fn write_jcode_previous_hook(path: &Path, command: &str) -> io::Result<()> {
+    fs::write(path, command)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

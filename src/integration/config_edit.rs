@@ -816,12 +816,22 @@ pub(crate) fn jcode_session_start_command(
     config_path: &Path,
 ) -> io::Result<Option<String>> {
     let document = parse_jcode_config(content, config_path)?;
-    Ok(document
+    let Some(entry) = document
         .get("hooks")
         .and_then(Item::as_table_like)
         .and_then(|hooks| hooks.get("session_start"))
-        .and_then(Item::as_str)
-        .map(str::to_string))
+    else {
+        return Ok(None);
+    };
+    entry
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "jcode hooks.session_start at {} must be a string",
+                config_path.display()
+            ))
+        })
 }
 
 pub(crate) fn set_jcode_session_start_command(
