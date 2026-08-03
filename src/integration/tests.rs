@@ -4085,28 +4085,25 @@ fn install_and_uninstall_jcode_preserve_existing_session_hook() {
     let installed = install_jcode().unwrap();
     let installed_config = fs::read_to_string(&config_path).unwrap();
     assert_eq!(
-        jcode_session_start_command(&installed_config, &config_path)
-            .unwrap()
-            .as_deref(),
-        Some(jcode_hook_command(&installed.hook_path).as_str())
+        jcode_session_start_commands(&installed_config, &config_path).unwrap(),
+        vec![
+            previous.to_string(),
+            jcode_hook_command(&installed.hook_path)
+        ]
     );
     assert!(installed_config.contains("# keep this comment"));
     assert!(installed_config.contains("turn_end = \"notify\""));
-    let previous_path = jcode.join("hooks").join(JCODE_PREVIOUS_HOOK_INSTALL_NAME);
-    assert_eq!(fs::read_to_string(&previous_path).unwrap(), previous);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&previous_path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
 
-    // Reinstalling must not replace the saved user command with Herdr's own
-    // wrapper command.
+    // Reinstalling must not duplicate Herdr's command or disturb user commands.
     install_jcode().unwrap();
-    assert_eq!(fs::read_to_string(&previous_path).unwrap(), previous);
+    let reinstalled_config = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_commands(&reinstalled_config, &config_path).unwrap(),
+        vec![
+            previous.to_string(),
+            jcode_hook_command(&installed.hook_path)
+        ]
+    );
     assert_eq!(
         integration_status_at(
             crate::api::schema::IntegrationTarget::Jcode,
@@ -4120,16 +4117,54 @@ fn install_and_uninstall_jcode_preserve_existing_session_hook() {
     let result = uninstall_jcode().unwrap();
     assert!(result.removed_hook_file);
     assert!(result.updated_config);
-    assert!(!previous_path.exists());
     let restored_config = fs::read_to_string(&config_path).unwrap();
     assert_eq!(
-        jcode_session_start_command(&restored_config, &config_path)
-            .unwrap()
-            .as_deref(),
-        Some(previous)
+        jcode_session_start_commands(&restored_config, &config_path).unwrap(),
+        vec![previous.to_string()]
     );
     assert!(restored_config.contains("# keep this comment"));
     assert!(restored_config.contains("turn_end = \"notify\""));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn install_and_uninstall_jcode_preserve_existing_session_hook_array() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode = home.join(".jcode");
+    fs::create_dir_all(&jcode).unwrap();
+    let config_path = jcode.join("config.toml");
+    fs::write(
+        &config_path,
+        "[hooks]\nsession_start = [\"first\", \"second\"]\nturn_end = \"notify\"\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_jcode().unwrap();
+    install_jcode().unwrap();
+    let installed_config = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_commands(&installed_config, &config_path).unwrap(),
+        vec![
+            "first".to_string(),
+            "second".to_string(),
+            jcode_hook_command(&installed.hook_path),
+        ]
+    );
+
+    let result = uninstall_jcode().unwrap();
+    assert!(result.updated_config);
+    let remaining_config = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_commands(&remaining_config, &config_path).unwrap(),
+        vec!["first".to_string(), "second".to_string()]
+    );
+    assert!(remaining_config.contains("turn_end = \"notify\""));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -4148,19 +4183,18 @@ fn uninstall_jcode_does_not_clobber_a_user_replacement_hook() {
     std::env::set_var("HOME", &home);
 
     install_jcode().unwrap();
-    let current = fs::read_to_string(&config_path).unwrap();
-    let replacement =
-        set_jcode_session_start_command(&current, &config_path, Some("second")).unwrap();
-    fs::write(&config_path, replacement).unwrap();
+    fs::write(
+        &config_path,
+        "[hooks]\nsession_start = [\"first\", \"second\"]\n",
+    )
+    .unwrap();
 
     let result = uninstall_jcode().unwrap();
     assert!(!result.updated_config);
     let remaining = fs::read_to_string(&config_path).unwrap();
     assert_eq!(
-        jcode_session_start_command(&remaining, &config_path)
-            .unwrap()
-            .as_deref(),
-        Some("second")
+        jcode_session_start_commands(&remaining, &config_path).unwrap(),
+        vec!["first".to_string(), "second".to_string()]
     );
 
     std::env::remove_var("HOME");
@@ -4168,21 +4202,23 @@ fn uninstall_jcode_does_not_clobber_a_user_replacement_hook() {
 }
 
 #[test]
-fn install_jcode_rejects_non_string_session_hook_without_overwriting_it() {
+fn install_jcode_rejects_session_hook_arrays_with_non_string_values() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
     let jcode = home.join(".jcode");
     fs::create_dir_all(&jcode).unwrap();
     let config_path = jcode.join("config.toml");
-    fs::write(&config_path, "[hooks]\nsession_start = [\"first\"]\n").unwrap();
+    fs::write(&config_path, "[hooks]\nsession_start = [\"first\", 42]\n").unwrap();
     std::env::set_var("HOME", &home);
 
     let error = install_jcode().unwrap_err();
-    assert!(error.to_string().contains("must be a string"));
+    assert!(error
+        .to_string()
+        .contains("must be a string or array of strings"));
     assert_eq!(
         fs::read_to_string(&config_path).unwrap(),
-        "[hooks]\nsession_start = [\"first\"]\n"
+        "[hooks]\nsession_start = [\"first\", 42]\n"
     );
 
     std::env::remove_var("HOME");
@@ -4191,7 +4227,7 @@ fn install_jcode_rejects_non_string_session_hook_without_overwriting_it() {
 
 #[cfg(unix)]
 #[test]
-fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
+fn jcode_hook_reports_official_session() {
     use std::io::{BufRead, Write};
     use std::os::unix::net::UnixListener;
 
@@ -4200,56 +4236,14 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     let home = base.join("home");
     let jcode = home.join(".jcode");
     fs::create_dir_all(&jcode).unwrap();
-    let previous_output = base.join("previous.out");
-    let previous_command = format!(
-        "JCODE_FORWARD_PREFIX=forwarded; printf '%s:%s' \"$JCODE_FORWARD_PREFIX\" \"$JCODE_HOOK_SESSION_ID\" | /bin/cat > {}",
-        shell_single_quote(&previous_output.display().to_string())
-    );
-    fs::write(
-        jcode.join("config.toml"),
-        format!(
-            "[hooks]\nsession_start = {}\n",
-            toml_basic_string(&previous_command)
-        ),
-    )
-    .unwrap();
     std::env::set_var("HOME", &home);
     let installed = install_jcode().unwrap();
-
-    // A missing Python runtime must disable only Herdr reporting, never the
-    // observer that occupied Jcode's session_start slot before installation.
-    let no_python_path = base.join("no-python-bin");
-    fs::create_dir_all(&no_python_path).unwrap();
-    let find_on_path = |command: &str| {
-        std::env::split_paths(&std::env::var_os("PATH").expect("PATH should be set"))
-            .map(|directory| directory.join(command))
-            .find(|candidate| candidate.is_file())
-            .unwrap_or_else(|| panic!("{command} should be available on PATH"))
-    };
-    let shell = find_on_path("sh");
-    std::os::unix::fs::symlink(&shell, no_python_path.join("sh")).unwrap();
-    std::os::unix::fs::symlink(find_on_path("cat"), no_python_path.join("cat")).unwrap();
-    std::os::unix::fs::symlink(find_on_path("dirname"), no_python_path.join("dirname")).unwrap();
-    let status = std::process::Command::new(shell)
-        .arg(&installed.hook_path)
-        .env("PATH", &no_python_path)
-        .env("JCODE_HOOK_SESSION_ID", "without-python")
-        .status()
-        .unwrap();
-    assert!(status.success());
-    for _ in 0..500 {
-        if fs::read_to_string(&previous_output)
-            .is_ok_and(|content| content == "forwarded:without-python")
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let config_path = jcode.join("config.toml");
     assert_eq!(
-        fs::read_to_string(&previous_output).unwrap(),
-        "forwarded:without-python"
+        jcode_session_start_commands(&fs::read_to_string(&config_path).unwrap(), &config_path)
+            .unwrap(),
+        vec![jcode_hook_command(&installed.hook_path)]
     );
-    fs::remove_file(&previous_output).unwrap();
 
     let socket_path = PathBuf::from(format!("/tmp/herdr-jcode-{}.sock", std::process::id()));
     let _ = fs::remove_file(&socket_path);
@@ -4257,59 +4251,60 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut stream = loop {
+        let mut requests = Vec::new();
+        while requests.len() < 2 {
             match listener.accept() {
-                Ok((stream, _)) => break stream,
+                Ok((mut stream, _)) => {
+                    let mut line = String::new();
+                    std::io::BufReader::new(stream.try_clone().unwrap())
+                        .read_line(&mut line)
+                        .unwrap();
+                    stream
+                        .write_all(b"{\"id\":\"ok\",\"result\":{}}\n")
+                        .unwrap();
+                    requests.push(serde_json::from_str::<Value>(&line).unwrap());
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     assert!(
                         std::time::Instant::now() < deadline,
-                        "jcode hook did not connect to the Herdr socket within 5 seconds"
+                        "two jcode hooks did not connect to the Herdr socket within 5 seconds"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 Err(error) => panic!("failed to accept Jcode hook connection: {error}"),
             }
-        };
-        let mut line = String::new();
-        std::io::BufReader::new(stream.try_clone().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        stream
-            .write_all(b"{\"id\":\"ok\",\"result\":{}}\n")
-            .unwrap();
-        serde_json::from_str::<Value>(&line).unwrap()
+        }
+        requests
     });
 
-    let status = std::process::Command::new("bash")
-        .arg(&installed.hook_path)
-        .env("HERDR_ENV", "1")
-        .env("HERDR_PANE_ID", "w1:p2")
-        .env("HERDR_SOCKET_PATH", &socket_path)
-        .env("JCODE_HOOK_SESSION_ID", "jcode-session-123")
-        .env("JCODE_HOOK_SOURCE", "resume")
-        .status()
-        .unwrap();
-    assert!(status.success());
+    for (pane, session) in [
+        ("w1:p2", "jcode-session-123"),
+        ("w1:p3", "jcode-session-456"),
+    ] {
+        let status = std::process::Command::new("bash")
+            .arg(&installed.hook_path)
+            .env("HERDR_ENV", "1")
+            .env("HERDR_PANE_ID", pane)
+            .env("HERDR_SOCKET_PATH", &socket_path)
+            .env("JCODE_HOOK_SESSION_ID", session)
+            .env("JCODE_HOOK_SOURCE", "resume")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 
-    let request = server.join().unwrap();
+    let requests = server.join().unwrap();
+    let request = &requests[0];
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["source"], "herdr:jcode");
     assert_eq!(request["params"]["agent"], "jcode");
     assert_eq!(request["params"]["pane_id"], "w1:p2");
     assert_eq!(request["params"]["agent_session_id"], "jcode-session-123");
     assert_eq!(request["params"]["session_start_source"], "resume");
-
-    for _ in 0..500 {
-        if fs::read_to_string(&previous_output)
-            .is_ok_and(|content| content == "forwarded:jcode-session-123")
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    assert_eq!(requests[1]["params"]["pane_id"], "w1:p3");
     assert_eq!(
-        fs::read_to_string(&previous_output).unwrap(),
-        "forwarded:jcode-session-123"
+        requests[1]["params"]["agent_session_id"],
+        "jcode-session-456"
     );
 
     let _ = fs::remove_file(&socket_path);

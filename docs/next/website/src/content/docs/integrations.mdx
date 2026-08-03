@@ -325,7 +325,7 @@ herdr integration install jcode
 
 The hook reports native session identity through Jcode's `session_start` observer while Jcode runs inside a Herdr pane. Jcode state remains screen-driven: the composer marker and processing status line provide working and idle evidence, while shell mode and user-opened overlays remain idle.
 
-Herdr uses `~/.jcode`. The Jcode config directory must already exist. Install writes `hooks/herdr-agent-state.sh` and registers it as `[hooks].session_start` in `config.toml`. Because Jcode currently has one command slot for that event, Herdr saves any existing `session_start` command and the adapter forwards each event to it. Uninstall restores the saved command. If you replace the configured command after installing, uninstall leaves your replacement untouched.
+Herdr uses `~/.jcode`. The Jcode config directory must already exist. Install writes `hooks/herdr-agent-state.sh` and appends it to `[hooks].session_start` in `config.toml`. Jcode runs each command in that lifecycle hook array directly. Reinstalling does not duplicate the Herdr command, and uninstall removes only the Herdr command while preserving every other observer.
 
 After Jcode emits a session start event, Herdr can resume the pane with `jcode --resume <id>` after a server restart. The integration reports session identity only and never reports lifecycle state.
 
