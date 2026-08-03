@@ -1800,7 +1800,9 @@ impl AppState {
         };
 
         if let Some(focused) = panes.iter().find(|p| p.is_focused) {
-            if let Some(target) = find_in_direction(focused, direction, &panes) {
+            if let Some(target) =
+                find_in_direction(focused, direction, &panes, tab.layout.focus_history())
+            {
                 self.focus_pane_in_workspace(ws_idx, target);
             }
         }
@@ -1823,7 +1825,12 @@ impl AppState {
         let Some(focused) = panes.iter().find(|p| p.is_focused) else {
             return false;
         };
-        let Some(target) = find_in_direction(focused, direction, &panes) else {
+        let Some(target) = find_in_direction(
+            focused,
+            direction,
+            &panes,
+            &crate::layout::FocusHistory::default(),
+        ) else {
             return false;
         };
         let source = focused.id;

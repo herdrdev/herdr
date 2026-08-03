@@ -425,8 +425,8 @@ impl Tab {
         let runtime = match runtime {
             Ok(runtime) => runtime,
             Err(err) => {
-                self.layout.close_focused();
                 self.layout.focus_pane(previous_focus);
+                self.layout.close_pane(new_id);
                 return Err(err);
             }
         };
@@ -493,14 +493,7 @@ impl Tab {
 
         if self.layout.pane_count() > 1 {
             let next_root = self.promoted_root_if_needed(pane_id);
-            if self.layout.focused() == pane_id {
-                self.layout.close_focused();
-            } else {
-                let prev_focus = self.layout.focused();
-                self.layout.focus_pane(pane_id);
-                self.layout.close_focused();
-                self.layout.focus_pane(prev_focus);
-            }
+            self.layout.close_pane(pane_id);
             if let Some(next_root) = next_root {
                 self.root_pane = next_root;
             }
@@ -540,14 +533,7 @@ impl Tab {
 
         let next_root = self.promoted_root_if_needed(pane_id);
 
-        if self.layout.focused() == pane_id {
-            self.layout.close_focused();
-        } else {
-            let prev_focus = self.layout.focused();
-            self.layout.focus_pane(pane_id);
-            self.layout.close_focused();
-            self.layout.focus_pane(prev_focus);
-        }
+        self.layout.close_pane(pane_id);
 
         let pane = self.panes.remove(&pane_id)?;
         let terminal_id = pane.attached_terminal_id;

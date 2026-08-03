@@ -17,7 +17,7 @@ use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
 use crate::app::App;
 #[cfg(test)]
 use crate::app::Mode;
-use crate::layout::{find_in_direction, NavDirection, PaneId};
+use crate::layout::{find_in_direction, FocusHistory, NavDirection, PaneId};
 
 use super::super::api_helpers::{
     detect_state_from_api, encode_api_keys, normalize_metadata_source, normalize_metadata_tokens,
@@ -470,7 +470,7 @@ impl App {
                         .unwrap_or_default(),
                 );
             };
-            let target = self.directional_pane_target(ws_idx, tab_idx, source_pane_id, direction);
+            let target = self.directional_swap_target(ws_idx, tab_idx, source_pane_id, direction);
             match target {
                 Some(target_pane_id) => {
                     (ws_idx, tab_idx, source_pane_id, Some(target_pane_id), None)
@@ -1676,7 +1676,28 @@ impl App {
         let tab = self.state.workspaces.get(ws_idx)?.tabs.get(tab_idx)?;
         let panes = tab.layout.panes(self.state.view.terminal_area);
         let source = panes.iter().find(|pane| pane.id == source_pane_id)?;
-        find_in_direction(source, direction.into(), &panes)
+        find_in_direction(source, direction.into(), &panes, tab.layout.focus_history())
+    }
+
+    /// Resolve a directional swap target using geometry only.
+    ///
+    /// Unlike [`Self::directional_pane_target`], swaps deliberately ignore focus
+    /// history: a directional swap exchanges the source with its geometric
+    /// neighbor, matching the TUI swap path (`directional_pane_swap_from_view`).
+    /// Biasing swaps toward the most-recently-focused neighbor would make the
+    /// API diverge from the keyboard swap and make swap targets depend on
+    /// unrelated focus movements.
+    fn directional_swap_target(
+        &self,
+        ws_idx: usize,
+        tab_idx: usize,
+        source_pane_id: PaneId,
+        direction: PaneDirection,
+    ) -> Option<PaneId> {
+        let tab = self.state.workspaces.get(ws_idx)?.tabs.get(tab_idx)?;
+        let panes = tab.layout.panes(self.state.view.terminal_area);
+        let source = panes.iter().find(|pane| pane.id == source_pane_id)?;
+        find_in_direction(source, direction.into(), &panes, &FocusHistory::default())
     }
 
     pub(super) fn pane_layout_snapshot(
@@ -2450,6 +2471,46 @@ mod tests {
         assert_eq!(swap.target_pane_id, None);
         assert_eq!(swap.layout.panes.len(), 1);
         assert!(app.event_hub.events_after(0).is_empty());
+    }
+
+    #[test]
+    fn api_pane_swap_direction_ignores_focus_history() {
+        // Layout: H(L, V(RT, RB)). RB is focused most recently among the right
+        // column, then focus returns to L. A directional swap must exchange L
+        // with its geometric neighbor (RT, the top pane), not the most-recently
+        // focused one (RB); swaps are geometry-only, unlike focus navigation.
+        let mut app = app_with_linked_worktree();
+        let left = app.state.workspaces[0].tabs[0].root_pane;
+        let right_top = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        let right_bottom = app.state.workspaces[0].test_split(ratatui::layout::Direction::Vertical);
+        // Make RB the most-recently-focused right pane, then return focus to L.
+        app.state.workspaces[0].tabs[0]
+            .layout
+            .focus_pane(right_bottom);
+        app.state.workspaces[0].tabs[0].layout.focus_pane(left);
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 100, 20));
+        let left_public = app.public_pane_id(0, left).unwrap();
+        let right_top_public = app.public_pane_id(0, right_top).unwrap();
+        let right_bottom_public = app.public_pane_id(0, right_bottom).unwrap();
+
+        let response = app.handle_pane_swap(
+            "req".into(),
+            PaneSwapParams {
+                pane_id: Some(left_public.clone()),
+                direction: Some(PaneDirection::Right),
+                ..PaneSwapParams::default()
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneSwap { swap } = success.result else {
+            panic!("expected pane swap response");
+        };
+        assert!(swap.changed);
+        assert_eq!(swap.reason, None);
+        assert_eq!(swap.source_pane_id, left_public);
+        assert_eq!(swap.target_pane_id, Some(right_top_public));
+        assert_ne!(swap.target_pane_id, Some(right_bottom_public));
     }
 
     #[test]

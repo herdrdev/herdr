@@ -689,8 +689,19 @@ impl App {
             .pane_infos
             .iter()
             .find(|pane| pane.is_focused)?;
-        let target =
-            crate::layout::find_in_direction(focused, direction, &self.state.view.pane_infos)?;
+        let history = self
+            .state
+            .workspaces
+            .get(ws_idx)?
+            .active_tab()?
+            .layout
+            .focus_history();
+        let target = crate::layout::find_in_direction(
+            focused,
+            direction,
+            &self.state.view.pane_infos,
+            history,
+        )?;
         Some((ws_idx, target))
     }
 
@@ -705,8 +716,13 @@ impl App {
             .pane_infos
             .iter()
             .find(|pane| pane.is_focused)?;
-        let target =
-            crate::layout::find_in_direction(focused, direction, &self.state.view.pane_infos)?;
+        let empty = crate::layout::FocusHistory::default();
+        let target = crate::layout::find_in_direction(
+            focused,
+            direction,
+            &self.state.view.pane_infos,
+            &empty,
+        )?;
         Some((ws_idx, focused.id, target))
     }
 

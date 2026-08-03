@@ -1,6 +1,7 @@
 //! BSP tree layout for tiling panes within a workspace.
 
 use std::cmp::Reverse;
+use std::collections::HashMap;
 
 use ratatui::{
     layout::{Direction, Rect},
@@ -80,10 +81,32 @@ pub enum Node {
     },
 }
 
+/// Per-pane "last focused" timestamps for MRU directional navigation.
+#[derive(Debug, Default, Clone)]
+pub struct FocusHistory {
+    stamps: HashMap<PaneId, u64>,
+    clock: u64,
+}
+
+impl FocusHistory {
+    fn record(&mut self, id: PaneId) {
+        self.clock += 1;
+        self.stamps.insert(id, self.clock);
+    }
+    fn forget(&mut self, id: PaneId) {
+        self.stamps.remove(&id);
+    }
+    /// 0 = never focused; larger = more recent.
+    fn get(&self, id: PaneId) -> u64 {
+        self.stamps.get(&id).copied().unwrap_or(0)
+    }
+}
+
 /// BSP tiling layout. Tracks a tree of splits and a focused pane.
 pub struct TileLayout {
     root: Node,
     focus: PaneId,
+    focus_history: FocusHistory,
 }
 
 impl TileLayout {
@@ -91,17 +114,22 @@ impl TileLayout {
     /// Returns (layout, root_pane_id) so the caller can create the pane.
     pub fn new() -> (Self, PaneId) {
         let root_id = PaneId::alloc();
-        (
-            Self {
-                root: Node::Pane(root_id),
-                focus: root_id,
-            },
-            root_id,
-        )
+        let mut layout = Self {
+            root: Node::Pane(root_id),
+            focus: root_id,
+            focus_history: FocusHistory::default(),
+        };
+        layout.focus_history.record(root_id);
+        (layout, root_id)
     }
 
     pub fn focused(&self) -> PaneId {
         self.focus
+    }
+
+    /// Access the per-pane focus history for MRU directional navigation.
+    pub fn focus_history(&self) -> &FocusHistory {
+        &self.focus_history
     }
 
     pub fn pane_count(&self) -> usize {
@@ -134,6 +162,7 @@ impl TileLayout {
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
         self.root = split_at(old, self.focus, direction, new_id, valid_split_ratio(ratio));
         self.focus = new_id;
+        self.focus_history.record(new_id);
         new_id
     }
 
@@ -158,17 +187,24 @@ impl TileLayout {
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
         self.root = split_at(old, target, direction, moved, valid_split_ratio(ratio));
         self.focus = moved;
+        self.focus_history.record(moved);
         true
     }
 
-    /// Close the focused pane. Returns false if it's the last pane.
-    pub fn close_focused(&mut self) -> bool {
+    /// Close a specific pane by id. When the removed pane is the focused one,
+    /// focus moves to a neighbor and that neighbor is recorded as
+    /// most-recently-focused; otherwise the current focus and all other history
+    /// are left untouched. The removed pane's history stamp is always pruned.
+    /// Returns false if the pane is missing or it is the last remaining pane.
+    pub fn close_pane(&mut self, target: PaneId) -> bool {
         if self.pane_count() <= 1 {
             return false;
         }
-        let target = self.focus;
         let ids = self.pane_ids();
-        let pos = ids.iter().position(|id| *id == target).unwrap();
+        let Some(pos) = ids.iter().position(|id| *id == target) else {
+            return false;
+        };
+        let removing_focused = self.focus == target;
         let new_focus = if pos + 1 < ids.len() {
             ids[pos + 1]
         } else {
@@ -178,7 +214,11 @@ impl TileLayout {
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
         if let Some(new_root) = remove_pane(old, target) {
             self.root = new_root;
-            self.focus = new_focus;
+            self.focus_history.forget(target);
+            if removing_focused {
+                self.focus = new_focus;
+                self.focus_history.record(new_focus);
+            }
             true
         } else {
             false
@@ -188,6 +228,7 @@ impl TileLayout {
     pub fn focus_pane(&mut self, id: PaneId) {
         if self.pane_ids().contains(&id) {
             self.focus = id;
+            self.focus_history.record(id);
         }
     }
 
@@ -268,9 +309,14 @@ impl TileLayout {
     }
 
     /// Reconstruct a layout from a saved tree.
-    /// Reconstruct a layout from a saved tree.
     pub fn from_saved(root: Node, focus: PaneId) -> Self {
-        Self { root, focus }
+        let mut layout = Self {
+            root,
+            focus,
+            focus_history: FocusHistory::default(),
+        };
+        layout.focus_history.record(focus);
+        layout
     }
 }
 
@@ -281,10 +327,12 @@ pub fn find_in_direction(
     focused: &PaneInfo,
     direction: NavDirection,
     panes: &[PaneInfo],
+    history: &FocusHistory,
 ) -> Option<PaneId> {
     let fr = focused.rect;
 
-    panes
+    // Candidates strictly in `direction` with cross-axis overlap.
+    let candidates: Vec<(usize, &PaneInfo)> = panes
         .iter()
         .enumerate()
         .filter(|(_, p)| p.id != focused.id)
@@ -305,14 +353,35 @@ pub fn find_in_direction(
                 }
             }
         })
+        .collect();
+
+    // Nearest boundary: the adjacent sibling subtree tiles the shared edge at the
+    // smallest edge distance; deeper panes sit farther in. This is the structural
+    // "near-edge" filter expressed geometrically (gapless BSP => equal for all
+    // near-edge panes).
+    let min_edge = candidates
+        .iter()
+        .map(|(_, p)| pane_edge_distance(p.rect, fr, direction))
+        .min()?;
+    let nearest: Vec<(usize, &PaneInfo)> = candidates
+        .into_iter()
+        .filter(|(_, p)| pane_edge_distance(p.rect, fr, direction) == min_edge)
+        .collect();
+
+    // History path: most-recently-focused adjacent pane (clock monotonic => unique max).
+    if let Some((_, p)) = nearest
+        .iter()
+        .filter(|(_, p)| history.get(p.id) > 0)
+        .max_by_key(|(_, p)| history.get(p.id))
+    {
+        return Some(p.id);
+    }
+
+    // Geometric fallback (unchanged tiebreak), restricted to the nearest column/row.
+    nearest
+        .into_iter()
         .min_by_key(|(index, p)| {
             let r = p.rect;
-            let edge_distance = match direction {
-                NavDirection::Left => fr.x.saturating_sub(r.x + r.width),
-                NavDirection::Right => r.x.saturating_sub(fr.x + fr.width),
-                NavDirection::Up => fr.y.saturating_sub(r.y + r.height),
-                NavDirection::Down => r.y.saturating_sub(fr.y + fr.height),
-            };
             let overlap = match direction {
                 NavDirection::Left | NavDirection::Right => {
                     range_overlap_amount(r.y, r.height, fr.y, fr.height)
@@ -329,9 +398,18 @@ pub fn find_in_direction(
                     range_center_distance(r.x, r.width, fr.x, fr.width)
                 }
             };
-            (edge_distance, Reverse(overlap), center_distance, *index)
+            (Reverse(overlap), center_distance, *index)
         })
         .map(|(_, p)| p.id)
+}
+
+fn pane_edge_distance(candidate: Rect, focused: Rect, direction: NavDirection) -> u16 {
+    match direction {
+        NavDirection::Left => focused.x.saturating_sub(candidate.x + candidate.width),
+        NavDirection::Right => candidate.x.saturating_sub(focused.x + focused.width),
+        NavDirection::Up => focused.y.saturating_sub(candidate.y + candidate.height),
+        NavDirection::Down => candidate.y.saturating_sub(focused.y + focused.height),
+    }
 }
 
 fn ranges_overlap(a_start: u16, a_len: u16, b_start: u16, b_len: u16) -> bool {
@@ -950,8 +1028,128 @@ mod tests {
         let panes = vec![focused.clone(), small_overlap_first, larger_overlap_second];
 
         assert_eq!(
-            find_in_direction(&focused, NavDirection::Left, &panes),
+            find_in_direction(
+                &focused,
+                NavDirection::Left,
+                &panes,
+                &FocusHistory::default()
+            ),
             Some(pane(3))
+        );
+    }
+
+    fn find_from(layout: &TileLayout, from: PaneId, direction: NavDirection) -> Option<PaneId> {
+        let panes = layout.panes(Rect::new(0, 0, 100, 40));
+        let focused = panes.iter().find(|p| p.id == from).expect("pane exists");
+        find_in_direction(focused, direction, &panes, layout.focus_history())
+    }
+
+    // root = H(L, R=V(RT, RB))
+    fn side_stacked_layout() -> TileLayout {
+        TileLayout::from_saved(
+            Node::Split {
+                direction: Direction::Horizontal,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(pane(1))), // L
+                second: Box::new(Node::Split {
+                    direction: Direction::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(Node::Pane(pane(2))),  // RT
+                    second: Box::new(Node::Pane(pane(3))), // RB
+                }),
+            },
+            pane(1),
+        )
+    }
+
+    #[test]
+    fn navigate_returns_to_last_focused_pane_in_subtree() {
+        let mut layout = side_stacked_layout();
+        // Visit RB, then move back to L; moving Right must return to RB (MRU),
+        // not the geometric winner RT.
+        layout.focus_pane(pane(3)); // RB
+        layout.focus_pane(pane(1)); // L
+        assert_eq!(
+            find_from(&layout, pane(1), NavDirection::Right),
+            Some(pane(3))
+        );
+        // Reciprocity: from RB moving Left returns L.
+        assert_eq!(
+            find_from(&layout, pane(3), NavDirection::Left),
+            Some(pane(1))
+        );
+    }
+
+    #[test]
+    fn navigate_adjacency_beats_recency() {
+        // root = H(L, R=H(RL, RR)); RR is more recent but sits in the far column.
+        let mut layout = TileLayout::from_saved(
+            Node::Split {
+                direction: Direction::Horizontal,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(pane(1))), // L
+                second: Box::new(Node::Split {
+                    direction: Direction::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(Node::Pane(pane(2))),  // RL
+                    second: Box::new(Node::Pane(pane(3))), // RR
+                }),
+            },
+            pane(1),
+        );
+        layout.focus_pane(pane(3)); // RR (recent, far column)
+        layout.focus_pane(pane(1)); // L
+                                    // Only the adjacent column (RL) is eligible; RR is excluded despite recency.
+        assert_eq!(
+            find_from(&layout, pane(1), NavDirection::Right),
+            Some(pane(2))
+        );
+    }
+
+    #[test]
+    fn navigate_without_history_uses_geometry() {
+        // Only L (root focus) is stamped; RT/RB have no history, so geometry decides.
+        let layout = side_stacked_layout();
+        assert_eq!(
+            find_from(&layout, pane(1), NavDirection::Right),
+            Some(pane(2))
+        );
+    }
+
+    #[test]
+    fn closing_non_focused_pane_does_not_corrupt_navigation_history() {
+        // root = H(L, R=V(RT, RB=H(RBL, RBR)))
+        let mut layout = TileLayout::from_saved(
+            Node::Split {
+                direction: Direction::Horizontal,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(pane(1))), // L
+                second: Box::new(Node::Split {
+                    direction: Direction::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(Node::Pane(pane(2))), // RT
+                    second: Box::new(Node::Split {
+                        direction: Direction::Horizontal,
+                        ratio: 0.5,
+                        first: Box::new(Node::Pane(pane(3))), // RBL
+                        second: Box::new(Node::Pane(pane(4))), // RBR
+                    }),
+                }),
+            },
+            pane(1),
+        );
+        layout.focus_pane(pane(2)); // RT becomes MRU on the right
+        layout.focus_pane(pane(1)); // focus returns to L
+
+        // Close a background, non-focused pane, as handle_pane_died does.
+        assert!(layout.close_pane(pane(4)));
+        assert_eq!(layout.focused(), pane(1)); // focus is untouched
+
+        // RT is still the most-recently-focused right pane; closing RBR's sibling
+        // must not have stamped a bystander (RBL) as MRU.
+        assert_eq!(
+            find_from(&layout, pane(1), NavDirection::Right),
+            Some(pane(2))
         );
     }
 }
