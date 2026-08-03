@@ -1026,6 +1026,17 @@
             "on",
             "off"
           ]
+        },
+        {
+          "key": "ui.sound.agents.jcode",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Jcode agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
         }
       ]
     },
