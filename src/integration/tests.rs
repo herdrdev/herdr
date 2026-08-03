@@ -2734,6 +2734,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_HOOK_ASSET,
             MASTRACODE_INTEGRATION_VERSION,
         ),
+        ("jcode", JCODE_HOOK_ASSET, JCODE_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -2863,6 +2864,12 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
     assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
     assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));
+    assert!(JCODE_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=jcode"));
+    assert!(JCODE_HOOK_ASSET.contains("JCODE_HOOK_SESSION_ID"));
+    assert!(JCODE_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(JCODE_HOOK_ASSET.contains("herdr:jcode"));
+    assert!(!JCODE_HOOK_ASSET.contains("pane.report_agent\""));
+    assert!(!JCODE_HOOK_ASSET.contains("pane.release_agent"));
 }
 
 #[test]
@@ -4052,5 +4059,184 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
 
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn install_and_uninstall_jcode_preserve_existing_session_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode = home.join(".jcode");
+    fs::create_dir_all(&jcode).unwrap();
+    let config_path = jcode.join("config.toml");
+    let previous = "~/bin/session-observer --label 'user hook'";
+    fs::write(
+        &config_path,
+        format!(
+            "# keep this comment\n[display]\nemoji = false\n\n[hooks]\nturn_end = \"notify\"\nsession_start = {}\n",
+            toml_basic_string(previous)
+        ),
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_jcode().unwrap();
+    let installed_config = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_command(&installed_config, &config_path)
+            .unwrap()
+            .as_deref(),
+        Some(jcode_hook_command(&installed.hook_path).as_str())
+    );
+    assert!(installed_config.contains("# keep this comment"));
+    assert!(installed_config.contains("turn_end = \"notify\""));
+    let previous_path = jcode.join("hooks").join(JCODE_PREVIOUS_HOOK_INSTALL_NAME);
+    assert_eq!(fs::read_to_string(&previous_path).unwrap(), previous);
+
+    // Reinstalling must not replace the saved user command with Herdr's own
+    // wrapper command.
+    install_jcode().unwrap();
+    assert_eq!(fs::read_to_string(&previous_path).unwrap(), previous);
+    assert_eq!(
+        integration_status_at(
+            crate::api::schema::IntegrationTarget::Jcode,
+            installed.hook_path.clone(),
+            JCODE_INTEGRATION_VERSION,
+        )
+        .state,
+        IntegrationStatusKind::Current
+    );
+
+    let result = uninstall_jcode().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_config);
+    assert!(!previous_path.exists());
+    let restored_config = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_command(&restored_config, &config_path)
+            .unwrap()
+            .as_deref(),
+        Some(previous)
+    );
+    assert!(restored_config.contains("# keep this comment"));
+    assert!(restored_config.contains("turn_end = \"notify\""));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn uninstall_jcode_does_not_clobber_a_user_replacement_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode = home.join(".jcode");
+    fs::create_dir_all(&jcode).unwrap();
+    let config_path = jcode.join("config.toml");
+    fs::write(&config_path, "[hooks]\nsession_start = \"first\"\n").unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_jcode().unwrap();
+    let current = fs::read_to_string(&config_path).unwrap();
+    let replacement =
+        set_jcode_session_start_command(&current, &config_path, Some("second")).unwrap();
+    fs::write(&config_path, replacement).unwrap();
+
+    let result = uninstall_jcode().unwrap();
+    assert!(!result.updated_config);
+    let remaining = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        jcode_session_start_command(&remaining, &config_path)
+            .unwrap()
+            .as_deref(),
+        Some("second")
+    );
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
+    use std::io::{BufRead, Write};
+    use std::os::unix::net::UnixListener;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode = home.join(".jcode");
+    fs::create_dir_all(&jcode).unwrap();
+    let previous_script = base.join("previous.sh");
+    let previous_output = base.join("previous.out");
+    fs::write(
+        &previous_script,
+        "#!/bin/sh\nprintf '%s' \"$JCODE_HOOK_SESSION_ID\" >\"$1\"\n",
+    )
+    .unwrap();
+    let previous_command = format!(
+        "sh {} {}",
+        shell_single_quote(&previous_script.display().to_string()),
+        shell_single_quote(&previous_output.display().to_string())
+    );
+    fs::write(
+        jcode.join("config.toml"),
+        format!(
+            "[hooks]\nsession_start = {}\n",
+            toml_basic_string(&previous_command)
+        ),
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+    let installed = install_jcode().unwrap();
+
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        stream
+            .write_all(b"{\"id\":\"ok\",\"result\":{}}\n")
+            .unwrap();
+        serde_json::from_str::<Value>(&line).unwrap()
+    });
+
+    let status = std::process::Command::new("bash")
+        .arg(&installed.hook_path)
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .env("JCODE_HOOK_SESSION_ID", "jcode-session-123")
+        .env("JCODE_HOOK_SOURCE", "resume")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let request = server.join().unwrap();
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["source"], "herdr:jcode");
+    assert_eq!(request["params"]["agent"], "jcode");
+    assert_eq!(request["params"]["pane_id"], "w1:p2");
+    assert_eq!(request["params"]["agent_session_id"], "jcode-session-123");
+    assert_eq!(request["params"]["session_start_source"], "resume");
+
+    for _ in 0..100 {
+        if previous_output.is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        fs::read_to_string(&previous_output).unwrap(),
+        "jcode-session-123"
+    );
+
+    std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }

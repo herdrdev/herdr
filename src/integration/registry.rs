@@ -24,6 +24,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Mastracode => "mastracode",
         crate::api::schema::IntegrationTarget::AntigravityCli => "antigravity-cli",
         crate::api::schema::IntegrationTarget::Grok => "grok",
+        crate::api::schema::IntegrationTarget::Jcode => "jcode",
     }
 }
 
@@ -53,6 +54,7 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
         crate::api::schema::IntegrationTarget::Grok => &["grok"],
+        crate::api::schema::IntegrationTarget::Jcode => &["jcode"],
     }
 }
 
@@ -264,7 +266,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 16] {
+); 17] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -352,6 +354,11 @@ fn integration_specs() -> [(
             grok_dir().map(|dir| dir.join("hooks").join(super::GROK_HOOK_INSTALL_NAME)),
             super::GROK_INTEGRATION_VERSION,
         ),
+        (
+            crate::api::schema::IntegrationTarget::Jcode,
+            jcode_dir().map(|dir| dir.join("hooks").join(super::JCODE_HOOK_INSTALL_NAME)),
+            super::JCODE_INTEGRATION_VERSION,
+        ),
     ]
 }
 
@@ -421,6 +428,20 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
         )
 }
 
+fn jcode_hook_config_is_valid(hook_path: &Path) -> bool {
+    let Some(jcode_dir) = hook_path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    let config_path = jcode_dir.join("config.toml");
+    fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|content| {
+            super::config_edit::jcode_session_start_command(&content, &config_path).ok()
+        })
+        .flatten()
+        .is_some_and(|command| command == super::targets::jcode_hook_command(hook_path))
+}
+
 pub(crate) fn integration_status_at(
     target: crate::api::schema::IntegrationTarget,
     path: PathBuf,
@@ -458,6 +479,12 @@ pub(crate) fn integration_status_at(
     if target == crate::api::schema::IntegrationTarget::Opencode
         && state == super::IntegrationStatusKind::Current
         && !opencode_tui_integration_is_valid(&path, expected_version)
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+    if target == crate::api::schema::IntegrationTarget::Jcode
+        && state == super::IntegrationStatusKind::Current
+        && !jcode_hook_config_is_valid(&path)
     {
         state = super::IntegrationStatusKind::Outdated;
     }

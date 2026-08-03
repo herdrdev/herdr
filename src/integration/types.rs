@@ -112,6 +112,20 @@ pub(crate) struct GrokUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct JcodeInstallPaths {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct JcodeUninstallResult {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_config: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct QodercliUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,

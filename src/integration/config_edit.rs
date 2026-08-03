@@ -2,6 +2,7 @@ use std::io;
 use std::path::Path;
 
 use serde_json::{json, Map, Value};
+use toml_edit::{value, DocumentMut, Item, Table};
 
 use super::command::{hook_command, legacy_bash_hook_command};
 #[cfg(windows)]
@@ -808,6 +809,63 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
     } else {
         result
     }
+}
+
+pub(crate) fn jcode_session_start_command(
+    content: &str,
+    config_path: &Path,
+) -> io::Result<Option<String>> {
+    let document = parse_jcode_config(content, config_path)?;
+    Ok(document
+        .get("hooks")
+        .and_then(Item::as_table_like)
+        .and_then(|hooks| hooks.get("session_start"))
+        .and_then(Item::as_str)
+        .map(str::to_string))
+}
+
+pub(crate) fn set_jcode_session_start_command(
+    content: &str,
+    config_path: &Path,
+    command: Option<&str>,
+) -> io::Result<String> {
+    let mut document = parse_jcode_config(content, config_path)?;
+    match command {
+        Some(command) => {
+            if !document.contains_key("hooks") {
+                document.insert("hooks", Item::Table(Table::new()));
+            }
+            let hooks = document
+                .get_mut("hooks")
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(|| {
+                    io::Error::other(format!(
+                        "jcode hooks at {} must be a TOML table",
+                        config_path.display()
+                    ))
+                })?;
+            hooks.insert("session_start", value(command));
+        }
+        None => {
+            let remove_empty_hooks =
+                if let Some(hooks) = document.get_mut("hooks").and_then(Item::as_table_like_mut) {
+                    hooks.remove("session_start");
+                    hooks.is_empty()
+                } else {
+                    false
+                };
+            if remove_empty_hooks {
+                document.remove("hooks");
+            }
+        }
+    }
+    Ok(document.to_string())
+}
+
+fn parse_jcode_config(content: &str, config_path: &Path) -> io::Result<DocumentMut> {
+    content.parse::<DocumentMut>().map_err(|err| {
+        io::Error::other(format!("failed to parse {}: {err}", config_path.display()))
+    })
 }
 
 pub(crate) fn toml_basic_string(value: &str) -> String {
