@@ -4146,7 +4146,7 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
         .status()
         .unwrap();
     assert!(status.success());
-    for _ in 0..100 {
+    for _ in 0..500 {
         if previous_output.is_file() {
             break;
         }
@@ -4161,8 +4161,22 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     let socket_path = PathBuf::from(format!("/tmp/herdr-jcode-{}.sock", std::process::id()));
     let _ = fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "jcode hook did not connect to the Herdr socket within 5 seconds"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("failed to accept Jcode hook connection: {error}"),
+            }
+        };
         let mut line = String::new();
         std::io::BufReader::new(stream.try_clone().unwrap())
             .read_line(&mut line)
@@ -4192,7 +4206,7 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     assert_eq!(request["params"]["agent_session_id"], "jcode-session-123");
     assert_eq!(request["params"]["session_start_source"], "resume");
 
-    for _ in 0..100 {
+    for _ in 0..500 {
         if previous_output.is_file() {
             break;
         }
