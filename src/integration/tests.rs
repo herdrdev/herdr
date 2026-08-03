@@ -2781,6 +2781,14 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
     assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
     assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));
+    // Hermes v4+ must report session refs for resurrect to work
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("HERDR_INTEGRATION_VERSION=4"));
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("agent_session_id"));
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("pane.report_agent_session"));
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("session_start_source"));
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("session_id"));
+    assert!(HERMES_PLUGIN_INIT_ASSET.contains("_report_session"));
+    assert!(!HERMES_PLUGIN_INIT_ASSET.contains("pane.release_agent"));
 }
 
 #[test]

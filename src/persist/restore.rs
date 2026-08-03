@@ -788,8 +788,32 @@ fn restore_plan_for_snapshot(
     if !resume_agents_on_restore {
         return None;
     }
-    let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    let persisted = match persisted_agent_session_from_snapshot(session) {
+        Some(p) => p,
+        None => {
+            warn!(
+                source = %session.source,
+                agent = %session.agent,
+                kind = ?session.kind,
+                value = %session.value,
+                "agent resume skipped: no valid session reference in snapshot"
+            );
+            return None;
+        }
+    };
+    match crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref) {
+        Some(plan) => Some(plan),
+        None => {
+            warn!(
+                source = %session.source,
+                agent = %session.agent,
+                session_kind = ?persisted.session_ref.kind,
+                session_value = %persisted.session_ref.value,
+                "agent resume skipped: could not build resume plan"
+            );
+            None
+        }
+    }
 }
 
 fn persisted_agent_session_from_snapshot(
@@ -1055,6 +1079,59 @@ mod tests {
             vec!["pi", "--session", pi_session_path.as_str()]
         );
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_none());
+    }
+
+    #[test]
+    fn restore_plan_for_snapshot_skips_when_resume_disabled() {
+        // When resume_agents_on_restore=false, restore_plan_for_snapshot must return None
+        // regardless of session validity. This is the silent skip path.
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Path,
+            value: test_session_path("pi-session.jsonl"),
+        };
+        assert!(restore_plan_for_snapshot(&session, false).is_none());
+    }
+
+    #[test]
+    fn restore_plan_for_snapshot_skips_non_official_source() {
+        // Non-official sources silently return None (resume skipped).
+        // This exercises the "no valid session reference" warn path.
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "third_party:custom".into(),
+            agent: "custom".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session-123".into(),
+        };
+        assert!(restore_plan_for_snapshot(&session, true).is_none());
+    }
+
+    #[test]
+    fn restore_plan_for_snapshot_skips_hermes_with_path_kind() {
+        // Hermes uses Id kind only. Path kind for non-pi/omp agents returns None.
+        // This exercises the "could not build resume plan" warn path.
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:hermes".into(),
+            agent: "hermes".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Path,
+            value: test_session_path("hermes-session.jsonl"),
+        };
+        assert!(restore_plan_for_snapshot(&session, true).is_none());
+    }
+
+    #[test]
+    fn restore_plan_for_snapshot_builds_plan_for_hermes_id() {
+        // Hermes v4+ reports session_id (Id kind). Resume plan should be built.
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:hermes".into(),
+            agent: "hermes".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "hermes-session-abc".into(),
+        };
+        let plan = restore_plan_for_snapshot(&session, true)
+            .expect("hermes Id session should produce a resume plan");
+        assert_eq!(plan.argv, vec!["hermes", "--resume", "hermes-session-abc"]);
     }
 
     #[test]
