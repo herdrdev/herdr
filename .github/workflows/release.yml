@@ -163,11 +163,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
       - name: Validate release inputs
         run: |
           python3 scripts/changelog.py validate-product-announcement
           test -f docs/next/README.md
           test -f docs/next/README.zh-CN.md
+          (cd website && bun install --frozen-lockfile && bun run test && bun run build:draft)
 
   release:
     needs: [build, flake-check, validate-release-inputs]
@@ -335,6 +341,9 @@ jobs:
   update-latest-json:
     needs: release
     runs-on: ubuntu-latest
+    concurrency:
+      group: docs-publish-master
+      cancel-in-progress: false
     permissions:
       contents: write
 
@@ -363,6 +372,11 @@ jobs:
           python3 scripts/changelog.py validate-product-announcement --path "$ANNOUNCEMENT_PATH"
           RELEASE_PROTOCOL=$(git show "${GITHUB_REF_NAME}:src/protocol/wire.rs" | python3 -c 'import re, sys; match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", sys.stdin.read()); sys.exit(1) if match is None else print(match.group(1))')
 
+          DOCS_CURRENT=$(node website/scripts/docs-versions.mjs current)
+          if [ "$DOCS_CURRENT" != "$VERSION" ]; then
+            echo "Archived v$VERSION documentation without moving current docs backward from v$DOCS_CURRENT"
+            exit 0
+          fi
           CURRENT_VERSION=$(python3 -c 'import json; print(json.load(open("website/latest.json")).get("version", ""))')
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then
             echo "website/latest.json is already at v$VERSION"
@@ -380,11 +394,12 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md README.zh-CN.md docs/versions website/latest.json website/src/content/docs website/src/data/config-reference.json docs/next/product-announcement.json
+          git add -A README.md README.zh-CN.md docs/versions website/latest.json website/src/content/docs website/src/data/config-reference.json docs/next/product-announcement.json
           git diff --cached --quiet || git commit -m "docs: update website manifest for v$VERSION"
           for attempt in 1 2 3; do
             git pull --rebase origin master
             node website/scripts/docs-versions.mjs check
+            node website/scripts/docs-preview.mjs check
             (cd website && bun install --frozen-lockfile && bun run build)
             if git push origin master; then
               exit 0

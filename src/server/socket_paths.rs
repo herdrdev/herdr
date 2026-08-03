@@ -54,14 +54,6 @@ pub(crate) fn derive_client_socket_from_api_socket(api_socket_path: &Path) -> Pa
         .unwrap_or("herdr");
     let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
 
-    if api_socket_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext == "sock")
-    {
-        return parent.join(format!("{stem}-client.sock"));
-    }
-
     parent.join(format!("{stem}-client.sock"))
 }
 

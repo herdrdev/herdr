@@ -1,4 +1,5 @@
 mod actions;
+mod claude_settings;
 mod command;
 mod config_edit;
 mod env;
@@ -196,6 +197,32 @@ const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
 const CURSOR_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const CURSOR_HOOK_ASSET: &str = include_str!("assets/cursor/herdr-agent-state.sh");
 const CURSOR_INTEGRATION_VERSION: u32 = 1;
+#[cfg(windows)]
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+#[cfg(not(windows))]
+const ANTIGRAVITY_CLI_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+#[cfg(windows)]
+const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
+    include_str!("assets/antigravity_cli/herdr-agent-state.ps1");
+#[cfg(not(windows))]
+const ANTIGRAVITY_CLI_HOOK_ASSET: &str =
+    include_str!("assets/antigravity_cli/herdr-agent-state.sh");
+const ANTIGRAVITY_CLI_INTEGRATION_VERSION: u32 = 1;
+/// Antigravity CLI keys `hooks.json` by hook name, so every Herdr entry lives
+/// under one Herdr-owned block that install rewrites and uninstall removes.
+const ANTIGRAVITY_CLI_HOOK_BLOCK_NAME: &str = "herdr";
+const ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC: u64 = 10;
+/// `(event, reported action)`. Session-only: `PreInvocation` is the only event
+/// we need because it carries `conversationId`. The others cannot express
+/// lifecycle safely — Antigravity CLI has no blocked event, `PostInvocation` is
+/// skipped on interruption, and `Stop` is end-of-turn rather than process exit.
+/// Screen detection owns agent state instead.
+///
+/// `PreInvocation` takes a flat handler list; only the `PreToolUse`/`PostToolUse`
+/// events accept a `matcher`/`hooks` wrapper, and sending one here would
+/// invalidate the whole file.
+const ANTIGRAVITY_CLI_HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")];
+const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 const MASTRACODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const MASTRACODE_HOOK_ASSET: &str = include_str!("assets/mastracode/herdr-agent-state.sh");
 const MASTRACODE_INTEGRATION_VERSION: u32 = 2;
@@ -219,7 +246,6 @@ const GROK_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
 const GROK_HOOK_CONFIG_INSTALL_NAME: &str = "herdr.json";
 const GROK_HOOK_ASSET: &str = include_str!("assets/grok/herdr-agent-state.sh");
 const GROK_INTEGRATION_VERSION: u32 = 1;
-const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

@@ -40,6 +40,10 @@ if (stable.includes('name="robots" content="noindex')) {
   throw new Error('stable docs must remain indexable');
 }
 assertIncludes(preview, 'data-pagefind-filter="version[content]" content="preview"');
+assertIncludes(preview, `Preview build <code dir="auto">${versions.preview.build_id}</code>`);
+if (versions.preview.commit !== 'master') {
+  assertIncludes(preview, versions.preview.commit.slice(0, 12));
+}
 assertIncludes(preview, 'name="robots" content="noindex, nofollow"');
 assertIncludes(archived, `data-pagefind-filter="version[content]" content="${versions.current}"`);
 assertIncludes(archived, 'name="robots" content="noindex, nofollow"');

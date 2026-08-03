@@ -181,8 +181,11 @@ file: ../../../public/assets/logo.svg
         self.assertIn("file: ../../../../public/assets/logo.svg", output)
         self.assertIn("from '../../../components/ConfigReference.astro'", output)
         self.assertIn("from '../../../../components/LocaleWidget.astro'", output)
-        self.assertIn("Next docs describe unreleased work", output)
-        self.assertIn("edit/master/docs/next/website/src/content/docs/", output)
+        self.assertIn("Preview build `2026-07-29-44b3adb12552`", output)
+        self.assertIn(
+            "blob/44b3adb125524ea9a55739eee3776f922f2115ad/docs/next/website/src/content/docs/",
+            output,
+        )
 
     def test_version_docs_rewrite_links_and_source_paths(self):
         source = """---

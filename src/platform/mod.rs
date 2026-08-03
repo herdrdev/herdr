@@ -35,6 +35,13 @@ pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::Co
     pane_custom_command_pty_builder_platform(command)
 }
 
+pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuilder) {
+    apply_pane_runtime_marker_platform(command);
+}
+
+#[cfg(not(windows))]
+fn apply_pane_runtime_marker_platform(_command: &mut portable_pty::CommandBuilder) {}
+
 pub(crate) fn configure_background_command(command: &mut std::process::Command) {
     configure_background_command_platform(command);
 }

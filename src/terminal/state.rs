@@ -1234,7 +1234,7 @@ impl TerminalState {
                     && current_kind == crate::agent_resume::AgentSessionRefKind::Id
                     && session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
                     && current_value != session_ref.value
-                    && !Self::session_start_source_allows_session_replacement(
+                    && !Self::session_report_allows_session_replacement(
                         source,
                         agent_label,
                         session_start_source,
@@ -1267,7 +1267,7 @@ impl TerminalState {
                 })
     }
 
-    fn session_start_source_allows_session_replacement(
+    fn session_report_allows_session_replacement(
         source: &str,
         agent_label: &str,
         session_start_source: Option<&str>,
@@ -1291,6 +1291,7 @@ impl TerminalState {
                     "omp",
                     Some("startup" | "new" | "resume" | "fork")
                 )
+                | ("herdr:antigravity_cli", "agy", None)
         )
     }
 
@@ -1413,12 +1414,12 @@ impl TerminalState {
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
             return None;
         }
-        let session_replacement_allowed = Self::session_start_source_allows_session_replacement(
+        let session_replacement_allowed = Self::session_report_allows_session_replacement(
             &source,
             &agent_label,
             session_start_source.as_deref(),
         );
-        let replacing_hermes_session =
+        let replacing_identity_only_session =
             crate::detect::session_identity_only_integration(&source, &agent_label)
                 && session_replacement_allowed
                 && self.current_session_identity_for_persistence().is_some_and(
@@ -1430,7 +1431,7 @@ impl TerminalState {
                             && current_value != session_ref.value
                     },
                 );
-        if replacing_hermes_session && !process_present {
+        if replacing_identity_only_session && !process_present {
             return None;
         }
         let owner_conflicts = self.current_session_owner_conflicts(&source, &agent_label);
@@ -2309,101 +2310,125 @@ mod tests {
     }
 
     #[test]
-    fn hermes_session_claim_leaves_state_to_detection() {
-        let mut terminal = test_terminal();
-        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
-        let session_ref = crate::agent_resume::AgentSessionRef::id("hermes-root").unwrap();
+    fn session_identity_claims_leave_state_to_detection() {
+        for (source, label, agent, start_source, replacement_source) in [
+            (
+                "herdr:hermes",
+                "hermes",
+                Agent::Hermes,
+                Some("startup"),
+                Some("resume"),
+            ),
+            (
+                "herdr:antigravity_cli",
+                "agy",
+                Agent::Antigravity,
+                None,
+                None,
+            ),
+        ] {
+            let mut terminal = test_terminal();
+            terminal.set_detected_state(Some(agent), AgentState::Idle);
+            let first_ref =
+                crate::agent_resume::AgentSessionRef::id(format!("{label}-root")).unwrap();
+            let first = terminal.set_agent_session_ref_for_session_start(
+                source.into(),
+                label.into(),
+                Some(first_ref.clone()),
+                Some(10),
+                start_source.map(str::to_string),
+            );
 
-        let session = terminal.set_agent_session_ref_for_session_start(
-            "herdr:hermes".into(),
-            "hermes".into(),
-            Some(session_ref.clone()),
-            Some(10),
-            Some("startup".into()),
-        );
+            assert!(first.is_some(), "{label} should accept its session");
+            assert!(terminal.hook_authority.is_none());
+            assert_eq!(terminal.state, AgentState::Idle);
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| &session.session_ref),
+                Some(&first_ref)
+            );
 
-        assert!(session.is_some());
-        assert!(terminal.hook_authority.is_none());
-        assert_eq!(
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| &session.session_ref),
-            Some(&session_ref)
-        );
+            terminal.set_detected_state(Some(agent), AgentState::Working);
+            let replacement_ref =
+                crate::agent_resume::AgentSessionRef::id(format!("{label}-replacement")).unwrap();
+            let replacement = terminal.set_agent_session_ref_for_session_start(
+                source.into(),
+                label.into(),
+                Some(replacement_ref.clone()),
+                Some(11),
+                start_source.map(str::to_string),
+            );
 
-        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Working);
+            assert!(
+                replacement.is_some_and(|mutation| mutation.session_ref_changed),
+                "{label} should replace its detected session"
+            );
+            assert!(terminal.hook_authority.is_none());
+            assert_eq!(terminal.state, AgentState::Working);
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| &session.session_ref),
+                Some(&replacement_ref)
+            );
 
-        assert_eq!(terminal.state, AgentState::Working);
-        assert!(terminal.hook_authority.is_none());
+            let legacy_state = terminal.set_hook_authority_with_session_ref(
+                source.into(),
+                label.into(),
+                AgentState::Blocked,
+                None,
+                Some(replacement_ref.clone()),
+                Some(12),
+            );
+            assert!(legacy_state.is_none());
+            assert!(terminal.hook_authority.is_none());
+            assert_eq!(terminal.state, AgentState::Working);
 
-        let replacement_ref =
-            crate::agent_resume::AgentSessionRef::id("hermes-replacement").unwrap();
-        let replacement = terminal.set_agent_session_ref_for_session_start(
-            "herdr:hermes".into(),
-            "hermes".into(),
-            Some(replacement_ref.clone()),
-            Some(11),
-            Some("startup".into()),
-        );
+            terminal.set_detected_state(None, AgentState::Unknown);
+            let background_ref =
+                crate::agent_resume::AgentSessionRef::id(format!("{label}-background")).unwrap();
+            let background_replacement = terminal.set_agent_session_ref_for_session_start(
+                source.into(),
+                label.into(),
+                Some(background_ref.clone()),
+                Some(13),
+                replacement_source.map(str::to_string),
+            );
+            assert!(
+                background_replacement.is_none(),
+                "{label} should reject a background replacement"
+            );
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| &session.session_ref),
+                Some(&replacement_ref)
+            );
 
-        assert!(replacement.is_some());
-        assert_eq!(terminal.state, AgentState::Working);
-        assert!(terminal.hook_authority.is_none());
-        assert_eq!(
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| &session.session_ref),
-            Some(&replacement_ref)
-        );
-
-        let legacy_state = terminal.set_hook_authority_with_session_ref(
-            "herdr:hermes".into(),
-            "hermes".into(),
-            AgentState::Blocked,
-            None,
-            Some(replacement_ref.clone()),
-            Some(12),
-        );
-        assert!(legacy_state.is_none());
-        assert_eq!(terminal.state, AgentState::Working);
-        assert!(terminal.hook_authority.is_none());
-
-        terminal.set_detected_state(None, AgentState::Unknown);
-        let background_replacement = terminal.set_agent_session_ref_for_session_start(
-            "herdr:hermes".into(),
-            "hermes".into(),
-            crate::agent_resume::AgentSessionRef::id("hermes-background"),
-            Some(13),
-            Some("resume".into()),
-        );
-        assert!(background_replacement.is_none());
-        assert_eq!(
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| &session.session_ref),
-            Some(&replacement_ref)
-        );
-
-        terminal.set_detected_state(Some(Agent::Hermes), AgentState::Idle);
-        let retried_ref = crate::agent_resume::AgentSessionRef::id("hermes-background").unwrap();
-        let retried_replacement = terminal.set_agent_session_ref_for_session_start(
-            "herdr:hermes".into(),
-            "hermes".into(),
-            Some(retried_ref.clone()),
-            Some(14),
-            Some("resume".into()),
-        );
-        assert!(retried_replacement.is_some());
-        assert_eq!(
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| &session.session_ref),
-            Some(&retried_ref)
-        );
+            terminal.set_detected_state(Some(agent), AgentState::Idle);
+            let retried_replacement = terminal.set_agent_session_ref_for_session_start(
+                source.into(),
+                label.into(),
+                Some(background_ref.clone()),
+                Some(14),
+                replacement_source.map(str::to_string),
+            );
+            assert!(
+                retried_replacement.is_some_and(|mutation| mutation.session_ref_changed),
+                "{label} should replace the session once detected"
+            );
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| &session.session_ref),
+                Some(&background_ref)
+            );
+        }
     }
 
     #[test]
