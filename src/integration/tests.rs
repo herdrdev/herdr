@@ -4220,10 +4220,17 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     // observer that occupied Jcode's session_start slot before installation.
     let no_python_path = base.join("no-python-bin");
     fs::create_dir_all(&no_python_path).unwrap();
-    std::os::unix::fs::symlink("/bin/sh", no_python_path.join("sh")).unwrap();
-    std::os::unix::fs::symlink("/bin/cat", no_python_path.join("cat")).unwrap();
-    std::os::unix::fs::symlink("/usr/bin/dirname", no_python_path.join("dirname")).unwrap();
-    let status = std::process::Command::new("/bin/sh")
+    let find_on_path = |command: &str| {
+        std::env::split_paths(&std::env::var_os("PATH").expect("PATH should be set"))
+            .map(|directory| directory.join(command))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{command} should be available on PATH"))
+    };
+    let shell = find_on_path("sh");
+    std::os::unix::fs::symlink(&shell, no_python_path.join("sh")).unwrap();
+    std::os::unix::fs::symlink(find_on_path("cat"), no_python_path.join("cat")).unwrap();
+    std::os::unix::fs::symlink(find_on_path("dirname"), no_python_path.join("dirname")).unwrap();
+    let status = std::process::Command::new(shell)
         .arg(&installed.hook_path)
         .env("PATH", &no_python_path)
         .env("JCODE_HOOK_SESSION_ID", "without-python")
