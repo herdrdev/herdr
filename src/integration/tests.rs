@@ -4094,6 +4094,14 @@ fn install_and_uninstall_jcode_preserve_existing_session_hook() {
     assert!(installed_config.contains("turn_end = \"notify\""));
     let previous_path = jcode.join("hooks").join(JCODE_PREVIOUS_HOOK_INSTALL_NAME);
     assert_eq!(fs::read_to_string(&previous_path).unwrap(), previous);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&previous_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     // Reinstalling must not replace the saved user command with Herdr's own
     // wrapper command.
@@ -4159,6 +4167,28 @@ fn uninstall_jcode_does_not_clobber_a_user_replacement_hook() {
     let _ = fs::remove_dir_all(base);
 }
 
+#[test]
+fn install_jcode_rejects_non_string_session_hook_without_overwriting_it() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let jcode = home.join(".jcode");
+    fs::create_dir_all(&jcode).unwrap();
+    let config_path = jcode.join("config.toml");
+    fs::write(&config_path, "[hooks]\nsession_start = [\"first\"]\n").unwrap();
+    std::env::set_var("HOME", &home);
+
+    let error = install_jcode().unwrap_err();
+    assert!(error.to_string().contains("must be a string"));
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        "[hooks]\nsession_start = [\"first\"]\n"
+    );
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
 #[cfg(unix)]
 #[test]
 fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
@@ -4170,16 +4200,9 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     let home = base.join("home");
     let jcode = home.join(".jcode");
     fs::create_dir_all(&jcode).unwrap();
-    let previous_script = base.join("previous.sh");
     let previous_output = base.join("previous.out");
-    fs::write(
-        &previous_script,
-        "#!/bin/sh\nprintf '%s' \"$JCODE_HOOK_SESSION_ID\" >\"$1\"\n",
-    )
-    .unwrap();
     let previous_command = format!(
-        "sh {} {}",
-        shell_single_quote(&previous_script.display().to_string()),
+        "JCODE_FORWARD_PREFIX=forwarded; printf '%s:%s' \"$JCODE_FORWARD_PREFIX\" \"$JCODE_HOOK_SESSION_ID\" | /bin/cat > {}",
         shell_single_quote(&previous_output.display().to_string())
     );
     fs::write(
@@ -4193,7 +4216,34 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     std::env::set_var("HOME", &home);
     let installed = install_jcode().unwrap();
 
-    let socket_path = base.join("herdr.sock");
+    // A missing Python runtime must disable only Herdr reporting, never the
+    // observer that occupied Jcode's session_start slot before installation.
+    let no_python_path = base.join("no-python-bin");
+    fs::create_dir_all(&no_python_path).unwrap();
+    std::os::unix::fs::symlink("/bin/sh", no_python_path.join("sh")).unwrap();
+    std::os::unix::fs::symlink("/bin/cat", no_python_path.join("cat")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/dirname", no_python_path.join("dirname")).unwrap();
+    let status = std::process::Command::new("/bin/sh")
+        .arg(&installed.hook_path)
+        .env("PATH", &no_python_path)
+        .env("JCODE_HOOK_SESSION_ID", "without-python")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    for _ in 0..100 {
+        if previous_output.is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        fs::read_to_string(&previous_output).unwrap(),
+        "forwarded:without-python"
+    );
+    fs::remove_file(&previous_output).unwrap();
+
+    let socket_path = PathBuf::from(format!("/tmp/herdr-jcode-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path).unwrap();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -4234,9 +4284,10 @@ fn jcode_hook_forwards_existing_hook_and_reports_official_session() {
     }
     assert_eq!(
         fs::read_to_string(&previous_output).unwrap(),
-        "jcode-session-123"
+        "forwarded:jcode-session-123"
     );
 
+    let _ = fs::remove_file(&socket_path);
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }

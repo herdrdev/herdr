@@ -696,7 +696,7 @@ pub(crate) fn uninstall_target(
             }
             if result.updated_config {
                 messages.push(format!(
-                    "restored jcode session_start hook in {}",
+                    "updated jcode session_start hook in {}",
                     result.config_path.display()
                 ));
             } else {
