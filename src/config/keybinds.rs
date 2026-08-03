@@ -436,7 +436,7 @@ impl Config {
         let (prefix, prefix_diag) = parse_key_combo_with_diagnostic(
             &self.keys.prefix,
             "keys.prefix",
-            (KeyCode::Char('b'), KeyModifiers::CONTROL),
+            (KeyCode::Esc, KeyModifiers::NONE),
         );
         if let Some(diag) = &prefix_diag {
             warn!(message = %diag, "config diagnostic");
@@ -1088,6 +1088,16 @@ fn parse_binding_string(raw: &str) -> Option<ParsedBinding> {
         },
         label,
     }))
+}
+
+/// Canonical label a binding string parses back to, or `None` when the string
+/// is not a valid single binding.
+#[cfg(test)]
+pub(crate) fn test_parse_binding_label(raw: &str) -> Option<String> {
+    match parse_binding_string(raw)? {
+        ParsedBinding::Single(binding) => Some(binding.label),
+        ParsedBinding::Range(_) => None,
+    }
 }
 
 pub fn format_key_combo(binding: KeyCombo) -> String {

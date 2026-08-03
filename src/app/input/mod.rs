@@ -38,10 +38,11 @@ fn modified_url_click_modifier_matches_terminal_mouse_reporting() {
 
 mod clipboard;
 mod copy_mode;
-mod modal;
+pub(super) mod modal;
 mod mouse;
 mod navigate;
 mod overlays;
+mod palette;
 mod selection;
 mod settings;
 mod sidebar;
@@ -49,13 +50,14 @@ mod terminal;
 
 pub(crate) use self::{
     modal::{
-        handle_global_menu_key, handle_keybind_help_key, handle_navigator_key,
-        insert_keybind_help_query_text, insert_navigator_search_text, insert_rename_input_text,
-        open_new_workspace_dialog,
+        handle_global_menu_key, handle_navigator_key, insert_navigator_search_text,
+        insert_rename_input_text, open_new_workspace_dialog,
     },
     navigate::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
+        NavigateAction,
     },
+    palette::insert_keybind_help_query_text,
     settings::open_settings_at,
 };
 use self::{
@@ -111,7 +113,7 @@ impl App {
                 }
                 Mode::Settings => self.handle_settings_key(key_event),
                 Mode::GlobalMenu => handle_global_menu_key(&mut self.state, key_event),
-                Mode::KeybindHelp => handle_keybind_help_key(&mut self.state, key),
+                Mode::KeybindHelp => self.handle_keybind_help_key(key),
                 Mode::Navigator => {
                     handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
                 }
@@ -175,7 +177,7 @@ impl App {
                 true
             }
             Mode::KeybindHelp => {
-                if !self.state.keybind_help.search_focused {
+                if self.state.keybind_help.capture.is_some() {
                     return false;
                 }
                 insert_keybind_help_query_text(&mut self.state, text);
@@ -659,7 +661,7 @@ pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
             .as_ref()
             .is_some_and(|open| open.search_focused),
         Mode::Navigator => state.navigator.search_focused,
-        Mode::KeybindHelp => state.keybind_help.search_focused,
+        Mode::KeybindHelp => state.keybind_help.capture.is_none(),
         Mode::Copy => state
             .copy_mode
             .as_ref()
@@ -865,18 +867,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_routes_to_keybind_help_query_only_when_searching() {
+    async fn paste_routes_to_command_palette_search_unless_capturing() {
         let mut app = test_app();
         app.state.mode = Mode::KeybindHelp;
-        app.handle_paste("ignored".into()).await;
-        assert!(app.state.keybind_help.query.is_empty());
-
-        app.state.keybind_help.search_focused = true;
         app.state.keybind_help.scroll = 3;
         app.handle_paste("work\nspace".into()).await;
 
         assert_eq!(app.state.keybind_help.query, "workspace");
         assert_eq!(app.state.keybind_help.scroll, 0);
+
+        app.state.keybind_help.capture = Some(crate::app::state::ShortcutCapture {
+            config_key: "split_vertical",
+            command_label: "split vertical".into(),
+            pending_conflict: None,
+        });
+        app.handle_paste("ignored".into()).await;
+        assert_eq!(app.state.keybind_help.query, "workspace");
     }
 
     #[tokio::test]
@@ -945,10 +951,14 @@ mod tests {
         assert!(modal_paste_target_active(&state));
 
         state.mode = Mode::KeybindHelp;
-        state.keybind_help.search_focused = false;
-        assert!(!modal_paste_target_active(&state));
-        state.keybind_help.search_focused = true;
         assert!(modal_paste_target_active(&state));
+        state.keybind_help.capture = Some(crate::app::state::ShortcutCapture {
+            config_key: "split_vertical",
+            command_label: "split vertical".into(),
+            pending_conflict: None,
+        });
+        assert!(!modal_paste_target_active(&state));
+        state.keybind_help.capture = None;
 
         state.mode = Mode::ConfirmClose;
         assert!(!modal_paste_target_active(&state));

@@ -159,15 +159,16 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # manifest_check = true
 
 [keys]
-# Prefix key to enter prefix mode (default: "ctrl+b")
-# Examples: "ctrl+b", "f12", "esc", "-"
+# Prefix key to enter prefix mode (default: "esc")
+# Examples: "esc", "ctrl+b", "f12", "-"
+# Press the prefix key twice to send it to the focused pane.
 # Action bindings use explicit syntax: "prefix+n" requires the prefix;
 # "ctrl+alt+n" is a direct terminal-mode shortcut.
 # Accepted key syntax: plain keys, ctrl/shift/alt/cmd/super modifiers, and special keys like enter/tab/esc/left/right/up/down.
 # Named punctuation such as minus, comma, ampersand, plus, and backtick is also accepted.
 # Most reliable direct bindings are ctrl+letter, function keys, and explicit modified chords.
 # alt+..., cmd/super, and punctuation-with-modifiers may depend on your terminal/tmux setup.
-# prefix = "ctrl+b"
+# prefix = "esc"
 
 # Prefix-mode actions
 # help = "prefix+?"

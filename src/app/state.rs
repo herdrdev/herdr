@@ -825,9 +825,9 @@ impl Mode {
     /// `sync_prefix_input_source` (gated by `switch_ascii_input_source_in_prefix`) so multi-level
     /// prefix commands keep ASCII until they return to the terminal.
     ///
-    /// Known limitation: the search boxes in `Navigator` and `KeybindHelp` are also held on ASCII,
-    /// since this `Mode`-level predicate can't see `search_focused` (non-ASCII filtering there
-    /// would need a runtime check).
+    /// Known limitation: the search box in `Navigator` is also held on ASCII, since this
+    /// `Mode`-level predicate can't see `search_focused` (non-ASCII filtering there would need a
+    /// runtime check). `KeybindHelp` is excluded because its search box is always focused.
     pub(crate) fn wants_ascii_input(self) -> bool {
         matches!(
             self,
@@ -840,7 +840,6 @@ impl Mode {
                 | Mode::ConfirmRemoveWorktree
                 | Mode::ContextMenu
                 | Mode::GlobalMenu
-                | Mode::KeybindHelp
         )
     }
 }
@@ -1392,11 +1391,36 @@ pub struct ProductAnnouncementState {
     pub preview: bool,
 }
 
+/// Command palette state. The search box is always focused; `capture` is set
+/// while the palette is waiting for the user to press a new shortcut for the
+/// selected command.
 #[derive(Default)]
 pub struct KeybindHelpState {
-    pub scroll: u16,
     pub query: String,
-    pub search_focused: bool,
+    pub selected: usize,
+    pub scroll: usize,
+    pub(crate) capture: Option<ShortcutCapture>,
+    /// Transient inline message shown in the footer (rebind result, why a
+    /// command could not run).
+    pub notice: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShortcutCapture {
+    /// `[keys]` field being rebound.
+    pub config_key: &'static str,
+    pub command_label: String,
+    /// Chord pressed that is already owned by another command, kept until the
+    /// user confirms the steal by pressing it again.
+    pub pending_conflict: Option<PendingShortcutConflict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingShortcutConflict {
+    /// Binding string as it would be written to config, e.g. `prefix+v`.
+    pub binding: String,
+    pub owner_config_key: &'static str,
+    pub owner_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1869,8 +1893,8 @@ impl AppState {
             pending_agent_notifications: std::collections::HashMap::new(),
             copy_feedback: None,
             outer_terminal_focus: None,
-            prefix_code: KeyCode::Char('b'),
-            prefix_mods: KeyModifiers::CONTROL,
+            prefix_code: KeyCode::Esc,
+            prefix_mods: KeyModifiers::NONE,
             default_sidebar_width: 26,
             sidebar_width: 26,
             sidebar_min_width: 18,

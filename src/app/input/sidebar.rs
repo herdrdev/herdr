@@ -197,7 +197,7 @@ impl AppState {
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
-        let mut labels = vec!["settings", "keybinds", "reload config"];
+        let mut labels = vec!["settings", "commands", "reload config"];
         if self.update_available.is_some() {
             labels.push("update ready");
         } else if self.latest_release_notes_available {
@@ -644,7 +644,7 @@ mod tests {
             app.state.global_menu_labels(),
             vec![
                 "settings",
-                "keybinds",
+                "commands",
                 "reload config",
                 "update ready",
                 "detach"
@@ -667,7 +667,7 @@ mod tests {
 
         assert_eq!(
             app.state.global_menu_labels(),
-            vec!["settings", "keybinds", "reload config", "detach"]
+            vec!["settings", "commands", "reload config", "detach"]
         );
 
         let menu = app.state.global_menu_rect();
@@ -691,7 +691,7 @@ mod tests {
             app.state.global_menu_labels(),
             vec![
                 "settings",
-                "keybinds",
+                "commands",
                 "reload config",
                 "what's new",
                 "detach"

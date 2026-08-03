@@ -42,18 +42,22 @@ pub(super) fn render_prefix_overlay(app: &AppState, frame: &mut Frame, area: Rec
     let help = prefix_rhs_label(&app.keybinds.help);
     let prefix = crate::config::format_key_combo((app.prefix_code, app.prefix_mods));
 
-    let line = Line::from(vec![
-        Span::styled(" PREFIX ", mode_style),
-        Span::raw(" "),
-        Span::styled("esc", key),
-        Span::styled(" cancel  ", dim),
+    let mut spans = vec![Span::styled(" PREFIX ", mode_style), Span::raw(" ")];
+    // With esc as the prefix, esc is claimed by "send prefix" and never cancels,
+    // so the cancel hint would be a lie.
+    if app.prefix_code != crossterm::event::KeyCode::Esc {
+        spans.push(Span::styled("esc", key));
+        spans.push(Span::styled(" cancel  ", dim));
+    }
+    spans.extend([
         Span::styled(prefix, key),
         Span::styled(" send prefix  ", dim),
         Span::styled(workspace_picker, key),
         Span::styled(" workspace nav  ", dim),
         Span::styled(help, key),
-        Span::styled(" keybinds", dim),
+        Span::styled(" commands", dim),
     ]);
+    let line = Line::from(spans);
 
     let overlay_y = area.y + area.height.saturating_sub(1);
     let overlay_area = Rect::new(area.x, overlay_y, area.width, 1);
@@ -163,6 +167,10 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         Span::styled(" ws  ", dim),
         Span::styled("⇥", key),
         Span::styled(" pane  ", dim),
+        Span::styled("⏎", key),
+        Span::styled(" open  ", dim),
+        Span::styled("1..9", key),
+        Span::styled(" switch ws  ", dim),
         Span::styled(goto, key),
         Span::styled(" navigator  ", dim),
         Span::styled(new_tab, key),
@@ -178,7 +186,7 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         Span::styled(resize, key),
         Span::styled(" resize  ", dim),
         Span::styled(help, key),
-        Span::styled(" keybinds  ", dim),
+        Span::styled(" commands  ", dim),
         Span::styled(settings, key),
         Span::styled(" settings  ", dim),
         Span::styled(detach, key),

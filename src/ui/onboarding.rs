@@ -12,7 +12,7 @@ use super::widgets::{
 };
 use crate::app::AppState;
 
-const ONBOARDING_PREFIX_LABEL: &str = "ctrl+b";
+const ONBOARDING_PREFIX_LABEL: &str = "esc";
 
 pub(super) fn render_onboarding_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     super::dim_background(frame, area);

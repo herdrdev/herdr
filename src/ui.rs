@@ -89,7 +89,6 @@ pub(crate) use self::{
 };
 
 pub(crate) use self::{
-    keybind_help::keybind_help_lines,
     mobile::{
         mobile_switcher_areas, mobile_switcher_max_scroll, mobile_switcher_target_at,
         mobile_switcher_workspace_doc_range, MobileSwitcherTarget,
@@ -577,7 +576,6 @@ fn _build_hints(items: &[(&str, &str)], key_style: Style, dim_style: Style) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::keybind_help::keybind_help_groups;
     use super::scrollbar::scrollbar_thumb;
     use super::*;
     use crate::{app::state::ViewLayout, layout::PaneInfo, workspace::Workspace};
@@ -1353,138 +1351,5 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("PREFIX"));
-    }
-
-    #[test]
-    fn keybind_help_shows_unset_for_optional_actions() {
-        let app = crate::app::state::AppState::test_new();
-        let groups = keybind_help_groups(&app);
-
-        let workspace_tab = groups
-            .iter()
-            .find(|(name, _)| *name == "workspaces / tabs")
-            .expect("workspace tab group")
-            .1
-            .clone();
-        let panes = groups
-            .iter()
-            .find(|(name, _)| *name == "panes")
-            .expect("panes group")
-            .1
-            .clone();
-
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "previous workspace"));
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "next workspace"));
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "previous agent"));
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "next agent"));
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "focus agent 1-9"));
-        assert!(workspace_tab
-            .iter()
-            .any(|(key, label)| key == "unset" && label.as_ref() == "switch workspace 1-9"));
-        assert!(panes
-            .iter()
-            .any(|(key, label)| key == "prefix+h" && label.as_ref() == "focus pane left"));
-        assert!(panes
-            .iter()
-            .any(|(key, label)| key == "prefix+j" && label.as_ref() == "focus pane down"));
-        assert!(panes
-            .iter()
-            .any(|(key, label)| key == "prefix+k" && label.as_ref() == "focus pane up"));
-        assert!(panes
-            .iter()
-            .any(|(key, label)| key == "prefix+l" && label.as_ref() == "focus pane right"));
-    }
-
-    #[test]
-    fn keybind_help_shows_custom_command_descriptions() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.keybinds.custom_commands = vec![
-            crate::config::CustomCommandKeybind {
-                bindings: crate::config::ActionKeybinds::prefix("alt+g"),
-                label: "prefix+alt+g".to_string(),
-                command: "lazygit".to_string(),
-                action: crate::config::CustomCommandAction::Pane,
-                description: Some("open lazygit".to_string()),
-                width: None,
-                height: None,
-            },
-            crate::config::CustomCommandKeybind {
-                bindings: crate::config::ActionKeybinds::prefix("alt+h"),
-                label: "prefix+alt+h".to_string(),
-                command: "echo hello".to_string(),
-                action: crate::config::CustomCommandAction::Shell,
-                description: None,
-                width: None,
-                height: None,
-            },
-        ];
-
-        let groups = keybind_help_groups(&app);
-        let custom = groups
-            .iter()
-            .find(|(name, _)| *name == "custom")
-            .expect("custom group")
-            .1
-            .clone();
-        assert!(custom
-            .iter()
-            .any(|(key, label)| key == "prefix+alt+g" && label.as_ref() == "open lazygit"));
-        assert!(custom
-            .iter()
-            .any(|(key, label)| key == "prefix+alt+h" && label.as_ref() == "custom command"));
-
-        let rendered_help = keybind_help_lines(&app)
-            .into_iter()
-            .flat_map(|(_, line)| line.spans)
-            .map(|span| span.content.into_owned())
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(rendered_help.contains("open lazygit"));
-        assert!(rendered_help.contains("custom command"));
-    }
-
-    #[test]
-    fn keybind_help_compacts_multiple_indexed_ranges() {
-        let config: crate::config::Config = toml::from_str(
-            r#"
-[keys]
-switch_tab = ["prefix+1..9", "alt+1..9"]
-switch_workspace = "ctrl+1..9"
-"#,
-        )
-        .expect("config parses");
-
-        let mut app = crate::app::state::AppState::test_new();
-        app.keybinds = config.keybinds();
-
-        let workspace_tab = keybind_help_groups(&app)
-            .into_iter()
-            .find(|(name, _)| *name == "workspaces / tabs")
-            .expect("workspace tab group")
-            .1;
-
-        let switch_tab_key = workspace_tab
-            .iter()
-            .find(|(_, label)| label.as_ref() == "switch tab 1-9")
-            .map(|(key, _)| key.as_str())
-            .expect("switch tab help entry");
-        let switch_workspace_key = workspace_tab
-            .iter()
-            .find(|(_, label)| label.as_ref() == "switch workspace 1-9")
-            .map(|(key, _)| key.as_str())
-            .expect("switch workspace help entry");
-
-        assert_eq!(switch_tab_key, "prefix+1..9 / alt+1..9");
-        assert_eq!(switch_workspace_key, "ctrl+1..9");
     }
 }

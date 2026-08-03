@@ -111,13 +111,13 @@ When enabled, `herdr --remote` writes a private temporary SSH config that includ
 
 For a guided introduction to the prefix and a vetted prefix-free setup, see [Keyboard](/docs/keyboard/).
 
-Herdr has a prefix mode similar to tmux. The default prefix is `ctrl+b`. Keybinding strings are explicit: `prefix+n` means press the configured prefix and then `n`; `ctrl+alt+n` is a direct terminal-mode shortcut.
+Herdr has a prefix mode similar to tmux. The default prefix is `esc`; press it twice to send a literal `esc` to the focused pane. Keybinding strings are explicit: `prefix+n` means press the configured prefix and then `n`; `ctrl+alt+n` is a direct terminal-mode shortcut.
 
 A small keybinding override looks like this:
 
 ```toml
 [keys]
-prefix = "ctrl+b"
+prefix = "esc"
 goto = "prefix+g"
 new_tab = "prefix+c"
 next_tab = "prefix+n"

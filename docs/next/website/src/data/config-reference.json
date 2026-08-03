@@ -208,8 +208,8 @@
         {
           "key": "keys.prefix",
           "type": "string",
-          "default": "\"ctrl+b\"",
-          "description": "Prefix key to enter prefix mode (e.g. \"ctrl+b\", \"f12\", \"esc\")."
+          "default": "\"esc\"",
+          "description": "Prefix key to enter prefix mode (e.g. \"esc\", \"ctrl+b\", \"f12\"). Default: \"esc\"."
         },
         {
           "key": "keys.help",

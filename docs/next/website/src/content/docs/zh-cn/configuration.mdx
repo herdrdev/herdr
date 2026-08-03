@@ -111,13 +111,13 @@ manage_ssh_config = true
 
 有关前缀键的引导式介绍和经过验证的免前缀配置，请参阅[键盘](/docs/keyboard/)。
 
-Herdr 提供类似 tmux 的前缀模式。默认前缀是 `ctrl+b`。按键绑定字符串是显式的：`prefix+n` 表示先按配置的前缀，再按 `n`；`ctrl+alt+n` 则是终端模式下的直接快捷键。
+Herdr 提供类似 tmux 的前缀模式。默认前缀是 `esc`,连按两次即可向聚焦窗格发送字面的 `esc`。按键绑定字符串是显式的：`prefix+n` 表示先按配置的前缀，再按 `n`；`ctrl+alt+n` 则是终端模式下的直接快捷键。
 
 一个简短的按键绑定覆盖如下：
 
 ```toml
 [keys]
-prefix = "ctrl+b"
+prefix = "esc"
 goto = "prefix+g"
 new_tab = "prefix+c"
 next_tab = "prefix+n"

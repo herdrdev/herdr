@@ -16,7 +16,9 @@ impl App {
             return;
         }
         self.state.update_dismissed = true;
-        if self.state.is_prefix_key(key) {
+        // Esc keeps its copy-mode meaning (clear search, clear selection, exit)
+        // even when it is also the prefix key.
+        if self.state.is_prefix_key(key) && key.code != KeyCode::Esc {
             self.state.mode = Mode::Prefix;
             return;
         }
@@ -1026,6 +1028,10 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.view.pane_infos = pane_infos;
+        // Esc keeps its copy-mode meaning, so prefix interactions are exercised
+        // with a non-esc prefix; esc-as-prefix has its own test.
+        app.state.prefix_code = KeyCode::Char('b');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
         (app, pane_id)
     }
 
@@ -1085,6 +1091,8 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.view.pane_infos = pane_infos;
+        app.state.prefix_code = KeyCode::Char('b');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
         (app, first_pane, second_pane)
     }
 
@@ -1197,6 +1205,32 @@ mod tests {
         assert_eq!(app.state.mode, Mode::Prefix);
         assert_eq!(copy_mode_offset_from_bottom(&app, pane_id), 0);
         assert!(app.state.copy_mode.is_some());
+    }
+
+    #[tokio::test]
+    async fn copy_mode_escape_keeps_its_meaning_when_esc_is_the_prefix() {
+        let (mut app, _) = app_with_copy_screen(b"alpha needle\r\n");
+        app.state.prefix_code = KeyCode::Esc;
+        app.state.prefix_mods = KeyModifiers::empty();
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        submit_copy_search(&mut app, '/', "needle");
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Copy);
+        assert!(app
+            .state
+            .copy_mode
+            .as_ref()
+            .expect("copy mode")
+            .search
+            .query
+            .is_empty());
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.state.copy_mode.is_none());
     }
 
     #[tokio::test]

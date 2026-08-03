@@ -100,10 +100,24 @@ impl App {
             return;
         }
 
+        // Nothing matched. When the prefix is a key panes need constantly (esc),
+        // swallowing the pair would eat sequences like `esc i` in an editor, so
+        // replay the prefix and the key to the pane instead.
+        if self.state.prefix_code == KeyCode::Esc
+            && self.state.prefix_mods.is_empty()
+            && self.pass_through_key_to_focused_pane(TerminalKey::new(
+                self.state.prefix_code,
+                self.state.prefix_mods,
+            ))
+        {
+            self.pass_through_key_to_focused_pane(raw_key);
+            return;
+        }
+
         leave_command_mode(&mut self.state);
     }
 
-    fn execute_prefix_key_action(&mut self, action: NavigateAction) {
+    pub(super) fn execute_prefix_key_action(&mut self, action: NavigateAction) {
         if action == NavigateAction::EditScrollback {
             let previous_mode = self.state.mode;
             self.cancel_copy_mode_if_active();

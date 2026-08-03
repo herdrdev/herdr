@@ -4903,10 +4903,7 @@ new_tab = "prefix+t"
             direct_attach_requested: false,
             writer: writer_b,
         }));
-        assert_eq!(
-            server.app.state.prefix_code,
-            crossterm::event::KeyCode::Char('b')
-        );
+        assert_eq!(server.app.state.prefix_code, crossterm::event::KeyCode::Esc);
         assert!(server
             .app
             .state
@@ -5094,10 +5091,7 @@ next_tab = ""
             direct_attach_requested: false,
             writer: writer_b,
         }));
-        assert_eq!(
-            server.app.state.prefix_code,
-            crossterm::event::KeyCode::Char('b')
-        );
+        assert_eq!(server.app.state.prefix_code, crossterm::event::KeyCode::Esc);
         assert!(!server
             .app
             .state
@@ -7311,7 +7305,7 @@ next_tab = ""
     }
 
     #[test]
-    fn semantic_client_down_scrolls_keybind_help() {
+    fn semantic_client_down_moves_command_palette_selection() {
         let mut server = test_headless_server();
         server.app.state.mode = crate::app::Mode::KeybindHelp;
         server.clients.insert(
@@ -7341,7 +7335,7 @@ next_tab = ""
         }));
 
         assert_eq!(server.app.state.mode, crate::app::Mode::KeybindHelp);
-        assert_eq!(server.app.state.keybind_help.scroll, 1);
+        assert_eq!(server.app.state.keybind_help.selected, 1);
     }
 
     #[tokio::test]
