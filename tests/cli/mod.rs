@@ -4,6 +4,7 @@ mod agent_wait;
 mod agents;
 mod harness;
 mod hooks;
+mod jcode_lifecycle;
 mod panes;
 mod plugins;
 mod protocol;

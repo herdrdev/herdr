@@ -14,14 +14,14 @@ struct ShellHookInvocation<'a> {
     pane_id: &'a str,
 }
 
-struct FakeHookSocket {
+pub(super) struct FakeHookSocket {
     base: PathBuf,
     socket_path: PathBuf,
     server: thread::JoinHandle<Vec<serde_json::Value>>,
 }
 
 impl FakeHookSocket {
-    fn start(expected_requests: usize) -> Self {
+    pub(super) fn start(expected_requests: usize) -> Self {
         let base = unique_test_dir();
         fs::create_dir_all(&base).unwrap();
         let socket_path = base.join("herdr.sock");
@@ -58,7 +58,11 @@ impl FakeHookSocket {
         }
     }
 
-    fn finish(self) -> Vec<serde_json::Value> {
+    pub(super) fn path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    pub(super) fn finish(self) -> Vec<serde_json::Value> {
         let requests = self.server.join().unwrap();
         cleanup_test_base(&self.base);
         requests
