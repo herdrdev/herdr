@@ -513,10 +513,11 @@ impl Tab {
         moved: MovedPane,
         direction: Direction,
         ratio: f32,
+        focus: bool,
     ) -> Result<PaneId, MovedPane> {
         if !self
             .layout
-            .insert_pane_near(target_pane_id, moved.pane_id, direction, ratio)
+            .insert_pane_near(target_pane_id, moved.pane_id, direction, ratio, focus)
         {
             return Err(moved);
         }

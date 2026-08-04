@@ -871,10 +871,6 @@ impl App {
                     self.recover_failed_pane_move(recovery_context, moved);
                     return encode_error(id, "pane_move_failed", "target tab disappeared");
                 };
-                let previous_target_focus = self.state.workspaces[target_ws_idx].tabs
-                    [target_tab_idx]
-                    .layout
-                    .focused();
                 let direction = split_direction_to_layout(split);
                 let moved_pane_id = match self.state.workspaces[target_ws_idx]
                     .insert_moved_pane_into_tab(
@@ -883,6 +879,7 @@ impl App {
                         moved,
                         direction,
                         ratio,
+                        focus,
                     ) {
                     Ok(pane_id) => pane_id,
                     Err(moved) => {
@@ -894,11 +891,6 @@ impl App {
                         );
                     }
                 };
-                if !focus {
-                    self.state.workspaces[target_ws_idx].tabs[target_tab_idx]
-                        .layout
-                        .focus_pane(previous_target_focus);
-                }
                 (target_ws_idx, target_tab_idx, moved_pane_id)
             }
             ResolvedPaneMoveDestination::NewTab {
@@ -3194,6 +3186,60 @@ mod tests {
             app.state.workspaces[0].tabs[0].layout.focused(),
             previously_focused
         );
+    }
+
+    #[test]
+    fn api_pane_move_no_focus_pane_is_not_a_directional_navigation_target() {
+        // Target tab: H(A, V(RT, RB)), focus A. Move `source` next to RT with a
+        // downward split and focus: false, producing H(A, V(V(RT, source), RB)).
+        // Directional navigation from A must not select the never-focused moved
+        // pane; it has no focus history and loses to the geometric winner (RB).
+        let mut app = app_with_linked_worktree();
+        let source = app.state.workspaces[0].tabs[0].root_pane;
+        let target_tab = app.state.workspaces[0].test_add_tab(Some("target"));
+        app.state.workspaces[0].active_tab = target_tab;
+        let a = app.state.workspaces[0].tabs[target_tab].root_pane;
+        let rt = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        let rb = app.state.workspaces[0].test_split(ratatui::layout::Direction::Vertical);
+        app.state.workspaces[0].tabs[target_tab]
+            .layout
+            .focus_pane(a);
+        seed_terminal_states(&mut app);
+        let source_public = app.public_pane_id(0, source).unwrap();
+        let target_tab_public = app.public_tab_id(0, target_tab).unwrap();
+        let rt_public = app.public_pane_id(0, rt).unwrap();
+
+        let response = app.handle_pane_move(
+            "req".into(),
+            PaneMoveParams {
+                pane_id: source_public,
+                destination: PaneMoveDestination::Tab {
+                    tab_id: target_tab_public,
+                    target_pane_id: Some(rt_public),
+                    split: SplitDirection::Down,
+                    ratio: None,
+                },
+                focus: false,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneMove { move_result } = success.result else {
+            panic!("expected pane move response");
+        };
+        assert!(move_result.changed);
+        // Focus stayed on A; the moved pane was never focused. The source's
+        // emptied tab is removed by the move, so resolve the target tab by pane.
+        let target_tab_after = app.state.workspaces[0].find_tab_index_for_pane(a).unwrap();
+        let layout = &app.state.workspaces[0].tabs[target_tab_after].layout;
+        assert_eq!(layout.focused(), a);
+
+        let panes = layout.panes(ratatui::layout::Rect::new(0, 0, 100, 40));
+        let focused = panes.iter().find(|pane| pane.id == a).unwrap();
+        let nav_target =
+            find_in_direction(focused, NavDirection::Right, &panes, layout.focus_history());
+        assert_ne!(nav_target, Some(source));
+        assert_eq!(nav_target, Some(rb));
     }
 
     #[test]

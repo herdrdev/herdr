@@ -168,12 +168,18 @@ impl TileLayout {
 
     /// Insert an existing pane id next to a target pane without allocating a new
     /// pane or spawning a terminal runtime.
+    ///
+    /// When `focus` is true the moved pane becomes focused and is recorded in the
+    /// focus history. When false the current focus and history are left untouched,
+    /// so a pane relocated without focus does not become an MRU directional
+    /// navigation target.
     pub fn insert_pane_near(
         &mut self,
         target: PaneId,
         moved: PaneId,
         direction: Direction,
         ratio: f32,
+        focus: bool,
     ) -> bool {
         if target == moved {
             return false;
@@ -186,8 +192,10 @@ impl TileLayout {
         let placeholder = PaneId::from_raw(0);
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
         self.root = split_at(old, target, direction, moved, valid_split_ratio(ratio));
-        self.focus = moved;
-        self.focus_history.record(moved);
+        if focus {
+            self.focus = moved;
+            self.focus_history.record(moved);
+        }
         true
     }
 
@@ -824,7 +832,7 @@ mod tests {
         let (mut layout, root) = TileLayout::new();
         let moved = pane(99);
 
-        assert!(layout.insert_pane_near(root, moved, Direction::Horizontal, 0.25));
+        assert!(layout.insert_pane_near(root, moved, Direction::Horizontal, 0.25, true));
 
         assert_eq!(layout.pane_count(), 2);
         assert_eq!(layout.pane_ids(), vec![root, moved]);
@@ -833,6 +841,38 @@ mod tests {
         assert_eq!(splits, vec![(Direction::Horizontal, 0.25)]);
         assert_eq!(pane_rect(&layout, root), Rect::new(0, 0, 25, 40));
         assert_eq!(pane_rect(&layout, moved), Rect::new(25, 0, 75, 40));
+    }
+
+    #[test]
+    fn insert_pane_near_without_focus_leaves_focus_and_history_untouched() {
+        // Tab: H(A, V(RT, RB)), focus A. from_saved stamps only A.
+        let mut layout = TileLayout::from_saved(
+            Node::Split {
+                direction: Direction::Horizontal,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(pane(1))), // A
+                second: Box::new(Node::Split {
+                    direction: Direction::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(Node::Pane(pane(2))),  // RT
+                    second: Box::new(Node::Pane(pane(3))), // RB
+                }),
+            },
+            pane(1),
+        );
+        let moved = pane(99);
+
+        // Relocate `moved` next to RT without focusing it (a focus: false move).
+        assert!(layout.insert_pane_near(pane(2), moved, Direction::Vertical, 0.5, false));
+        // Focus is unchanged; the moved pane was never focused.
+        assert_eq!(layout.focused(), pane(1));
+
+        // The never-focused moved pane must not win directional selection: it has
+        // no focus history and loses to the geometric winner (RB, the largest
+        // overlap). With a phantom MRU stamp it would incorrectly capture focus.
+        let target = find_from(&layout, pane(1), NavDirection::Right);
+        assert_ne!(target, Some(moved));
+        assert_eq!(target, Some(pane(3)));
     }
 
     #[test]
