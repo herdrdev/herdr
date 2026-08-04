@@ -151,18 +151,54 @@ impl TileLayout {
     }
 
     /// Split the focused pane. Returns the new pane's id.
+    #[cfg(test)]
     pub fn split_focused(&mut self, direction: Direction) -> PaneId {
         self.split_focused_with_ratio(direction, 0.5)
     }
 
     /// Split the focused pane with a custom first-child ratio.
+    #[cfg(test)]
     pub fn split_focused_with_ratio(&mut self, direction: Direction, ratio: f32) -> PaneId {
+        self.split_target(self.focus, direction, ratio, true)
+    }
+
+    /// Split a specific pane, inserting a newly allocated sibling.
+    ///
+    /// When `focus` is true the new pane becomes focused and is recorded in the
+    /// focus history. When false the current focus and history are left
+    /// untouched, so a pane created without focus (for example `pane.split` with
+    /// `focus: false`) does not become an MRU directional navigation target.
+    /// Returns the new pane id, or None when `target` is not in the layout.
+    pub fn split_pane(
+        &mut self,
+        target: PaneId,
+        direction: Direction,
+        ratio: f32,
+        focus: bool,
+    ) -> Option<PaneId> {
+        if !self.pane_ids().contains(&target) {
+            return None;
+        }
+        Some(self.split_target(target, direction, ratio, focus))
+    }
+
+    /// Structural split of `target` (assumed present). Focuses and records the
+    /// new pane only when `focus` is true.
+    fn split_target(
+        &mut self,
+        target: PaneId,
+        direction: Direction,
+        ratio: f32,
+        focus: bool,
+    ) -> PaneId {
         let new_id = PaneId::alloc();
         let placeholder = PaneId::from_raw(0);
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
-        self.root = split_at(old, self.focus, direction, new_id, valid_split_ratio(ratio));
-        self.focus = new_id;
-        self.focus_history.record(new_id);
+        self.root = split_at(old, target, direction, new_id, valid_split_ratio(ratio));
+        if focus {
+            self.focus = new_id;
+            self.focus_history.record(new_id);
+        }
         new_id
     }
 
@@ -872,6 +908,39 @@ mod tests {
         // overlap). With a phantom MRU stamp it would incorrectly capture focus.
         let target = find_from(&layout, pane(1), NavDirection::Right);
         assert_ne!(target, Some(moved));
+        assert_eq!(target, Some(pane(3)));
+    }
+
+    #[test]
+    fn split_pane_without_focus_is_not_a_navigation_target() {
+        // Tab: H(A, V(RT, RB)), focus A. from_saved stamps only A.
+        let mut layout = TileLayout::from_saved(
+            Node::Split {
+                direction: Direction::Horizontal,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(pane(1))), // A
+                second: Box::new(Node::Split {
+                    direction: Direction::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(Node::Pane(pane(2))),  // RT
+                    second: Box::new(Node::Pane(pane(3))), // RB
+                }),
+            },
+            pane(1),
+        );
+
+        // Split RT downward without focusing the new pane (pane.split focus: false).
+        let new_id = layout
+            .split_pane(pane(2), Direction::Vertical, 0.5, false)
+            .expect("target pane exists");
+        // Focus and the target pane's history are untouched.
+        assert_eq!(layout.focused(), pane(1));
+
+        // The unfocused new pane must not win directional selection: it has no
+        // focus history and loses to the geometric winner (RB). A phantom MRU
+        // stamp would incorrectly steer navigation onto it.
+        let target = find_from(&layout, pane(1), NavDirection::Right);
+        assert_ne!(target, Some(new_id));
         assert_eq!(target, Some(pane(3)));
     }
 
