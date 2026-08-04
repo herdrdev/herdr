@@ -562,7 +562,7 @@
         {
           "key": "ui.sidebar_max_width",
           "type": "integer",
-          "default": "36",
+          "default": "80",
           "description": "Maximum sidebar width (columns) when expanded."
         },
         {

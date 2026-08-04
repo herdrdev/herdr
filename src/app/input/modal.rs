@@ -14,6 +14,10 @@ use crate::{
     layout::NavDirection,
 };
 
+use super::sidebar_color::{
+    open_agent_color_picker, open_tab_color_picker, open_workspace_color_picker,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModalAction {
     Continue,
@@ -809,6 +813,25 @@ pub(super) fn apply_context_menu_action(
         }
         (
             ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Color"),
+        ) => {
+            open_workspace_color_picker(state, terminal_runtimes, ws_idx);
+        }
+        (
+            ContextMenuKind::Agent {
+                ws_idx,
+                tab_idx,
+                pane_id,
+            },
+            Some("Color"),
+        ) => {
+            open_agent_color_picker(state, ws_idx, tab_idx, pane_id);
+        }
+        (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Color")) => {
+            open_tab_color_picker(state, ws_idx, tab_idx);
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Close" | "Close group"),
         ) => {
             state.selected = ws_idx;
@@ -1236,6 +1259,22 @@ impl App {
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Rename"),
             ) => open_rename_workspace(&mut self.state, &self.terminal_runtimes, ws_idx),
+            (
+                ContextMenuKind::Workspace { ws_idx }
+                | ContextMenuKind::GitWorkspace { ws_idx, .. },
+                Some("Color"),
+            ) => open_workspace_color_picker(&mut self.state, &self.terminal_runtimes, ws_idx),
+            (
+                ContextMenuKind::Agent {
+                    ws_idx,
+                    tab_idx,
+                    pane_id,
+                },
+                Some("Color"),
+            ) => open_agent_color_picker(&mut self.state, ws_idx, tab_idx, pane_id),
+            (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("Color")) => {
+                open_tab_color_picker(&mut self.state, ws_idx, tab_idx)
+            }
             (
                 ContextMenuKind::Workspace { ws_idx }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },

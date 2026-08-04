@@ -17,6 +17,7 @@ pub(super) enum ResolvedTokenKind {
     Workspace(String),
     Tab(String),
     Pane(String),
+    Directory(String),
     Agent(String),
     TerminalTitle(String),
     Branch(String),
@@ -57,11 +58,18 @@ pub(super) fn agent_rows(
                             Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
                         }
                         AgentSidebarToken::Tab => {
-                            entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
+                            Some(ResolvedTokenKind::Tab(entry.tab_label.clone()))
                         }
                         AgentSidebarToken::Pane => {
                             entry.pane_label.clone().map(ResolvedTokenKind::Pane)
                         }
+                        AgentSidebarToken::PaneOrTab => {
+                            Some(ResolvedTokenKind::Pane(entry.pane_or_tab_label.clone()))
+                        }
+                        AgentSidebarToken::Directory => entry
+                            .directory_label
+                            .clone()
+                            .map(ResolvedTokenKind::Directory),
                         AgentSidebarToken::Agent => {
                             entry.agent_label.clone().map(ResolvedTokenKind::Agent)
                         }
@@ -163,8 +171,11 @@ mod tests {
             tab_idx: 0,
             pane_id: crate::layout::PaneId::from_raw(1),
             primary_label: "repo".into(),
+            tab_label: "1".into(),
             primary_tab_label: None,
             pane_label: None,
+            pane_or_tab_label: "1".into(),
+            directory_label: Some("src".into()),
             terminal_title: None,
             terminal_title_stripped: None,
             agent_label: Some("pi".into()),
@@ -176,6 +187,53 @@ mod tests {
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
         }
+    }
+
+    #[test]
+    fn default_rows_show_tab_and_directory_while_pane_or_tab_remains_available() {
+        let mut entry = entry();
+        let config = AgentsSidebarConfig::default();
+
+        assert_eq!(
+            agent_rows(&config, &entry, "working"),
+            vec![
+                vec![
+                    ResolvedToken::unstyled(ResolvedTokenKind::StateIcon),
+                    ResolvedToken::unstyled(ResolvedTokenKind::Workspace("repo".into())),
+                    ResolvedToken::unstyled(ResolvedTokenKind::Tab("1".into())),
+                ],
+                vec![
+                    ResolvedToken::unstyled(ResolvedTokenKind::Directory("src".into())),
+                    ResolvedToken::unstyled(ResolvedTokenKind::Agent("pi".into())),
+                ],
+            ]
+        );
+
+        let fallback_config = AgentsSidebarConfig {
+            rows: vec![vec![AgentSidebarToken::PaneOrTab]],
+            ..Default::default()
+        };
+        assert_eq!(
+            agent_rows(&fallback_config, &entry, "working"),
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Pane(
+                "1".into()
+            ))]]
+        );
+
+        entry.pane_label = Some("tests".into());
+        entry.pane_or_tab_label = "tests".into();
+        assert_eq!(
+            agent_rows(&fallback_config, &entry, "working")[0][0],
+            ResolvedToken::unstyled(ResolvedTokenKind::Pane("tests".into()))
+        );
+    }
+
+    #[test]
+    fn directory_and_agent_use_the_standard_separator() {
+        let directory = ResolvedToken::unstyled(ResolvedTokenKind::Directory("src".into()));
+        let agent = ResolvedToken::unstyled(ResolvedTokenKind::Agent("codex".into()));
+
+        assert_eq!(separator(&directory, &agent), " · ");
     }
 
     #[test]

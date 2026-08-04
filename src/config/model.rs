@@ -786,7 +786,7 @@ pub struct UiConfig {
     pub sidebar_width: u16,
     /// Minimum sidebar width (columns) when expanded. Default: 18.
     pub sidebar_min_width: u16,
-    /// Maximum sidebar width (columns) when expanded. Default: 36.
+    /// Maximum sidebar width (columns) when expanded. Default: 80.
     pub sidebar_max_width: u16,
     /// Start with the sidebar collapsed. Default: false.
     pub sidebar_start_collapsed: bool,
@@ -1009,7 +1009,7 @@ impl Default for UiConfig {
         Self {
             sidebar_width: 26,
             sidebar_min_width: 18,
-            sidebar_max_width: 36,
+            sidebar_max_width: 80,
             sidebar_start_collapsed: false,
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
@@ -1391,7 +1391,7 @@ cjk_ime_agents = ["claude", "codex"]
     fn sidebar_bounds_default_and_parse() {
         let default_config = Config::default();
         assert_eq!(default_config.ui.sidebar_min_width, 18);
-        assert_eq!(default_config.ui.sidebar_max_width, 36);
+        assert_eq!(default_config.ui.sidebar_max_width, 80);
         assert_eq!(
             default_config.ui.mobile_width_threshold,
             DEFAULT_MOBILE_WIDTH_THRESHOLD

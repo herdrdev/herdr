@@ -809,6 +809,7 @@ pub enum Mode {
     Resize,
     ConfirmClose,
     ContextMenu,
+    SidebarColor,
     Settings,
     GlobalMenu,
     KeybindHelp,
@@ -1198,6 +1199,11 @@ pub enum ContextMenuKind {
         source_pane_id: Option<PaneId>,
         has_manual_label: bool,
     },
+    Agent {
+        ws_idx: usize,
+        tab_idx: usize,
+        pane_id: PaneId,
+    },
 }
 
 /// Right-click context menu state.
@@ -1211,16 +1217,22 @@ pub struct ContextMenuState {
 impl ContextMenuState {
     pub fn items(&self) -> &'static [&'static str] {
         match self.kind {
-            ContextMenuKind::Workspace { .. } => &["Rename", "Close"],
+            ContextMenuKind::Workspace { .. } => &["Rename", "Close", "Color"],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 ..
-            } => &["Rename", "Close", "New worktree", "Open worktree..."],
+            } => &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Color",
+            ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
                 ..
-            } => &["Rename", "Close", "Delete worktree checkout..."],
+            } => &["Rename", "Close", "Delete worktree checkout...", "Color"],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: true,
@@ -1232,6 +1244,7 @@ impl ContextMenuState {
                 "New worktree",
                 "Open worktree...",
                 "Expand",
+                "Color",
             ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
@@ -1244,8 +1257,9 @@ impl ContextMenuState {
                 "New worktree",
                 "Open worktree...",
                 "Collapse",
+                "Color",
             ],
-            ContextMenuKind::Tab { .. } => &["New tab", "Rename", "Close"],
+            ContextMenuKind::Tab { .. } => &["New tab", "Rename", "Close", "Color"],
             ContextMenuKind::Pane {
                 has_manual_label: true,
                 source_pane_id: Some(_),
@@ -1294,6 +1308,7 @@ impl ContextMenuState {
                 "Zoom",
                 "Close pane",
             ],
+            ContextMenuKind::Agent { .. } => &["Color"],
         }
     }
 }
@@ -1450,6 +1465,14 @@ pub struct AppState {
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub context_menu: Option<ContextMenuState>,
+    pub(crate) sidebar_color_picker: Option<crate::sidebar_color::SidebarColorPickerState>,
+    pub(crate) workspace_sidebar_colors:
+        std::collections::HashMap<String, crate::sidebar_color::SidebarRowColor>,
+    pub(crate) tab_colors: std::collections::HashMap<String, crate::sidebar_color::SidebarRowColor>,
+    pub(crate) agent_sidebar_colors: std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::sidebar_color::SidebarRowColor,
+    >,
     // Notifications
     pub update_available: Option<String>,
     pub update_install_command: String,
@@ -1831,6 +1854,10 @@ impl AppState {
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
+            sidebar_color_picker: None,
+            workspace_sidebar_colors: std::collections::HashMap::new(),
+            tab_colors: std::collections::HashMap::new(),
+            agent_sidebar_colors: std::collections::HashMap::new(),
             update_available: None,
             update_install_command: "herdr update".into(),
             latest_release_notes_available: false,
@@ -1845,7 +1872,7 @@ impl AppState {
             default_sidebar_width: 26,
             sidebar_width: 26,
             sidebar_min_width: 18,
-            sidebar_max_width: 36,
+            sidebar_max_width: 80,
             mobile_width_threshold: crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD,
             sidebar_width_source: SidebarWidthSource::ConfigDefault,
             sidebar_width_auto: false,
@@ -2254,6 +2281,22 @@ impl AppState {
                         assert_live_pane(source_pane_id, "context menu source pane");
                     }
                 }
+                ContextMenuKind::Agent {
+                    ws_idx,
+                    tab_idx,
+                    pane_id,
+                } => {
+                    assert_tab_index(ws_idx, tab_idx, "agent context menu tab");
+                    assert!(
+                        self.workspaces[ws_idx].tabs[tab_idx]
+                            .panes
+                            .contains_key(&pane_id),
+                        "agent context menu references pane {:?} outside workspace {} tab {}",
+                        pane_id,
+                        ws_idx,
+                        tab_idx
+                    );
+                }
             }
         }
     }
@@ -2453,7 +2496,7 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "Delete worktree checkout..."]
+            &["Rename", "Close", "Delete worktree checkout...", "Color"]
         );
     }
 
@@ -2473,7 +2516,13 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "New worktree", "Open worktree..."]
+            &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Color"
+            ]
         );
     }
 
@@ -2498,7 +2547,8 @@ mod tests {
                 "Close group",
                 "New worktree",
                 "Open worktree...",
-                "Collapse"
+                "Collapse",
+                "Color"
             ]
         );
     }

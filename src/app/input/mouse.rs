@@ -22,6 +22,7 @@ use super::{
         modal_action_from_buttons, open_global_menu, open_new_tab_dialog, ModalAction,
     },
     settings::SettingsAction,
+    sidebar_color::{apply_sidebar_color_action, SidebarColorAction},
     ScrollbarClickTarget, TAB_DRAG_THRESHOLD, WORKSPACE_DRAG_THRESHOLD,
 };
 
@@ -383,6 +384,38 @@ impl AppState {
                                 leave_modal(self);
                             }
                             _ => {}
+                        }
+                    }
+                    return None;
+                }
+
+                if self.mode == Mode::SidebarColor {
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        let Some(inner) = self.sidebar_color_modal_inner() else {
+                            apply_sidebar_color_action(self, SidebarColorAction::Cancel);
+                            return None;
+                        };
+                        if let Some(index) = crate::ui::sidebar_color_swatch_rects(inner)
+                            .iter()
+                            .position(|rect| rect_contains(*rect, mouse.column, mouse.row))
+                        {
+                            apply_sidebar_color_action(self, SidebarColorAction::Preset(index));
+                            return None;
+                        }
+                        let (apply, clear, cancel) = crate::ui::sidebar_color_button_rects(inner);
+                        let action = if rect_contains(apply, mouse.column, mouse.row) {
+                            Some(SidebarColorAction::Save)
+                        } else if rect_contains(clear, mouse.column, mouse.row) {
+                            Some(SidebarColorAction::Clear)
+                        } else if rect_contains(cancel, mouse.column, mouse.row)
+                            || !rect_contains(inner, mouse.column, mouse.row)
+                        {
+                            Some(SidebarColorAction::Cancel)
+                        } else {
+                            None
+                        };
+                        if let Some(action) = action {
+                            apply_sidebar_color_action(self, action);
                         }
                     }
                     return None;
@@ -1033,7 +1066,24 @@ impl AppState {
                 if self
                     .workspace_list_scrollbar_target_at(mouse.column, mouse.row)
                     .is_some()
+                    || self
+                        .agent_panel_scrollbar_target_at(mouse.column, mouse.row)
+                        .is_some()
                 {
+                    return None;
+                }
+                if let Some((ws_idx, tab_idx, pane_id)) = self.agent_detail_target_at(mouse.row) {
+                    self.context_menu = Some(ContextMenuState {
+                        kind: ContextMenuKind::Agent {
+                            ws_idx,
+                            tab_idx,
+                            pane_id,
+                        },
+                        x: mouse.column,
+                        y: mouse.row,
+                        list: MenuListState::new(0),
+                    });
+                    self.mode = Mode::ContextMenu;
                     return None;
                 }
                 if let Some(idx) = self.workspace_at_row(mouse.row) {
@@ -3423,6 +3473,73 @@ mod tests {
     }
 
     #[test]
+    fn right_clicking_agent_row_opens_agent_color_menu() {
+        let mut app = app_for_mouse_test();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        let terminal_id = app.state.workspaces[0].tabs[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .detected_agent = Some(Agent::Codex);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let agent_area = app.state.agent_panel_rect();
+        let body = crate::ui::agent_panel_body_rect(agent_area, false);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            body.x + 1,
+            body.y,
+        ));
+
+        assert_eq!(app.state.mode, Mode::ContextMenu);
+        let menu = app.state.context_menu.take().expect("agent context menu");
+        assert!(matches!(
+            menu.kind,
+            ContextMenuKind::Agent {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id: target,
+            } if target == pane_id
+        ));
+        assert_eq!(menu.items(), &["Color"]);
+
+        app.apply_context_menu_action_via_api(menu, 0);
+        assert_eq!(app.state.mode, Mode::SidebarColor);
+        assert!(matches!(
+            app.state
+                .sidebar_color_picker
+                .as_ref()
+                .map(|picker| &picker.target),
+            Some(crate::sidebar_color::SidebarColorTarget::Agent {
+                terminal_id: target,
+            }) if target == &terminal_id
+        ));
+
+        let inner = app.state.sidebar_color_modal_inner().unwrap();
+        let blue = crate::ui::sidebar_color_swatch_rects(inner)[5];
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            blue.x + 1,
+            blue.y,
+        ));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(
+            app.state.agent_sidebar_colors.get(&terminal_id),
+            Some(&crate::sidebar_color::SIDEBAR_COLOR_PRESETS[5].1)
+        );
+    }
+
+    #[test]
     fn bottom_mode_bar_consumes_hidden_tab_mouse_actions() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("one");
@@ -3507,7 +3624,25 @@ mod tests {
                 tab_idx: 1
             }
         );
+        assert_eq!(menu.items(), &["New tab", "Rename", "Close", "Color"]);
         assert_eq!(app.state.mode, Mode::ContextMenu);
+
+        let tab_number = app.state.workspaces[0].tabs[1].number;
+        let tab_id =
+            crate::workspace::public_tab_id_for_number(&app.state.workspaces[0].id, tab_number);
+        let menu = app.state.context_menu.take().expect("tab context menu");
+        app.apply_context_menu_action_via_api(menu, 3);
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(app.state.mode, Mode::SidebarColor);
+        assert!(matches!(
+            app.state
+                .sidebar_color_picker
+                .as_ref()
+                .map(|picker| &picker.target),
+            Some(crate::sidebar_color::SidebarColorTarget::Tab { tab_id: target })
+                if target == &tab_id
+        ));
     }
 
     #[test]

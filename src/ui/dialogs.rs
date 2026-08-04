@@ -12,10 +12,15 @@ use super::widgets::{
     render_modal_header, render_modal_shell, render_panel_shell, ActionButtonSpec,
 };
 use crate::app::{state::WorktreeOpenState, AppState, Mode};
+use crate::sidebar_color::SIDEBAR_COLOR_PRESETS;
 use crate::terminal::TerminalRuntimeRegistry;
 
 const NEW_LINKED_WORKTREE_POPUP_WIDTH: u16 = 68;
 const NEW_LINKED_WORKTREE_POPUP_HEIGHT: u16 = 12;
+pub(crate) const SIDEBAR_COLOR_POPUP_WIDTH: u16 = 64;
+pub(crate) const SIDEBAR_COLOR_POPUP_HEIGHT: u16 = 12;
+const SIDEBAR_COLOR_COLUMNS: usize = 4;
+const SIDEBAR_COLOR_SWATCH_TOP: u16 = 2;
 
 pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
     let rects = action_button_row_rects(
@@ -36,6 +41,78 @@ pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
         ],
         2,
         3,
+    );
+    (rects[0], rects[1], rects[2])
+}
+
+pub(crate) fn sidebar_color_swatch_rects(inner: Rect) -> Vec<Rect> {
+    let cell_width = inner.width / SIDEBAR_COLOR_COLUMNS as u16;
+    (0..SIDEBAR_COLOR_PRESETS.len())
+        .map(|index| {
+            let column = index % SIDEBAR_COLOR_COLUMNS;
+            let row = index / SIDEBAR_COLOR_COLUMNS;
+            let x = inner.x + cell_width.saturating_mul(column as u16);
+            let width = if column == SIDEBAR_COLOR_COLUMNS - 1 {
+                inner.x + inner.width - x
+            } else {
+                cell_width
+            };
+            Rect::new(
+                x,
+                inner
+                    .y
+                    .saturating_add(SIDEBAR_COLOR_SWATCH_TOP + row as u16),
+                width,
+                1,
+            )
+        })
+        .collect()
+}
+
+fn sidebar_color_swatch_rows() -> u16 {
+    SIDEBAR_COLOR_PRESETS.len().div_ceil(SIDEBAR_COLOR_COLUMNS) as u16
+}
+
+fn sidebar_color_hex_label_rect(inner: Rect) -> Rect {
+    Rect::new(
+        inner.x,
+        inner
+            .y
+            .saturating_add(SIDEBAR_COLOR_SWATCH_TOP + sidebar_color_swatch_rows()),
+        inner.width,
+        1,
+    )
+}
+
+pub(crate) fn sidebar_color_input_rect(inner: Rect) -> Rect {
+    let label = sidebar_color_hex_label_rect(inner);
+    Rect::new(label.x, label.y.saturating_add(1), label.width, 1)
+}
+
+fn sidebar_color_guidance_rect(inner: Rect) -> Rect {
+    let input = sidebar_color_input_rect(inner);
+    Rect::new(input.x, input.y.saturating_add(1), input.width, 1)
+}
+
+pub(crate) fn sidebar_color_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
+    let rects = action_button_row_rects(
+        inner,
+        &[
+            ActionButtonSpec {
+                hint: Some("↵"),
+                label: "apply",
+            },
+            ActionButtonSpec {
+                hint: None,
+                label: "clear color",
+            },
+            ActionButtonSpec {
+                hint: Some("esc"),
+                label: "cancel",
+            },
+        ],
+        2,
+        inner.height.saturating_sub(1),
     );
     (rects[0], rects[1], rects[2])
 }
@@ -98,6 +175,129 @@ pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rec
         clear_rect,
         Some("^c"),
         "clear",
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0)
+            .add_modifier(Modifier::BOLD),
+    );
+    render_action_button(
+        frame,
+        cancel_rect,
+        Some("esc"),
+        "cancel",
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0)
+            .add_modifier(Modifier::BOLD),
+    );
+}
+
+pub(super) fn render_sidebar_color_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
+    let Some(picker) = app.sidebar_color_picker.as_ref() else {
+        return;
+    };
+
+    super::dim_background(frame, area);
+    let Some(inner) = render_modal_shell(
+        frame,
+        area,
+        SIDEBAR_COLOR_POPUP_WIDTH,
+        SIDEBAR_COLOR_POPUP_HEIGHT,
+        &app.palette,
+    ) else {
+        return;
+    };
+    if inner.height < 10 {
+        return;
+    }
+
+    render_modal_header(
+        frame,
+        Rect::new(inner.x, inner.y, inner.width, 1),
+        "color",
+        &app.palette,
+    );
+    frame.render_widget(
+        Paragraph::new(format!(
+            " {}",
+            truncate_end(&picker.target_label, inner.width.saturating_sub(1) as usize)
+        ))
+        .style(Style::default().fg(app.palette.overlay0)),
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+    );
+
+    for (index, rect) in sidebar_color_swatch_rects(inner).into_iter().enumerate() {
+        let Some((name, color)) = SIDEBAR_COLOR_PRESETS.get(index).copied() else {
+            continue;
+        };
+        let marker = if picker.selected_preset == index {
+            "◆ "
+        } else {
+            "  "
+        };
+        frame.render_widget(
+            Paragraph::new(format!("{marker}{name}"))
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(
+                    Style::default()
+                        .fg(color.contrast())
+                        .bg(color.ratatui())
+                        .add_modifier(if picker.selected_preset == index {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+            rect,
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(" custom hex (#RGB or #RRGGBB)")
+            .style(Style::default().fg(app.palette.overlay0)),
+        sidebar_color_hex_label_rect(inner),
+    );
+    let input_rect = sidebar_color_input_rect(inner);
+    frame.render_widget(Clear, input_rect);
+    frame.render_widget(
+        Paragraph::new(format!(" {}█", picker.input)).style(
+            Style::default()
+                .fg(app.palette.text)
+                .bg(app.palette.surface0),
+        ),
+        input_rect,
+    );
+    let guidance = picker
+        .error
+        .as_deref()
+        .unwrap_or(" click a color, or enter a hex value and press enter");
+    frame.render_widget(
+        Paragraph::new(format!(" {guidance}")).style(Style::default().fg(
+            if picker.error.is_some() {
+                app.palette.red
+            } else {
+                app.palette.overlay0
+            },
+        )),
+        sidebar_color_guidance_rect(inner),
+    );
+
+    let (apply_rect, clear_rect, cancel_rect) = sidebar_color_button_rects(inner);
+    render_action_button(
+        frame,
+        apply_rect,
+        Some("↵"),
+        "apply",
+        Style::default()
+            .fg(panel_contrast_fg(&app.palette))
+            .bg(app.palette.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+    render_action_button(
+        frame,
+        clear_rect,
+        None,
+        "clear color",
         Style::default()
             .fg(app.palette.text)
             .bg(app.palette.surface0)
@@ -773,6 +973,24 @@ mod tests {
     use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
     use super::{confirm_close_overlay_text, render_new_linked_worktree_overlay};
+
+    #[test]
+    fn sidebar_color_palette_and_actions_use_distinct_rows() {
+        let inner = Rect::new(10, 5, super::SIDEBAR_COLOR_POPUP_WIDTH - 2, 10);
+        let swatches = super::sidebar_color_swatch_rects(inner);
+        let input = super::sidebar_color_input_rect(inner);
+        let (apply, clear, cancel) = super::sidebar_color_button_rects(inner);
+
+        assert_eq!(swatches.len(), 12);
+        assert_eq!(swatches[0].y, inner.y + 2);
+        assert_eq!(swatches[4].y, inner.y + 3);
+        assert_eq!(swatches[8].y, inner.y + 4);
+        assert!(swatches.iter().all(|swatch| swatch.y < input.y));
+        assert!(apply.y > input.y);
+        assert_eq!(apply.y, inner.y + inner.height - 1);
+        assert_eq!(clear.y, apply.y);
+        assert_eq!(cancel.y, apply.y);
+    }
 
     #[test]
     fn confirm_close_text_uses_live_workspace_cwd_label() {

@@ -321,7 +321,16 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
             continue;
         }
         let active = idx == ws.active_tab;
-        let style = if active {
+        let tab_id = crate::workspace::public_tab_id_for_number(&ws.id, tab.number);
+        let custom_color = app.tab_colors.get(&tab_id).copied();
+        let style = if let Some(color) = custom_color {
+            let base = Style::default().fg(color.contrast()).bg(color.ratatui());
+            if tab.is_auto_named() {
+                base
+            } else {
+                base.add_modifier(Modifier::BOLD)
+            }
+        } else if active {
             let base = Style::default().fg(panel_contrast_fg(p)).bg(p.accent);
             if tab.is_auto_named() {
                 base
@@ -461,6 +470,40 @@ mod tests {
         assert_eq!(style.bg, Some(app.palette.accent));
         assert!(!style.add_modifier.contains(Modifier::DIM));
         assert!(!style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn custom_tab_color_uses_contrast_and_clear_restores_theme_style() {
+        let mut app = AppState::test_new();
+        let ws = Workspace::test_new("test");
+        let tab_id = crate::workspace::public_tab_id_for_number(&ws.id, ws.tabs[0].number);
+        let color = crate::sidebar_color::SidebarRowColor::new(0xF5, 0xC2, 0xE7);
+
+        app.tab_colors.insert(tab_id.clone(), color);
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let view = compute_tab_bar_view(&app.workspaces[0], app.view.tab_bar_rect, 0, true, false);
+        app.view.tab_hit_areas = view.tab_hit_areas;
+
+        let backend = TestBackend::new(30, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+        let tab_rect = app.view.tab_hit_areas[0];
+        let custom_style = terminal.backend().buffer()[(tab_rect.x + 1, tab_rect.y)].style();
+        assert_eq!(custom_style.bg, Some(color.ratatui()));
+        assert_eq!(custom_style.fg, Some(color.contrast()));
+        assert!(!custom_style.add_modifier.contains(Modifier::DIM));
+
+        app.tab_colors.remove(&tab_id);
+        terminal
+            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+        let default_style = terminal.backend().buffer()[(tab_rect.x + 1, tab_rect.y)].style();
+        assert_eq!(default_style.bg, Some(app.palette.accent));
+        assert_eq!(default_style.fg, Some(panel_contrast_fg(&app.palette)));
     }
 
     #[test]

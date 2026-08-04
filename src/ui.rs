@@ -69,7 +69,8 @@ pub(crate) use self::{
         new_linked_worktree_inner_rect, open_existing_worktree_button_rects,
         open_existing_worktree_inner_rect, open_existing_worktree_max_visible_rows,
         open_existing_worktree_visible_start, remove_worktree_button_rects,
-        remove_worktree_popup_rect, rename_button_rects,
+        remove_worktree_popup_rect, rename_button_rects, sidebar_color_button_rects,
+        sidebar_color_swatch_rects, SIDEBAR_COLOR_POPUP_HEIGHT, SIDEBAR_COLOR_POPUP_WIDTH,
     },
     settings::{
         settings_button_rects, settings_popup_height, settings_show_primary_action,
@@ -448,6 +449,9 @@ pub fn render_with_runtime_registry(
         }
         Mode::ContextMenu => {
             render_context_menu(app, frame);
+        }
+        Mode::SidebarColor => {
+            dialogs::render_sidebar_color_overlay(app, frame, frame.area());
         }
         Mode::Settings => render_settings_overlay(app, frame, frame.area()),
         Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {

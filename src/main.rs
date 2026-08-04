@@ -93,6 +93,7 @@ mod render_signal;
 mod selection;
 mod server;
 mod session;
+mod sidebar_color;
 mod sound;
 mod terminal;
 mod terminal_modes;
@@ -254,7 +255,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # sidebar_min_width = 18
 
 # Maximum sidebar width when expanded (columns)
-# sidebar_max_width = 36
+# sidebar_max_width = 80
 
 # Start with the sidebar collapsed. Changes take effect on the next launch.
 # sidebar_start_collapsed = false
@@ -327,18 +328,18 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
 
-# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
-# terminal_title, and terminal_title_stripped.
+# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane,
+# pane_or_tab, directory, agent, terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
 # A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
 # Omitted style fields preserve the contextual default.
 # [ui.sidebar.agents]
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
-# rows = [["state_icon", "workspace", "tab"], ["agent"]]
+# rows = [["state_icon", "workspace", "tab", "pane"], ["directory", "agent"]]
 # Optional canonical agent IDs replace the default rows for matching agents.
 # [ui.sidebar.agents.rows_by_agent]
-# claude = [["state_icon", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
+# claude = [["state_icon", "workspace", "tab", "pane"], ["terminal_title_stripped"], ["directory", "agent"]]
 
 # Expanded space rows. Built-ins are state_icon, state_text, workspace, branch, and git_status.
 # Custom values reported through workspace metadata use a $name token, for example $jj_status.

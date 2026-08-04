@@ -493,9 +493,9 @@ impl App {
             tracing::warn!(
                 min = config.ui.sidebar_min_width,
                 max = config.ui.sidebar_max_width,
-                "ui.sidebar_min_width is greater than sidebar_max_width; falling back to default bounds (18, 36)"
+                "ui.sidebar_min_width is greater than sidebar_max_width; falling back to default bounds (18, 80)"
             );
-            (18, 36)
+            (18, 80)
         });
 
         let worktree_directory =
@@ -613,6 +613,10 @@ impl App {
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
+            sidebar_color_picker: None,
+            workspace_sidebar_colors: std::collections::HashMap::new(),
+            tab_colors: std::collections::HashMap::new(),
+            agent_sidebar_colors: std::collections::HashMap::new(),
             update_available,
             update_install_command,
             latest_release_notes_available,
@@ -1851,6 +1855,9 @@ impl App {
             }
             Mode::ContextMenu => {
                 self.handle_context_menu_key_via_api(key_event);
+            }
+            Mode::SidebarColor => {
+                input::handle_sidebar_color_key(&mut self.state, key_event);
             }
             Mode::KeybindHelp => {
                 input::handle_keybind_help_key(&mut self.state, key);
@@ -3147,7 +3154,7 @@ mod tests {
         let mut app = test_app();
         // Default bounds.
         assert_eq!(app.state.sidebar_min_width, 18);
-        assert_eq!(app.state.sidebar_max_width, 36);
+        assert_eq!(app.state.sidebar_max_width, 80);
         assert_eq!(
             app.state.mobile_width_threshold,
             crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD
@@ -3228,7 +3235,7 @@ mod tests {
             "App::new must fall back to default min when bounds are inverted"
         );
         assert_eq!(
-            app.state.sidebar_max_width, 36,
+            app.state.sidebar_max_width, 80,
             "App::new must fall back to default max when bounds are inverted"
         );
     }

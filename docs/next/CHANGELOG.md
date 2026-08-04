@@ -5,6 +5,11 @@
 ### Added
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
 - Added a resizable expanded-sidebar Health Check section with server-host CPU, battery, RAM, and disk usage.
+- Added right-click color customization for complete Agent and Space sidebar rows and top tabs, with 12 preset colors, strict `#RGB`/`#RRGGBB` input, automatic readable text contrast, and a clear action.
+
+### Changed
+- Agent sidebar entries now show the workspace, tab, and optional pane name, followed by the agent launch directory and agent name.
+- Increased the default maximum expanded sidebar width from 36 to 80 columns so longer Agent and Space details can remain visible.
 
 ### Fixed
 - `pane send-keys` and `agent send-keys` now preserve Shift when sending `shift+tab`, allowing agent permission modes to be cycled programmatically. (#1561, thanks @keinstn and @tomohisa)

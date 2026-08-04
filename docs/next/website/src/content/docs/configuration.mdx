@@ -256,6 +256,8 @@ Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `rese
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
+Drag the sidebar's right divider to reveal longer Agent and Space details. The default resize range is now 18–80 columns and remains configurable with `sidebar_min_width` and `sidebar_max_width`. Right-click a complete Agent or Space row, or a top tab, and choose **Color** to apply one of 12 presets or enter a strict `#RGB`/`#RRGGBB` value. Herdr automatically uses readable black or white text across the colored item; **clear color** restores every default theme style. These presentation colors remain available while that Herdr server is running and clear after a cold server restart.
+
 The expanded desktop sidebar also includes a compact **Health Check** section. It shows CPU usage, battery percentage when a battery is present, RAM used/total, and disk used/total. Drag the divider above Health Check vertically to resize the section; the chosen position persists with the session. These values are sampled from the host running the Herdr server, so a remote attach reports the remote host. Battery displays `n/a` on desktops, containers, and other systems without a readable battery.
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
@@ -268,8 +270,8 @@ The expanded desktop sidebar renders each inner array in `rows` as one line. The
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
-  ["state_icon", "workspace", "tab"],
-  ["agent"],
+  ["state_icon", "workspace", "tab", "pane"],
+  ["directory", "agent"],
 ]
 
 [ui.sidebar.spaces]
@@ -285,8 +287,10 @@ Agent rows accept these built-in tokens:
 - `state_icon` — colored icon for the agent's semantic state.
 - `state_text` — `idle`, `working`, `blocked`, `done`, or `unknown`, including a reported display label when present.
 - `workspace` — workspace name.
-- `tab` — tab name when available.
+- `tab` — tab name, including its automatic numeric name.
 - `pane` — pane name when available.
+- `pane_or_tab` — pane name when available, otherwise the tab name.
+- `directory` — base name of the pane working directory from which the agent was launched.
 - `agent` — detected or reported agent display name.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
@@ -301,7 +305,7 @@ Space rows accept these built-in tokens:
 - `git_status` — Git ahead and behind counts when nonzero.
 - `$name` — custom workspace metadata named `name`.
 
-Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
+Tokens render in their configured order. Herdr separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
 
 A token entry can also be an inline style table:
 

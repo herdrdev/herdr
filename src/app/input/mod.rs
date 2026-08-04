@@ -46,6 +46,7 @@ mod overlays;
 mod selection;
 mod settings;
 mod sidebar;
+mod sidebar_color;
 mod terminal;
 
 pub(crate) use self::{
@@ -59,6 +60,7 @@ pub(crate) use self::{
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
     },
     settings::open_settings_at,
+    sidebar_color::{handle_sidebar_color_key, insert_sidebar_color_text},
 };
 use self::{
     modal::{
@@ -110,6 +112,9 @@ impl App {
                 Mode::ConfirmClose => self.handle_confirm_close_key_via_api(key_event),
                 Mode::ContextMenu => {
                     self.handle_context_menu_key_via_api(key_event);
+                }
+                Mode::SidebarColor => {
+                    handle_sidebar_color_key(&mut self.state, key_event);
                 }
                 Mode::Settings => self.handle_settings_key(key_event),
                 Mode::GlobalMenu => handle_global_menu_key(&mut self.state, key_event),
@@ -211,6 +216,10 @@ impl App {
         match self.state.mode {
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
                 insert_rename_input_text(&mut self.state, text);
+                true
+            }
+            Mode::SidebarColor => {
+                insert_sidebar_color_text(&mut self.state, text);
                 true
             }
             Mode::NewLinkedWorktree => {
@@ -707,9 +716,11 @@ pub(crate) fn is_modal_paste_shortcut(key: &KeyEvent) -> bool {
 
 pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
     match state.mode {
-        Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::NewLinkedWorktree => {
-            true
-        }
+        Mode::RenameWorkspace
+        | Mode::RenameTab
+        | Mode::RenamePane
+        | Mode::SidebarColor
+        | Mode::NewLinkedWorktree => true,
         Mode::OpenExistingWorktree => state
             .worktree_open
             .as_ref()

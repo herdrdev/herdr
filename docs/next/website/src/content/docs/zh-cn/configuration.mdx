@@ -252,6 +252,8 @@ yellow = "#f9e2af"
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
 
+拖动侧边栏右侧分隔线可显示较长的 Agent 和 Space 详细信息。默认调整范围现在为 18～80 列，仍可通过 `sidebar_min_width` 和 `sidebar_max_width` 配置。右键单击完整的 Agent 或 Space 行或顶部标签页并选择 **Color**，即可从十二种预设颜色中选择，或输入严格的 `#RGB`/`#RRGGBB` 值。Herdr 会自动为彩色项目的所有文本使用清晰可读的黑色或白色；选择 **clear color** 可恢复所有默认主题样式。这些显示颜色会在对应 Herdr 服务器运行期间保留，并在服务器彻底重启后清除。
+
 展开的桌面侧边栏还包含一个紧凑的 **Health Check** 区域，显示运行 Herdr 服务器的主机 CPU 使用率、可用时的电池百分比、RAM 已用量/总量和磁盘已用量/总量。上下拖动 Health Check 上方的分隔线即可调整区域大小，所选位置会随会话保存。因此，远程连接显示的是远程主机数据。在没有可读电池的台式机、容器或其他系统上，电池会显示为 `n/a`。
 
 ### 侧边栏行布局
@@ -262,8 +264,8 @@ yellow = "#f9e2af"
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
-  ["state_icon", "workspace", "tab"],
-  ["agent"],
+  ["state_icon", "workspace", "tab", "pane"],
+  ["directory", "agent"],
 ]
 
 [ui.sidebar.spaces]
@@ -279,8 +281,10 @@ Agent 行支持以下内置 token：
 - `state_icon` — 智能体语义状态的彩色图标。
 - `state_text` — `idle`、`working`、`blocked`、`done` 或 `unknown`；如果报告中包含显示标签，也会一并显示。
 - `workspace` — 工作区名称。
-- `tab` — 标签页名称（如有）。
+- `tab` — 标签页名称，包括自动生成的数字名称。
 - `pane` — 窗格名称（如有）。
+- `pane_or_tab` — 优先显示窗格名称；没有窗格名称时显示标签页名称。
+- `directory` — 启动智能体时所在窗格工作目录的基本名称。
 - `agent` — 检测到或报告的智能体显示名称。
 - `terminal_title` — 经过安全规范化的最新 OSC 0/2 终端标题。
 - `terminal_title_stripped` — 从终端标题开头移除一个可识别的活动或旋转指示符字形及其后空白后的结果。
@@ -295,7 +299,7 @@ Space 行支持以下内置 token：
 - `git_status` — 非零时显示 Git ahead 和 behind 数量。
 - `$name` — 名为 `name` 的自定义工作区元数据。
 
-token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
+token 会按配置顺序渲染。Herdr 使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。每个布局最多可包含 16 行，每行最多可包含 16 个 token。
 
 也可以用内联样式表定义 token：
 

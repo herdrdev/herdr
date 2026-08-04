@@ -107,6 +107,8 @@ pub enum AgentSidebarToken {
     Workspace,
     Tab,
     Pane,
+    PaneOrTab,
+    Directory,
     Agent,
     TerminalTitle,
     TerminalTitleStripped,
@@ -237,6 +239,8 @@ fn agent_token_name(token: &AgentSidebarToken) -> String {
         AgentSidebarToken::Workspace => "workspace".into(),
         AgentSidebarToken::Tab => "tab".into(),
         AgentSidebarToken::Pane => "pane".into(),
+        AgentSidebarToken::PaneOrTab => "pane_or_tab".into(),
+        AgentSidebarToken::Directory => "directory".into(),
         AgentSidebarToken::Agent => "agent".into(),
         AgentSidebarToken::TerminalTitle => "terminal_title".into(),
         AgentSidebarToken::TerminalTitleStripped => "terminal_title_stripped".into(),
@@ -291,6 +295,8 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
                 ("workspace", Self::Workspace),
                 ("tab", Self::Tab),
                 ("pane", Self::Pane),
+                ("pane_or_tab", Self::PaneOrTab),
+                ("directory", Self::Directory),
                 ("agent", Self::Agent),
                 ("terminal_title", Self::TerminalTitle),
                 ("terminal_title_stripped", Self::TerminalTitleStripped),
@@ -395,8 +401,9 @@ impl Default for AgentsSidebarConfig {
                     AgentSidebarToken::StateIcon,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,
+                    AgentSidebarToken::Pane,
                 ],
-                vec![AgentSidebarToken::Agent],
+                vec![AgentSidebarToken::Directory, AgentSidebarToken::Agent],
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
@@ -445,8 +452,9 @@ mod tests {
                     AgentSidebarToken::StateIcon,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,
+                    AgentSidebarToken::Pane,
                 ],
-                vec![AgentSidebarToken::Agent],
+                vec![AgentSidebarToken::Directory, AgentSidebarToken::Agent],
             ]
         );
         assert!(config.agents.rows_by_agent.is_empty());
@@ -466,7 +474,7 @@ mod tests {
         let config: crate::config::Config = toml::from_str(
             r#"
 [ui.sidebar.agents]
-rows = [["state_icon", "workspace"], ["state_text", "agent", "$summary"], ["terminal_title", "terminal_title_stripped", "$terminal_title"]]
+rows = [["state_icon", "workspace", "pane_or_tab"], ["directory", "agent", "$summary"], ["terminal_title", "terminal_title_stripped", "$terminal_title"]]
 row_gap = 1
 
 [ui.sidebar.agents.rows_by_agent]
@@ -480,9 +488,17 @@ row_gap = 3
         .expect("sidebar token config");
 
         assert_eq!(
+            config.ui.sidebar.agents.rows[0],
+            vec![
+                AgentSidebarToken::StateIcon,
+                AgentSidebarToken::Workspace,
+                AgentSidebarToken::PaneOrTab,
+            ]
+        );
+        assert_eq!(
             config.ui.sidebar.agents.rows[1],
             vec![
-                AgentSidebarToken::StateText,
+                AgentSidebarToken::Directory,
                 AgentSidebarToken::Agent,
                 AgentSidebarToken::Custom("summary".into()),
             ]
