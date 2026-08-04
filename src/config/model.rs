@@ -335,6 +335,10 @@ pub struct KeysConfig {
     pub navigate_workspace_up: BindingConfig,
     /// Move workspace selection down in navigate mode. Default: "down".
     pub navigate_workspace_down: BindingConfig,
+    /// Move the session navigator selection up. Default: "ctrl+p".
+    pub navigate_navigator_up: BindingConfig,
+    /// Move the session navigator selection down. Default: "ctrl+n".
+    pub navigate_navigator_down: BindingConfig,
     /// Focus the pane to the left in navigate mode. Default: "h". Left arrow is always an alias.
     pub navigate_pane_left: BindingConfig,
     /// Focus the pane below in navigate mode. Default: "j".
@@ -455,6 +459,10 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_down: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    navigate_navigator_up: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigate_navigator_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     navigate_pane_left: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_pane_down: Option<BindingConfig>,
@@ -570,6 +578,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(goto);
         apply_field!(navigate_workspace_up);
         apply_field!(navigate_workspace_down);
+        apply_field!(navigate_navigator_up);
+        apply_field!(navigate_navigator_down);
         apply_field!(navigate_pane_left);
         apply_field!(navigate_pane_down);
         apply_field!(navigate_pane_up);
@@ -668,6 +678,8 @@ impl KeysConfig {
         copy_effective_action_field!(goto, keybinds.goto);
         copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
         copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
+        copy_effective_action_field!(navigate_navigator_up, keybinds.navigator.up);
+        copy_effective_action_field!(navigate_navigator_down, keybinds.navigator.down);
         copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
         copy_effective_action_field!(navigate_pane_down, keybinds.navigate.pane_down);
         copy_effective_action_field!(navigate_pane_up, keybinds.navigate.pane_up);
@@ -949,6 +961,8 @@ impl Default for KeysConfig {
             goto: BindingConfig::one("prefix+g"),
             navigate_workspace_up: BindingConfig::one("up"),
             navigate_workspace_down: BindingConfig::one("down"),
+            navigate_navigator_up: BindingConfig::one("ctrl+p"),
+            navigate_navigator_down: BindingConfig::one("ctrl+n"),
             navigate_pane_left: BindingConfig::one("h"),
             navigate_pane_down: BindingConfig::one("j"),
             navigate_pane_up: BindingConfig::one("k"),

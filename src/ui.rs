@@ -1428,13 +1428,28 @@ mod tests {
 
     #[test]
     fn keybind_help_shows_unset_for_optional_actions() {
-        let app = crate::app::state::AppState::test_new();
+        let mut app = crate::app::state::AppState::test_new();
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[keys]
+navigate_navigator_up = "ctrl+alt+p"
+navigate_navigator_down = "ctrl+alt+n"
+"#,
+        )
+        .unwrap();
+        app.keybinds = config.keybinds();
         let groups = keybind_help_groups(&app);
 
         let workspace_tab = groups
             .iter()
             .find(|(name, _)| *name == "workspaces / tabs")
             .expect("workspace tab group")
+            .1
+            .clone();
+        let navigation = groups
+            .iter()
+            .find(|(name, _)| *name == "navigation")
+            .expect("navigation group")
             .1
             .clone();
         let panes = groups
@@ -1462,6 +1477,9 @@ mod tests {
         assert!(workspace_tab
             .iter()
             .any(|(key, label)| key == "unset" && label.as_ref() == "switch workspace 1-9"));
+        assert!(navigation.iter().any(|(key, label)| {
+            key == "ctrl+alt+p / ctrl+alt+n" && label.as_ref() == "session navigator selection"
+        }));
         assert!(panes
             .iter()
             .any(|(key, label)| key == "prefix+h" && label.as_ref() == "focus pane left"));
