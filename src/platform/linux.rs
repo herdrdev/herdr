@@ -339,24 +339,46 @@ fn proc_children_supported() -> bool {
     })
 }
 
-/// Every live pid visible in `/proc`.
-fn all_proc_pids() -> Vec<u32> {
+/// Every live pid visible in `/proc`, streamed so callers that stop early do
+/// not pay for the rest of the directory.
+fn proc_pids() -> impl Iterator<Item = u32> {
     std::fs::read_dir("/proc")
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|entry| numeric_file_name(&entry))
-        .collect()
+}
+
+/// Every live pid visible in `/proc`.
+fn all_proc_pids() -> Vec<u32> {
+    proc_pids().collect()
 }
 
 /// Direct children of `parent_pid`, discovered by scanning `/proc` for
 /// processes whose stat reports `parent_pid` as their ppid. Used only when the
 /// kernel does not expose children files.
 fn scanned_child_pids(parent_pid: u32) -> Vec<u32> {
-    all_proc_pids()
-        .into_iter()
-        .filter(|&pid| process_ppid(pid) == Some(parent_pid as i32))
-        .collect()
+    scanned_child_pids_from(parent_pid, proc_pids(), process_ppid)
+}
+
+fn scanned_child_pids_from(
+    parent_pid: u32,
+    pids: impl Iterator<Item = u32>,
+    mut ppid: impl FnMut(u32) -> Option<i32>,
+) -> Vec<u32> {
+    let mut children = Vec::new();
+    for pid in pids {
+        if ppid(pid) != Some(parent_pid as i32) {
+            continue;
+        }
+        children.push(pid);
+        // One past the limit is enough for the caller to fail closed, so stop
+        // walking `/proc` instead of reading every remaining pid.
+        if children.len() > CHILD_GROUPS_SCAN_LIMIT {
+            break;
+        }
+    }
+    children
 }
 
 fn process_task_children(pid: u32, tid: u32) -> Vec<u32> {
@@ -933,6 +955,34 @@ mod tests {
 
         assert_eq!(inspected, CHILD_GROUPS_SCAN_LIMIT);
         assert_eq!(group, None);
+    }
+
+    #[test]
+    fn scanned_child_pids_stop_one_past_the_scan_limit() {
+        let total = CHILD_GROUPS_SCAN_LIMIT + 50;
+        let mut read = 0usize;
+
+        let children = scanned_child_pids_from(100, 1..=(total as u32), |_| {
+            read += 1;
+            Some(100)
+        });
+
+        // One past the limit is all the caller needs to fail closed, and the
+        // walk stops there instead of reading every remaining pid.
+        assert_eq!(children.len(), CHILD_GROUPS_SCAN_LIMIT + 1);
+        assert_eq!(read, CHILD_GROUPS_SCAN_LIMIT + 1);
+        assert!(read < total);
+    }
+
+    #[test]
+    fn scanned_child_pids_keep_only_direct_children() {
+        let parents = HashMap::from([(1, 0), (150, 100), (300, 100), (500, 1)]);
+
+        let children = scanned_child_pids_from(100, [1, 150, 300, 500].into_iter(), |pid| {
+            parents.get(&pid).copied()
+        });
+
+        assert_eq!(children, vec![150, 300]);
     }
 
     #[test]
