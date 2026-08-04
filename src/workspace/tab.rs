@@ -205,8 +205,12 @@ impl Tab {
         self.custom_name = Some(name);
     }
 
+    // Terminal-launch split builder; params mirror the runtime spawn API.
+    #[allow(clippy::too_many_arguments)]
     pub fn split_focused(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         rows: u16,
         cols: u16,
@@ -218,6 +222,8 @@ impl Tab {
         launch_env: &PaneLaunchEnv,
     ) -> std::io::Result<NewPane> {
         self.split_focused_with_runtime(
+            target,
+            focus_new_pane,
             direction,
             None,
             rows,
@@ -232,8 +238,12 @@ impl Tab {
         )
     }
 
+    // Terminal-launch split builder; params mirror the runtime spawn API.
+    #[allow(clippy::too_many_arguments)]
     pub fn split_focused_with_ratio(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         ratio: f32,
         rows: u16,
@@ -246,6 +256,8 @@ impl Tab {
         launch_env: &PaneLaunchEnv,
     ) -> std::io::Result<NewPane> {
         self.split_focused_with_runtime(
+            target,
+            focus_new_pane,
             direction,
             Some(ratio),
             rows,
@@ -260,8 +272,12 @@ impl Tab {
         )
     }
 
+    // Terminal-launch split builder; params mirror the runtime spawn API.
+    #[allow(clippy::too_many_arguments)]
     pub fn split_focused_command(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         rows: u16,
         cols: u16,
@@ -273,6 +289,8 @@ impl Tab {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
     ) -> std::io::Result<NewPane> {
         self.split_focused_with_runtime(
+            target,
+            focus_new_pane,
             direction,
             None,
             rows,
@@ -290,8 +308,12 @@ impl Tab {
         )
     }
 
+    // Terminal-launch split builder; params mirror the runtime spawn API.
+    #[allow(clippy::too_many_arguments)]
     pub fn split_focused_argv_command(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         rows: u16,
         cols: u16,
@@ -303,6 +325,8 @@ impl Tab {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
     ) -> std::io::Result<NewPane> {
         self.split_focused_with_runtime(
+            target,
+            focus_new_pane,
             direction,
             None,
             rows,
@@ -317,8 +341,12 @@ impl Tab {
         )
     }
 
+    // Terminal-launch split builder; params mirror the runtime spawn API.
+    #[allow(clippy::too_many_arguments)]
     pub fn split_focused_argv_command_with_ratio(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         ratio: f32,
         rows: u16,
@@ -331,6 +359,8 @@ impl Tab {
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
     ) -> std::io::Result<NewPane> {
         self.split_focused_with_runtime(
+            target,
+            focus_new_pane,
             direction,
             Some(ratio),
             rows,
@@ -349,6 +379,8 @@ impl Tab {
     #[allow(clippy::too_many_arguments)]
     fn split_focused_with_runtime(
         &mut self,
+        target: PaneId,
+        focus_new_pane: bool,
         direction: Direction,
         ratio: Option<f32>,
         rows: u16,
@@ -361,10 +393,15 @@ impl Tab {
         launch_env: &PaneLaunchEnv,
         command: Option<SplitCommand<'_>>,
     ) -> std::io::Result<NewPane> {
-        let previous_focus = self.layout.focused();
-        let new_id = match ratio {
-            Some(ratio) => self.layout.split_focused_with_ratio(direction, ratio),
-            None => self.layout.split_focused(direction),
+        let restore_focus = self.layout.focused();
+        let Some(new_id) =
+            self.layout
+                .split_pane(target, direction, ratio.unwrap_or(0.5), focus_new_pane)
+        else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "split target pane not found",
+            ));
         };
         let actual_cwd =
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
@@ -425,8 +462,10 @@ impl Tab {
         let runtime = match runtime {
             Ok(runtime) => runtime,
             Err(err) => {
-                self.layout.close_focused();
-                self.layout.focus_pane(previous_focus);
+                if focus_new_pane {
+                    self.layout.focus_pane(restore_focus);
+                }
+                self.layout.close_pane(new_id);
                 return Err(err);
             }
         };
@@ -493,14 +532,7 @@ impl Tab {
 
         if self.layout.pane_count() > 1 {
             let next_root = self.promoted_root_if_needed(pane_id);
-            if self.layout.focused() == pane_id {
-                self.layout.close_focused();
-            } else {
-                let prev_focus = self.layout.focused();
-                self.layout.focus_pane(pane_id);
-                self.layout.close_focused();
-                self.layout.focus_pane(prev_focus);
-            }
+            self.layout.close_pane(pane_id);
             if let Some(next_root) = next_root {
                 self.root_pane = next_root;
             }
@@ -520,10 +552,11 @@ impl Tab {
         moved: MovedPane,
         direction: Direction,
         ratio: f32,
+        focus: bool,
     ) -> Result<PaneId, MovedPane> {
         if !self
             .layout
-            .insert_pane_near(target_pane_id, moved.pane_id, direction, ratio)
+            .insert_pane_near(target_pane_id, moved.pane_id, direction, ratio, focus)
         {
             return Err(moved);
         }
@@ -540,14 +573,7 @@ impl Tab {
 
         let next_root = self.promoted_root_if_needed(pane_id);
 
-        if self.layout.focused() == pane_id {
-            self.layout.close_focused();
-        } else {
-            let prev_focus = self.layout.focused();
-            self.layout.focus_pane(pane_id);
-            self.layout.close_focused();
-            self.layout.focus_pane(prev_focus);
-        }
+        self.layout.close_pane(pane_id);
 
         let pane = self.panes.remove(&pane_id)?;
         let terminal_id = pane.attached_terminal_id;

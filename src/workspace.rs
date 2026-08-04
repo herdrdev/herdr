@@ -683,10 +683,16 @@ impl Workspace {
             .map(|tab| tab.number)
             .expect("workspace must always have at least one tab");
         let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let target = self
+            .active_tab()
+            .map(|tab| tab.layout.focused())
+            .expect("workspace must always have at least one tab");
         let new_pane = self
             .active_tab_mut()
             .expect("workspace must always have at least one tab")
             .split_focused(
+                target,
+                true,
                 direction,
                 rows,
                 cols,
@@ -720,10 +726,16 @@ impl Workspace {
             .map(|tab| tab.number)
             .expect("workspace must always have at least one tab");
         let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let target = self
+            .active_tab()
+            .map(|tab| tab.layout.focused())
+            .expect("workspace must always have at least one tab");
         let new_pane = self
             .active_tab_mut()
             .expect("workspace must always have at least one tab")
             .split_focused_command(
+                target,
+                true,
                 direction,
                 rows,
                 cols,
@@ -891,11 +903,11 @@ impl Workspace {
         let tab_number = self.tabs[tab_idx].number;
         let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
         let tab = &mut self.tabs[tab_idx];
-        let previous_focus = tab.layout.focused();
-        tab.layout.focus_pane(pane_id);
         let new_pane = match if let Some(argv) = argv {
             match ratio {
                 Some(ratio) => tab.split_focused_argv_command_with_ratio(
+                    pane_id,
+                    focus_new_pane,
                     direction,
                     ratio,
                     rows,
@@ -908,6 +920,8 @@ impl Workspace {
                     host_terminal_appearance,
                 ),
                 None => tab.split_focused_argv_command(
+                    pane_id,
+                    focus_new_pane,
                     direction,
                     rows,
                     cols,
@@ -922,6 +936,8 @@ impl Workspace {
         } else {
             match ratio {
                 Some(ratio) => tab.split_focused_with_ratio(
+                    pane_id,
+                    focus_new_pane,
                     direction,
                     ratio,
                     rows,
@@ -934,6 +950,8 @@ impl Workspace {
                     &launch_env,
                 ),
                 None => tab.split_focused(
+                    pane_id,
+                    focus_new_pane,
                     direction,
                     rows,
                     cols,
@@ -947,14 +965,8 @@ impl Workspace {
             }
         } {
             Ok(new_pane) => new_pane,
-            Err(err) => {
-                tab.layout.focus_pane(previous_focus);
-                return Some(Err(err));
-            }
+            Err(err) => return Some(Err(err)),
         };
-        if !focus_new_pane {
-            tab.layout.focus_pane(previous_focus);
-        }
         self.register_new_pane_with_number(new_pane.pane_id, pane_number);
         Some(Ok((tab_idx, new_pane)))
     }
@@ -1034,12 +1046,13 @@ impl Workspace {
         moved: MovedPane,
         direction: Direction,
         ratio: f32,
+        focus: bool,
     ) -> Result<PaneId, MovedPane> {
         let pane_id = moved.pane_id;
         let Some(tab) = self.tabs.get_mut(tab_idx) else {
             return Err(moved);
         };
-        tab.insert_existing_pane(target_pane_id, moved, direction, ratio)?;
+        tab.insert_existing_pane(target_pane_id, moved, direction, ratio, focus)?;
         if !self.public_pane_numbers.contains_key(&pane_id) {
             self.register_new_pane_with_number(pane_id, self.next_public_pane_number);
         }
@@ -1332,7 +1345,11 @@ impl Workspace {
 
     pub(crate) fn test_split(&mut self, direction: Direction) -> PaneId {
         let tab = self.active_tab_mut().expect("workspace must have tab");
-        let new_id = tab.layout.split_focused(direction);
+        let target = tab.layout.focused();
+        let new_id = tab
+            .layout
+            .split_pane(target, direction, 0.5, true)
+            .expect("focused pane is always present");
         tab.panes
             .insert(new_id, PaneState::new(TerminalId::alloc()));
         self.register_new_pane(new_id);
@@ -1665,7 +1682,14 @@ mod tests {
         let missing_target = PaneId::alloc();
 
         let recovered = target
-            .insert_moved_pane_into_tab(0, missing_target, taken.moved, Direction::Horizontal, 0.5)
+            .insert_moved_pane_into_tab(
+                0,
+                missing_target,
+                taken.moved,
+                Direction::Horizontal,
+                0.5,
+                true,
+            )
             .expect_err("invalid target should return the moved pane");
 
         assert_eq!(recovered.pane_id, source_pane);
