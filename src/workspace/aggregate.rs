@@ -53,9 +53,7 @@ impl Tab {
                     tab_idx,
                     tab_label: tab_label.to_string(),
                     label: agent_label.clone(),
-                    pane_label: terminal
-                        .effective_title()
-                        .or_else(|| terminal.manual_label.clone()),
+                    pane_label: self.pane_display_label(*id, terminal),
                     terminal_title: terminal.terminal_title.clone(),
                     terminal_title_stripped: terminal.terminal_title_stripped(),
                     agent_label,
@@ -213,6 +211,24 @@ mod tests {
             labels,
             vec![("planner".into(), "planner".into(), Some(Agent::Pi))]
         );
+    }
+
+    #[test]
+    fn pane_details_include_generated_pane_name_without_manual_label() {
+        let ws = Workspace::test_new("test");
+        let root_pane = ws.tabs[0].root_pane;
+        let mut terminals = HashMap::new();
+        let mut terminal = terminal_for_pane(&ws, root_pane);
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+        terminals.insert(terminal.id.clone(), terminal);
+
+        let detail = ws
+            .pane_details(&terminals)
+            .into_iter()
+            .next()
+            .expect("agent pane should be listed");
+
+        assert_eq!(detail.pane_label.as_deref(), Some("pane 1"));
     }
 
     #[test]

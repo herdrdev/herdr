@@ -4,7 +4,7 @@ use bytes::Bytes;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tracing::warn;
 
-use crate::app::PaneClickState;
+use crate::app::{PaneClickState, WorkspaceEmptyClickState};
 use crate::input::TerminalKey;
 #[cfg(test)]
 use ratatui::layout::Direction;
@@ -43,6 +43,7 @@ mod modal;
 mod mouse;
 mod navigate;
 mod overlays;
+mod pane_drag;
 mod selection;
 mod settings;
 mod sidebar;
@@ -71,6 +72,7 @@ use self::{
 };
 use super::state::{AppState, Mode};
 use super::App;
+pub(crate) use pane_drag::PaneDragController;
 
 // ---------------------------------------------------------------------------
 // Key handling
@@ -81,6 +83,9 @@ impl App {
         &mut self,
         key: TerminalKey,
     ) -> Option<super::TerminalInputTarget> {
+        if self.handle_pane_drag_key(super::LOCAL_INPUT_SOURCE, &key) {
+            return None;
+        }
         if self.state.popup_pane.is_some() {
             return self.handle_terminal_key(key).await;
         }
@@ -368,6 +373,9 @@ impl App {
         if self.handle_overlay_mouse(mouse) {
             return;
         }
+        if self.handle_pane_drag_mouse(source_id, mouse) {
+            return;
+        }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && self.state.on_sidebar_divider(mouse.column, mouse.row)
@@ -390,6 +398,11 @@ impl App {
         }
 
         if self.handle_modified_url_click(source_id, mouse) {
+            return;
+        }
+
+        if self.handle_workspace_empty_double_click(source_id, mouse) {
+            self.begin_tui_workspace_create("tui.mouse.workspace.create");
             return;
         }
 
@@ -601,6 +614,59 @@ impl App {
         if let Err(err) = crate::platform::open_url(&url) {
             tracing::warn!(err = %err, url = %url, "failed to open pane URL");
         }
+        true
+    }
+
+    fn handle_workspace_empty_double_click(
+        &mut self,
+        source_id: super::InputSourceId,
+        mouse: MouseEvent,
+    ) -> bool {
+        if matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+                | MouseEventKind::Drag(MouseButton::Left)
+        ) {
+            self.last_workspace_empty_click = None;
+            return false;
+        }
+
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        let valid_mode = matches!(
+            self.state.mode,
+            Mode::Terminal | Mode::Navigate | Mode::Resize
+        );
+        if !valid_mode
+            || !mouse.modifiers.is_empty()
+            || !self
+                .state
+                .workspace_list_empty_space_at(mouse.column, mouse.row)
+        {
+            self.last_workspace_empty_click = None;
+            return false;
+        }
+
+        let click = WorkspaceEmptyClickState {
+            source_id,
+            row: mouse.row,
+            col: mouse.column,
+            at: std::time::Instant::now(),
+        };
+        if !self
+            .last_workspace_empty_click
+            .is_some_and(|last| last.is_double_click_for(click))
+        {
+            self.last_workspace_empty_click = Some(click);
+            return false;
+        }
+
+        self.last_workspace_empty_click = None;
         true
     }
 

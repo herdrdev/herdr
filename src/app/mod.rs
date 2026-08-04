@@ -94,6 +94,23 @@ impl PaneClickState {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkspaceEmptyClickState {
+    source_id: InputSourceId,
+    row: u16,
+    col: u16,
+    at: Instant,
+}
+
+impl WorkspaceEmptyClickState {
+    fn is_double_click_for(self, next: Self) -> bool {
+        self.source_id == next.source_id
+            && next.at.duration_since(self.at) <= SIDEBAR_DOUBLE_CLICK_WINDOW
+            && self.row.abs_diff(next.row) <= 1
+            && self.col.abs_diff(next.col) <= 1
+    }
+}
+
 pub struct App {
     pub state: AppState,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
@@ -123,7 +140,9 @@ pub struct App {
     pub(crate) pending_api_worktree_remove_paths: HashMap<std::path::PathBuf, u64>,
     pub(crate) next_api_worktree_operation_id: u64,
     pub(crate) last_sidebar_divider_click: Option<Instant>,
+    pub(crate) last_workspace_empty_click: Option<WorkspaceEmptyClickState>,
     pub(crate) last_pane_click: Option<PaneClickState>,
+    pub(crate) pane_drag: Option<input::PaneDragController>,
     pub(crate) pending_url_click_sources: HashSet<InputSourceId>,
     pub(crate) next_resize_poll: Instant,
     pub(crate) next_auto_update_check: Option<Instant>,
@@ -605,11 +624,13 @@ impl App {
                 mobile_menu_hit_area: Rect::default(),
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
+                pane_title_hit_areas: Vec::new(),
                 split_borders: Vec::new(),
             },
             drag: None,
             workspace_press: None,
             tab_press: None,
+            pane_drop_preview: None,
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
@@ -768,7 +789,9 @@ impl App {
             pending_api_worktree_remove_paths: HashMap::new(),
             next_api_worktree_operation_id: 1,
             last_sidebar_divider_click: None,
+            last_workspace_empty_click: None,
             last_pane_click: None,
+            pane_drag: None,
             pending_url_click_sources: HashSet::new(),
             next_resize_poll: Instant::now() + RESIZE_POLL_INTERVAL,
             next_auto_update_check: version_check_enabled
@@ -1708,6 +1731,9 @@ impl App {
             let previous_mode = self.state.mode;
             match event {
                 crate::raw_input::RawInputEvent::Key(key) => {
+                    if self.handle_pane_drag_key(source_id, &key) {
+                        continue;
+                    }
                     let lease_key = input::InputLeaseKey::new(source_id, &key);
                     let key = self.input_leases.normalize_press(&lease_key, key);
                     match key.kind {
@@ -3596,7 +3622,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn outer_focus_gained_marks_visible_done_panes_seen() {
+    async fn outer_focus_gained_marks_only_the_focused_done_pane_seen() {
         let mut app = test_app();
         let mut workspace = Workspace::test_new("test");
         let root_pane = workspace.tabs[0].root_pane;
@@ -3646,6 +3672,7 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.outer_terminal_focus = Some(false);
+        app.state.workspaces[0].tabs[0].layout.focus_pane(root_pane);
 
         let handled = app
             .handle_raw_input_event(crate::raw_input::RawInputEvent::OuterFocusGained)
@@ -3654,7 +3681,7 @@ mod tests {
         assert!(handled);
         assert_eq!(app.state.outer_terminal_focus, Some(true));
         assert!(app.state.workspaces[0].tabs[0].panes[&root_pane].seen);
-        assert!(app.state.workspaces[0].tabs[0].panes[&split_pane].seen);
+        assert!(!app.state.workspaces[0].tabs[0].panes[&split_pane].seen);
         assert!(!app.state.workspaces[0].tabs[background_tab].panes[&background_pane].seen);
     }
 

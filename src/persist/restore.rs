@@ -461,6 +461,32 @@ fn restore_tab(
         .map(|(&old_id, &new_id)| (new_id, old_id))
         .collect();
     let pane_ids = collect_pane_ids(&node);
+    let mut used_auto_pane_numbers = HashSet::new();
+    let mut auto_pane_numbers = HashMap::new();
+    let mut next_fallback_auto_pane_number = 1usize;
+    for id in &pane_ids {
+        let saved_number = reverse_id_map
+            .get(id)
+            .and_then(|old_id| snap.auto_pane_numbers.get(old_id))
+            .copied()
+            .filter(|number| *number > 0)
+            .filter(|number| used_auto_pane_numbers.insert(*number));
+        let number = saved_number.unwrap_or_else(|| {
+            while used_auto_pane_numbers.contains(&next_fallback_auto_pane_number) {
+                next_fallback_auto_pane_number += 1;
+            }
+            let number = next_fallback_auto_pane_number;
+            used_auto_pane_numbers.insert(number);
+            next_fallback_auto_pane_number += 1;
+            number
+        });
+        auto_pane_numbers.insert(*id, number);
+    }
+    let max_auto_pane_number = auto_pane_numbers.values().copied().max().unwrap_or(0);
+    let next_auto_pane_number = snap
+        .next_auto_pane_number
+        .max(max_auto_pane_number.saturating_add(1))
+        .max(1);
 
     let mut panes = HashMap::new();
     let mut terminals = Vec::new();
@@ -561,7 +587,11 @@ fn restore_tab(
                     std::time::Instant::now(),
                 );
             }
-            panes.insert(*id, PaneState::new(terminal_id));
+            let auto_name_number = auto_pane_numbers.get(id).copied().unwrap_or(1);
+            panes.insert(
+                *id,
+                PaneState::new(terminal_id).with_auto_name_number(auto_name_number),
+            );
             terminals.push(terminal);
             continue;
         }
@@ -660,7 +690,11 @@ fn restore_tab(
                         std::time::Instant::now(),
                     );
                 }
-                panes.insert(*id, PaneState::new(terminal_id.clone()));
+                let auto_name_number = auto_pane_numbers.get(id).copied().unwrap_or(1);
+                panes.insert(
+                    *id,
+                    PaneState::new(terminal_id.clone()).with_auto_name_number(auto_name_number),
+                );
                 terminal_runtimes.insert(terminal_id, runtime);
                 terminals.push(terminal);
             }
@@ -718,6 +752,7 @@ fn restore_tab(
             crate::workspace::Tab {
                 custom_name: snap.custom_name.clone(),
                 number,
+                next_auto_pane_number,
                 root_pane,
                 layout,
                 panes,
@@ -1183,6 +1218,8 @@ mod tests {
                 next_public_tab_number: 0,
                 tabs: vec![TabSnapshot {
                     custom_name: None,
+                    auto_pane_numbers: HashMap::new(),
+                    next_auto_pane_number: 0,
                     layout: LayoutSnapshot::Pane(0),
                     panes: HashMap::from([(
                         0,
@@ -1264,6 +1301,8 @@ mod tests {
                 next_public_tab_number: 6,
                 tabs: vec![TabSnapshot {
                     custom_name: None,
+                    auto_pane_numbers: HashMap::from([(10, 3), (20, 8)]),
+                    next_auto_pane_number: 12,
                     layout: LayoutSnapshot::Split {
                         direction: super::super::snapshot::DirectionSnapshot::Horizontal,
                         ratio: 0.5,
@@ -1309,7 +1348,7 @@ mod tests {
         };
         let (events, _event_rx) = mpsc::channel(4);
 
-        let (workspaces, _terminals, _runtimes) = restore(
+        let (mut workspaces, _terminals, _runtimes) = restore(
             &snapshot,
             None,
             24,
@@ -1323,13 +1362,38 @@ mod tests {
             Arc::new(RenderSignal::new()),
         );
 
-        let workspace = workspaces.first().expect("workspace should restore");
+        let workspace = workspaces.first_mut().expect("workspace should restore");
         let mut public_numbers: Vec<_> = workspace.public_pane_numbers.values().copied().collect();
         public_numbers.sort_unstable();
         assert_eq!(public_numbers, vec![1, 3]);
         assert_eq!(workspace.next_public_pane_number, 4);
         assert_eq!(workspace.tabs[0].number, 5);
         assert_eq!(workspace.next_public_tab_number, 6);
+        let mut auto_numbers_by_public_pane: Vec<_> = workspace.tabs[0]
+            .panes
+            .iter()
+            .map(|(pane_id, pane)| {
+                (
+                    workspace
+                        .public_pane_number(*pane_id)
+                        .expect("restored pane should have a public number"),
+                    pane.auto_name_number,
+                )
+            })
+            .collect();
+        auto_numbers_by_public_pane.sort_unstable();
+        assert_eq!(auto_numbers_by_public_pane, vec![(1, 3), (3, 8)]);
+        assert_eq!(workspace.tabs[0].next_auto_pane_number, 12);
+        let reused_gap = workspace.test_split(ratatui::layout::Direction::Vertical);
+        assert_eq!(
+            workspace.tabs[0].auto_pane_label(reused_gap).as_deref(),
+            Some("pane 1")
+        );
+        assert_eq!(
+            workspace.tabs[0].next_auto_pane_number, 12,
+            "filling a restored gap must preserve the high-water mark"
+        );
+        workspace.assert_invariants_for_test();
     }
 
     #[tokio::test]
@@ -1375,6 +1439,8 @@ mod tests {
                 tabs: vec![
                     TabSnapshot {
                         custom_name: None,
+                        auto_pane_numbers: HashMap::new(),
+                        next_auto_pane_number: 0,
                         layout: LayoutSnapshot::Pane(10),
                         panes: HashMap::from([pane_snap("10")]),
                         zoomed: false,
@@ -1383,6 +1449,8 @@ mod tests {
                     },
                     TabSnapshot {
                         custom_name: None,
+                        auto_pane_numbers: HashMap::new(),
+                        next_auto_pane_number: 0,
                         layout: LayoutSnapshot::Pane(11),
                         panes: HashMap::from([pane_snap("11")]),
                         zoomed: false,
@@ -1391,6 +1459,8 @@ mod tests {
                     },
                     TabSnapshot {
                         custom_name: None,
+                        auto_pane_numbers: HashMap::new(),
+                        next_auto_pane_number: 0,
                         layout: LayoutSnapshot::Pane(12),
                         panes: HashMap::from([pane_snap("12")]),
                         zoomed: false,
@@ -1399,6 +1469,8 @@ mod tests {
                     },
                     TabSnapshot {
                         custom_name: None,
+                        auto_pane_numbers: HashMap::new(),
+                        next_auto_pane_number: 0,
                         layout: LayoutSnapshot::Pane(13),
                         panes: HashMap::from([(13, final_pane)]),
                         zoomed: false,
@@ -1458,6 +1530,8 @@ mod tests {
             next_public_tab_number: 0,
             tabs: vec![TabSnapshot {
                 custom_name: None,
+                auto_pane_numbers: HashMap::new(),
+                next_auto_pane_number: 0,
                 layout: LayoutSnapshot::Split {
                     direction: super::super::snapshot::DirectionSnapshot::Horizontal,
                     ratio: 0.5,
@@ -1497,6 +1571,8 @@ mod tests {
                 next_public_tab_number: 0,
                 tabs: vec![TabSnapshot {
                     custom_name: None,
+                    auto_pane_numbers: HashMap::new(),
+                    next_auto_pane_number: 0,
                     layout: LayoutSnapshot::Pane(0),
                     panes: HashMap::from([(
                         0,
@@ -1707,6 +1783,8 @@ mod tests {
                 next_public_tab_number: 0,
                 tabs: vec![TabSnapshot {
                     custom_name: None,
+                    auto_pane_numbers: HashMap::new(),
+                    next_auto_pane_number: 0,
                     layout: LayoutSnapshot::Pane(0),
                     panes,
                     zoomed: false,

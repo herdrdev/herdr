@@ -41,6 +41,15 @@ impl App {
         encode_success(id, ResponseResult::AgentInfo { agent })
     }
 
+    pub(super) fn handle_agent_mark_unread(&mut self, id: String, target: AgentTarget) -> String {
+        let agent = match self.mark_agent_unread_target(&target.target) {
+            Ok(agent) => agent,
+            Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
+        };
+
+        encode_success(id, ResponseResult::AgentInfo { agent })
+    }
+
     pub(super) fn handle_agent_rename(&mut self, id: String, params: AgentRenameParams) -> String {
         let agent = match self.rename_agent_target(&params.target, params.name) {
             Ok(agent) => agent,
@@ -499,6 +508,47 @@ mod tests {
             panic!("expected agent info response");
         };
         assert_eq!(agent.agent_status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn agent_mark_unread_marks_an_idle_agent_done_without_changing_focus() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        app.state.workspaces[0].tabs[0].layout.focus_pane(pane_id);
+        let target = app.public_pane_id(0, pane_id).unwrap();
+
+        let response = app.handle_agent_mark_unread(
+            "req".into(),
+            AgentTarget {
+                target: target.clone(),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::AgentInfo { agent } = success.result else {
+            panic!("expected agent info response");
+        };
+        assert_eq!(agent.agent_status, AgentStatus::Done);
+        assert!(agent.focused);
+        assert!(!app.state.workspaces[0].tabs[0].panes[&pane_id].seen);
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(
+                &event.data,
+                crate::api::schema::EventData::PaneAgentStatusChanged {
+                    pane_id,
+                    agent_status: AgentStatus::Done,
+                    ..
+                } if pane_id == &target
+            )
+        }));
     }
 
     #[test]

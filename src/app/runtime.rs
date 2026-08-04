@@ -222,8 +222,10 @@ impl App {
                 true
             }
             crate::raw_input::RawInputEvent::Mouse(mouse) => {
+                let pane_drag_active = self.pane_drag.is_some();
                 let changes_view = !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved)
-                    || self.state.mode.mouse_motion_changes_view();
+                    || self.state.mode.mouse_motion_changes_view()
+                    || pane_drag_active;
                 if self.state.popup_pane.is_some() || self.state.mouse_capture {
                     self.handle_mouse(mouse);
                 } else {
@@ -238,14 +240,15 @@ impl App {
                     self.request_repaint();
                 }
                 self.state.outer_terminal_focus = Some(true);
-                self.state.mark_active_tab_seen();
+                self.state.mark_focused_pane_seen();
                 true
             }
             crate::raw_input::RawInputEvent::OuterFocusLost => {
+                let pane_drag_changed = self.pane_drag_owned_by(super::LOCAL_INPUT_SOURCE);
                 self.release_input_source(super::LOCAL_INPUT_SOURCE).await;
                 self.send_outer_focus_event(crate::ghostty::FocusEvent::Lost);
                 self.state.outer_terminal_focus = Some(false);
-                false
+                pane_drag_changed
             }
             crate::raw_input::RawInputEvent::HostDefaultColor { kind, color } => {
                 self.update_host_terminal_theme(kind, color)
@@ -348,6 +351,7 @@ impl App {
             self.tick_selection_autoscroll(now);
             changed = true;
         }
+        changed |= self.tick_pane_drag(now);
 
         changed |= self.clear_due_selection_highlight(now);
 
@@ -635,6 +639,7 @@ impl App {
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
             self.selection_highlight_clear_deadline,
+            self.pane_drag_deadline(),
             render_deadline,
         ]
         .into_iter()

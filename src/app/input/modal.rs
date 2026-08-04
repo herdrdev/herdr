@@ -820,6 +820,17 @@ pub(super) fn apply_context_menu_action(
         (
             ContextMenuKind::Agent {
                 ws_idx,
+                tab_idx: _,
+                pane_id,
+            },
+            Some("Unread"),
+        ) => {
+            state.set_pane_seen(ws_idx, pane_id, false);
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Agent {
+                ws_idx,
                 tab_idx,
                 pane_id,
             },
@@ -1264,6 +1275,19 @@ impl App {
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Color"),
             ) => open_workspace_color_picker(&mut self.state, &self.terminal_runtimes, ws_idx),
+            (
+                ContextMenuKind::Agent {
+                    ws_idx,
+                    tab_idx: _,
+                    pane_id,
+                },
+                Some("Unread"),
+            ) => {
+                if let Some(target) = self.public_pane_id(ws_idx, pane_id) {
+                    self.runtime_agent_mark_unread("tui.agent.mark_unread", target);
+                }
+                leave_modal(&mut self.state);
+            }
             (
                 ContextMenuKind::Agent {
                     ws_idx,

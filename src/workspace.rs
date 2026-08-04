@@ -498,7 +498,8 @@ impl Workspace {
         if idx < self.tabs.len() {
             self.active_tab = idx;
             if let Some(tab) = self.tabs.get_mut(idx) {
-                for pane in tab.panes.values_mut() {
+                let focused_pane_id = tab.layout.focused();
+                if let Some(pane) = tab.panes.get_mut(&focused_pane_id) {
                     pane.seen = true;
                 }
             }
@@ -1046,6 +1047,25 @@ impl Workspace {
         Ok(pane_id)
     }
 
+    pub(crate) fn insert_moved_pane_at(
+        &mut self,
+        tab_idx: usize,
+        target_pane_id: PaneId,
+        moved: MovedPane,
+        placement: crate::layout::PanePlacement,
+        moved_ratio: f32,
+    ) -> Result<PaneId, MovedPane> {
+        let pane_id = moved.pane_id;
+        let Some(tab) = self.tabs.get_mut(tab_idx) else {
+            return Err(moved);
+        };
+        tab.insert_existing_pane_at(target_pane_id, moved, placement, moved_ratio)?;
+        if !self.public_pane_numbers.contains_key(&pane_id) {
+            self.register_new_pane_with_number(pane_id, self.next_public_pane_number);
+        }
+        Ok(pane_id)
+    }
+
     pub(crate) fn create_tab_from_existing_pane(
         &mut self,
         moved: MovedPane,
@@ -1293,6 +1313,7 @@ impl Workspace {
         let tab = Tab {
             custom_name: None,
             number: 1,
+            next_auto_pane_number: 2,
             root_pane: root_id,
             layout,
             panes,
@@ -1333,8 +1354,11 @@ impl Workspace {
     pub(crate) fn test_split(&mut self, direction: Direction) -> PaneId {
         let tab = self.active_tab_mut().expect("workspace must have tab");
         let new_id = tab.layout.split_focused(direction);
-        tab.panes
-            .insert(new_id, PaneState::new(TerminalId::alloc()));
+        let auto_name_number = tab.allocate_auto_pane_number();
+        tab.panes.insert(
+            new_id,
+            PaneState::new(TerminalId::alloc()).with_auto_name_number(auto_name_number),
+        );
         self.register_new_pane(new_id);
         new_id
     }
@@ -1349,6 +1373,7 @@ impl Workspace {
         let tab = Tab {
             custom_name: name.map(str::to_string),
             number: self.next_public_tab_number,
+            next_auto_pane_number: 2,
             root_pane: root_id,
             layout,
             panes,
@@ -1462,7 +1487,24 @@ impl Workspace {
                 self.id, tab_idx
             );
 
+            let mut auto_name_numbers = std::collections::HashSet::new();
+            let mut max_auto_name_number = 0usize;
             for (pane_id, pane) in &tab.panes {
+                assert!(
+                    pane.auto_name_number > 0,
+                    "workspace {} tab {} pane {:?} has generated name number 0",
+                    self.id,
+                    tab_idx,
+                    pane_id
+                );
+                assert!(
+                    auto_name_numbers.insert(pane.auto_name_number),
+                    "workspace {} tab {} has duplicate generated pane number {}",
+                    self.id,
+                    tab_idx,
+                    pane.auto_name_number
+                );
+                max_auto_name_number = max_auto_name_number.max(pane.auto_name_number);
                 assert!(
                     live_panes.insert(*pane_id),
                     "workspace {} pane {:?} appears in more than one tab",
@@ -1482,6 +1524,14 @@ impl Workspace {
                     pane.attached_terminal_id
                 );
             }
+            assert!(
+                tab.next_auto_pane_number > max_auto_name_number,
+                "workspace {} tab {} next generated pane number {} must exceed max live number {}",
+                self.id,
+                tab_idx,
+                tab.next_auto_pane_number,
+                max_auto_name_number
+            );
         }
 
         assert!(
@@ -1603,6 +1653,57 @@ mod tests {
 
         let fourth = ws.test_split(Direction::Horizontal);
         assert_eq!(ws.public_pane_number(fourth), Some(4));
+    }
+
+    #[test]
+    fn generated_pane_names_reuse_lowest_gap_and_remain_tab_local() {
+        let mut ws = Workspace::test_new("test");
+        let root = ws.tabs[0].root_pane;
+        let second = ws.test_split(Direction::Horizontal);
+        let third = ws.test_split(Direction::Vertical);
+        let fourth = ws.test_split(Direction::Horizontal);
+        let fifth = ws.test_split(Direction::Vertical);
+
+        assert_eq!(ws.tabs[0].auto_pane_label(root).as_deref(), Some("pane 1"));
+        assert_eq!(
+            ws.tabs[0].auto_pane_label(second).as_deref(),
+            Some("pane 2")
+        );
+        assert_eq!(ws.tabs[0].auto_pane_label(third).as_deref(), Some("pane 3"));
+        assert_eq!(
+            ws.tabs[0].auto_pane_label(fourth).as_deref(),
+            Some("pane 4")
+        );
+        assert_eq!(ws.tabs[0].auto_pane_label(fifth).as_deref(), Some("pane 5"));
+        assert_eq!(ws.tabs[0].next_auto_pane_number, 6);
+
+        assert!(!ws.close_pane(second));
+        assert!(!ws.close_pane(fourth));
+        let reused_second = ws.test_split(Direction::Horizontal);
+        assert_eq!(
+            ws.tabs[0].auto_pane_label(reused_second).as_deref(),
+            Some("pane 2")
+        );
+        assert_eq!(ws.tabs[0].next_auto_pane_number, 6);
+        let reused_fourth = ws.test_split(Direction::Vertical);
+        assert_eq!(
+            ws.tabs[0].auto_pane_label(reused_fourth).as_deref(),
+            Some("pane 4")
+        );
+        assert_eq!(ws.tabs[0].next_auto_pane_number, 6);
+        let sixth = ws.test_split(Direction::Horizontal);
+        assert_eq!(ws.tabs[0].auto_pane_label(sixth).as_deref(), Some("pane 6"));
+        assert_eq!(ws.tabs[0].next_auto_pane_number, 7);
+
+        let second_tab = ws.test_add_tab(None);
+        let second_tab_root = ws.tabs[second_tab].root_pane;
+        assert_eq!(
+            ws.tabs[second_tab]
+                .auto_pane_label(second_tab_root)
+                .as_deref(),
+            Some("pane 1")
+        );
+        ws.assert_invariants_for_test();
     }
 
     #[test]

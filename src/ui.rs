@@ -83,9 +83,10 @@ pub(crate) use self::{
         collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,
         expanded_sidebar_toggle_rect, health_check_divider_rect, health_split_ratio_for_row,
         normalized_workspace_scroll, sidebar_section_divider_rect, workspace_drop_slots,
-        workspace_group_chevron_rect, workspace_list_entries, workspace_list_entries_expanded,
-        workspace_list_rect, workspace_list_scroll_metrics, workspace_list_scrollbar_rect,
-        workspace_parent_group_state, AgentPanelEntry, WorkspaceListEntry,
+        workspace_group_chevron_rect, workspace_list_body_rect, workspace_list_entries,
+        workspace_list_entries_expanded, workspace_list_rect, workspace_list_scroll_metrics,
+        workspace_list_scrollbar_rect, workspace_parent_group_state, AgentPanelEntry,
+        WorkspaceListEntry,
     },
 };
 
@@ -308,6 +309,7 @@ fn compute_view_internal(
             )
         })
         .unwrap_or_default();
+    let pane_title_hit_areas = panes::compute_pane_title_hit_areas(app, &pane_infos);
 
     app.view = crate::app::ViewState {
         layout: ViewLayout::Desktop,
@@ -323,6 +325,7 @@ fn compute_view_internal(
         mobile_menu_hit_area: Rect::default(),
         toast_hit_area,
         pane_infos,
+        pane_title_hit_areas,
         split_borders,
     };
     app.sync_copy_mode_search_geometry();
@@ -386,6 +389,7 @@ fn compute_mobile_view(
         mobile_menu_hit_area: header_hits.menu,
         toast_hit_area,
         pane_infos,
+        pane_title_hit_areas: Vec::new(),
         split_borders,
     };
     app.sync_copy_mode_search_geometry();
@@ -936,8 +940,8 @@ mod tests {
         let one_tab_size = app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size();
         let two_tab_size =
             app.workspaces[1].tabs[background_tab].runtimes[&two_tab_pane].current_size();
-        assert_eq!(one_tab_size, (20, 53));
-        assert_eq!(two_tab_size, (19, 53));
+        assert_eq!(one_tab_size, (18, 51));
+        assert_eq!(two_tab_size, (17, 51));
     }
 
     #[tokio::test]
@@ -963,7 +967,7 @@ mod tests {
         assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 18));
         assert_eq!(
             app.workspaces[0].tabs[background_tab].runtimes[&background_pane].current_size(),
-            (18, 43)
+            (16, 41)
         );
     }
 
@@ -1313,7 +1317,7 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 40, 12));
 
         let info = app.view.pane_infos.first().expect("pane info");
-        assert_eq!(info.inner_rect.width + 1, app.view.terminal_area.width);
+        assert_eq!(info.inner_rect.width + 3, app.view.terminal_area.width);
         assert_eq!(
             info.scrollbar_rect,
             Some(Rect::new(

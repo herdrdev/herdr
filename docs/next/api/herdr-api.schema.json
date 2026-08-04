@@ -790,6 +790,13 @@
                 "null"
               ]
             },
+            "display_label": {
+              "description": "Effective pane name (metadata title, manual label, or generated\ntab-local `pane N` fallback). `label` remains the manual label.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
             },
@@ -2595,6 +2602,38 @@
             },
             {
               "properties": {
+                "moved_ratio": {
+                  "description": "Share of the target split assigned to the moved pane.",
+                  "format": "float",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "placement": {
+                  "$ref": "#/schemas/request/$defs/PanePlacement"
+                },
+                "tab_id": {
+                  "type": "string"
+                },
+                "target_pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "tab_placement",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tab_id",
+                "target_pane_id",
+                "placement"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "label": {
                   "type": [
                     "string",
@@ -2678,6 +2717,16 @@
             "direction"
           ],
           "type": "object"
+        },
+        "PanePlacement": {
+          "description": "Side of a target pane where a moved pane should be inserted.",
+          "enum": [
+            "left",
+            "right",
+            "above",
+            "below"
+          ],
+          "type": "string"
         },
         "PaneProcessInfoParams": {
           "properties": {
@@ -4994,6 +5043,22 @@
           "properties": {
             "method": {
               "const": "agent.focus",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.mark_unread",
               "type": "string"
             },
             "params": {
@@ -7426,6 +7491,13 @@
                 "null"
               ]
             },
+            "display_label": {
+              "description": "Effective pane name (metadata title, manual label, or generated\ntab-local `pane N` fallback). `label` remains the manual label.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "focused": {
               "type": "boolean"
             },
@@ -7636,6 +7708,7 @@
         "PaneMoveReason": {
           "enum": [
             "same_tab",
+            "same_pane",
             "zoomed_tab"
           ],
           "type": "string"

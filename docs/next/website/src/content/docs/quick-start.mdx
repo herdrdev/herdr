@@ -17,7 +17,9 @@ When a session has no workspaces, Herdr opens one automatically. A workspace is 
 
 ## Use the mouse
 
-Herdr is mouse-native, so start by clicking. Click panes, tabs, workspaces, and agents to focus them. Drag split borders to resize. Right-click for context menus, including splitting panes and creating tabs. Drag-select text to copy it to your clipboard; double-click a token to copy it directly. Copying does not require Ctrl+C.
+Herdr is mouse-native, so start by clicking. Click panes, tabs, workspaces, and agents to focus them. Every tab names its panes `pane 1`, `pane 2`, and so on. When an automatically named pane closes, the next pane reuses the lowest available number in that tab before increasing the highest number. Click and hold a pane title, then drag it over another pane. A center drop swaps two panes in the same tab, while the four edge zones place the dragged pane left, right, above, or below the target. Hover a tab or workspace for 400 ms to switch destinations without releasing the mouse. Press Esc or release away from a valid preview to cancel.
+
+Drag split borders to resize. Right-click for context menus, including splitting panes and creating tabs. Drag-select text to copy it to your clipboard; double-click a token to copy it directly. Copying does not require Ctrl+C.
 
 Ctrl-click opens pane links when your terminal sends the modified click to Herdr. This works for OSC 8 hyperlinks and visible `http://` or `https://` URLs. On macOS, use Ctrl-click for Herdr-handled pane links while mouse capture is enabled; Cmd-click is only available through the terminal-native bypass path, such as Shift-Cmd-click or `ui.mouse_capture = false`.
 

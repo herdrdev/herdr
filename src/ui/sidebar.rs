@@ -18,6 +18,7 @@ use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
+const WORKSPACE_LIST_TRAILING_EMPTY_ROWS: u16 = 1;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
 const PREFERRED_HEALTH_CHECK_SECTION_ROWS: u16 = 6;
 const MIN_HEALTH_CHECK_SECTION_ROWS: u16 = 3;
@@ -553,9 +554,23 @@ pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect 
     Rect::new(area.x, body_y, body_width, body_height)
 }
 
-fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> usize {
+fn workspace_list_content_height(body_height: u16, reserve_trailing_space: bool) -> u16 {
+    if reserve_trailing_space && body_height > WORKSPACE_LIST_TRAILING_EMPTY_ROWS {
+        body_height.saturating_sub(WORKSPACE_LIST_TRAILING_EMPTY_ROWS)
+    } else {
+        body_height
+    }
+}
+
+fn workspace_list_visible_count(
+    app: &AppState,
+    area: Rect,
+    scroll: usize,
+    reserve_trailing_space: bool,
+) -> usize {
     let body = workspace_list_body_rect(area, false);
-    if body.width == 0 || body.height == 0 {
+    let content_height = workspace_list_content_height(body.height, reserve_trailing_space);
+    if body.width == 0 || content_height == 0 {
         return 0;
     }
 
@@ -569,23 +584,24 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                     continue;
                 };
                 (
-                    workspace_row_height_in_body(app, ws, *indented, body.height),
+                    workspace_row_height_in_body(app, ws, *indented, content_height),
                     workspace_entry_gap(app, &entries, entry_idx),
                 )
             }
         };
-        if used_rows.saturating_add(row_height) > body.height {
+        if used_rows.saturating_add(row_height) > content_height {
             break;
         }
         used_rows = used_rows.saturating_add(row_height);
         visible += 1;
-        used_rows = used_rows.saturating_add(gap).min(body.height);
+        used_rows = used_rows.saturating_add(gap).min(content_height);
     }
     visible
 }
 
 fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
     let body = workspace_list_body_rect(area, false);
+    let content_height = workspace_list_content_height(body.height, true);
     let entries = workspace_list_entries(app);
     let mut used_rows = 0u16;
     let mut start = entries.len();
@@ -595,9 +611,9 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
             continue;
         };
         let gap = workspace_entry_gap(app, &entries, entry_idx);
-        let needed = workspace_row_height_in_body(app, workspace, *indented, body.height)
+        let needed = workspace_row_height_in_body(app, workspace, *indented, content_height)
             .saturating_add(gap);
-        if used_rows.saturating_add(needed) > body.height {
+        if used_rows.saturating_add(needed) > content_height {
             break;
         }
         used_rows = used_rows.saturating_add(needed);
@@ -612,7 +628,7 @@ pub(crate) fn workspace_list_scroll_metrics(
 ) -> crate::pane::ScrollMetrics {
     let max_scroll = workspace_list_bottom_start(app, area);
     let scroll = app.workspace_scroll.min(max_scroll);
-    let viewport_rows = workspace_list_visible_count(app, area, scroll);
+    let viewport_rows = workspace_list_visible_count(app, area, scroll, scroll == max_scroll);
 
     crate::pane::ScrollMetrics {
         offset_from_bottom: max_scroll.saturating_sub(scroll),
@@ -775,9 +791,11 @@ pub(crate) fn compute_workspace_list_areas(
         return (Vec::new(), Vec::new());
     }
 
-    let scroll = app.workspace_scroll;
+    let scroll = app.workspace_scroll.min(metrics.max_offset_from_bottom);
+    let content_height =
+        workspace_list_content_height(body.height, scroll == metrics.max_offset_from_bottom);
     let mut row_y = body.y;
-    let body_bottom = body.y + body.height;
+    let body_bottom = body.y + content_height;
     let mut cards = Vec::new();
     let headers = Vec::new();
 
@@ -788,7 +806,7 @@ pub(crate) fn compute_workspace_list_areas(
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = workspace_row_height_in_body(app, ws, *indented, body.height);
+                let row_height = workspace_row_height_in_body(app, ws, *indented, content_height);
                 let gap = workspace_entry_gap(app, &entries, entry_idx);
                 if row_y.saturating_add(row_height) > body_bottom {
                     break;
@@ -2202,7 +2220,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let body = agent_panel_body_rect(agent_area, false);
         let first = row_text(buffer, body.y, 17);
 
-        assert!(first.contains("logs"), "rendered row: {first:?}");
+        assert!(first.contains("lo…"), "rendered row: {first:?}");
+        assert!(first.contains("p…"), "rendered row: {first:?}");
         assert!(first.contains('·'), "rendered row: {first:?}");
     }
 
@@ -2442,8 +2461,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         let entry = agent_panel_entries(&app).pop().unwrap();
         assert_eq!(entry.tab_label, "feature");
-        assert_eq!(entry.pane_label, None);
-        assert_eq!(entry.pane_or_tab_label, "feature");
+        assert_eq!(entry.pane_label.as_deref(), Some("pane 1"));
+        assert_eq!(entry.pane_or_tab_label, "pane 1");
         assert_eq!(entry.directory_label.as_deref(), Some("service"));
 
         app.terminals
@@ -3062,7 +3081,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         );
         let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
         assert_eq!(spacious_metrics.viewport_rows, 3);
-        assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
+        assert_eq!(spacious_metrics.max_offset_from_bottom, 3);
 
         app.sidebar_spaces.row_gap = 0;
         let (packed, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
@@ -3071,7 +3090,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
         let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
         assert_eq!(packed_metrics.viewport_rows, 4);
-        assert_eq!(packed_metrics.max_offset_from_bottom, 0);
+        assert_eq!(packed_metrics.max_offset_from_bottom, 1);
     }
 
     #[test]
@@ -3151,7 +3170,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn compact_space_group_scroll_clamps_when_all_entries_fit() {
+    fn compact_space_group_scroll_reaches_trailing_empty_row() {
         let mut app = AppState::test_new();
         app.workspaces = vec![
             workspace_with_worktree_space("main", Some("repo-key"), "/repo/herdr"),
@@ -3164,9 +3183,42 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let (cards, headers) = compute_workspace_list_areas(&app, area);
 
         assert!(headers.is_empty());
-        assert_eq!(app.workspace_scroll, 0);
-        assert_eq!(cards.len(), 3);
-        assert_eq!(cards[2].ws_idx, 2);
+        assert_eq!(app.workspace_scroll, 1);
+        assert_eq!(
+            cards.iter().map(|card| card.ws_idx).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn workspace_list_bottom_reserves_a_trailing_empty_row() {
+        let mut app = AppState::test_new();
+        app.workspaces = (0..8)
+            .map(|idx| Workspace::test_new(&format!("workspace-{idx}")))
+            .collect();
+        app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
+        app.sidebar_spaces.row_gap = 0;
+        let area = Rect::new(0, 0, 30, 20);
+        let list_area = workspace_list_rect(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
+        let metrics = workspace_list_scroll_metrics(&app, list_area);
+        assert!(metrics.max_offset_from_bottom > 0);
+
+        app.workspace_scroll = metrics.max_offset_from_bottom;
+        let (cards, _) = compute_workspace_list_areas(&app, area);
+        let metrics = workspace_list_scroll_metrics(&app, list_area);
+        let body = workspace_list_body_rect(list_area, should_show_scrollbar(metrics));
+        let last_card = cards
+            .last()
+            .expect("bottom viewport should show a workspace");
+
+        assert_eq!(
+            last_card.rect.y + last_card.rect.height + WORKSPACE_LIST_TRAILING_EMPTY_ROWS,
+            body.y + body.height
+        );
     }
 
     #[test]

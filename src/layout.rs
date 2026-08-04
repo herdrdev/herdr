@@ -10,6 +10,18 @@ use ratatui::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PaneId(u32);
 
+/// Side of a target pane where a moved pane should be inserted.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PanePlacement {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
 /// Global atomic counter for unique PaneId generation across all workspaces.
 static NEXT_PANE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
@@ -70,6 +82,7 @@ pub enum NavDirection {
 }
 
 /// A node in the BSP tree. Public for serialization.
+#[derive(Clone)]
 pub enum Node {
     Pane(PaneId),
     Split {
@@ -81,6 +94,7 @@ pub enum Node {
 }
 
 /// BSP tiling layout. Tracks a tree of splits and a focused pane.
+#[derive(Clone)]
 pub struct TileLayout {
     root: Node,
     focus: PaneId,
@@ -159,6 +173,104 @@ impl TileLayout {
         self.root = split_at(old, target, direction, moved, valid_split_ratio(ratio));
         self.focus = moved;
         true
+    }
+
+    /// Insert an existing pane on an explicit side of `target`.
+    ///
+    /// `moved_share` always describes the moved pane's share, independent of
+    /// whether it becomes the first or second child.
+    pub fn insert_pane_at(
+        &mut self,
+        target: PaneId,
+        moved: PaneId,
+        placement: PanePlacement,
+        moved_share: f32,
+    ) -> bool {
+        if target == moved {
+            return false;
+        }
+        let ids = self.pane_ids();
+        if !ids.contains(&target) || ids.contains(&moved) {
+            return false;
+        }
+
+        self.root = split_at_placement(
+            self.root.clone(),
+            target,
+            moved,
+            placement,
+            valid_split_ratio(moved_share),
+        );
+        self.focus = moved;
+        true
+    }
+
+    /// Atomically relocate an existing pane within this layout.
+    ///
+    /// The tree is built as a candidate and committed only when both leaves
+    /// exist and remain represented exactly once.
+    pub fn relocate_pane(
+        &mut self,
+        source: PaneId,
+        target: PaneId,
+        placement: PanePlacement,
+        moved_share: f32,
+    ) -> bool {
+        if source == target {
+            return false;
+        }
+        let original_ids = self.pane_ids();
+        if !original_ids.contains(&source) || !original_ids.contains(&target) {
+            return false;
+        }
+
+        let Some(without_source) = remove_pane(self.root.clone(), source) else {
+            return false;
+        };
+        let candidate = split_at_placement(
+            without_source,
+            target,
+            source,
+            placement,
+            valid_split_ratio(moved_share),
+        );
+        let mut candidate_ids = Vec::new();
+        collect_ids(&candidate, &mut candidate_ids);
+        let mut expected = original_ids;
+        expected.sort_by_key(|id| id.raw());
+        candidate_ids.sort_by_key(|id| id.raw());
+        if candidate_ids != expected {
+            return false;
+        }
+
+        self.root = candidate;
+        true
+    }
+
+    pub fn projected_insert(
+        &self,
+        target: PaneId,
+        moved: PaneId,
+        placement: PanePlacement,
+        moved_share: f32,
+    ) -> Option<Self> {
+        let mut projected = self.clone();
+        projected
+            .insert_pane_at(target, moved, placement, moved_share)
+            .then_some(projected)
+    }
+
+    pub fn projected_relocation(
+        &self,
+        source: PaneId,
+        target: PaneId,
+        placement: PanePlacement,
+        moved_share: f32,
+    ) -> Option<Self> {
+        let mut projected = self.clone();
+        projected
+            .relocate_pane(source, target, placement, moved_share)
+            .then_some(projected)
     }
 
     /// Close the focused pane. Returns false if it's the last pane.
@@ -546,6 +658,68 @@ fn split_at(
     }
 }
 
+fn split_at_placement(
+    node: Node,
+    target: PaneId,
+    moved: PaneId,
+    placement: PanePlacement,
+    moved_share: f32,
+) -> Node {
+    match node {
+        Node::Pane(id) if id == target => {
+            let (direction, moved_first) = match placement {
+                PanePlacement::Left => (Direction::Horizontal, true),
+                PanePlacement::Right => (Direction::Horizontal, false),
+                PanePlacement::Above => (Direction::Vertical, true),
+                PanePlacement::Below => (Direction::Vertical, false),
+            };
+            let (first, second, ratio) = if moved_first {
+                (
+                    Box::new(Node::Pane(moved)),
+                    Box::new(Node::Pane(id)),
+                    moved_share,
+                )
+            } else {
+                (
+                    Box::new(Node::Pane(id)),
+                    Box::new(Node::Pane(moved)),
+                    1.0 - moved_share,
+                )
+            };
+            Node::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            }
+        }
+        Node::Pane(_) => node,
+        Node::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => Node::Split {
+            direction,
+            ratio,
+            first: Box::new(split_at_placement(
+                *first,
+                target,
+                moved,
+                placement,
+                moved_share,
+            )),
+            second: Box::new(split_at_placement(
+                *second,
+                target,
+                moved,
+                placement,
+                moved_share,
+            )),
+        },
+    }
+}
+
 fn valid_split_ratio(ratio: f32) -> f32 {
     if ratio.is_finite() {
         ratio.clamp(0.1, 0.9)
@@ -755,6 +929,61 @@ mod tests {
         assert_eq!(splits, vec![(Direction::Horizontal, 0.25)]);
         assert_eq!(pane_rect(&layout, root), Rect::new(0, 0, 25, 40));
         assert_eq!(pane_rect(&layout, moved), Rect::new(25, 0, 75, 40));
+    }
+
+    #[test]
+    fn explicit_insert_placement_uses_moved_pane_share_on_all_four_sides() {
+        let cases = [
+            (PanePlacement::Left, Rect::new(0, 0, 25, 40)),
+            (PanePlacement::Right, Rect::new(75, 0, 25, 40)),
+            (PanePlacement::Above, Rect::new(0, 0, 100, 10)),
+            (PanePlacement::Below, Rect::new(0, 30, 100, 10)),
+        ];
+
+        for (placement, expected_moved_rect) in cases {
+            let (mut layout, root) = TileLayout::new();
+            let moved = PaneId::alloc();
+
+            assert!(layout.insert_pane_at(root, moved, placement, 0.25));
+            assert_eq!(pane_rect(&layout, moved), expected_moved_rect);
+            assert_eq!(layout.focused(), moved);
+        }
+    }
+
+    #[test]
+    fn relocate_pane_is_atomic_and_preserves_leaf_identity_and_focus() {
+        let mut layout = sample_layout();
+        let before_focus = layout.focused();
+        let mut before_ids = layout.pane_ids();
+        before_ids.sort_by_key(|id| id.raw());
+
+        assert!(layout.relocate_pane(pane(4), pane(1), PanePlacement::Above, 0.25,));
+
+        let mut after_ids = layout.pane_ids();
+        after_ids.sort_by_key(|id| id.raw());
+        assert_eq!(after_ids, before_ids);
+        assert_eq!(layout.focused(), before_focus);
+        let moved = pane_rect(&layout, pane(4));
+        let target = pane_rect(&layout, pane(1));
+        assert_eq!(moved.x, target.x);
+        assert_eq!(moved.width, target.width);
+        assert_eq!(moved.y + moved.height, target.y);
+    }
+
+    #[test]
+    fn invalid_relocation_leaves_layout_unchanged() {
+        let mut layout = sample_layout();
+        let before_rects = pane_rects(&layout);
+        let before_splits = split_snapshot(&layout);
+        let before_focus = layout.focused();
+
+        assert!(!layout.relocate_pane(pane(2), pane(2), PanePlacement::Left, 0.5,));
+        assert!(!layout.relocate_pane(pane(99), pane(2), PanePlacement::Left, 0.5,));
+        assert!(!layout.relocate_pane(pane(2), pane(99), PanePlacement::Left, 0.5,));
+
+        assert_eq!(pane_rects(&layout), before_rects);
+        assert_eq!(split_snapshot(&layout), before_splits);
+        assert_eq!(layout.focused(), before_focus);
     }
 
     #[test]

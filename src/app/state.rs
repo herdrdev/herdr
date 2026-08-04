@@ -774,6 +774,19 @@ pub enum ViewLayout {
     Mobile,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneTitleHitArea {
+    pub pane_id: PaneId,
+    pub rect: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneDropPreview {
+    pub rects: Vec<Rect>,
+    pub label: String,
+    pub valid: bool,
+}
+
 pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
@@ -788,6 +801,7 @@ pub struct ViewState {
     pub mobile_menu_hit_area: Rect,
     pub toast_hit_area: Rect,
     pub pane_infos: Vec<PaneInfo>,
+    pub pane_title_hit_areas: Vec<PaneTitleHitArea>,
     pub split_borders: Vec<SplitBorder>,
 }
 
@@ -1308,7 +1322,7 @@ impl ContextMenuState {
                 "Zoom",
                 "Close pane",
             ],
-            ContextMenuKind::Agent { .. } => &["Color"],
+            ContextMenuKind::Agent { .. } => &["Unread", "Color"],
         }
     }
 }
@@ -1462,6 +1476,8 @@ pub struct AppState {
     pub(crate) drag: Option<DragState>,
     pub(crate) workspace_press: Option<WorkspacePressState>,
     pub(crate) tab_press: Option<TabPressState>,
+    /// Transient mouse-drag projection. It is never persisted.
+    pub(crate) pane_drop_preview: Option<PaneDropPreview>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub context_menu: Option<ContextMenuState>,
@@ -1846,11 +1862,13 @@ impl AppState {
                 mobile_menu_hit_area: Rect::default(),
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
+                pane_title_hit_areas: Vec::new(),
                 split_borders: Vec::new(),
             },
             drag: None,
             workspace_press: None,
             tab_press: None,
+            pane_drop_preview: None,
             selection: None,
             selection_autoscroll: None,
             context_menu: None,
@@ -2048,6 +2066,10 @@ impl AppState {
             assert!(
                 self.drag.is_none(),
                 "empty app state must not keep drag state"
+            );
+            assert!(
+                self.pane_drop_preview.is_none(),
+                "empty app state must not keep pane drop preview state"
             );
             assert!(
                 self.workspace_press.is_none(),

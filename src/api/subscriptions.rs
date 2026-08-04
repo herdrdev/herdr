@@ -662,6 +662,7 @@ mod tests {
             cwd: None,
             foreground_cwd: None,
             label: None,
+            display_label: Some("pane 1".into()),
             agent: None,
             title: None,
             terminal_title: None,

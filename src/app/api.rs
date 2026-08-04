@@ -665,16 +665,14 @@ impl App {
         };
 
         for update in pane_updates {
-            let is_active_tab = self
-                .state
-                .pane_is_in_active_tab(update.ws_idx, update.pane_id);
-            let suppress_active_tab_notifications =
-                crate::app::actions::active_tab_suppresses_notifications(
-                    is_active_tab,
+            let is_focused_pane = self.state.pane_is_focused(update.ws_idx, update.pane_id);
+            let suppress_focused_pane_notifications =
+                crate::app::actions::focused_pane_suppresses_notifications(
+                    is_focused_pane,
                     self.state.outer_terminal_focus,
                 );
             let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
-                suppress_active_tab_notifications,
+                suppress_focused_pane_notifications,
                 update,
             ) else {
                 continue;
@@ -1045,6 +1043,9 @@ impl App {
             Method::AgentList(_) => return self.handle_agent_list(request.id),
             Method::AgentGet(target) => return self.handle_agent_get(request.id, target),
             Method::AgentFocus(target) => return self.handle_agent_focus(request.id, target),
+            Method::AgentMarkUnread(target) => {
+                return self.handle_agent_mark_unread(request.id, target)
+            }
             Method::AgentRename(params) => return self.handle_agent_rename(request.id, params),
             Method::AgentViewSet(params) => return self.handle_agent_view_set(request.id, params),
             Method::AgentViewClear(params) => {

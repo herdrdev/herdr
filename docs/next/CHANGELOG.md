@@ -4,7 +4,10 @@
 
 ### Added
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
+- Added persistent tab-local `pane N` names that reuse the lowest available number, plus pane-title drag-and-drop: center drops swap panes in the same tab, edge drops place panes left/right/above/below, and hovering a tab or workspace switches the destination before the move.
+- Added an **Unread** action to Agent sidebar row menus and an `agent.mark_unread` socket method for manually returning an idle agent to `done`.
 - Added a resizable expanded-sidebar Health Check section with server-host CPU, battery, RAM, and disk usage.
+- Added workspace creation by double-clicking empty space in the expanded Spaces list, including a reachable trailing empty row after scrolling to the bottom.
 - Added right-click color customization for complete Agent and Space sidebar rows and top tabs, with 12 preset colors, strict `#RGB`/`#RRGGBB` input, automatic readable text contrast, and a clear action.
 
 ### Changed
@@ -13,6 +16,8 @@
 
 ### Fixed
 - `pane send-keys` and `agent send-keys` now preserve Shift when sending `shift+tab`, allowing agent permission modes to be cycled programmatically. (#1561, thanks @keinstn and @tomohisa)
+- Completed agents now remain unread until their exact pane receives focus; focusing the containing workspace, tab, or a sibling pane no longer clears the marker or suppresses that pane's completion notification.
+- Pane-title drags now autoscroll all the way from an earlier workspace to the final workspace and leave scroll mode so the final workspace can become the drop destination.
 
 ## [0.8.0] - 2026-08-03
 

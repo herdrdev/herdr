@@ -1126,9 +1126,6 @@ impl HeadlessServer {
         self.app.state.host_cell_size = host_cell_size;
         apply_keybindings(&mut self.app, &keybindings);
         self.sync_visible_server_config_diagnostic(uses_local_keybindings);
-        if outer_terminal_focus == Some(true) {
-            self.app.state.mark_active_tab_seen();
-        }
         self.app.set_host_terminal_appearance_state(
             host_terminal_appearance,
             host_terminal_appearance_explicit,
@@ -1451,9 +1448,9 @@ impl HeadlessServer {
         self.clients.get(&client_id)?.outer_terminal_focus
     }
 
-    fn active_tab_suppresses_notifications(&self, is_active_tab: bool) -> bool {
-        crate::app::actions::active_tab_suppresses_notifications(
-            is_active_tab,
+    fn focused_pane_suppresses_notifications(&self, is_focused_pane: bool) -> bool {
+        crate::app::actions::focused_pane_suppresses_notifications(
+            is_focused_pane,
             self.foreground_client_outer_focus(),
         )
     }
@@ -1468,6 +1465,9 @@ impl HeadlessServer {
         let changed = self.foreground_client_id != Some(client_id);
         self.foreground_client_id = Some(client_id);
         self.sync_foreground_client_state();
+        if changed && self.foreground_client_outer_focus() == Some(true) {
+            self.app.state.mark_focused_pane_seen();
+        }
         changed
     }
 
@@ -1476,6 +1476,9 @@ impl HeadlessServer {
         let changed = next_foreground != self.foreground_client_id;
         self.foreground_client_id = next_foreground;
         self.sync_foreground_client_state();
+        if changed && self.foreground_client_outer_focus() == Some(true) {
+            self.app.state.mark_focused_pane_seen();
+        }
         changed
     }
 
@@ -1858,17 +1861,17 @@ impl HeadlessServer {
             return;
         }
 
-        let is_active_tab = self
+        let is_focused_pane = self
             .app
             .state
-            .pane_is_in_active_tab(update.ws_idx, update.pane_id);
-        let suppress_active_tab_notifications =
-            self.active_tab_suppresses_notifications(is_active_tab);
+            .pane_is_focused(update.ws_idx, update.pane_id);
+        let suppress_focused_pane_notifications =
+            self.focused_pane_suppresses_notifications(is_focused_pane);
 
         if self.app.state.sound.allows(update.known_agent) {
             if let Some(sound) =
                 crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                    suppress_active_tab_notifications,
+                    suppress_focused_pane_notifications,
                     update.previous_state,
                     update.state,
                     update.previous_agent_label.as_deref(),
@@ -1887,7 +1890,7 @@ impl HeadlessServer {
             return;
         }
         let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
-            suppress_active_tab_notifications,
+            suppress_focused_pane_notifications,
             update,
         ) else {
             return;
@@ -2135,18 +2138,15 @@ impl HeadlessServer {
                 self.app.handle_internal_event(ev);
 
                 // Forward sound notification to clients when server-side sound policy allows it.
-                let is_active_tab = self
+                let is_focused_pane = self
                     .app
                     .state
                     .active
                     .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-                    .is_some_and(|ws| {
-                        ws.find_tab_index_for_pane(pane_id_val)
-                            .is_some_and(|tab_idx| ws.active_tab_index() == tab_idx)
-                    });
+                    .is_some_and(|ws| ws.focused_pane_id() == Some(pane_id_val));
 
-                let suppress_active_tab_notifications =
-                    self.active_tab_suppresses_notifications(is_active_tab);
+                let suppress_focused_pane_notifications =
+                    self.focused_pane_suppresses_notifications(is_focused_pane);
 
                 let next_state = self.pane_effective_state(pane_id_val);
                 let next_agent_label = self.pane_effective_agent_label(pane_id_val);
@@ -2156,7 +2156,7 @@ impl HeadlessServer {
                 {
                     if let Some(sound) =
                         crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
+                            suppress_focused_pane_notifications,
                             prev_state,
                             next_state,
                             prev_agent_label.as_deref(),
@@ -2185,7 +2185,7 @@ impl HeadlessServer {
                             &self.app.state,
                             &self.app.terminal_runtimes,
                             pane_id_val,
-                            suppress_active_tab_notifications,
+                            suppress_focused_pane_notifications,
                             prev_state,
                             next_state,
                             prev_agent_label.as_deref(),
@@ -2227,18 +2227,15 @@ impl HeadlessServer {
 
                 // Forward sound notification based on the effective transition when
                 // server-side sound policy allows it.
-                let is_active_tab = self
+                let is_focused_pane = self
                     .app
                     .state
                     .active
                     .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-                    .is_some_and(|ws| {
-                        ws.find_tab_index_for_pane(pane_id_val)
-                            .is_some_and(|tab_idx| ws.active_tab_index() == tab_idx)
-                    });
+                    .is_some_and(|ws| ws.focused_pane_id() == Some(pane_id_val));
 
-                let suppress_active_tab_notifications =
-                    self.active_tab_suppresses_notifications(is_active_tab);
+                let suppress_focused_pane_notifications =
+                    self.focused_pane_suppresses_notifications(is_focused_pane);
 
                 let next_state = self.pane_effective_state(pane_id_val);
                 let next_agent_label = self.pane_effective_agent_label(pane_id_val);
@@ -2248,7 +2245,7 @@ impl HeadlessServer {
                 {
                     if let Some(sound) =
                         crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
+                            suppress_focused_pane_notifications,
                             prev_state,
                             next_state,
                             prev_agent_label.as_deref(),
@@ -2277,7 +2274,7 @@ impl HeadlessServer {
                             &self.app.state,
                             &self.app.terminal_runtimes,
                             pane_id_val,
-                            suppress_active_tab_notifications,
+                            suppress_focused_pane_notifications,
                             prev_state,
                             next_state,
                             prev_agent_label.as_deref(),
@@ -2691,8 +2688,11 @@ impl HeadlessServer {
             &events,
             self.app.state.redraw_on_focus_gained,
         );
-        let render_neutral_mouse_motion =
-            events_are_render_neutral_mouse_motion(&events, self.app.state.mode);
+        let render_neutral_mouse_motion = events_are_render_neutral_mouse_motion(
+            &events,
+            self.app.state.mode,
+            self.app.pane_drag.is_some(),
+        );
         if let Some(client) = self.clients.get_mut(&client_id) {
             if host_surface_redraw {
                 client.request_repaint();
@@ -3571,9 +3571,9 @@ impl HeadlessServer {
                 continue;
             }
 
-            let is_active_tab = self.app.state.pane_is_in_active_tab(*ws_idx, *pane_id);
-            let suppress_active_tab_notifications =
-                self.active_tab_suppresses_notifications(is_active_tab);
+            let is_focused_pane = self.app.state.pane_is_focused(*ws_idx, *pane_id);
+            let suppress_focused_pane_notifications =
+                self.focused_pane_suppresses_notifications(is_focused_pane);
 
             let agent = terminal_after.effective_known_agent();
             let agent_label = terminal_after.effective_agent_label().map(str::to_string);
@@ -3593,7 +3593,7 @@ impl HeadlessServer {
             {
                 if let Some(kind) =
                     crate::app::actions::notification_toast_for_state_change_with_agent_labels(
-                        suppress_active_tab_notifications,
+                        suppress_focused_pane_notifications,
                         *prev_state,
                         new_state,
                         prev_agent_label.as_deref(),
@@ -3638,7 +3638,7 @@ impl HeadlessServer {
             {
                 if let Some(sound) =
                     crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                        suppress_active_tab_notifications,
+                        suppress_focused_pane_notifications,
                         *prev_state,
                         new_state,
                         prev_agent_label.as_deref(),
@@ -4379,6 +4379,7 @@ impl HeadlessServer {
             self.app.tick_selection_autoscroll(now);
             changed = true;
         }
+        changed |= self.app.tick_pane_drag(now);
 
         changed |= self.app.clear_due_selection_highlight(now);
 
@@ -4512,8 +4513,10 @@ impl HeadlessServer {
 fn events_are_render_neutral_mouse_motion(
     events: &[crate::raw_input::RawInputEvent],
     mode: crate::app::Mode,
+    pane_drag_active: bool,
 ) -> bool {
     !events.is_empty()
+        && !pane_drag_active
         && !mode.mouse_motion_changes_view()
         && events.iter().all(|event| {
             matches!(
@@ -7765,14 +7768,22 @@ next_tab = ""
 
         assert!(events_are_render_neutral_mouse_motion(
             &events,
-            crate::app::Mode::Terminal
+            crate::app::Mode::Terminal,
+            false,
+        ));
+        assert!(!events_are_render_neutral_mouse_motion(
+            &events,
+            crate::app::Mode::Terminal,
+            true,
         ));
         for mode in [
             crate::app::Mode::GlobalMenu,
             crate::app::Mode::ContextMenu,
             crate::app::Mode::Navigator,
         ] {
-            assert!(!events_are_render_neutral_mouse_motion(&events, mode));
+            assert!(!events_are_render_neutral_mouse_motion(
+                &events, mode, false
+            ));
         }
     }
 
@@ -7837,6 +7848,28 @@ next_tab = ""
         assert!(!changed);
         assert_eq!(server.clients[&1].outer_terminal_focus, Some(false));
         assert_eq!(server.app.state.outer_terminal_focus, Some(false));
+    }
+
+    #[test]
+    fn foreground_state_sync_does_not_clear_manual_unread_without_a_focus_event() {
+        let mut server = test_headless_server();
+        let workspace = crate::workspace::Workspace::test_new("test");
+        let pane_id = workspace.tabs[0].root_pane;
+        server.app.state.workspaces = vec![workspace];
+        server.app.state.active = Some(0);
+        server.app.state.selected = 0;
+        server.clients.insert(1, test_app_client(Some(true), 1));
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+        server.app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .seen = false;
+
+        server.sync_foreground_client_state();
+
+        assert!(!server.app.state.workspaces[0].tabs[0].panes[&pane_id].seen);
     }
 
     #[test]
@@ -8110,8 +8143,8 @@ next_tab = ""
 
         let foreground_terminal_area = Rect::new(26, 1, 94, 39);
         let expected_pane_size = (
-            foreground_terminal_area.height,
-            foreground_terminal_area.width.saturating_sub(1),
+            foreground_terminal_area.height.saturating_sub(2),
+            foreground_terminal_area.width.saturating_sub(3),
         );
         assert_eq!(
             server.app.state.view.layout,
@@ -8170,7 +8203,10 @@ next_tab = ""
         server.resize_shared_runtime_to_effective_size();
 
         let terminal_area = server.app.state.view.terminal_area;
-        let expected = (terminal_area.height, terminal_area.width.saturating_sub(1));
+        let expected = (
+            terminal_area.height.saturating_sub(2),
+            terminal_area.width.saturating_sub(3),
+        );
         assert_eq!(
             server
                 .app

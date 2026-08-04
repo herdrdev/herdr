@@ -351,6 +351,13 @@ impl App {
 
     pub(crate) fn release_input_source_headless(&mut self, source_id: crate::app::InputSourceId) {
         self.pending_url_click_sources.remove(&source_id);
+        self.cancel_pane_drag(source_id, true);
+        if self
+            .last_workspace_empty_click
+            .is_some_and(|click| click.source_id == source_id)
+        {
+            self.last_workspace_empty_click = None;
+        }
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key
@@ -361,6 +368,13 @@ impl App {
 
     pub(crate) async fn release_input_source(&mut self, source_id: crate::app::InputSourceId) {
         self.pending_url_click_sources.remove(&source_id);
+        self.cancel_pane_drag(source_id, true);
+        if self
+            .last_workspace_empty_click
+            .is_some_and(|click| click.source_id == source_id)
+        {
+            self.last_workspace_empty_click = None;
+        }
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key

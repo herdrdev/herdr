@@ -1,7 +1,7 @@
 use crate::api::schema::{
     Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
     PaneFocusDirectionParams, PaneLayoutParams, PaneListParams, PaneMoveDestination,
-    PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
+    PaneMoveParams, PaneNeighborParams, PanePlacement, PaneProcessInfoParams, PaneReadParams,
     PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneSendInputParams, PaneSendKeysParams,
     PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams,
@@ -662,6 +662,7 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
     let mut workspace_id = None;
     let mut target_pane_id = None;
     let mut split = None;
+    let mut placement = None;
     let mut ratio = None;
     let mut label = None;
     let mut tab_label = None;
@@ -704,6 +705,13 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
                     return Err("missing value for --split".into());
                 };
                 split = Some(parse_split_direction(value)?);
+                index += 2;
+            }
+            "--place" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --place".into());
+                };
+                placement = Some(parse_pane_placement(value)?);
                 index += 2;
             }
             "--ratio" => {
@@ -752,9 +760,9 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
     }
 
     let destination = if let Some(tab_id) = tab_id {
-        let Some(split) = split else {
+        if split.is_some() == placement.is_some() {
             return Err(pane_move_usage());
-        };
+        }
         if workspace_id.is_some()
             || new_tab
             || new_workspace
@@ -763,14 +771,33 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
         {
             return Err(pane_move_usage());
         }
-        PaneMoveDestination::Tab {
-            tab_id,
-            target_pane_id,
-            split,
-            ratio,
+        if let Some(placement) = placement {
+            let Some(target_pane_id) = target_pane_id else {
+                return Err(pane_move_usage());
+            };
+            PaneMoveDestination::TabPlacement {
+                tab_id,
+                target_pane_id,
+                placement,
+                moved_ratio: ratio,
+            }
+        } else if let Some(split) = split {
+            PaneMoveDestination::Tab {
+                tab_id,
+                target_pane_id,
+                split,
+                ratio,
+            }
+        } else {
+            return Err(pane_move_usage());
         }
     } else if new_tab {
-        if split.is_some() || target_pane_id.is_some() || new_workspace || tab_label.is_some() {
+        if split.is_some()
+            || placement.is_some()
+            || target_pane_id.is_some()
+            || new_workspace
+            || tab_label.is_some()
+        {
             return Err(pane_move_usage());
         }
         PaneMoveDestination::NewTab {
@@ -778,7 +805,12 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
             label,
         }
     } else {
-        if split.is_some() || target_pane_id.is_some() || workspace_id.is_some() || new_tab {
+        if split.is_some()
+            || placement.is_some()
+            || target_pane_id.is_some()
+            || workspace_id.is_some()
+            || new_tab
+        {
             return Err(pane_move_usage());
         }
         PaneMoveDestination::NewWorkspace { label, tab_label }
@@ -792,7 +824,7 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
 }
 
 fn pane_move_usage() -> String {
-    "usage: herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
+    "usage: herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --tab <tab_id> --target-pane ID --place left|right|above|below [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
         .into()
 }
 
@@ -869,6 +901,18 @@ fn parse_split_direction(value: &str) -> Result<SplitDirection, String> {
         "down" => Ok(SplitDirection::Down),
         _ => Err(format!(
             "invalid split direction: {value} (expected right or down)"
+        )),
+    }
+}
+
+fn parse_pane_placement(value: &str) -> Result<PanePlacement, String> {
+    match value {
+        "left" => Ok(PanePlacement::Left),
+        "right" => Ok(PanePlacement::Right),
+        "above" => Ok(PanePlacement::Above),
+        "below" => Ok(PanePlacement::Below),
+        _ => Err(format!(
+            "invalid placement: {value} (expected left, right, above, or below)"
         )),
     }
 }
@@ -1505,6 +1549,7 @@ fn print_pane_help() {
     eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
     eprintln!("  herdr pane swap --source-pane ID --target-pane ID");
     eprintln!("  herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
+    eprintln!("  herdr pane move <pane_id> --tab <tab_id> --target-pane ID --place left|right|above|below [--ratio FLOAT] [--focus|--no-focus]");
     eprintln!("  herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
     eprintln!("  herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
     eprintln!("  herdr pane close <pane_id>");
@@ -1673,6 +1718,32 @@ mod tests {
                 target_pane_id: Some("issue-3".into()),
                 split: SplitDirection::Right,
                 ratio: Some(0.25),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pane_move_args_accepts_explicit_four_way_placement() {
+        let params = parse_pane_move_args(&args(&[
+            "issue-1",
+            "--tab",
+            "issue:2",
+            "--target-pane",
+            "issue-3",
+            "--place",
+            "above",
+            "--ratio",
+            "0.25",
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            params.destination,
+            PaneMoveDestination::TabPlacement {
+                tab_id: "issue:2".into(),
+                target_pane_id: "issue-3".into(),
+                placement: PanePlacement::Above,
+                moved_ratio: Some(0.25),
             }
         );
     }

@@ -551,6 +551,10 @@ fn pane_command() -> Command {
                 .arg(option("tab", "TAB_ID"))
                 .arg(option("split", "DIRECTION").value_parser(["right", "down"]))
                 .arg(option("target-pane", "ID"))
+                .arg(
+                    option("place", "PLACEMENT")
+                        .value_parser(["left", "right", "above", "below"]),
+                )
                 .arg(option("ratio", "FLOAT"))
                 .arg(flag("new-tab"))
                 .arg(option("workspace", "ID"))
@@ -1259,6 +1263,17 @@ mod tests {
         assert!(has_option(pane_split, "direction"));
         assert!(!has_option(pane_split, "split"));
         assert_eq!(option_values(pane_split, "direction"), ["right", "down"]);
+    }
+
+    #[test]
+    fn spec_exposes_four_way_pane_move_placement() {
+        let cmd = super::command();
+        let pane_move = command_path(&cmd, &["pane", "move"]);
+        assert!(has_option(pane_move, "place"));
+        assert_eq!(
+            option_values(pane_move, "place"),
+            ["left", "right", "above", "below"]
+        );
     }
 
     #[test]

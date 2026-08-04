@@ -106,12 +106,14 @@ Raw socket method names use dot notation:
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.graphics.info`, `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.stream`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
-| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
+| Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.mark_unread`, `agent.start`, `agent.view.set`, `agent.view.clear` |
 | Events | `events.subscribe`, `events.wait` |
 | Integrations | `integration.install`, `integration.uninstall` |
 | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
 
 `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls.
+
+`agent.mark_unread` accepts the same live agent name or hosting pane ID as other agent methods. It returns the updated agent record without changing focus and changes an idle agent from `idle` to `done`. The agent stays `done` until its exact pane is focused; focusing only its workspace, tab, or a sibling pane does not acknowledge it.
 
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
 
@@ -155,7 +157,9 @@ like `ctrl+h`, `control+j`, `alt+x`, and `shift+tab`, function keys like
 
 `pane.current` returns a single `PaneInfo`. When `caller_pane_id` is present,
 Herdr returns that pane. When it is omitted, Herdr returns the active focused
-pane.
+pane. `PaneInfo.label` is the optional manual pane label, while
+`PaneInfo.display_label` is the effective display name and falls back to the
+tab-local generated name such as `pane 1`.
 
 `PaneInfo` includes `scroll` when terminal scroll metrics are available:
 
@@ -282,15 +286,20 @@ workspace:
 
 ```json
 {"id":"req_move_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab","tab_id":"w1:t2","target_pane_id":"w1:p3","split":"right","ratio":0.5},"focus":true}}
+{"id":"req_place_above","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"tab_placement","tab_id":"w1:t2","target_pane_id":"w1:p3","placement":"above","moved_ratio":0.4},"focus":true}}
 {"id":"req_move_new_tab","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_tab","workspace_id":"w1","label":"logs"},"focus":true}}
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
 
 Existing-tab moves require `split: "right" | "down"`. `target_pane_id` is
-optional and defaults to the target tab's focused pane. Same-tab layout changes
-remain `pane.swap`; moving to the source tab returns `changed: false` with
-`reason: "same_tab"`. Moves involving a zoomed source or target tab return
-`changed: false` with `reason: "zoomed_tab"`.
+optional and defaults to the target tab's focused pane. The
+`type: "tab_placement"` form requires a target pane and accepts
+`placement: "left" | "right" | "above" | "below"` in the same tab or another
+tab. Its optional `moved_ratio` is always the share assigned to the moved pane.
+The older `type: "tab"` form remains a no-op in the source tab and returns
+`reason: "same_tab"`; use `pane.swap` for an explicit same-tab swap. Moves
+involving a zoomed source or target tab return `changed: false` with
+`reason: "zoomed_tab"`.
 
 The response is `type: "pane_move"` with `changed`, optional `reason`,
 `previous_pane_id`, `previous_workspace_id`, `previous_tab_id`, the moved

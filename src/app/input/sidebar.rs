@@ -187,6 +187,37 @@ impl AppState {
         Rect::new(footer.x, footer.y, width, footer.height)
     }
 
+    pub(super) fn workspace_list_empty_space_at(&self, col: u16, row: u16) -> bool {
+        let area = self.workspace_list_rect();
+        if area == Rect::default() {
+            return false;
+        }
+
+        let metrics = crate::ui::workspace_list_scroll_metrics(self, area);
+        let body =
+            crate::ui::workspace_list_body_rect(area, crate::ui::should_show_scrollbar(metrics));
+        if body == Rect::default()
+            || col < body.x
+            || col >= body.x + body.width
+            || row < body.y
+            || row >= body.y + body.height
+        {
+            return false;
+        }
+
+        let cards = if self.view.workspace_card_areas.is_empty() {
+            crate::ui::compute_workspace_card_areas(self, self.view.sidebar_rect)
+        } else {
+            self.view.workspace_card_areas.clone()
+        };
+        !cards.iter().any(|card| {
+            col >= card.rect.x
+                && col < card.rect.x + card.rect.width
+                && row >= card.rect.y
+                && row < card.rect.y + card.rect.height
+        })
+    }
+
     pub(crate) fn global_launcher_rect(&self) -> Rect {
         if self.view.layout == ViewLayout::Mobile {
             return self.view.mobile_menu_hit_area;

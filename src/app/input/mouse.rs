@@ -3473,7 +3473,7 @@ mod tests {
     }
 
     #[test]
-    fn right_clicking_agent_row_opens_agent_color_menu() {
+    fn right_clicking_agent_row_offers_unread_and_color_actions() {
         let mut app = app_for_mouse_test();
         let workspace = Workspace::test_new("one");
         let pane_id = workspace.tabs[0].root_pane;
@@ -3490,7 +3490,7 @@ mod tests {
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .detected_agent = Some(Agent::Codex);
+            .set_detected_state(Some(Agent::Codex), AgentState::Idle);
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
         let agent_area = app.state.agent_panel_rect();
         let body = crate::ui::agent_panel_body_rect(agent_area, false);
@@ -3511,9 +3511,19 @@ mod tests {
                 pane_id: target,
             } if target == pane_id
         ));
-        assert_eq!(menu.items(), &["Color"]);
+        assert_eq!(menu.items(), &["Unread", "Color"]);
 
         app.apply_context_menu_action_via_api(menu, 0);
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(!app.state.workspaces[0].tabs[0].panes[&pane_id].seen);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            body.x + 1,
+            body.y,
+        ));
+        let menu = app.state.context_menu.take().expect("agent context menu");
+        app.apply_context_menu_action_via_api(menu, 1);
         assert_eq!(app.state.mode, Mode::SidebarColor);
         assert!(matches!(
             app.state
@@ -4001,6 +4011,60 @@ mod tests {
         assert!(app.state.pending_workspace_create_cwd.is_some());
         assert!(app.state.name_input_replace_on_type);
         assert_eq!(app.state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn double_clicking_trailing_spaces_list_row_opens_new_workspace_prompt() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = (0..20)
+            .map(|idx| Workspace::test_new(&format!("workspace-{idx}")))
+            .collect();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.prompt_new_workspace_name = true;
+        app.state.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
+        app.state.sidebar_spaces.row_gap = 0;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let list_area = app.state.workspace_list_rect();
+        let metrics = crate::ui::workspace_list_scroll_metrics(&app.state, list_area);
+        assert!(metrics.max_offset_from_bottom > 0);
+        app.state.workspace_scroll = metrics.max_offset_from_bottom;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+
+        let metrics = crate::ui::workspace_list_scroll_metrics(&app.state, list_area);
+        let body = crate::ui::workspace_list_body_rect(
+            list_area,
+            crate::ui::should_show_scrollbar(metrics),
+        );
+        let empty_row = body.y + body.height - 1;
+        let empty_col = body.x + 1;
+        assert!(app
+            .state
+            .workspace_list_empty_space_at(empty_col, empty_row));
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            empty_col,
+            empty_row,
+        ));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            empty_col,
+            empty_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            empty_col,
+            empty_row,
+        ));
+
+        assert_eq!(app.state.mode, Mode::RenameWorkspace);
+        assert!(app.state.pending_workspace_create_cwd.is_some());
+        assert!(app.state.name_input_replace_on_type);
+        assert_eq!(app.state.workspaces.len(), 20);
     }
 
     #[tokio::test]

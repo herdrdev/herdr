@@ -87,6 +87,10 @@ struct LegacyWorkspaceSnapshot {
 pub struct TabSnapshot {
     #[serde(default)]
     pub custom_name: Option<String>,
+    #[serde(default)]
+    pub auto_pane_numbers: HashMap<u32, usize>,
+    #[serde(default)]
+    pub next_auto_pane_number: usize,
     pub layout: LayoutSnapshot,
     pub panes: HashMap<u32, PaneSnapshot>,
     pub zoomed: bool,
@@ -148,6 +152,8 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
         let identity_cwd = legacy_identity_cwd(&snap);
         let tab = TabSnapshot {
             custom_name: None,
+            auto_pane_numbers: HashMap::new(),
+            next_auto_pane_number: 0,
             layout: snap.layout,
             panes: snap.panes,
             zoomed: snap.zoomed,
@@ -380,6 +386,12 @@ fn capture_tab(
     }
     TabSnapshot {
         custom_name: tab.custom_name.clone(),
+        auto_pane_numbers: tab
+            .panes
+            .iter()
+            .map(|(pane_id, pane)| (pane_id.raw(), pane.auto_name_number))
+            .collect(),
+        next_auto_pane_number: tab.next_auto_pane_number,
         layout: capture_node(tab.layout.root()),
         panes,
         zoomed: tab.zoomed,
@@ -684,6 +696,8 @@ mod tests {
                 next_public_tab_number: 2,
                 tabs: vec![TabSnapshot {
                     custom_name: Some("api".to_string()),
+                    auto_pane_numbers: HashMap::new(),
+                    next_auto_pane_number: 0,
                     layout: LayoutSnapshot::Split {
                         direction: DirectionSnapshot::Horizontal,
                         ratio: 0.5,
@@ -926,6 +940,9 @@ mod tests {
         assert_eq!(tab.root_pane, Some(root.raw()));
         assert!(tab.zoomed);
         assert_eq!(tab.panes.len(), 2);
+        assert_eq!(tab.auto_pane_numbers.get(&root.raw()), Some(&1));
+        assert_eq!(tab.auto_pane_numbers.get(&second.raw()), Some(&2));
+        assert_eq!(tab.next_auto_pane_number, 3);
     }
 
     #[test]
@@ -1249,6 +1266,8 @@ mod tests {
                 next_public_tab_number: 0,
                 tabs: vec![TabSnapshot {
                     custom_name: None,
+                    auto_pane_numbers: HashMap::new(),
+                    next_auto_pane_number: 0,
                     layout: LayoutSnapshot::Split {
                         direction: DirectionSnapshot::Horizontal,
                         ratio: 0.5,
