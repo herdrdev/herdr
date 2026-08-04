@@ -125,10 +125,9 @@ impl App {
     }
 
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
-        let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
 
-        if key.code == KeyCode::Esc || self.state.is_prefix_key(&raw_key) {
+        if is_navigate_cancel_key(&raw_key) || self.state.is_prefix_key(&raw_key) {
             leave_navigate_mode(&mut self.state);
             return;
         }
@@ -1310,7 +1309,7 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
     state.update_dismissed = true;
     let terminal_key = TerminalKey::from(key);
 
-    if state.is_prefix_key(&terminal_key) || key.code == KeyCode::Esc {
+    if state.is_prefix_key(&terminal_key) || is_navigate_cancel_key(&terminal_key) {
         leave_navigate_mode(state);
         return;
     }
@@ -1807,6 +1806,19 @@ fn workspace_can_start_worktree_action(
             .and_then(crate::workspace::git_space_metadata)
     });
     !git_space.is_some_and(|space| space.is_linked_worktree)
+}
+
+/// True for Esc and for Ctrl+[, its terminal-level equivalent.
+///
+/// A legacy terminal sends Ctrl+[ as 0x1b, the same byte as Esc, so it already
+/// arrives as `KeyCode::Esc`. Under the kitty keyboard protocol, which Herdr
+/// negotiates, the modified key is reported on its own and reaches us as
+/// `Char('[')` with CONTROL. Ctrl+Shift+[ stays distinct because it carries
+/// SHIFT.
+fn is_navigate_cancel_key(key: &TerminalKey) -> bool {
+    key.code == KeyCode::Esc
+        || (key.code == KeyCode::Char('[')
+            && key.modifiers == crossterm::event::KeyModifiers::CONTROL)
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
@@ -2889,6 +2901,32 @@ command = "printf literal > '{}'"
         app.handle_navigate_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
 
         assert_eq!(app.state.selected, 1);
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_ctrl_bracket_leaves_like_esc() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+
+        app.state.mode = Mode::Navigate;
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('['), KeyModifiers::CONTROL));
+        assert_eq!(app.state.mode, Mode::Terminal);
+
+        app.state.mode = Mode::Navigate;
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn app_navigate_mode_ctrl_shift_bracket_stays_open() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(TerminalKey::new(
+            KeyCode::Char('['),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+
         assert_eq!(app.state.mode, Mode::Navigate);
     }
 
