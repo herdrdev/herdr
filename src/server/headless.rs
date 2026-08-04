@@ -8179,7 +8179,7 @@ next_tab = ""
             ),
         );
 
-        server.app.state.mode = crate::app::Mode::Prefix;
+        server.app.state.mode = crate::app::Mode::Navigate;
         server.stream_host_keyboard_enhancement_flags();
         assert!(matches!(
             read_server_message(

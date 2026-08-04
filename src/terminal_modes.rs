@@ -36,6 +36,23 @@ pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
     Ok(())
 }
 
+/// Clears every kitty keyboard flag in the host's current stack entry.
+///
+/// Teardown pops the entry Herdr pushed, but some hosts (iTerm2) keep the flags
+/// a `CSI = flags u` set applied, so a detach while navigation mode was active
+/// leaves the host reporting all keys as escape codes. Zeroing the flags before
+/// the pop is a no-op on hosts that scope the set to the popped entry.
+#[cfg(not(windows))]
+pub(crate) fn clear_host_kitty_keyboard_flags<W: Write>(writer: &mut W) -> io::Result<()> {
+    writer.write_all(b"\x1b[=0u")?;
+    writer.flush()
+}
+
+#[cfg(windows)]
+pub(crate) fn clear_host_kitty_keyboard_flags<W: Write>(_writer: &mut W) -> io::Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,6 +65,16 @@ mod tests {
         set_host_kitty_keyboard_report_all(&mut output, false).unwrap();
 
         assert_eq!(output, b"\x1b[=15u\x1b[=7u");
+    }
+
+    #[test]
+    fn clearing_host_keyboard_flags_zeroes_the_current_stack_entry() {
+        let mut output = Vec::new();
+
+        set_host_kitty_keyboard_report_all(&mut output, true).unwrap();
+        clear_host_kitty_keyboard_flags(&mut output).unwrap();
+
+        assert_eq!(output, b"\x1b[=15u\x1b[=0u");
     }
 
     #[test]

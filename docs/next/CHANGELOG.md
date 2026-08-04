@@ -3,9 +3,12 @@
 ## Unreleased
 
 ### Changed
+- The prefix key now enters navigation mode directly; the one-shot prefix mode between them is gone. Commands stay available until you leave, and the bottom hint line lists them.
 - The keybind help overlay is now a command palette: a search box filters commands by regular expression, `↑`/`↓` move the selection, `Enter` runs the selected command, and `esc` closes the panel.
+- The command palette is bound to `prefix+space`, and its `[keys]` entry is now `commands` instead of `help`. Existing `help = ...` entries keep working as an alias.
 - Shortcuts can be rebound inline from the command palette with `ctrl+s` (or cleared with `ctrl+x`), which writes the `[keys]` entry to `config.toml` and applies it immediately. Reassigning a shortcut that another command owns asks for confirmation first.
-- The default prefix key is now `esc` instead of `ctrl+b`. Press it twice to send a literal `esc` to the focused pane; `esc` followed by an unbound key sends both keys through. `esc` keeps its existing meaning for back/cancel in navigate mode, copy mode, and overlays. Set `keys.prefix = "ctrl+b"` in `config.toml` to keep the previous default.
+- Digits no longer jump to a workspace inside navigation mode, so `prefix+1..9` keeps its documented tab meaning everywhere. Bind `switch_workspace` (for example `prefix+shift+1..9`) to jump to workspaces by number.
+- The default prefix key is now `esc` instead of `ctrl+b`. Press it twice to leave navigation mode and send a literal `esc` to the focused pane; keys with no binding do nothing and keep you in navigation mode. `esc` keeps its existing meaning for back/cancel in copy mode and overlays. Set `keys.prefix = "ctrl+b"` in `config.toml` to keep the previous default.
 - Held keys now repeat in overlays and navigation on terminals that use the kitty keyboard protocol, matching the behavior legacy terminals already had.
 - Agent status indicators now use the same static workspace marks across the sidebar, navigator, and mobile views, eliminating continuous spinner rendering while agents work.
 - Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.

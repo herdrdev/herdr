@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::modal::leave_modal;
 use super::navigate::ActionContext;
 use crate::app::palette::{palette_line_of_row, PaletteAction};
-use crate::app::state::{AppState, Mode, PendingShortcutConflict, ShortcutCapture};
+use crate::app::state::{AppState, PendingShortcutConflict, ShortcutCapture};
 use crate::app::App;
 use crate::config::KeyCombo;
 use crate::input::TerminalKey;
@@ -82,20 +82,20 @@ impl App {
                     command.label
                 ));
             }
-            PaletteAction::PrefixMode => {
+            PaletteAction::NavigateMode => {
                 leave_modal(&mut self.state);
-                self.state.mode = Mode::Prefix;
+                self.state.enter_navigate_mode();
             }
             PaletteAction::Navigate(action) => {
                 leave_modal(&mut self.state);
-                self.execute_prefix_key_action(action);
+                self.execute_command_action(action, ActionContext::Direct);
             }
             PaletteAction::Custom(idx) => {
                 let Some(binding) = self.state.keybinds.custom_commands.get(idx).cloned() else {
                     return;
                 };
                 leave_modal(&mut self.state);
-                self.launch_custom_command(binding, ActionContext::Prefix);
+                self.launch_custom_command(binding, ActionContext::Direct);
             }
         }
     }
@@ -126,7 +126,7 @@ impl App {
             return;
         };
         if config_key == PREFIX_CONFIG_KEY {
-            self.state.keybind_help.notice = Some("prefix mode always needs a key".to_string());
+            self.state.keybind_help.notice = Some("navigation mode always needs a key".to_string());
             return;
         }
         if !command.is_bound() {
@@ -186,8 +186,9 @@ impl App {
             // Stealing the prefix would leave it unset, so it is rebound from
             // its own row instead.
             if owner_config_key == PREFIX_CONFIG_KEY {
-                self.state.keybind_help.notice =
-                    Some(format!("{binding} is the prefix key; rebind prefix mode"));
+                self.state.keybind_help.notice = Some(format!(
+                    "{binding} is the prefix key; rebind navigation mode"
+                ));
                 self.state.keybind_help.capture = None;
                 return;
             }
@@ -383,6 +384,7 @@ mod tests {
     use super::*;
     use crate::app::input::app_for_mouse_test;
     use crate::app::palette::palette_commands;
+    use crate::app::state::Mode;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> TerminalKey {
         TerminalKey::new(code, modifiers)
@@ -626,7 +628,7 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = palette_app();
-        insert_keybind_help_query_text(&mut app.state, "^prefix mode$");
+        insert_keybind_help_query_text(&mut app.state, "^navigation mode$");
         app.handle_keybind_help_key(key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         assert!(!path.exists());
         assert!(app
@@ -634,7 +636,7 @@ mod tests {
             .keybind_help
             .notice
             .as_deref()
-            .is_some_and(|notice| notice.contains("prefix mode")));
+            .is_some_and(|notice| notice.contains("navigation mode")));
 
         app.state.keybind_help.query.clear();
         insert_keybind_help_query_text(&mut app.state, "^split vertical$");

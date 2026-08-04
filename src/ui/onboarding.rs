@@ -78,17 +78,17 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " enters prefix mode · ",
+            " enters navigation mode · ",
             Style::default().fg(app.palette.overlay1),
         ),
         Span::styled(
-            "?",
+            "space",
             Style::default()
                 .fg(app.palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " shows keybinds and settings",
+            " opens the command palette",
             Style::default().fg(app.palette.overlay1),
         ),
     ]);

@@ -13,13 +13,15 @@ Herdr is mouse-native. You can click panes, tabs, workspaces, and agents, drag s
 
 A terminal multiplexer sits between your terminal and the programs running inside it. Those programs already use most key combinations: `ctrl+c` interrupts, `ctrl+r` searches history, editors claim nearly everything else. If Herdr grabbed common keys directly, it would break the programs inside it.
 
-The prefix solves this. Press the prefix key, default `esc`, and the next keypress goes to Herdr instead of your terminal. `prefix+c` means: press `esc`, release, then press `c`. One reserved key instead of dozens.
+The prefix solves this. Press the prefix key, default `esc`, and Herdr enters navigation mode: keys stop going to your terminal and run Herdr commands instead. `prefix+c` means: press `esc`, release, then press `c`. One reserved key instead of dozens.
 
-With the default prefix, `esc esc` sends a literal `esc` to the focused pane, and `esc` followed by a key that is not bound sends both keys to the pane, so editors keep working. Set `keys.prefix = "ctrl+b"` in `config.toml` for the tmux-style prefix.
+Navigation mode stays open until you leave it, so you can run several commands from one press. A hint line at the bottom of the screen lists what is bound. `space` opens the command palette, `↑`/`↓` move the workspace selection in the sidebar, `Enter` opens the selected workspace, and most commands that move focus drop you back in the terminal on their own.
+
+Press the prefix key again to leave. With the default prefix that means `esc esc`, which also sends a literal `esc` to the focused pane, so vim and other editors stay usable. A key that is not bound does nothing and keeps you in navigation mode. Set `keys.prefix = "ctrl+b"` in `config.toml` for the tmux-style prefix; then `esc` leaves navigation mode without sending anything, and `ctrl+b ctrl+b` sends a literal `ctrl+b`.
 
 ## Command palette
 
-Press `prefix+?` at any time to open the command palette. It lists every command with its current shortcut, grouped by area.
+Press `prefix+space` at any time to open the command palette. It lists every command with its current shortcut, grouped by area.
 
 The search box is always focused: type to filter by command name, shortcut, or group. The query is a regular expression, so `^split` or `pane|tab` work; an incomplete pattern falls back to a plain substring match. Use Backspace to edit the query or `ctrl+u` to clear it.
 
@@ -39,7 +41,7 @@ Press `ctrl+s` and the shortcut column of the selected row switches to `press sh
 
 - A plain key binds as `prefix+<key>`, because an unmodified global shortcut would swallow that key in every pane. `v` becomes `prefix+v`.
 - A modified chord (`ctrl+g`, `ctrl+alt+n`) or a function key binds directly, with no prefix.
-- The `prefix mode` row is special: whatever you press becomes the prefix key itself.
+- The `navigation mode` row is special: whatever you press becomes the prefix key itself.
 - If the chord already belongs to another command, the palette says so and waits; press the same chord again to reassign it and unbind the previous owner.
 - `esc` cancels the capture and never binds.
 
@@ -52,7 +54,7 @@ Commands defined under `[[keys.command]]` run from the palette but are still edi
 | New tab | `prefix+c` |
 | Split right / down | `prefix+v` / `prefix+minus` |
 | Move between panes | `prefix+h/j/k/l` |
-| Workspace navigation | `prefix+w` |
+| Command palette | `prefix+space` |
 | Detach, leave everything running | `prefix+q` |
 
 These cover most daily movement. Everything else can stay on the mouse.
@@ -86,7 +88,10 @@ Workspaces and session:
 | Rename workspace | `prefix+shift+w` |
 | Close workspace | `prefix+shift+d` |
 | Goto picker | `prefix+g` |
+| Workspace navigation surface | `prefix+w` |
 | Toggle sidebar | `prefix+b` |
+
+Digits belong to tabs, so jumping straight to a workspace needs its own binding, for example `switch_workspace = "prefix+shift+1..9"`. Inside navigation mode you can also pick a workspace with `↑`/`↓` and `Enter`.
 
 The full keymap and the binding syntax live in the [keybinding reference](/docs/configuration/#keybindings).
 

@@ -162,7 +162,7 @@ command = "lazygit"
         let config: Config = toml::from_str(
             r#"
 [keys]
-zoom = "prefix+?"
+zoom = "prefix+space"
 "#,
         )
         .unwrap();
@@ -170,15 +170,15 @@ zoom = "prefix+?"
         let profile = config.local_keybindings_profile_toml().unwrap();
         let round_tripped: Config = toml::from_str(&profile).unwrap();
 
-        assert!(profile.contains("zoom = \"prefix+?\""));
-        assert!(!profile.contains("help = \"prefix+?\""));
+        assert!(profile.contains("zoom = \"prefix+space\""));
+        assert!(!profile.contains("commands = \"prefix+space\""));
         assert!(round_tripped
             .keybinds()
             .zoom
             .bindings
             .iter()
-            .any(|binding| binding.label == "prefix+?"));
-        assert!(round_tripped.keybinds().help.bindings.is_empty());
+            .any(|binding| binding.label == "prefix+space"));
+        assert!(round_tripped.keybinds().commands.bindings.is_empty());
     }
 
     #[test]

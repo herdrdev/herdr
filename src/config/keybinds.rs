@@ -88,7 +88,7 @@ pub enum CommandKeybindType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CommandKeybindConfig {
-    /// Key that runs a command. Use `prefix+g` for prefix mode or a modified chord for direct mode.
+    /// Key that runs a command. Use `prefix+g` for navigation mode or a modified chord for direct mode.
     pub key: BindingConfig,
     /// Command executed either in the background shell or inside a pane.
     pub command: String,
@@ -306,7 +306,7 @@ pub struct NavigateKeybinds {
 #[derive(Debug, Clone)]
 pub struct Keybinds {
     pub navigate: NavigateKeybinds,
-    pub help: ActionKeybinds,
+    pub commands: ActionKeybinds,
     pub settings: ActionKeybinds,
     pub new_workspace: ActionKeybinds,
     pub new_worktree: ActionKeybinds,
@@ -468,7 +468,7 @@ impl Config {
                 pane_up: empty_action!(),
                 pane_right: empty_action!(),
             },
-            help: empty_action!(),
+            commands: empty_action!(),
             settings: empty_action!(),
             new_workspace: empty_action!(),
             new_worktree: empty_action!(),
@@ -590,7 +590,7 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_down, navigate_pane_down, source);
             apply_navigate!(keybinds.navigate.pane_up, navigate_pane_up, source);
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
-            apply_action!(keybinds.help, help, source);
+            apply_action!(keybinds.commands, commands, source);
             apply_action!(keybinds.settings, settings, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
             apply_action!(keybinds.new_worktree, new_worktree, source);
@@ -1770,20 +1770,39 @@ close_tab = "X"
     }
 
     #[test]
+    fn legacy_help_key_still_binds_the_command_palette() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+help = "prefix+?"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding_triggers(&config.keybinds().commands),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('?'),
+                KeyModifiers::empty()
+            ))]
+        );
+    }
+
+    #[test]
     fn prefix_rhs_equal_to_configured_prefix_is_rejected() {
         let config: Config = toml::from_str(
             r#"
 [keys]
 prefix = "ctrl+a"
-help = "prefix+ctrl+a"
+commands = "prefix+ctrl+a"
 "#,
         )
         .unwrap();
         let diagnostics = config.collect_diagnostics();
-        assert!(config.keybinds().help.bindings.is_empty());
+        assert!(config.keybinds().commands.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
             diag.contains("reserved keybinding")
-                && diag.contains("keys.help")
+                && diag.contains("keys.commands")
                 && diag.contains("keys.prefix")
         }));
 
@@ -1791,11 +1810,11 @@ help = "prefix+ctrl+a"
             r#"
 [keys]
 prefix = "ctrl+a"
-help = "prefix+ctrl+b"
+commands = "prefix+ctrl+b"
 "#,
         )
         .unwrap();
-        assert!(!config.keybinds().help.bindings.is_empty());
+        assert!(!config.keybinds().commands.bindings.is_empty());
     }
 
     #[test]
@@ -2051,7 +2070,7 @@ tabs = "bogus"
         let config: Config = toml::from_str(
             r#"
 [keys]
-switch_tab = "prefix+?"
+switch_tab = "prefix+space"
 "#,
         )
         .unwrap();
@@ -2061,9 +2080,9 @@ switch_tab = "prefix+?"
 
         assert!(kb.switch_tab.is_empty());
         assert_eq!(
-            binding_triggers(&kb.help),
+            binding_triggers(&kb.commands),
             vec![BindingTrigger::Prefix((
-                KeyCode::Char('?'),
+                KeyCode::Char(' '),
                 KeyModifiers::empty()
             ))]
         );
@@ -2071,7 +2090,7 @@ switch_tab = "prefix+?"
             diag.contains("indexed keybinding must use 1..9") && diag.contains("keys.switch_tab")
         }));
         assert!(!diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.switch_tab") && diag.contains("disabled keys.help")
+            diag.contains("kept keys.switch_tab") && diag.contains("disabled keys.commands")
         }));
     }
 

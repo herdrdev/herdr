@@ -159,7 +159,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # manifest_check = true
 
 [keys]
-# Prefix key to enter prefix mode (default: "esc")
+# Prefix key to enter navigation mode (default: "esc")
 # Examples: "esc", "ctrl+b", "f12", "-"
 # Press the prefix key twice to send it to the focused pane.
 # Action bindings use explicit syntax: "prefix+n" requires the prefix;
@@ -170,8 +170,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # alt+..., cmd/super, and punctuation-with-modifiers may depend on your terminal/tmux setup.
 # prefix = "esc"
 
-# Prefix-mode actions
-# help = "prefix+?"
+# Navigation-mode actions
+# commands = "prefix+space"
 # settings = "prefix+s"
 # detach = "prefix+q"
 # reload_config = "prefix+shift+r"
@@ -397,9 +397,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # kitty_graphics = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
-# While prefix mode is active, temporarily switch the host input source to
-# an ASCII-capable mode so prefix commands register even when an IME is
-# active, then restore the previous input source when prefix mode exits. On
+# While navigation mode is active, temporarily switch the host input source to
+# an ASCII-capable mode so navigation commands register even when an IME is
+# active, then restore the previous input source when navigation mode exits. On
 # macOS this selects the ASCII-capable keyboard layout; on Windows it toggles
 # a Korean IME between Hangul and English (other IME languages are left
 # unchanged). macOS and Windows only; best-effort. Default: false.

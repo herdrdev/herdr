@@ -1751,9 +1751,6 @@ impl App {
         }
 
         match self.state.mode {
-            Mode::Prefix => {
-                self.handle_prefix_key(key);
-            }
             Mode::Navigate => {
                 self.handle_navigate_key(key);
             }
@@ -1938,14 +1935,14 @@ mod tests {
         let mut app = test_app();
         app.state.switch_ascii_input_source_in_prefix = true;
 
-        // Terminal -> Prefix emits the ASCII-switch intent.
-        app.state.mode = Mode::Prefix;
+        // Terminal -> Navigate emits the ASCII-switch intent.
+        app.state.mode = Mode::Navigate;
         app.sync_prefix_input_source(Mode::Terminal);
         assert_eq!(drained_prefix_active(&mut app), vec![true]);
 
-        // Prefix -> Terminal emits the restore intent.
+        // Navigate -> Terminal emits the restore intent.
         app.state.mode = Mode::Terminal;
-        app.sync_prefix_input_source(Mode::Prefix);
+        app.sync_prefix_input_source(Mode::Navigate);
         assert_eq!(drained_prefix_active(&mut app), vec![false]);
     }
 
@@ -1955,22 +1952,21 @@ mod tests {
         app.state.switch_ascii_input_source_in_prefix = false;
 
         // Entering the realm with the flag off emits nothing.
-        app.state.mode = Mode::Prefix;
+        app.state.mode = Mode::Navigate;
         app.sync_prefix_input_source(Mode::Terminal);
         assert!(drained_prefix_active(&mut app).is_empty());
 
         // Leaving the realm still emits the restore (harmless if nothing was switched), so a
         // mid-interaction flag toggle can't strand the host on ASCII.
         app.state.mode = Mode::Terminal;
-        app.sync_prefix_input_source(Mode::Prefix);
+        app.sync_prefix_input_source(Mode::Navigate);
         assert_eq!(drained_prefix_active(&mut app), vec![false]);
     }
 
     #[test]
     fn mode_wants_ascii_input_classification() {
-        // Allowlist: the prefix command/navigation realm wants ASCII.
+        // Allowlist: the navigation command realm wants ASCII.
         for mode in [
-            Mode::Prefix,
             Mode::Navigate,
             Mode::Navigator,
             Mode::Copy,
@@ -2002,18 +1998,18 @@ mod tests {
     }
 
     #[test]
-    fn sync_prefix_input_source_keeps_realm_across_multi_level_prefix_commands() {
+    fn sync_prefix_input_source_keeps_realm_across_multi_level_navigate_commands() {
         let mut app = test_app();
         app.state.switch_ascii_input_source_in_prefix = true;
 
-        // Terminal -> Prefix switches once.
-        app.state.mode = Mode::Prefix;
+        // Terminal -> Navigate switches once.
+        app.state.mode = Mode::Navigate;
         app.sync_prefix_input_source(Mode::Terminal);
         assert_eq!(drained_prefix_active(&mut app), vec![true]);
 
-        // Prefix -> sub-mode and sub-mode -> sub-mode stay in the realm: no emit.
+        // Navigate -> sub-mode and sub-mode -> sub-mode stay in the realm: no emit.
         app.state.mode = Mode::Navigator;
-        app.sync_prefix_input_source(Mode::Prefix);
+        app.sync_prefix_input_source(Mode::Navigate);
         app.state.mode = Mode::Resize;
         app.sync_prefix_input_source(Mode::Navigator);
         assert!(
@@ -2032,13 +2028,13 @@ mod tests {
         let mut app = test_app();
         app.state.switch_ascii_input_source_in_prefix = true;
 
-        app.state.mode = Mode::Prefix;
+        app.state.mode = Mode::Navigate;
         app.sync_prefix_input_source(Mode::Terminal);
         assert_eq!(drained_prefix_active(&mut app), vec![true]);
 
-        // Prefix -> RenameTab leaves the realm (text entry wants the IME): restore.
+        // Navigate -> RenameTab leaves the realm (text entry wants the IME): restore.
         app.state.mode = Mode::RenameTab;
-        app.sync_prefix_input_source(Mode::Prefix);
+        app.sync_prefix_input_source(Mode::Navigate);
         assert_eq!(drained_prefix_active(&mut app), vec![false]);
     }
 
@@ -2075,10 +2071,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_input_dispatch_emits_input_source_intent_when_leaving_prefix() {
-        // Leaving prefix mode happens inside the raw-input dispatch, not in `handle_key` itself —
-        // the sync must sit at the dispatch layer so any event that exits prefix (here Esc) still
-        // emits the restore intent.
+    async fn raw_input_dispatch_emits_input_source_intent_when_leaving_navigate() {
+        // Leaving navigation mode happens inside the raw-input dispatch, not in `handle_key`
+        // itself, so the sync must sit at the dispatch layer for any event that exits
+        // navigation (here Esc) to still emit the restore intent.
         let mut app = test_app();
         app.state.switch_ascii_input_source_in_prefix = true;
         app.state.workspaces = vec![Workspace::test_new("test")];
@@ -2089,17 +2085,17 @@ mod tests {
         app.state.prefix_code = KeyCode::Char('b');
         app.state.prefix_mods = KeyModifiers::CONTROL;
 
-        // The prefix key enters prefix mode → switch intent.
+        // The prefix key enters navigation mode → switch intent.
         app.handle_raw_input_event(raw_key(
             KeyCode::Char('b'),
             KeyModifiers::CONTROL,
             KeyEventKind::Press,
         ))
         .await;
-        assert_eq!(app.state.mode, Mode::Prefix);
+        assert_eq!(app.state.mode, Mode::Navigate);
         assert_eq!(drained_prefix_active(&mut app), vec![true]);
 
-        // Esc leaves prefix mode → restore intent.
+        // Esc leaves navigation mode → restore intent.
         app.handle_raw_input_event(raw_key(
             KeyCode::Esc,
             KeyModifiers::empty(),
@@ -4955,8 +4951,8 @@ mod tests {
 
         assert_eq!(
             app.state.mode,
-            Mode::Prefix,
-            "prefix key should enter prefix mode"
+            Mode::Navigate,
+            "prefix key should enter navigation mode"
         );
         assert!(
             !app.state.detach_requested,
@@ -5033,7 +5029,7 @@ last_pane = "prefix+tab"
         app.state.prefix_mods = KeyModifiers::CONTROL;
 
         app.route_client_input(vec![0x0c]);
-        assert_eq!(app.state.mode, Mode::Prefix);
+        assert_eq!(app.state.mode, Mode::Navigate);
 
         app.route_client_input(vec![0x0c]);
         assert_eq!(app.state.mode, Mode::Terminal);
@@ -5041,9 +5037,9 @@ last_pane = "prefix+tab"
     }
 
     #[tokio::test]
-    async fn esc_prefix_replays_unbound_pairs_to_the_focused_pane() {
-        // With esc as the prefix, `esc i` in an editor must still reach the pane
-        // instead of being swallowed as an unknown prefix command.
+    async fn double_esc_sends_a_literal_esc_and_leaves_navigation() {
+        // With esc as the prefix, unbound keys stay inside navigation mode and
+        // `esc esc` is how a pane receives a literal esc.
         let mut app = test_app();
         let mut workspace = Workspace::test_new("test");
         let focused = workspace.focused_pane_id().unwrap();
@@ -5055,13 +5051,19 @@ last_pane = "prefix+tab"
         app.state.mode = Mode::Terminal;
 
         app.route_client_input(vec![0x1b]);
-        assert_eq!(app.state.mode, Mode::Prefix);
+        assert_eq!(app.state.mode, Mode::Navigate);
 
         app.route_client_input(vec![b'i']);
+        assert_eq!(app.state.mode, Mode::Navigate);
+
+        app.route_client_input(vec![0x1b]);
 
         assert_eq!(app.state.mode, Mode::Terminal);
         assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from(vec![0x1b]));
-        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from(vec![b'i']));
+        assert!(
+            rx.try_recv().is_err(),
+            "unbound key must not reach the pane"
+        );
     }
 
     #[tokio::test]
@@ -5127,8 +5129,6 @@ last_pane = "prefix+tab"
         assert!(!app.host_keyboard_report_all_requested());
 
         assert!(app.state.focus_pane_in_workspace(0, focused));
-        app.state.mode = Mode::Prefix;
-        assert!(app.host_keyboard_report_all_requested());
         app.state.mode = Mode::Navigate;
         assert!(app.host_keyboard_report_all_requested());
         app.state.mode = Mode::RenameWorkspace;
@@ -5461,7 +5461,7 @@ last_pane = "prefix+tab"
 
         app.route_client_input(b"\x1b[27u\x1b[27;1:3u".to_vec());
 
-        assert_eq!(app.state.mode, Mode::Prefix);
+        assert_eq!(app.state.mode, Mode::Navigate);
         assert!(rx.try_recv().is_err());
     }
 

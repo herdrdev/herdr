@@ -309,10 +309,10 @@ pub struct LoadedConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeysConfig {
-    /// Prefix key to enter prefix mode (e.g. "esc", "ctrl+b", "f12"). Default: "esc".
+    /// Prefix key to enter navigation mode (e.g. "esc", "ctrl+b", "f12"). Default: "esc".
     pub prefix: String,
-    /// Open keybinding help. Default: "prefix+?"
-    pub help: BindingConfig,
+    /// Open the command palette. Default: "prefix+space"
+    pub commands: BindingConfig,
     /// Open settings. Default: "prefix+s"
     pub settings: BindingConfig,
     /// Create a new workspace. Default: "prefix+shift+n"
@@ -371,7 +371,7 @@ pub struct KeysConfig {
     pub next_tab: BindingConfig,
     /// Switch to tab 1-9. Default: "prefix+1..9".
     pub switch_tab: BindingConfig,
-    /// Switch to workspace 1-9 from prefix mode. Unset by default.
+    /// Switch to workspace 1-9 from navigation mode. Unset by default.
     pub switch_workspace: BindingConfig,
     /// Close the active tab. Default: "prefix+shift+x".
     pub close_tab: BindingConfig,
@@ -430,8 +430,8 @@ pub struct KeysConfig {
 pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     prefix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    help: Option<BindingConfig>,
+    #[serde(alias = "help", skip_serializing_if = "Option::is_none")]
+    commands: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     settings: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -558,7 +558,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         }
 
         apply_field!(prefix);
-        apply_field!(help);
+        apply_field!(commands);
         apply_field!(settings);
         apply_field!(new_workspace);
         apply_field!(new_worktree);
@@ -656,7 +656,7 @@ impl KeysConfig {
         }
 
         profile.prefix = Some(self.prefix.clone());
-        copy_effective_action_field!(help, keybinds.help);
+        copy_effective_action_field!(commands, keybinds.commands);
         copy_effective_action_field!(settings, keybinds.settings);
         copy_effective_action_field!(new_workspace, keybinds.new_workspace);
         copy_effective_action_field!(new_worktree, keybinds.new_worktree);
@@ -909,10 +909,10 @@ pub struct ExperimentalConfig {
     /// Cursor shape rendered for the IME anchor when
     /// `reveal_hidden_cursor_for_cjk_ime` is enabled. Default: "steady_block".
     pub cjk_ime_cursor_shape: ImeCursorShape,
-    /// While prefix mode is active, temporarily switch the host input source
-    /// to an ASCII-capable mode so prefix commands are read as ASCII even when
-    /// an IME is active, then restore the previous input source when prefix
-    /// mode exits. On macOS this selects the ASCII-capable keyboard layout; on
+    /// While navigation mode is active, temporarily switch the host input
+    /// source to an ASCII-capable mode so navigation commands are read as ASCII
+    /// even when an IME is active, then restore the previous input source when
+    /// navigation mode exits. On macOS this selects the ASCII-capable keyboard layout; on
     /// Windows it switches the IME to English (ASCII) input. Windows support is
     /// currently limited to the Korean IME; with an IME for any other language,
     /// the input source is left unchanged. macOS and Windows only; a no-op
@@ -925,7 +925,7 @@ impl Default for KeysConfig {
     fn default() -> Self {
         Self {
             prefix: "esc".into(),
-            help: BindingConfig::one("prefix+?"),
+            commands: BindingConfig::one("prefix+space"),
             settings: BindingConfig::one("prefix+s"),
             new_workspace: BindingConfig::one("prefix+shift+n"),
             new_worktree: BindingConfig::one("prefix+shift+g"),

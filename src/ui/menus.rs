@@ -28,42 +28,6 @@ fn render_bottom_bar(frame: &mut Frame, area: Rect, line: Line<'_>, bg: ratatui:
     frame.render_widget(Paragraph::new(line), area);
 }
 
-pub(super) fn render_prefix_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
-    let key = Style::default()
-        .fg(app.palette.accent)
-        .add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(app.palette.overlay0);
-    let mode_style = Style::default()
-        .fg(panel_contrast_fg(&app.palette))
-        .bg(app.palette.accent)
-        .add_modifier(Modifier::BOLD);
-
-    let workspace_picker = prefix_rhs_label(&app.keybinds.workspace_picker);
-    let help = prefix_rhs_label(&app.keybinds.help);
-    let prefix = crate::config::format_key_combo((app.prefix_code, app.prefix_mods));
-
-    let mut spans = vec![Span::styled(" PREFIX ", mode_style), Span::raw(" ")];
-    // With esc as the prefix, esc is claimed by "send prefix" and never cancels,
-    // so the cancel hint would be a lie.
-    if app.prefix_code != crossterm::event::KeyCode::Esc {
-        spans.push(Span::styled("esc", key));
-        spans.push(Span::styled(" cancel  ", dim));
-    }
-    spans.extend([
-        Span::styled(prefix, key),
-        Span::styled(" send prefix  ", dim),
-        Span::styled(workspace_picker, key),
-        Span::styled(" workspace nav  ", dim),
-        Span::styled(help, key),
-        Span::styled(" commands", dim),
-    ]);
-    let line = Line::from(spans);
-
-    let overlay_y = area.y + area.height.saturating_sub(1);
-    let overlay_area = Rect::new(area.x, overlay_y, area.width, 1);
-    render_bottom_bar(frame, overlay_area, line, app.palette.panel_bg);
-}
-
 pub(super) fn render_copy_mode_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     let key = Style::default()
         .fg(app.palette.accent)
@@ -149,7 +113,7 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
     let close_pane = prefix_rhs_label(&kb.close_pane);
     let zoom = prefix_rhs_label(&kb.zoom);
     let resize = prefix_rhs_label(&kb.resize_mode);
-    let help = prefix_rhs_label(&kb.help);
+    let commands = prefix_rhs_label(&kb.commands);
     let settings = prefix_rhs_label(&kb.settings);
     let goto = prefix_rhs_label(&kb.goto);
     let detach = prefix_rhs_label(&kb.detach);
@@ -158,19 +122,38 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         keybind_label(&kb.navigate.workspace_up),
         keybind_label(&kb.navigate.workspace_down)
     );
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" NAVIGATE ", mode_style),
         Span::raw(" "),
         Span::styled("esc", key),
         Span::styled(" back  ", dim),
+        Span::styled(commands, key),
+        Span::styled(" commands  ", dim),
+    ];
+    if app.prefix_code != crossterm::event::KeyCode::Esc {
+        spans.push(Span::styled(
+            crate::config::format_key_combo((app.prefix_code, app.prefix_mods)),
+            key,
+        ));
+        spans.push(Span::styled(" send prefix  ", dim));
+    }
+    spans.extend([
         Span::styled(workspace_nav, key),
         Span::styled(" ws  ", dim),
         Span::styled("⇥", key),
         Span::styled(" pane  ", dim),
         Span::styled("⏎", key),
         Span::styled(" open  ", dim),
-        Span::styled("1..9", key),
-        Span::styled(" switch ws  ", dim),
+    ]);
+    if kb
+        .switch_tab
+        .iter()
+        .any(|binding| binding.trigger.is_prefix())
+    {
+        spans.push(Span::styled("1..9", key));
+        spans.push(Span::styled(" switch tab  ", dim));
+    }
+    spans.extend([
         Span::styled(goto, key),
         Span::styled(" navigator  ", dim),
         Span::styled(new_tab, key),
@@ -185,13 +168,12 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         Span::styled(" zoom  ", dim),
         Span::styled(resize, key),
         Span::styled(" resize  ", dim),
-        Span::styled(help, key),
-        Span::styled(" commands  ", dim),
         Span::styled(settings, key),
         Span::styled(" settings  ", dim),
         Span::styled(detach, key),
         Span::styled(" detach", dim),
     ]);
+    let line = Line::from(spans);
 
     let overlay_y = area.y + area.height.saturating_sub(1);
     let overlay_area = Rect::new(area.x, overlay_y, area.width, 1);

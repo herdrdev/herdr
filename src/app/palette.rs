@@ -15,8 +15,8 @@ use crate::app::state::AppState;
 pub(crate) enum PaletteAction {
     /// Runs the same action the bound key would run.
     Navigate(NavigateAction),
-    /// Enters prefix mode.
-    PrefixMode,
+    /// Enters navigation mode.
+    NavigateMode,
     /// Runs a `[[keys.command]]` entry by index.
     Custom(usize),
     /// Indexed families such as "switch tab 1-9" have no single target, so the
@@ -108,17 +108,17 @@ pub(crate) fn palette_commands(app: &AppState) -> Vec<PaletteCommand> {
     const GLOBAL: &str = "global";
     push(
         GLOBAL,
-        "prefix mode",
+        "navigation mode",
         crate::config::format_key_combo((app.prefix_code, app.prefix_mods)),
-        PaletteAction::PrefixMode,
+        PaletteAction::NavigateMode,
         "prefix",
     );
     push(
         GLOBAL,
         "command palette",
-        keybind_label(&kb.help),
-        PaletteAction::Navigate(NavigateAction::Help),
-        "help",
+        keybind_label(&kb.commands),
+        PaletteAction::Navigate(NavigateAction::CommandPalette),
+        "commands",
     );
     push(
         GLOBAL,

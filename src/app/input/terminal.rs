@@ -120,7 +120,7 @@ impl App {
         }
 
         if self.state.is_prefix_key(key) {
-            self.state.mode = Mode::Prefix;
+            self.state.enter_navigate_mode();
             return None;
         }
 
@@ -264,9 +264,7 @@ impl App {
     }
 
     pub(crate) fn host_keyboard_report_all_requested(&self) -> bool {
-        if self.state.popup_pane.is_none()
-            && matches!(self.state.mode, Mode::Prefix | Mode::Navigate)
-        {
+        if self.state.popup_pane.is_none() && self.state.mode == Mode::Navigate {
             return true;
         }
 

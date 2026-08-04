@@ -111,7 +111,7 @@ When enabled, `herdr --remote` writes a private temporary SSH config that includ
 
 For a guided introduction to the prefix and a vetted prefix-free setup, see [Keyboard](/docs/keyboard/).
 
-Herdr has a prefix mode similar to tmux. The default prefix is `esc`; press it twice to send a literal `esc` to the focused pane. Keybinding strings are explicit: `prefix+n` means press the configured prefix and then `n`; `ctrl+alt+n` is a direct terminal-mode shortcut.
+Herdr has a navigation mode reached through a prefix key, similar to tmux. The default prefix is `esc`; press it twice to leave navigation mode and send a literal `esc` to the focused pane. Keybinding strings are explicit: `prefix+n` means press the configured prefix and then `n`; `ctrl+alt+n` is a direct terminal-mode shortcut.
 
 A small keybinding override looks like this:
 
@@ -128,7 +128,7 @@ navigate_pane_down = "ctrl+j"
 split_horizontal = "prefix+minus"
 ```
 
-The default keymap is prefix-first so Herdr does not steal input from shells, editors, tmux, or terminal apps. Search `keys.` in the [Config reference](/docs/config-reference/) to see every action and default binding. The in-app help panel at `prefix+?` shows the active bindings.
+The default keymap is prefix-first so Herdr does not steal input from shells, editors, tmux, or terminal apps. Search `keys.` in the [Config reference](/docs/config-reference/) to see every action and default binding. The command palette at `prefix+space` shows the active bindings and rebinds them inline.
 
 A binding may also be an array when one action needs multiple shortcuts:
 
@@ -209,7 +209,7 @@ command = "example.layout.apply"
 description = "apply layout"
 ```
 
-An optional `description` can be provided. When specified, this description is displayed in the keybind help panel (opened with `prefix+?`) in place of the default `'custom command'` label.
+An optional `description` can be provided. When specified, this description is displayed in the command palette (opened with `prefix+space`) in place of the default `'custom command'` label.
 
 Custom commands receive `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, and `HERDR_ACTIVE_PANE_CWD` when those values are available. Shell commands run from the focused pane's working directory when Herdr can detect it.
 
