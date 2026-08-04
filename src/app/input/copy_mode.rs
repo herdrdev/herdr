@@ -188,6 +188,9 @@ impl AppState {
             'w' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::NextStart),
             'b' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::PreviousStart),
             'e' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::NextEnd),
+            'W' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::NextBigStart),
+            'B' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::PreviousBigStart),
+            'E' => self.copy_mode_word_motion(terminal_runtimes, WordMotion::NextBigEnd),
             '{' => self.copy_mode_paragraph(terminal_runtimes, -1),
             '}' => self.copy_mode_paragraph(terminal_runtimes, 1),
             _ => {}
@@ -649,6 +652,9 @@ impl AppState {
             WordMotion::NextStart => crate::pane::TerminalWordMotion::NextStart,
             WordMotion::PreviousStart => crate::pane::TerminalWordMotion::PreviousStart,
             WordMotion::NextEnd => crate::pane::TerminalWordMotion::NextEnd,
+            WordMotion::NextBigStart => crate::pane::TerminalWordMotion::NextBigStart,
+            WordMotion::PreviousBigStart => crate::pane::TerminalWordMotion::PreviousBigStart,
+            WordMotion::NextBigEnd => crate::pane::TerminalWordMotion::NextBigEnd,
         };
         let Some(target) = runtime.word_motion_target(absolute_row, copy_mode.cursor_col, motion)
         else {
@@ -915,6 +921,9 @@ enum WordMotion {
     NextStart,
     PreviousStart,
     NextEnd,
+    NextBigStart,
+    PreviousBigStart,
+    NextBigEnd,
 }
 
 fn first_non_blank_col(text: &str) -> Option<u16> {
@@ -1676,6 +1685,104 @@ mod tests {
             0
         );
         assert_eq!(copy_mode.cursor_col, 4);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_big_word_motions_skip_punctuation_runs() {
+        let (mut app, _) = app_with_copy_screen(b"foo.bar baz qux\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 0;
+        }
+
+        for expected_col in [8, 12] {
+            app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('w'), KeyModifiers::SHIFT));
+            assert_eq!(
+                app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+                expected_col
+            );
+        }
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('e'), KeyModifiers::SHIFT));
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+            14
+        );
+        for expected_col in [12, 8, 0] {
+            app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('b'), KeyModifiers::SHIFT));
+            assert_eq!(
+                app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+                expected_col
+            );
+        }
+
+        // Lowercase motions keep their punctuation-aware behavior.
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('w'), KeyModifiers::empty()));
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+            3
+        );
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('w'), KeyModifiers::empty()));
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_mode_big_word_motions_accept_shifted_codepoints_and_cross_rows() {
+        let (mut app, pane_id) = app_with_copy_screen(b"foo.bar baz\r\nqux/quux\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 0;
+        }
+
+        app.handle_copy_mode_key(
+            TerminalKey::new(KeyCode::Char('W'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('W' as u32),
+        );
+        let copy_mode = app.state.copy_mode.as_ref().expect("copy mode");
+        assert_eq!(
+            copy_mode_viewport_top_row(&app, pane_id) + usize::from(copy_mode.cursor_row),
+            0
+        );
+        assert_eq!(copy_mode.cursor_col, 8);
+
+        app.handle_copy_mode_key(
+            TerminalKey::new(KeyCode::Char('W'), KeyModifiers::SHIFT)
+                .with_shifted_codepoint('W' as u32),
+        );
+        let copy_mode = app.state.copy_mode.as_ref().expect("copy mode");
+        assert_eq!(
+            copy_mode_viewport_top_row(&app, pane_id) + usize::from(copy_mode.cursor_row),
+            1
+        );
+        assert_eq!(copy_mode.cursor_col, 0);
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('b'), KeyModifiers::SHIFT));
+        let copy_mode = app.state.copy_mode.as_ref().expect("copy mode");
+        assert_eq!(
+            copy_mode_viewport_top_row(&app, pane_id) + usize::from(copy_mode.cursor_row),
+            0
+        );
+        assert_eq!(copy_mode.cursor_col, 8);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_big_word_motions_extend_an_active_selection() {
+        let (mut app, _) = app_with_copy_screen(b"foo.bar baz qux\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 0;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('w'), KeyModifiers::SHIFT));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+
+        assert_eq!(copy_mode_clipboard_text(&mut app), "foo.bar b");
     }
 
     #[tokio::test]
