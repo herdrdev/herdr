@@ -189,7 +189,9 @@ fn idle_flush_timeout_ms(
     host_mouse_capture_active: bool,
 ) -> i32 {
     if host_mouse_capture_active
-        && (framer.has_pending_lone_escape() || framer.has_pending_incomplete_sgr_mouse_sequence())
+        && (framer.has_pending_lone_escape()
+            || framer.has_pending_incomplete_sgr_mouse_sequence()
+            || framer.has_pending_incomplete_x10_mouse_sequence())
     {
         crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
     } else {

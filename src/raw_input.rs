@@ -180,6 +180,10 @@ impl RawInputFramer {
         self.byte_framer.has_pending_incomplete_sgr_mouse_sequence()
     }
 
+    pub(crate) fn has_pending_incomplete_x10_mouse_sequence(&self) -> bool {
+        self.byte_framer.has_pending_incomplete_x10_mouse_sequence()
+    }
+
     #[cfg(any(windows, test))]
     pub(crate) fn has_pending_bracketed_paste(&self) -> bool {
         self.byte_framer.has_pending_bracketed_paste()
@@ -281,6 +285,10 @@ impl RawInputByteFramer {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
     }
 
+    pub(crate) fn has_pending_incomplete_x10_mouse_sequence(&self) -> bool {
+        starts_with_incomplete_x10_mouse_sequence(&self.buffer)
+    }
+
     #[cfg(any(windows, test))]
     pub(crate) fn has_pending_bracketed_paste(&self) -> bool {
         self.buffer.starts_with(BRACKETED_PASTE_START)
@@ -331,6 +339,15 @@ impl RawInputByteFramer {
                 &mut self.discarded_tail_bytes,
             );
             self.lone_escape_recently_flushed = false;
+            return chunks;
+        }
+
+        if starts_with_incomplete_x10_mouse_sequence(&self.buffer) {
+            tracing::debug!(
+                len = self.buffer.len(),
+                "discarding incomplete X10 mouse tail after input timeout"
+            );
+            self.buffer.clear();
             return chunks;
         }
 
@@ -586,7 +603,9 @@ pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent])
 }
 
 fn input_flush_timeout_ms(framer: &RawInputFramer) -> i32 {
-    if framer.has_pending_incomplete_sgr_mouse_sequence() {
+    if framer.has_pending_incomplete_sgr_mouse_sequence()
+        || framer.has_pending_incomplete_x10_mouse_sequence()
+    {
         MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
     } else {
         RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
@@ -783,6 +802,15 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
     }
 
     if buffer[0] == ESC {
+        // X10 ("normal") mouse reports: ESC [ M cb col row. Must be consumed
+        // before complete_escape_sequence_len, which would split ESC[M at 3 bytes.
+        if buffer.starts_with(b"\x1b[M") {
+            if let Some(mouse) = parse_x10_mouse(buffer) {
+                return Some((RawInputEvent::Mouse(mouse), 6));
+            }
+            // Incomplete X10 report: hold for the remaining coordinate bytes.
+            return None;
+        }
         let seq_len = complete_escape_sequence_len(buffer)?;
         let seq = std::str::from_utf8(&buffer[..seq_len]).ok()?;
 
@@ -1020,6 +1048,10 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
 }
 
+fn starts_with_incomplete_x10_mouse_sequence(buffer: &[u8]) -> bool {
+    buffer.starts_with(b"\x1b[M") && buffer.len() < 6
+}
+
 fn starts_with_incomplete_orphaned_sgr_mouse_tail(buffer: &[u8]) -> bool {
     if buffer.len() > MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES {
         return false;
@@ -1197,6 +1229,35 @@ fn parse_sgr_mouse(sequence: &str) -> Option<MouseEvent> {
     })
 }
 
+/// Parse an X10 ("normal") mouse report: ESC [ M <cb+32> <col+32> <row+32>.
+/// Every wire value is the raw one plus 32 (ASCII offset) and coordinates are
+/// 1-based; the parsed event uses 0-based coordinates like the SGR path.
+/// Returns None when the buffer is not a complete X10 report.
+fn parse_x10_mouse(buffer: &[u8]) -> Option<MouseEvent> {
+    if !buffer.starts_with(b"\x1b[M") || buffer.len() < 6 {
+        return None;
+    }
+    let cb = buffer[3].checked_sub(32)?;
+    let column = u16::from(buffer[4].saturating_sub(32)).saturating_sub(1);
+    let row = u16::from(buffer[5].saturating_sub(32)).saturating_sub(1);
+    let (kind, modifiers) = parse_mouse_cb(cb)?;
+    Some(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers,
+    })
+}
+
+/// True when `data` contains a complete X10 ("normal") mouse report
+/// (ESC [ M cb col row). These only arrive when the host terminal is in
+/// DEFAULT mouse encoding, so they are the client's signal to re-assert SGR.
+pub(crate) fn contains_x10_mouse_report(data: &[u8]) -> bool {
+    data.windows(6).any(|window| {
+        window.starts_with(b"\x1b[M") && window[3] >= 32 && window[4] >= 32 && window[5] >= 32
+    })
+}
+
 fn parse_mouse_cb(cb: u8) -> Option<(MouseEventKind, KeyModifiers)> {
     let button_number = (cb & 0b0000_0011) | ((cb & 0b1100_0000) >> 4);
     let dragging = cb & 0b0010_0000 == 0b0010_0000;
@@ -1244,6 +1305,14 @@ mod tests {
         };
         assert_eq!(key.code, code);
         assert_eq!(key.modifiers, modifiers);
+    }
+
+    #[test]
+    fn detects_x10_report_in_raw_input() {
+        assert!(contains_x10_mouse_report(b"\x1b[MC'$"));
+        assert!(contains_x10_mouse_report(b"xx\x1b[MC!!"));
+        assert!(!contains_x10_mouse_report(b"\x1b[<35;8;5M"));
+        assert!(!contains_x10_mouse_report(b"plain text"));
     }
 
     fn decode_hex(hex: &str) -> Vec<u8> {
@@ -1392,6 +1461,69 @@ mod tests {
             };
             assert_eq!(mouse.modifiers, expected);
             assert!(!mouse.modifiers.contains(KeyModifiers::SUPER));
+        }
+    }
+
+    #[test]
+    fn parses_x10_mouse_report() {
+        // ESC [ M, button 35+32=67('C'), column 7+32=39('\''), row 4+32=36('$').
+        // No spaces between bytes: the raw report is exactly \x1b[MC'$.
+        let bytes = b"\x1b[MC'$";
+        let events = parse_raw_input_bytes_sync(bytes);
+        match &events[0] {
+            RawInputEvent::Mouse(m) => {
+                assert_eq!(m.kind, MouseEventKind::Moved);
+                // X10 wire values are 1-based; parsed events are 0-based like SGR.
+                assert_eq!(m.column, 6);
+                assert_eq!(m.row, 3);
+            }
+            other => panic!("expected Mouse, got {other:?}"),
+        }
+        assert_eq!(
+            events.len(),
+            1,
+            "a complete X10 report must parse as exactly one event"
+        );
+    }
+
+    #[test]
+    fn x10_coordinates_are_zero_based() {
+        // col 1, row 1 -> bytes 33 ('!'), so parsed as 0-based (0, 0)
+        let bytes = b"\x1b[MC!!";
+        match &parse_raw_input_bytes_sync(bytes)[0] {
+            RawInputEvent::Mouse(m) => {
+                assert_eq!(m.column, 0);
+                assert_eq!(m.row, 0);
+            }
+            other => panic!("expected Mouse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn x10_scroll_wheel_events() {
+        // ScrollUp = 64+32 = 96 ('`'), ScrollDown = 65+32 = 97 ('a')
+        let up = b"\x1b[M`!!";
+        match &parse_raw_input_bytes_sync(up)[0] {
+            RawInputEvent::Mouse(m) => assert_eq!(m.kind, MouseEventKind::ScrollUp),
+            other => panic!("expected ScrollUp, got {other:?}"),
+        }
+        let down = b"\x1b[Ma!!";
+        match &parse_raw_input_bytes_sync(down)[0] {
+            RawInputEvent::Mouse(m) => assert_eq!(m.kind, MouseEventKind::ScrollDown),
+            other => panic!("expected ScrollDown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn x10_button_down_maps_to_down() {
+        // Left button down = 0 + 32 = 32, and byte 32 IS a literal space, so the
+        // space here is the button byte (not a separator).
+        let bytes = b"\x1b[M !!"; // \x1b[M + 32(' ') + 33('!') + 33('!')
+        match &parse_raw_input_bytes_sync(bytes)[0] {
+            RawInputEvent::Mouse(m) => {
+                assert_eq!(m.kind, MouseEventKind::Down(MouseButton::Left));
+            }
+            other => panic!("expected Down(Left), got {other:?}"),
         }
     }
 
@@ -2009,6 +2141,30 @@ mod tests {
         assert!(framer.flush_timeout().is_empty());
         assert!(framer.flush_timeout().is_empty());
         assert_eq!(framer.push(b"M"), vec![b"M".to_vec()]);
+    }
+
+    #[test]
+    fn x10_incomplete_report_waits_for_coordinate_bytes() {
+        let mut framer = RawInputByteFramer::for_host_input();
+        // \x1b[M + only the button byte: not yet a complete report
+        let chunks = framer.push(b"\x1b[M\x43");
+        assert!(chunks.is_empty(), "partial X10 must not emit a chunk");
+        assert!(framer.has_pending_incomplete_x10_mouse_sequence());
+        assert!(framer.has_pending_input());
+        // remaining two coordinate bytes complete the report
+        let chunks = framer.push(b"\x27\x24");
+        assert_eq!(chunks, vec![b"\x1b[M\x43\x27\x24".to_vec()]);
+        assert!(!framer.has_pending_input());
+    }
+
+    #[test]
+    fn x10_truncated_report_is_discarded_on_flush() {
+        let mut framer = RawInputByteFramer::for_host_input();
+        framer.push(b"\x1b[M\x43\x27");
+        assert!(framer.has_pending_incomplete_x10_mouse_sequence());
+        let chunks = framer.flush_timeout();
+        assert!(chunks.is_empty(), "truncated X10 must not leak as text");
+        assert!(!framer.has_pending_input());
     }
 
     #[test]

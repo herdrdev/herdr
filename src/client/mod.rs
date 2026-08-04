@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::io::{self, BufRead, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use crossterm::event::{
@@ -44,6 +44,7 @@ use crate::protocol::{
     ClientMessage, NotifyKind, RenderEncoding, ServerMessage, MAX_FRAME_SIZE,
     MAX_GRAPHICS_FRAME_SIZE, PROTOCOL_VERSION,
 };
+use crate::raw_input::RawInputEvent;
 use crate::server::socket_paths::client_socket_path;
 
 static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
@@ -564,6 +565,29 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
             Err(err) => Err(err),
         }
     }
+}
+
+const HOST_SGR_REASSERT_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Whether a host SGR re-assert is allowed now. Returns true at most once per
+/// debounce window; each true consumes the state, so callers must write the
+/// capture sequence when it returns true.
+fn should_reassert_host_sgr(last_assert: &mut Option<Instant>) -> bool {
+    if last_assert.is_some_and(|at| at.elapsed() < HOST_SGR_REASSERT_DEBOUNCE) {
+        return false;
+    }
+    *last_assert = Some(Instant::now());
+    true
+}
+
+/// Force the host terminal back to SGR mouse encoding, bypassing the
+/// host_mouse_capture_active caches that would otherwise suppress a re-send.
+fn reassert_host_sgr_mouse_capture(last_assert: &mut Option<Instant>) -> std::io::Result<()> {
+    if !should_reassert_host_sgr(last_assert) {
+        return Ok(());
+    }
+    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    execute!(io::stdout(), EnableMouseCapture)
 }
 
 fn restore_terminal_state(
@@ -1401,6 +1425,7 @@ async fn run_client_loop(
     let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
 
     // Main event loop.
+    let mut last_sgr_reassert: Option<Instant> = None;
     while !should_quit.load(Ordering::Acquire) {
         let event = tokio::select! {
             ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
@@ -1446,6 +1471,20 @@ async fn run_client_loop(
                     }
                 } else {
                     let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
+                    let host_capture_active = state.mouse_capture_active;
+                    if crate::raw_input::contains_x10_mouse_report(&data)
+                        || (host_capture_active
+                            && events
+                                .iter()
+                                .any(|event| matches!(event, RawInputEvent::OuterFocusGained)))
+                    {
+                        // X10 (host fell to DEFAULT encoding) or focus regained
+                        // with capture active (terminal recreated): force SGR back
+                        // on. Debounced. Focus-gain re-assert is gated on capture
+                        // being active so it cannot enable capture the user turned off.
+                        reassert_host_sgr_mouse_capture(&mut last_sgr_reassert)
+                            .map_err(ClientError::ConnectionFailed)?;
+                    }
                     if crate::raw_input::events_require_host_surface_redraw(
                         &events,
                         state.redraw_on_focus_gained,
@@ -2303,6 +2342,19 @@ mod tests {
         assert!(!resize_report_required(false, size, size));
         assert!(resize_report_required(false, (120, 41, 8, 16), size));
         assert!(resize_report_required(false, (120, 40, 9, 18), size));
+    }
+
+    #[test]
+    fn x10_reassert_debounce_suppresses_frequent_triggers() {
+        let mut last = None;
+        assert!(
+            should_reassert_host_sgr(&mut last),
+            "first X10 trigger re-asserts"
+        );
+        assert!(
+            !should_reassert_host_sgr(&mut last),
+            "immediate repeat within debounce is suppressed"
+        );
     }
 
     fn restore_env_var(key: &str, value: Option<OsString>) {
