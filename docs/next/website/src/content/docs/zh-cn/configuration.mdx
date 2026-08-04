@@ -94,7 +94,7 @@ Git 工作区行提供 worktree 操作。`New worktree` 会创建检出：如果
 
 归组的 worktree 仍像普通 Herdr 工作区一样工作：可以聚焦、重命名和关闭，也可以拥有自己的标签页和窗格。父行是原始工作区。关闭父行会关闭整个 Herdr 组，但不会删除检出目录或分支。
 
-删除 worktree 检出需要显式操作。在归组的子工作区上使用 `Delete worktree checkout...` 来运行 `git worktree remove`。Herdr 会先请求 Git 安全删除。如果 Git 因检出中存在已修改或未跟踪的文件而拒绝，Herdr 会在强制删除前再次确认。分支不会被删除。
+删除 worktree 检出需要显式操作。在归组的子工作区上使用 `Delete worktree checkout...` 来运行 `git worktree remove`。删除会在后台继续，并在工作区行上显示进度，因此删除大型检出时仍可继续使用 Herdr。Herdr 会先请求 Git 安全删除。如果 Git 因检出中存在已修改或未跟踪的文件而拒绝，Herdr 会在强制删除前再次确认。分支不会被删除。
 
 ## 远程连接
 

@@ -2201,6 +2201,17 @@ mod tests {
         app.pending_api_worktree_removes.insert(child_id.clone(), 7);
         app.pending_api_worktree_remove_paths
             .insert(crate::worktree::canonical_or_original(&checkout), 7);
+        app.state.worktree_remove = Some(crate::app::state::WorktreeRemoveState {
+            workspace_id: child_id.clone(),
+            repo_root: "/repo/herdr".into(),
+            path: checkout.clone(),
+            error: None,
+            removing: true,
+            spinner_frame: 4,
+            force_confirmation: true,
+        });
+        app.state.mode = crate::app::Mode::Settings;
+        app.start_worktree_remove_spinner();
         app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
             label: "herdr".into(),
@@ -2248,5 +2259,8 @@ mod tests {
                 .map(|membership| membership.checkout_path.as_path()),
             Some(Path::new("/repo/other"))
         );
+        assert!(app.state.worktree_remove.is_none());
+        assert!(app.worktree_remove_spinner_deadline.is_none());
+        assert_eq!(app.state.mode, crate::app::Mode::Settings);
     }
 }

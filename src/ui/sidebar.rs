@@ -19,6 +19,36 @@ use crate::terminal::TerminalRuntimeRegistry;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
+const WORKTREE_REMOVE_SPINNER_FRAMES: [&str; 10] =
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn worktree_remove_spinner(app: &AppState, ws_idx: usize) -> Option<&'static str> {
+    let remove = app
+        .worktree_remove
+        .as_ref()
+        .filter(|remove| remove.removing)?;
+    let workspace = app.workspaces.get(ws_idx)?;
+    (workspace.id == remove.workspace_id).then(|| {
+        WORKTREE_REMOVE_SPINNER_FRAMES
+            [usize::from(remove.spinner_frame) % WORKTREE_REMOVE_SPINNER_FRAMES.len()]
+    })
+}
+
+fn worktree_group_remove_spinner(app: &AppState, key: &str) -> Option<&'static str> {
+    let remove = app
+        .worktree_remove
+        .as_ref()
+        .filter(|remove| remove.removing)?;
+    app.workspaces
+        .iter()
+        .find(|workspace| workspace.id == remove.workspace_id)
+        .and_then(|workspace| workspace.worktree_space())
+        .filter(|space| space.key == key)
+        .map(|_| {
+            WORKTREE_REMOVE_SPINNER_FRAMES
+                [usize::from(remove.spinner_frame) % WORKTREE_REMOVE_SPINNER_FRAMES.len()]
+        })
+}
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -781,7 +811,14 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             break;
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
+        let (icon, icon_style) = worktree_remove_spinner(app, visible_idx)
+            .map(|spinner| {
+                (
+                    spinner,
+                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+                )
+            })
+            .unwrap_or_else(|| state_icon(agg_state, agg_seen, app.status_indicators, p));
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
@@ -1276,9 +1313,30 @@ fn render_workspace_list(
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
+        let removal_spinner = parent_group
+            .as_ref()
+            .filter(|(_, collapsed)| *collapsed)
+            .and_then(|(key, _)| worktree_group_remove_spinner(app, key))
+            .or_else(|| worktree_remove_spinner(app, i));
+        let state_icon = removal_spinner
+            .map(|spinner| {
+                (
+                    spinner,
+                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+                )
+            })
+            .unwrap_or_else(|| state_icon(display_state, display_seen, app.status_indicators, p));
+        let state_text = if removal_spinner.is_some() {
+            "removing"
+        } else {
+            state_label(display_state, display_seen)
+        };
         let state_text_style = Style::default()
-            .fg(state_label_color(display_state, display_seen, p))
+            .fg(if removal_spinner.is_some() {
+                p.accent
+            } else {
+                state_label_color(display_state, display_seen, p)
+            })
             .add_modifier(Modifier::DIM);
         let branch_style = Style::default().fg(if selected || is_active {
             p.mauve
@@ -1291,7 +1349,7 @@ fn render_workspace_list(
             SpaceTokenContext {
                 workspace: &display_label,
                 branch: ws.branch().as_deref(),
-                state_text: state_label(display_state, display_seen),
+                state_text,
                 ahead_behind: ws.git_ahead_behind(),
                 tokens: &token_values,
                 suppress_git_details: card.indented,
@@ -2480,6 +2538,53 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(
             buffer[(cards[0].rect.x + cards[0].rect.width - 1, cards[0].rect.y)].symbol(),
             "▾"
+        );
+    }
+
+    #[test]
+    fn workspace_row_shows_spinner_while_worktree_is_removing() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![workspace_with_worktree_space(
+            "issue",
+            Some("repo-key"),
+            "/repo/herdr-issue",
+        )];
+        let workspace_id = app.workspaces[0].id.clone();
+        app.worktree_remove = Some(crate::app::state::WorktreeRemoveState {
+            workspace_id,
+            repo_root: "/repo/herdr".into(),
+            path: "/repo/herdr-issue".into(),
+            error: None,
+            removing: true,
+            spinner_frame: 3,
+            force_confirmation: false,
+        });
+        app.sidebar_spaces.rows = vec![vec![
+            crate::config::SpaceSidebarToken::StateIcon,
+            crate::config::SpaceSidebarToken::Workspace,
+        ]];
+        let area = Rect::new(0, 0, 24, 8);
+        app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
+        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render_workspace_list(
+                    &app,
+                    &TerminalRuntimeRegistry::new(),
+                    frame,
+                    list_area,
+                    false,
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let card = &app.view.workspace_card_areas[0];
+        assert_eq!(
+            buffer[(card.rect.x + 1, card.rect.y)].symbol(),
+            WORKTREE_REMOVE_SPINNER_FRAMES[3]
         );
     }
 

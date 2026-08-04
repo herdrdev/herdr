@@ -644,6 +644,7 @@ pub struct WorktreeRemoveState {
     pub path: std::path::PathBuf,
     pub error: Option<String>,
     pub removing: bool,
+    pub spinner_frame: u8,
     pub force_confirmation: bool,
 }
 

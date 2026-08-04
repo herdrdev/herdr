@@ -520,6 +520,12 @@ impl App {
                     }
                 }
             }
+            if self.state.worktree_remove.as_ref().is_some_and(|remove| {
+                remove.workspace_id == result.workspace_id && remove.path == result.path
+            }) {
+                self.stop_worktree_remove_spinner();
+                self.state.mode = crate::app::Mode::ConfirmRemoveWorktree;
+            }
             Self::send_api_response(api.respond_to, encode_error(api.id, code, message));
             return;
         }
@@ -584,12 +590,8 @@ impl App {
         if self.state.worktree_remove.as_ref().is_some_and(|remove| {
             remove.workspace_id == result.workspace_id && remove.path == result.path
         }) {
+            self.stop_worktree_remove_spinner();
             self.state.worktree_remove = None;
-            self.state.mode = if self.state.active.is_some() {
-                crate::app::Mode::Terminal
-            } else {
-                crate::app::Mode::Navigate
-            };
         }
         let response = encode_success(
             api.id,

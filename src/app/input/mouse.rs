@@ -2815,6 +2815,7 @@ mod tests {
             path: "/repo/herdr-issue".into(),
             error: None,
             removing: false,
+            spinner_frame: 0,
             force_confirmation: false,
         });
         let popup = crate::ui::remove_worktree_popup_rect(app.state.screen_rect()).unwrap();
@@ -2843,6 +2844,7 @@ mod tests {
             path: "/repo/herdr-issue".into(),
             error: None,
             removing: false,
+            spinner_frame: 0,
             force_confirmation: false,
         });
         let popup = crate::ui::remove_worktree_popup_rect(app.state.screen_rect()).unwrap();

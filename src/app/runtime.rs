@@ -1,7 +1,4 @@
-use std::time::Instant;
-
-#[cfg(test)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::terminal;
 
@@ -9,6 +6,8 @@ use super::{
     background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
     RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
 };
+
+const WORKTREE_REMOVE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 fn retain_custom_command_after_wait(
     pid: u32,
     result: std::io::Result<Option<std::process::ExitStatus>>,
@@ -25,6 +24,18 @@ fn retain_custom_command_after_wait(
 }
 
 impl App {
+    pub(crate) fn start_worktree_remove_spinner(&mut self) {
+        if let Some(remove) = &mut self.state.worktree_remove {
+            remove.spinner_frame = 0;
+        }
+        self.worktree_remove_spinner_deadline =
+            Some(Instant::now() + WORKTREE_REMOVE_SPINNER_INTERVAL);
+    }
+
+    pub(crate) fn stop_worktree_remove_spinner(&mut self) {
+        self.worktree_remove_spinner_deadline = None;
+    }
+
     pub(crate) fn reap_finished_custom_commands(&mut self) {
         self.detached_custom_command_children
             .retain_mut(|child| retain_custom_command_after_wait(child.id(), child.try_wait()));
@@ -300,6 +311,25 @@ impl App {
             self.toast_deadline = None;
             self.state.toast = None;
             changed = true;
+        }
+
+        if self
+            .worktree_remove_spinner_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            if let Some(remove) = self
+                .state
+                .worktree_remove
+                .as_mut()
+                .filter(|remove| remove.removing)
+            {
+                remove.spinner_frame = remove.spinner_frame.wrapping_add(1);
+                self.worktree_remove_spinner_deadline =
+                    Some(now + WORKTREE_REMOVE_SPINNER_INTERVAL);
+                changed = true;
+            } else {
+                self.worktree_remove_spinner_deadline = None;
+            }
         }
 
         if self
@@ -600,6 +630,7 @@ impl App {
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
             self.selection_highlight_clear_deadline,
+            self.worktree_remove_spinner_deadline,
             render_deadline,
         ]
         .into_iter()
@@ -718,6 +749,39 @@ mod tests {
         app.tick_selection_autoscroll(now);
         assert!(app.state.selection_autoscroll.is_none());
         assert!(app.selection_autoscroll_deadline.is_none());
+    }
+
+    #[test]
+    fn scheduled_tasks_advance_worktree_remove_spinner() {
+        let (mut app, _) = test_app_with_pane();
+        let workspace_id = app.state.workspaces[0].id.clone();
+        app.state.worktree_remove = Some(state::WorktreeRemoveState {
+            workspace_id,
+            repo_root: "/repo/herdr".into(),
+            path: "/repo/herdr-issue".into(),
+            error: None,
+            removing: true,
+            spinner_frame: 0,
+            force_confirmation: false,
+        });
+
+        app.start_worktree_remove_spinner();
+        let deadline = app
+            .worktree_remove_spinner_deadline
+            .expect("spinner should schedule a frame");
+
+        assert!(app.handle_scheduled_tasks(deadline, false));
+        assert_eq!(
+            app.state
+                .worktree_remove
+                .as_ref()
+                .map(|remove| remove.spinner_frame),
+            Some(1)
+        );
+        assert!(app.worktree_remove_spinner_deadline.is_some());
+
+        app.stop_worktree_remove_spinner();
+        assert!(app.worktree_remove_spinner_deadline.is_none());
     }
 
     #[test]
