@@ -3871,6 +3871,45 @@ mod tests {
     }
 
     #[test]
+    fn ghostty_backtab_preserves_shift_across_keyboard_protocols() {
+        for (kitty_flags, expected) in [
+            (None, b"\x1b[Z".as_slice()),
+            (Some(1), b"\x1b[9;2u".as_slice()),
+        ] {
+            let (tx, _rx) = mpsc::channel(4);
+            let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+            if let Some(flags) = kitty_flags {
+                terminal.write(format!("\x1b[>{flags}u").as_bytes());
+            }
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+            let protocol = pane.keyboard_protocol().unwrap();
+
+            for modifiers in [
+                crossterm::event::KeyModifiers::empty(),
+                crossterm::event::KeyModifiers::SHIFT,
+            ] {
+                let encoded = pane.encode_terminal_key(
+                    crate::input::TerminalKey::new(crossterm::event::KeyCode::BackTab, modifiers),
+                    protocol,
+                );
+                assert_eq!(encoded, expected, "backtab with modifiers {modifiers:?}");
+            }
+        }
+
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let encoded = pane.encode_terminal_key(
+            crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Tab,
+                crossterm::event::KeyModifiers::empty(),
+            ),
+            crate::input::KeyboardProtocol::Legacy,
+        );
+        assert_eq!(encoded, b"\t");
+    }
+
+    #[test]
     fn ghostty_enter_backspace_release_in_legacy_pane_emits_nothing() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();

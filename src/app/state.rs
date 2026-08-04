@@ -991,6 +991,7 @@ pub enum AgentPanelSort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Theme,
+    Indicators,
     Sound,
     Toast,
     PaneLabels,
@@ -1000,6 +1001,7 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
+        Self::Indicators,
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
@@ -1009,6 +1011,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::Indicators => "indicators",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
@@ -1476,6 +1479,7 @@ pub struct AppState {
     /// Ratio of sidebar height allocated to the workspaces section.
     pub sidebar_section_split: f32,
     pub agent_panel_sort: AgentPanelSort,
+    pub status_indicators: crate::config::StatusIndicatorStyle,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1847,6 +1851,7 @@ impl AppState {
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
+            status_indicators: crate::config::StatusIndicatorStyle::Dots,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
