@@ -1592,6 +1592,33 @@ next_tab = "prefix+n"
     }
 
     #[test]
+    fn copy_mode_accepts_prefix_escape_aliases() {
+        for raw in ["prefix+esc", "prefix+escape", "prefix+Esc", "prefix+Escape"] {
+            let config: Config = toml::from_str(&format!(
+                r#"
+[keys]
+copy_mode = "{raw}"
+"#
+            ))
+            .unwrap();
+            let kb = config.keybinds();
+            assert!(
+                config.collect_diagnostics().is_empty(),
+                "unexpected diagnostics for {raw:?}: {:?}",
+                config.collect_diagnostics()
+            );
+            assert_eq!(
+                binding_triggers(&kb.copy_mode),
+                vec![BindingTrigger::Prefix((
+                    KeyCode::Esc,
+                    KeyModifiers::empty()
+                ))],
+                "failed for {raw:?}"
+            );
+        }
+    }
+
+    #[test]
     fn back_and_forth_keybinds_are_unset_by_default() {
         let kb = Config::default().keybinds();
         assert!(kb.last_pane.bindings.is_empty());

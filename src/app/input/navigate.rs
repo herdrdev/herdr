@@ -75,11 +75,6 @@ impl App {
             return;
         }
 
-        if key.code == KeyCode::Esc {
-            leave_command_mode(&mut self.state);
-            return;
-        }
-
         if let Some(action) =
             non_indexed_action_for_key(&self.state, &raw_key, BindingDispatch::Prefix)
         {
@@ -3031,6 +3026,83 @@ navigate_pane_down = "ctrl+j"
             .await;
 
         assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn unbound_prefix_escape_exits_prefix_mode() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.state.copy_mode.is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_escape_copy_mode_binding_enters_copy_mode() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .tabs[0]
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+copy_mode = "prefix+esc"
+"#,
+        )
+        .unwrap();
+        app.state.keybinds.copy_mode = config.keybinds().copy_mode;
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.mode, Mode::Copy);
+        assert!(app.state.copy_mode.is_some());
+    }
+
+    #[tokio::test]
+    async fn prefix_escape_alias_copy_mode_binding_enters_copy_mode() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .tabs[0]
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+copy_mode = "prefix+escape"
+"#,
+        )
+        .unwrap();
+        app.state.keybinds.copy_mode = config.keybinds().copy_mode;
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.mode, Mode::Copy);
+        assert!(app.state.copy_mode.is_some());
     }
 
     #[tokio::test]
