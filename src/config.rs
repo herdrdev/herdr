@@ -312,6 +312,15 @@ command = "echo one"
     }
 
     #[test]
+    fn terminal_control_takeover_defaults_enabled_and_can_be_disabled() {
+        assert!(Config::default().session.allow_terminal_control_takeover);
+
+        let config: Config =
+            toml::from_str("[session]\nallow_terminal_control_takeover = false\n").unwrap();
+        assert!(!config.session.allow_terminal_control_takeover);
+    }
+
+    #[test]
     fn ui_host_cursor_defaults_to_auto_and_parses_overrides() {
         let default_config = Config::default();
         assert_eq!(default_config.ui.host_cursor, HostCursorModeConfig::Auto);

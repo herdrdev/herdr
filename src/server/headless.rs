@@ -339,6 +339,7 @@ pub struct HeadlessServer {
 
 fn apply_terminal_attach_scroll(
     runtime: &crate::terminal::TerminalRuntime,
+    controller_id: u64,
     source: AttachScrollSource,
     direction: AttachScrollDirection,
     lines: u16,
@@ -361,7 +362,7 @@ fn apply_terminal_attach_scroll(
             }
             return Ok(());
         }
-        return apply_terminal_attach_input(runtime, input);
+        return apply_terminal_attach_input(runtime, controller_id, input);
     }
 
     match runtime.wheel_routing() {
@@ -380,7 +381,7 @@ fn apply_terminal_attach_scroll(
                 ));
             };
             runtime
-                .try_send_bytes(Bytes::from(bytes))
+                .try_send_controller_bytes(controller_id, Bytes::from(bytes))
                 .map_err(|err| format!("terminal attach mouse wheel input failed: {err}"))?;
         }
         Some(crate::pane::WheelRouting::AlternateScroll) => {
@@ -389,7 +390,7 @@ fn apply_terminal_attach_scroll(
                 return Ok(());
             };
             runtime
-                .try_send_bytes(Bytes::from(bytes))
+                .try_send_controller_bytes(controller_id, Bytes::from(bytes))
                 .map_err(|err| format!("terminal attach alternate scroll input failed: {err}"))?;
         }
         Some(crate::pane::WheelRouting::HostScroll) | None => match direction {
@@ -402,11 +403,12 @@ fn apply_terminal_attach_scroll(
 
 fn apply_terminal_attach_input(
     runtime: &crate::terminal::TerminalRuntime,
+    controller_id: u64,
     data: Vec<u8>,
 ) -> Result<(), String> {
     runtime.scroll_reset();
     runtime
-        .try_send_bytes(Bytes::from(data))
+        .try_send_controller_bytes(controller_id, Bytes::from(data))
         .map_err(|err| format!("terminal attach input failed: {err}"))
 }
 
@@ -1499,6 +1501,9 @@ impl HeadlessServer {
             if let ClientConnectionMode::TerminalAttach { terminal_id } = removed.mode {
                 self.terminal_attach_owners.remove(&terminal_id);
                 if let Some(terminal_id) = self.terminal_id_by_string(&terminal_id) {
+                    if let Some(runtime) = self.app.terminal_runtimes.get(&terminal_id) {
+                        runtime.clear_input_controller(client_id);
+                    }
                     self.app
                         .state
                         .direct_attach_resize_locks
@@ -1695,7 +1700,8 @@ impl HeadlessServer {
         {
             if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
                 let payload = paste_payload_for_runtime(runtime, &path);
-                if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
+                if let Err(err) = runtime.try_send_controller_bytes(client_id, Bytes::from(payload))
+                {
                     warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach clipboard image paste failed");
                 }
             }
@@ -1809,9 +1815,9 @@ impl HeadlessServer {
             return false;
         };
 
-        if let Err(err) =
-            apply_terminal_attach_scroll(runtime, source, direction, lines, column, row, modifiers)
-        {
+        if let Err(err) = apply_terminal_attach_scroll(
+            runtime, client_id, source, direction, lines, column, row, modifiers,
+        ) {
             warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
         }
         true
@@ -2614,6 +2620,19 @@ impl HeadlessServer {
         }
 
         if let Some(existing_owner) = self.terminal_attach_owners.get(&terminal_id).copied() {
+            if existing_owner != client_id && takeover && !self.app.allow_terminal_control_takeover
+            {
+                self.send_to_client(
+                    client_id,
+                    ServerMessage::ServerShutdown {
+                        reason: Some(format!(
+                            "terminal attach failed: takeover is disabled for terminal {terminal_id}"
+                        )),
+                    },
+                );
+                self.remove_client_and_resize_if_needed(client_id);
+                return false;
+            }
             if existing_owner != client_id && !takeover {
                 self.send_to_client(
                     client_id,
@@ -2657,6 +2676,9 @@ impl HeadlessServer {
         info!(client_id, cols, rows, terminal_id = %terminal_id, "terminal attach client connected");
         self.terminal_attach_owners
             .insert(terminal_id.clone(), client_id);
+        if let Some(runtime) = self.app.terminal_runtimes.get(&real_terminal_id) {
+            runtime.set_input_controller(client_id);
+        }
         self.app
             .state
             .direct_attach_resize_locks
@@ -2866,7 +2888,7 @@ impl HeadlessServer {
                 }) = self.clients.get(&client_id)
                 {
                     if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
-                        if let Err(err) = apply_terminal_attach_input(runtime, data) {
+                        if let Err(err) = apply_terminal_attach_input(runtime, client_id, data) {
                             warn!(client_id, terminal_id = %terminal_id, err = %err);
                         }
                     }
@@ -5725,6 +5747,22 @@ next_tab = ""
     fn with_terminal_session_test_server(
         test: impl FnOnce(&mut HeadlessServer, crate::terminal::TerminalId, String, String),
     ) {
+        with_terminal_session_input_test_server(
+            |server, terminal_id, terminal_id_string, public_pane_id, _input_rx| {
+                test(server, terminal_id, terminal_id_string, public_pane_id);
+            },
+        );
+    }
+
+    fn with_terminal_session_input_test_server(
+        test: impl FnOnce(
+            &mut HeadlessServer,
+            crate::terminal::TerminalId,
+            String,
+            String,
+            &mut mpsc::Receiver<Bytes>,
+        ),
+    ) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -5737,13 +5775,23 @@ next_tab = ""
         let terminal_id_string = terminal_id.to_string();
         let public_pane_id = format!("{}:p1", workspace.id);
         server.app.state.workspaces = vec![workspace];
+        server.app.state.active = Some(0);
+        server.app.state.selected = 0;
+        server.app.state.mode = crate::app::Mode::Terminal;
         server.app.state.ensure_test_terminals();
-        server.app.terminal_runtimes.insert(
-            terminal_id.clone(),
-            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
-        );
+        let (runtime, mut input_rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        server
+            .app
+            .terminal_runtimes
+            .insert(terminal_id.clone(), runtime);
 
-        test(&mut server, terminal_id, terminal_id_string, public_pane_id);
+        test(
+            &mut server,
+            terminal_id,
+            terminal_id_string,
+            public_pane_id,
+            &mut input_rx,
+        );
 
         drop(server);
         drop(_runtime_guard);
@@ -5924,6 +5972,120 @@ next_tab = ""
     }
 
     #[test]
+    fn terminal_control_fences_full_app_input_but_accepts_controller_input() {
+        with_terminal_session_input_test_server(
+            |server, _terminal_id, terminal_id_string, public_pane_id, input_rx| {
+                let (writer, _control_rx, _render_rx) = test_client_writer();
+                assert!(server.handle_server_event(ServerEvent::ClientConnected {
+                    client_id: 1,
+                    cols: 80,
+                    rows: 24,
+                    cell_width_px: 0,
+                    cell_height_px: 0,
+                    render_encoding: RenderEncoding::TerminalAnsi,
+                    keybindings: None,
+                    direct_attach_requested: false,
+                    writer,
+                }));
+                connect_pending_terminal_client(server, 7);
+                assert!(
+                    server.handle_server_event(ServerEvent::ClientControlTerminal {
+                        client_id: 7,
+                        target: public_pane_id,
+                        takeover: false,
+                    })
+                );
+
+                server.handle_server_event(ServerEvent::ClientInput {
+                    client_id: 1,
+                    data: b"blocked".to_vec(),
+                });
+                assert!(input_rx.try_recv().is_err());
+
+                assert!(server.handle_server_event(ServerEvent::ClientInput {
+                    client_id: 7,
+                    data: b"controller".to_vec(),
+                }));
+                assert_eq!(
+                    input_rx.try_recv().expect("controller input"),
+                    Bytes::from_static(b"controller")
+                );
+                assert_eq!(
+                    server.terminal_attach_owners.get(&terminal_id_string),
+                    Some(&7)
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn terminal_control_rejects_pane_api_input() {
+        with_terminal_session_input_test_server(
+            |server, _terminal_id, _terminal_id_string, public_pane_id, input_rx| {
+                connect_pending_terminal_client(server, 7);
+                assert!(
+                    server.handle_server_event(ServerEvent::ClientControlTerminal {
+                        client_id: 7,
+                        target: public_pane_id.clone(),
+                        takeover: false,
+                    })
+                );
+
+                let response = server.app.handle_api_request(api::schema::Request {
+                    id: "send".into(),
+                    method: api::schema::Method::PaneSendInput(api::schema::PaneSendInputParams {
+                        pane_id: public_pane_id,
+                        text: "blocked".into(),
+                        keys: vec!["Enter".into()],
+                    }),
+                });
+                let error: api::schema::ErrorResponse =
+                    serde_json::from_str(&response).expect("error response");
+                assert_eq!(error.error.code, "pane_send_failed");
+                assert!(input_rx.try_recv().is_err());
+            },
+        );
+    }
+
+    #[test]
+    fn terminal_control_disconnect_releases_input_fence() {
+        with_terminal_session_input_test_server(
+            |server, _terminal_id, terminal_id_string, public_pane_id, input_rx| {
+                connect_pending_terminal_client(server, 7);
+                assert!(
+                    server.handle_server_event(ServerEvent::ClientControlTerminal {
+                        client_id: 7,
+                        target: public_pane_id.clone(),
+                        takeover: false,
+                    })
+                );
+                assert!(
+                    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 7 })
+                );
+                assert!(!server
+                    .terminal_attach_owners
+                    .contains_key(&terminal_id_string));
+
+                let response = server.app.handle_api_request(api::schema::Request {
+                    id: "send".into(),
+                    method: api::schema::Method::PaneSendInput(api::schema::PaneSendInputParams {
+                        pane_id: public_pane_id,
+                        text: "released".into(),
+                        keys: Vec::new(),
+                    }),
+                });
+                let success: api::schema::SuccessResponse =
+                    serde_json::from_str(&response).expect("success response");
+                assert_eq!(success.result, api::schema::ResponseResult::Ok {});
+                assert_eq!(
+                    input_rx.try_recv().expect("input after disconnect"),
+                    Bytes::from_static(b"released")
+                );
+            },
+        );
+    }
+
+    #[test]
     fn terminal_control_rejects_attach_during_alt_screen_read() {
         with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
             let (respond_to, _response_rx) = std::sync::mpsc::channel();
@@ -6031,6 +6193,44 @@ next_tab = ""
             assert_eq!(
                 server.terminal_attach_owners.get(&terminal_id_string),
                 Some(&8)
+            );
+        });
+    }
+
+    #[test]
+    fn terminal_control_takeover_can_be_disabled() {
+        with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
+            server.app.allow_terminal_control_takeover = false;
+            connect_pending_terminal_client(server, 7);
+            assert!(
+                server.handle_server_event(ServerEvent::ClientControlTerminal {
+                    client_id: 7,
+                    target: terminal_id_string.clone(),
+                    takeover: false,
+                })
+            );
+
+            let control_rx = connect_pending_terminal_client_with_control_rx(server, 8);
+            assert!(
+                !server.handle_server_event(ServerEvent::ClientControlTerminal {
+                    client_id: 8,
+                    target: terminal_id_string.clone(),
+                    takeover: true,
+                })
+            );
+
+            assert!(server.clients.contains_key(&7));
+            assert!(!server.clients.contains_key(&8));
+            assert_eq!(
+                server.terminal_attach_owners.get(&terminal_id_string),
+                Some(&7)
+            );
+            let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
+            assert_eq!(
+                reason,
+                Some(format!(
+                    "terminal attach failed: takeover is disabled for terminal {terminal_id_string}"
+                ))
             );
         });
     }
@@ -6382,6 +6582,7 @@ next_tab = ""
 
         apply_terminal_attach_scroll(
             &runtime,
+            7,
             AttachScrollSource::Wheel,
             AttachScrollDirection::Up,
             3,
@@ -6395,6 +6596,7 @@ next_tab = ""
 
         apply_terminal_attach_scroll(
             &runtime,
+            7,
             AttachScrollSource::Wheel,
             AttachScrollDirection::Down,
             2,
@@ -6427,6 +6629,7 @@ next_tab = ""
             );
 
         runtime.scroll_up(4);
+        runtime.set_input_controller(7);
         assert_eq!(
             runtime
                 .scroll_metrics()
@@ -6435,7 +6638,7 @@ next_tab = ""
             4
         );
 
-        apply_terminal_attach_input(&runtime, b"x".to_vec()).expect("attach input");
+        apply_terminal_attach_input(&runtime, 7, b"x".to_vec()).expect("attach input");
         assert_eq!(
             runtime
                 .scroll_metrics()
@@ -6471,6 +6674,7 @@ next_tab = ""
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
                 20, 5, 4096, &bytes, 4,
             );
+        runtime.set_input_controller(7);
         if initial_scroll > 0 {
             runtime.scroll_up(initial_scroll);
         }
@@ -6485,6 +6689,7 @@ next_tab = ""
     fn apply_terminal_attach_page_up(runtime: &crate::terminal::TerminalRuntime) {
         apply_terminal_attach_scroll(
             runtime,
+            7,
             AttachScrollSource::PageKey {
                 input: b"\x1b[5~".to_vec(),
             },

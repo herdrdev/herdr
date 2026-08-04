@@ -264,12 +264,15 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Allow a writable terminal controller to replace an existing controller. Default: true.
+    pub allow_terminal_control_takeover: bool,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            allow_terminal_control_takeover: true,
         }
     }
 }

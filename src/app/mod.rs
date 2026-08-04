@@ -142,6 +142,7 @@ pub struct App {
     pub(crate) full_redraw_pending: bool,
     pub(crate) overlay_panes: HashMap<crate::layout::PaneId, OverlayPaneState>,
     pub(crate) local_terminal_notifications: bool,
+    pub(crate) allow_terminal_control_takeover: bool,
     /// Whether this process applies `AppEvent::PrefixInputSource` to the host input source.
     /// The headless server sets this to false: the switch belongs to the foreground client,
     /// even when an App-internal drain consumes the event before the forwarding drain.
@@ -770,6 +771,7 @@ impl App {
             full_redraw_pending: false,
             overlay_panes: HashMap::new(),
             local_terminal_notifications: true,
+            allow_terminal_control_takeover: config.session.allow_terminal_control_takeover,
             local_input_source_switch: true,
             config_reloaded_from_disk: false,
             prefix_input_source: Box::new(crate::platform::RealPrefixInputSource::default()),
@@ -1525,6 +1527,10 @@ impl App {
             self.state.default_shell = config.terminal.default_shell.clone();
             self.state.shell_mode = config.terminal.shell_mode;
             self.state.new_terminal_cwd = config.terminal.new_cwd.clone();
+        }
+
+        if !invalid_section("session") {
+            self.allow_terminal_control_takeover = config.session.allow_terminal_control_takeover;
         }
 
         if !invalid_section("worktrees") {

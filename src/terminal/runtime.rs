@@ -432,6 +432,22 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
+    pub(crate) fn set_input_controller(&self, controller_id: u64) {
+        self.0.set_input_controller(controller_id);
+    }
+
+    pub(crate) fn clear_input_controller(&self, controller_id: u64) {
+        self.0.clear_input_controller(controller_id);
+    }
+
+    pub(crate) fn try_send_controller_bytes(
+        &self,
+        controller_id: u64,
+        bytes: Bytes,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.0.try_send_controller_bytes(controller_id, bytes)
+    }
+
     pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
         self.0.send_bytes_after(bytes, delay);
     }

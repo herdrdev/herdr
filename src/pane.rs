@@ -990,6 +990,8 @@ pub struct PaneRuntime {
     child_wait_completed: Option<Arc<AtomicBool>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     detection_content_seq: Arc<AtomicU64>,
+    /// Non-zero while a server-side terminal controller exclusively owns user input.
+    input_controller: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
@@ -1135,28 +1137,6 @@ impl PaneRuntimeIo {
                 if let Some(bytes) = response() {
                     let _ = sender.try_send(bytes);
                 }
-            }
-        }
-    }
-
-    fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        match self {
-            PaneRuntimeIo::Actor(actor) => {
-                let actor = actor.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    if let Err(err) = actor.write_user_input(bytes).await {
-                        warn!(error = %err, "failed to send delayed PTY input");
-                    }
-                });
-            }
-            #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, .. } => {
-                let sender = sender.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    let _ = sender.send(bytes).await;
-                });
             }
         }
     }
@@ -1932,6 +1912,7 @@ impl PaneRuntime {
             child_wait_completed: None,
             kitty_keyboard_flags,
             detection_content_seq,
+            input_controller: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -2449,6 +2430,7 @@ impl PaneRuntime {
             child_wait_completed: Some(child_wait_completed),
             kitty_keyboard_flags,
             detection_content_seq,
+            input_controller: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active,
             detect_reset_notify,
             pending_release,
@@ -2697,15 +2679,74 @@ impl PaneRuntime {
     }
 
     pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
+        if self.input_controller.load(Ordering::Acquire) != 0 {
+            return Err(mpsc::error::SendError(bytes));
+        }
         self.io.send_bytes(bytes).await
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        if self.input_controller.load(Ordering::Acquire) != 0 {
+            return Err(mpsc::error::TrySendError::Closed(bytes));
+        }
+        self.io.try_send_bytes(bytes)
+    }
+
+    pub(crate) fn set_input_controller(&self, controller_id: u64) {
+        debug_assert_ne!(controller_id, 0);
+        self.input_controller
+            .store(controller_id, Ordering::Release);
+    }
+
+    pub(crate) fn clear_input_controller(&self, controller_id: u64) {
+        let _ = self.input_controller.compare_exchange(
+            controller_id,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn try_send_controller_bytes(
+        &self,
+        controller_id: u64,
+        bytes: Bytes,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        if self.input_controller.load(Ordering::Acquire) != controller_id {
+            return Err(mpsc::error::TrySendError::Closed(bytes));
+        }
         self.io.try_send_bytes(bytes)
     }
 
     pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        self.io.send_bytes_after(bytes, delay);
+        if self.input_controller.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let input_controller = self.input_controller.clone();
+        match &self.io {
+            PaneRuntimeIo::Actor(actor) => {
+                let actor = actor.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if input_controller.load(Ordering::Acquire) != 0 {
+                        return;
+                    }
+                    if let Err(err) = actor.write_user_input(bytes).await {
+                        warn!(error = %err, "failed to send delayed PTY input");
+                    }
+                });
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if input_controller.load(Ordering::Acquire) == 0 {
+                        let _ = sender.send(bytes).await;
+                    }
+                });
+            }
+        }
     }
 
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
@@ -2943,6 +2984,7 @@ impl PaneRuntime {
                 child_wait_completed: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
+                input_controller: Arc::new(AtomicU64::new(0)),
                 full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
                 detect_reset_notify: Arc::new(Notify::new()),
                 pending_release: Arc::new(Mutex::new(None)),
@@ -3497,6 +3539,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            input_controller: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
@@ -3528,6 +3571,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
+            input_controller: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
