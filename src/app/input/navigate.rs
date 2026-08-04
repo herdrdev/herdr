@@ -3050,8 +3050,7 @@ navigate_pane_down = "ctrl+j"
     #[tokio::test]
     async fn prefix_escape_copy_mode_binding_enters_copy_mode() {
         let mut app = app_with_test_workspaces(&["test"]);
-        app.state.view.pane_infos = app.state.workspaces[0]
-            .tabs[0]
+        app.state.view.pane_infos = app.state.workspaces[0].tabs[0]
             .layout
             .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
         let config: Config = toml::from_str(
@@ -3079,8 +3078,7 @@ copy_mode = "prefix+esc"
     #[tokio::test]
     async fn prefix_escape_alias_copy_mode_binding_enters_copy_mode() {
         let mut app = app_with_test_workspaces(&["test"]);
-        app.state.view.pane_infos = app.state.workspaces[0]
-            .tabs[0]
+        app.state.view.pane_infos = app.state.workspaces[0].tabs[0]
             .layout
             .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
         let config: Config = toml::from_str(
