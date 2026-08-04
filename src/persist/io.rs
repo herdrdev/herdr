@@ -206,6 +206,7 @@ mod tests {
             selected: 0,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_health_section_split: None,
             collapsed_space_keys: std::collections::HashSet::new(),
         }
     }

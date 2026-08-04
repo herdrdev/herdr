@@ -1557,6 +1557,7 @@ impl AppState {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_health_section_split,
         );
         self.agent_panel_scroll = crate::ui::agent_panel_scroll_for_target(
             self,
@@ -2929,6 +2930,7 @@ impl AppState {
                 let _ = cache_updates;
                 Vec::new()
             }
+            AppEvent::HealthMetricsSampled { .. } => Vec::new(),
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),

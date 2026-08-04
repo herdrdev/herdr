@@ -855,6 +855,7 @@ fn capture_snapshot(state: &AppState) -> crate::persist::SessionSnapshot {
         state.selected,
         state.sidebar_width,
         state.sidebar_section_split,
+        state.sidebar_health_section_split,
         state.collapsed_space_keys.clone(),
     )
 }

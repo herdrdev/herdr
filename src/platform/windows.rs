@@ -20,6 +20,7 @@ use windows_sys::{
             NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
+        Storage::FileSystem::GetDiskFreeSpaceExW,
         System::{
             Console::GetConsoleWindow,
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
@@ -39,10 +40,12 @@ use windows_sys::{
                 MEMORY_BASIC_INFORMATION,
             },
             Ole::CF_UNICODETEXT,
+            Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS},
+            SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
-                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
-                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, GetSystemTimes,
+                OpenProcess, QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW,
+                DETACHED_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
                 PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
             },
         },
@@ -149,6 +152,102 @@ static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true
+}
+
+pub(crate) fn health_probe() -> crate::health::PlatformHealthProbe {
+    crate::health::PlatformHealthProbe {
+        cpu_times: read_cpu_times(),
+        battery: read_battery_health(),
+        ram: read_memory_usage(),
+        disk: read_disk_usage(),
+    }
+}
+
+fn filetime_ticks(value: FILETIME) -> u64 {
+    (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
+}
+
+fn read_cpu_times() -> Option<crate::health::CpuTimes> {
+    let mut idle = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut kernel = idle;
+    let mut user = idle;
+    // SAFETY: all pointers refer to initialized, writable `FILETIME` values.
+    if unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {
+        return None;
+    }
+    let idle = filetime_ticks(idle);
+    let total = filetime_ticks(kernel).saturating_add(filetime_ticks(user));
+    Some(crate::health::CpuTimes {
+        busy: total.saturating_sub(idle),
+        total,
+    })
+}
+
+fn read_memory_usage() -> Option<crate::health::ResourceUsage> {
+    // SAFETY: zero is a valid initial state for `MEMORYSTATUSEX` once
+    // `dwLength` is set as required by `GlobalMemoryStatusEx`.
+    let mut status = unsafe { std::mem::zeroed::<MEMORYSTATUSEX>() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `status` points to writable storage with the required size field.
+    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+        return None;
+    }
+    crate::health::ResourceUsage::new(
+        status.ullTotalPhys.saturating_sub(status.ullAvailPhys),
+        status.ullTotalPhys,
+    )
+}
+
+fn read_battery_health() -> Option<crate::health::BatteryHealth> {
+    // SAFETY: all-zero bytes are a valid initial value for this plain Win32
+    // output structure.
+    let mut status = unsafe { std::mem::zeroed::<SYSTEM_POWER_STATUS>() };
+    // SAFETY: `status` points to writable storage for one result.
+    if unsafe { GetSystemPowerStatus(&mut status) } == 0
+        || status.BatteryFlag == 128
+        || status.BatteryLifePercent == u8::MAX
+    {
+        return None;
+    }
+    let charging = if status.BatteryFlag == u8::MAX || status.ACLineStatus == u8::MAX {
+        None
+    } else if status.BatteryFlag & 8 != 0 {
+        Some(true)
+    } else {
+        Some(status.ACLineStatus == 1 && status.BatteryLifePercent == 100)
+    };
+    Some(crate::health::BatteryHealth {
+        percentage: status.BatteryLifePercent.min(100),
+        charging,
+    })
+}
+
+fn read_disk_usage() -> Option<crate::health::ResourceUsage> {
+    let drive = std::env::var("SystemDrive")
+        .ok()
+        .filter(|drive| !drive.trim().is_empty())
+        .unwrap_or_else(|| "C:".to_string());
+    let root = wide_null(&format!("{}\\", drive.trim_end_matches(['\\', '/'])));
+    let mut available_bytes = 0_u64;
+    let mut total_bytes = 0_u64;
+    let mut free_bytes = 0_u64;
+    // SAFETY: `root` is NUL-terminated and all output pointers refer to
+    // initialized, writable `u64` values.
+    if unsafe {
+        GetDiskFreeSpaceExW(
+            root.as_ptr(),
+            &mut available_bytes,
+            &mut total_bytes,
+            &mut free_bytes,
+        )
+    } == 0
+    {
+        return None;
+    }
+    crate::health::ResourceUsage::new(total_bytes.saturating_sub(free_bytes), total_bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

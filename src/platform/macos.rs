@@ -12,11 +12,142 @@ use super::{
     LimitedRead, Signal,
 };
 
+extern "C" {
+    fn mach_host_self() -> libc::mach_port_t;
+}
+
 const PROC_PGRP_ONLY: u32 = 2;
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     false
+}
+
+pub(crate) fn health_probe() -> crate::health::PlatformHealthProbe {
+    crate::health::PlatformHealthProbe {
+        cpu_times: read_cpu_times(),
+        battery: command_stdout("/usr/bin/pmset", &["-g", "batt"])
+            .as_deref()
+            .and_then(parse_battery_health),
+        ram: read_memory_usage(),
+        disk: read_disk_usage("/"),
+    }
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn read_cpu_times() -> Option<crate::health::CpuTimes> {
+    // SAFETY: `host_cpu_load_info` is a plain Mach output structure, and the
+    // count tells `host_statistics` exactly how much writable storage is
+    // available through the cast output pointer.
+    let mut info = unsafe { std::mem::zeroed::<libc::host_cpu_load_info>() };
+    let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+    let result = unsafe {
+        libc::host_statistics(
+            mach_host_self(),
+            libc::HOST_CPU_LOAD_INFO,
+            (&mut info as *mut libc::host_cpu_load_info).cast::<libc::integer_t>(),
+            &mut count,
+        )
+    };
+    if result != libc::KERN_SUCCESS || count < libc::HOST_CPU_LOAD_INFO_COUNT {
+        return None;
+    }
+
+    let total = info
+        .cpu_ticks
+        .iter()
+        .copied()
+        .map(u64::from)
+        .fold(0_u64, u64::saturating_add);
+    let idle = u64::from(info.cpu_ticks[libc::CPU_STATE_IDLE as usize]);
+    Some(crate::health::CpuTimes {
+        busy: total.saturating_sub(idle),
+        total,
+    })
+}
+
+fn read_memory_usage() -> Option<crate::health::ResourceUsage> {
+    let total_bytes = command_stdout("/usr/sbin/sysctl", &["-n", "hw.memsize"])?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let vm_stat = command_stdout("/usr/bin/vm_stat", &[])?;
+    parse_memory_usage(total_bytes, &vm_stat)
+}
+
+fn parse_memory_usage(total_bytes: u64, vm_stat: &str) -> Option<crate::health::ResourceUsage> {
+    let page_size = vm_stat
+        .lines()
+        .next()?
+        .split("page size of ")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    let mut available_pages = 0_u64;
+    for line in vm_stat.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !matches!(
+            name.trim(),
+            "Pages free" | "Pages inactive" | "Pages speculative"
+        ) {
+            continue;
+        }
+        let pages = value.trim().trim_end_matches('.').parse::<u64>().ok()?;
+        available_pages = available_pages.saturating_add(pages);
+    }
+    let available_bytes = available_pages.saturating_mul(page_size);
+    crate::health::ResourceUsage::new(total_bytes.saturating_sub(available_bytes), total_bytes)
+}
+
+fn parse_battery_health(contents: &str) -> Option<crate::health::BatteryHealth> {
+    let line = contents.lines().find(|line| line.contains('%'))?;
+    let percentage_end = line.find('%')?;
+    let percentage_start = line[..percentage_end]
+        .rfind(|ch: char| !ch.is_ascii_digit())
+        .map_or(0, |index| index + 1);
+    let percentage = line[percentage_start..percentage_end]
+        .parse::<u8>()
+        .ok()?
+        .min(100);
+    let status = line.to_ascii_lowercase();
+    let charging = if status.contains("discharging") {
+        Some(false)
+    } else if status.contains("charging") || status.contains("charged") {
+        Some(true)
+    } else {
+        None
+    };
+    Some(crate::health::BatteryHealth {
+        percentage,
+        charging,
+    })
+}
+
+fn read_disk_usage(path: &str) -> Option<crate::health::ResourceUsage> {
+    let path = std::ffi::CString::new(path).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is a valid NUL-terminated string and `stats` points to
+    // writable storage for one `statvfs` result.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: a successful `statvfs` call initialized the output structure.
+    let stats = unsafe { stats.assume_init() };
+    let block_size = stats.f_frsize;
+    let total_bytes = u64::from(stats.f_blocks).saturating_mul(block_size);
+    let free_bytes = u64::from(stats.f_bfree).saturating_mul(block_size);
+    crate::health::ResourceUsage::new(total_bytes.saturating_sub(free_bytes), total_bytes)
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
@@ -986,6 +1117,44 @@ pub fn process_exists(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_parses_macos_memory_usage() {
+        let stats = "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n\
+                     Pages free:                               100.\n\
+                     Pages active:                             700.\n\
+                     Pages inactive:                           150.\n\
+                     Pages speculative:                         50.\n";
+        assert_eq!(
+            parse_memory_usage(4_096_000, stats),
+            Some(crate::health::ResourceUsage {
+                used_bytes: 2_867_200,
+                total_bytes: 4_096_000,
+            })
+        );
+    }
+
+    #[test]
+    fn health_parses_macos_battery_percentage_and_state() {
+        assert_eq!(
+            parse_battery_health(
+                "Now drawing from 'Battery Power'\n -InternalBattery-0 83%; discharging; 4:12 remaining\n"
+            ),
+            Some(crate::health::BatteryHealth {
+                percentage: 83,
+                charging: Some(false),
+            })
+        );
+        assert_eq!(
+            parse_battery_health(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 96%; charging; 0:20 remaining\n"
+            ),
+            Some(crate::health::BatteryHealth {
+                percentage: 96,
+                charging: Some(true),
+            })
+        );
+    }
 
     #[test]
     fn nofile_target_raises_low_soft_limit_to_cap_when_hard_is_unlimited() {

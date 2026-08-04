@@ -64,6 +64,9 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::HealthMetricsSampled { snapshot } => {
+                self.handle_health_metrics_sampled(snapshot)
+            }
             ev => {
                 self.handle_internal_event(ev);
                 true
@@ -94,6 +97,18 @@ impl App {
             self.render_notify.notify_one();
         }
         changed
+    }
+
+    fn handle_health_metrics_sampled(&mut self, snapshot: crate::health::HealthSnapshot) -> bool {
+        self.health_sample_in_flight = false;
+        self.next_health_sample = Some(Instant::now() + super::HEALTH_SAMPLE_INTERVAL);
+        if self.state.health == snapshot {
+            return false;
+        }
+        self.state.health = snapshot;
+        self.render_dirty.request_generic();
+        self.render_notify.notify_one();
+        true
     }
 
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
@@ -128,6 +143,11 @@ impl App {
         } = ev
         {
             self.handle_git_status_refreshed(results, cache_updates);
+            return;
+        }
+
+        if let AppEvent::HealthMetricsSampled { snapshot } = ev {
+            self.handle_health_metrics_sampled(snapshot);
             return;
         }
 

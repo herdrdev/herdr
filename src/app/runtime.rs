@@ -6,8 +6,8 @@ use std::time::Duration;
 use crossterm::terminal;
 
 use super::{
-    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
-    RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
+    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, HEALTH_SAMPLE_INTERVAL,
+    MIN_RENDER_INTERVAL, RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
 };
 fn retain_custom_command_after_wait(
     pid: u32,
@@ -351,6 +351,7 @@ impl App {
 
         changed |= self.clear_due_selection_highlight(now);
 
+        self.start_health_sample_if_due(now);
         self.start_git_status_refresh_if_due(now);
 
         if self
@@ -555,6 +556,39 @@ impl App {
         std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
     }
 
+    pub(crate) fn start_health_sample_if_due(&mut self, now: Instant) {
+        if self.health_sample_in_flight
+            || self
+                .next_health_sample
+                .is_none_or(|deadline| now < deadline)
+        {
+            return;
+        }
+
+        self.health_sample_in_flight = true;
+        self.next_health_sample = None;
+        let sampler = std::sync::Arc::clone(&self.health_sampler);
+        let event_tx = self.event_tx.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("herdr-health-sample".into())
+            .spawn(move || {
+                let snapshot = match sampler.lock() {
+                    Ok(mut sampler) => sampler.sample(),
+                    Err(err) => {
+                        tracing::warn!(err = %err, "health sampler lock was poisoned");
+                        crate::health::HealthSnapshot::default()
+                    }
+                };
+                let _ = event_tx
+                    .blocking_send(crate::events::AppEvent::HealthMetricsSampled { snapshot });
+            });
+        if let Err(err) = spawn_result {
+            self.health_sample_in_flight = false;
+            self.next_health_sample = Some(now + HEALTH_SAMPLE_INTERVAL);
+            tracing::warn!(err = %err, "failed to start health sampler");
+        }
+    }
+
     pub(crate) fn next_loop_deadline(&self, now: Instant, needs_render: bool) -> Option<Instant> {
         self.next_loop_deadline_with_resize_poll(now, needs_render, true, true)
     }
@@ -593,6 +627,7 @@ impl App {
             include_git_refresh
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
+            self.next_health_sample,
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
@@ -650,6 +685,33 @@ mod tests {
         let interrupted = std::io::Error::new(std::io::ErrorKind::Interrupted, "test interrupt");
 
         assert!(retain_custom_command_after_wait(42, Err(interrupted)));
+    }
+
+    #[test]
+    fn sampled_health_updates_pure_state_and_reschedules_collection() {
+        let mut app = super::super::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        app.health_sample_in_flight = true;
+        let snapshot = crate::health::HealthSnapshot {
+            cpu_usage_percentage: Some(37),
+            ram: crate::health::ResourceUsage::new(3, 8),
+            ..crate::health::HealthSnapshot::default()
+        };
+
+        assert!(app.handle_internal_event_with_render_impact(
+            crate::events::AppEvent::HealthMetricsSampled { snapshot }
+        ));
+        assert_eq!(app.state.health, snapshot);
+        assert!(!app.health_sample_in_flight);
+        assert!(app.next_health_sample.is_some());
+        assert!(!app.handle_internal_event_with_render_impact(
+            crate::events::AppEvent::HealthMetricsSampled { snapshot }
+        ));
     }
 
     fn test_app_with_pane() -> (super::super::App, crate::layout::PaneId) {

@@ -10,6 +10,10 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     false
 }
 
+pub(crate) fn health_probe() -> crate::health::PlatformHealthProbe {
+    crate::health::PlatformHealthProbe::default()
+}
+
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
     vec!["/bin/sh".into(), flag.into(), command.into()]
 }

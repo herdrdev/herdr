@@ -25,6 +25,8 @@ pub struct SessionSnapshot {
     #[serde(default)]
     pub sidebar_section_split: Option<f32>,
     #[serde(default)]
+    pub sidebar_health_section_split: Option<f32>,
+    #[serde(default)]
     pub collapsed_space_keys: std::collections::HashSet<String>,
 }
 
@@ -183,6 +185,8 @@ struct RawSessionSnapshot {
     #[serde(default)]
     sidebar_section_split: Option<f32>,
     #[serde(default)]
+    sidebar_health_section_split: Option<f32>,
+    #[serde(default)]
     collapsed_space_keys: std::collections::HashSet<String>,
 }
 
@@ -198,6 +202,7 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         selected: raw.selected,
         sidebar_width: raw.sidebar_width,
         sidebar_section_split: raw.sidebar_section_split,
+        sidebar_health_section_split: raw.sidebar_health_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
     })
 }
@@ -260,6 +265,7 @@ pub fn capture(
     selected: usize,
     sidebar_width: u16,
     sidebar_section_split: f32,
+    sidebar_health_section_split: Option<f32>,
     collapsed_space_keys: std::collections::HashSet<String>,
 ) -> SessionSnapshot {
     SessionSnapshot {
@@ -272,6 +278,7 @@ pub fn capture(
         selected,
         sidebar_width: Some(sidebar_width),
         sidebar_section_split: Some(sidebar_section_split),
+        sidebar_health_section_split,
         collapsed_space_keys,
     }
 }
@@ -540,6 +547,7 @@ mod tests {
             state.selected,
             state.sidebar_width,
             state.sidebar_section_split,
+            state.sidebar_health_section_split,
             state.collapsed_space_keys.clone(),
         )
     }
@@ -604,6 +612,7 @@ mod tests {
             selected: 0,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_health_section_split: Some(0.75),
             collapsed_space_keys: std::collections::HashSet::new(),
         };
         let json = serde_json::to_string(&snap).unwrap();
@@ -612,6 +621,7 @@ mod tests {
         assert_eq!(restored.active, None);
         assert_eq!(restored.sidebar_width, Some(26));
         assert_eq!(restored.sidebar_section_split, Some(0.5));
+        assert_eq!(restored.sidebar_health_section_split, Some(0.75));
     }
 
     #[test]
@@ -691,6 +701,7 @@ mod tests {
             selected: 0,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_health_section_split: None,
             collapsed_space_keys: std::collections::HashSet::new(),
             version: SNAPSHOT_VERSION,
         };
@@ -871,11 +882,13 @@ mod tests {
         let mut state = state_with_workspaces(&["one"]);
         state.sidebar_width = 31;
         state.sidebar_section_split = 0.4;
+        state.sidebar_health_section_split = Some(0.7);
         state.collapsed_space_keys.insert("repo-key".into());
 
         let snapshot = capture_from_state(&state);
         assert_eq!(snapshot.sidebar_width, Some(31));
         assert_eq!(snapshot.sidebar_section_split, Some(0.4));
+        assert_eq!(snapshot.sidebar_health_section_split, Some(0.7));
         assert!(snapshot.collapsed_space_keys.contains("repo-key"));
     }
 
@@ -1253,6 +1266,7 @@ mod tests {
             selected: 0,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_health_section_split: None,
             collapsed_space_keys: std::collections::HashSet::new(),
         };
 

@@ -1155,6 +1155,7 @@ pub(crate) enum DragTarget {
     },
     SidebarDivider,
     SidebarSectionDivider,
+    SidebarHealthDivider,
 }
 
 /// Active mouse drag on a split border or sidebar divider.
@@ -1475,11 +1476,16 @@ pub struct AppState {
     pub sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig,
     /// Ratio of sidebar height allocated to the workspaces section.
     pub sidebar_section_split: f32,
+    /// Boundary between the combined Spaces/Agents region and Health Check.
+    /// `None` keeps the compact six-row Health Check default.
+    pub sidebar_health_section_split: Option<f32>,
     pub agent_panel_sort: AgentPanelSort,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
+    /// Latest server-host resource sample shown by the expanded sidebar.
+    pub health: crate::health::HealthSnapshot,
     pub next_agent_state_change_seq: u64,
     /// Capture mouse input for Herdr's own mouse UI. When false, Herdr only
     /// captures mouse while the focused pane app requests mouse reporting.
@@ -1846,10 +1852,12 @@ impl AppState {
             sidebar_collapsed: false,
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
+            sidebar_health_section_split: None,
             agent_panel_sort: AgentPanelSort::Spaces,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
+            health: crate::health::HealthSnapshot::default(),
             next_agent_state_change_seq: 0,
             mouse_capture: true,
             copy_on_select: true,

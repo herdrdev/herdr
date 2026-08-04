@@ -37,6 +37,7 @@ pub(crate) const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const HEALTH_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
@@ -114,6 +115,9 @@ pub struct App {
     pub(crate) git_refresh_due_after_in_flight: bool,
     pub(crate) git_identity_refresh_requested: bool,
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
+    pub(crate) health_sampler: Arc<std::sync::Mutex<crate::health::HealthSampler>>,
+    pub(crate) next_health_sample: Option<Instant>,
+    pub(crate) health_sample_in_flight: bool,
     pub(crate) pending_api_worktree_creates: HashMap<std::path::PathBuf, u64>,
     pub(crate) pending_api_worktree_removes: HashMap<String, u64>,
     pub(crate) pending_api_worktree_remove_paths: HashMap<std::path::PathBuf, u64>,
@@ -217,6 +221,16 @@ fn auto_updates_enabled(no_session: bool) -> bool {
 
 fn background_update_check_enabled(no_session: bool, check_enabled: bool) -> bool {
     auto_updates_enabled(no_session) && check_enabled
+}
+
+#[cfg(not(test))]
+fn initial_health_sample_deadline() -> Option<Instant> {
+    Some(Instant::now())
+}
+
+#[cfg(test)]
+fn initial_health_sample_deadline() -> Option<Instant> {
+    None
 }
 
 fn load_plugin_registry(no_session: bool) -> crate::app::state::InstalledPluginRegistry {
@@ -384,6 +398,7 @@ impl App {
             sidebar_width,
             sidebar_width_source,
             sidebar_section_split,
+            sidebar_health_section_split,
             collapsed_space_keys,
         ) = if no_session {
             (
@@ -393,6 +408,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                None,
                 std::collections::HashSet::new(),
             )
         } else if let Some(snap) = crate::persist::load() {
@@ -429,6 +445,7 @@ impl App {
                         state::SidebarWidthSource::ConfigDefault
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
+                    snap.sidebar_health_section_split,
                     snap.collapsed_space_keys,
                 )
             } else {
@@ -446,6 +463,7 @@ impl App {
                         state::SidebarWidthSource::ConfigDefault
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
+                    snap.sidebar_health_section_split,
                     snap.collapsed_space_keys,
                 )
             }
@@ -457,6 +475,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                None,
                 std::collections::HashSet::new(),
             )
         };
@@ -615,10 +634,12 @@ impl App {
             sidebar_collapsed: config.ui.sidebar_start_collapsed,
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_section_split,
+            sidebar_health_section_split,
             agent_panel_sort,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
+            health: crate::health::HealthSnapshot::default(),
             next_agent_state_change_seq: 0,
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
@@ -733,6 +754,11 @@ impl App {
             git_refresh_due_after_in_flight: false,
             git_identity_refresh_requested: false,
             git_status_cache: HashMap::new(),
+            health_sampler: Arc::new(std::sync::Mutex::new(
+                crate::health::HealthSampler::default(),
+            )),
+            next_health_sample: initial_health_sample_deadline(),
+            health_sample_in_flight: false,
             pending_api_worktree_creates: HashMap::new(),
             pending_api_worktree_removes: HashMap::new(),
             pending_api_worktree_remove_paths: HashMap::new(),
@@ -831,6 +857,7 @@ impl App {
         if let Some(split) = snapshot.sidebar_section_split {
             app.state.sidebar_section_split = split;
         }
+        app.state.sidebar_health_section_split = snapshot.sidebar_health_section_split;
         app.state.collapsed_space_keys = snapshot.collapsed_space_keys.clone();
         app.state.mode = if app.state.active.is_some() {
             state::Mode::Terminal

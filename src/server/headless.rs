@@ -1202,6 +1202,7 @@ impl HeadlessServer {
             self.app.state.selected,
             self.app.state.sidebar_width,
             self.app.state.sidebar_section_split,
+            self.app.state.sidebar_health_section_split,
             self.app.state.collapsed_space_keys.clone(),
         );
 
@@ -4381,6 +4382,7 @@ impl HeadlessServer {
 
         changed |= self.app.clear_due_selection_highlight(now);
 
+        self.app.start_health_sample_if_due(now);
         if self.has_app_client() {
             self.app.start_git_status_refresh_if_due(now);
         }

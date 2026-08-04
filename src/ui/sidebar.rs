@@ -19,6 +19,10 @@ use crate::terminal::TerminalRuntimeRegistry;
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
+const PREFERRED_HEALTH_CHECK_SECTION_ROWS: u16 = 6;
+const MIN_HEALTH_CHECK_SECTION_ROWS: u16 = 3;
+const MIN_PRIMARY_SIDEBAR_ROWS: u16 = 6;
+const MIN_SIDEBAR_HEIGHT_WITH_HEALTH: u16 = 16;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -56,8 +60,12 @@ fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
     (ws_h, detail_h)
 }
 
-pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+pub(crate) fn expanded_sidebar_sections(
+    area: Rect,
+    split_ratio: f32,
+    health_split_ratio: Option<f32>,
+) -> (Rect, Rect) {
+    let content = expanded_sidebar_primary_rect(area, health_split_ratio);
     if content.width == 0 || content.height == 0 {
         return (Rect::default(), Rect::default());
     }
@@ -68,8 +76,68 @@ pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, 
     (ws_area, detail_area)
 }
 
-pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
+fn expanded_sidebar_primary_rect(area: Rect, health_split_ratio: Option<f32>) -> Rect {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    if content.width == 0 || content.height == 0 {
+        return Rect::default();
+    }
+    if content.height < MIN_SIDEBAR_HEIGHT_WITH_HEALTH {
+        return content;
+    }
+
+    let default_primary_height = content
+        .height
+        .saturating_sub(PREFERRED_HEALTH_CHECK_SECTION_ROWS);
+    let requested_primary_height = health_split_ratio
+        .map(|ratio| ((content.height as f32) * ratio.clamp(0.0, 1.0)).round() as u16)
+        .unwrap_or(default_primary_height);
+    let primary_height = requested_primary_height.clamp(
+        MIN_PRIMARY_SIDEBAR_ROWS,
+        content.height.saturating_sub(MIN_HEALTH_CHECK_SECTION_ROWS),
+    );
+    Rect::new(content.x, content.y, content.width, primary_height)
+}
+
+pub(crate) fn health_check_rect(area: Rect, health_split_ratio: Option<f32>) -> Rect {
+    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    let primary = expanded_sidebar_primary_rect(area, health_split_ratio);
+    if primary == content {
+        return Rect::default();
+    }
+    Rect::new(
+        content.x,
+        primary.y + primary.height,
+        content.width,
+        content.height.saturating_sub(primary.height),
+    )
+}
+
+pub(crate) fn health_check_divider_rect(area: Rect, health_split_ratio: Option<f32>) -> Rect {
+    let health = health_check_rect(area, health_split_ratio);
+    if health == Rect::default() {
+        return Rect::default();
+    }
+    Rect::new(health.x, health.y, health.width, 1)
+}
+
+pub(crate) fn health_split_ratio_for_row(area: Rect, row: u16) -> Option<f32> {
+    if area.height < MIN_SIDEBAR_HEIGHT_WITH_HEALTH {
+        return None;
+    }
+    let relative_y = row.saturating_sub(area.y);
+    let primary_height = relative_y.clamp(
+        MIN_PRIMARY_SIDEBAR_ROWS,
+        area.height.saturating_sub(MIN_HEALTH_CHECK_SECTION_ROWS),
+    );
+    Some((primary_height as f32) / (area.height as f32))
+}
+
+pub(crate) fn sidebar_section_divider_rect(
+    area: Rect,
+    split_ratio: f32,
+    health_split_ratio: Option<f32>,
+) -> Rect {
+    let content = expanded_sidebar_primary_rect(area, health_split_ratio);
     if content.width == 0 || content.height < 6 {
         return Rect::default();
     }
@@ -311,7 +379,11 @@ pub(crate) fn next_entry_is_indented_workspace(entries: &[WorkspaceListEntry], i
 }
 
 pub(crate) fn normalized_workspace_scroll(app: &AppState, area: Rect, requested: usize) -> usize {
-    let ws_area = workspace_list_rect(area, app.sidebar_section_split);
+    let ws_area = workspace_list_rect(
+        area,
+        app.sidebar_section_split,
+        app.sidebar_health_section_split,
+    );
     let body = workspace_list_body_rect(ws_area, false);
     if body.height == 0 {
         return requested;
@@ -435,8 +507,12 @@ fn workspace_list_entries_inner(app: &AppState, force_expanded: bool) -> Vec<Wor
     entries
 }
 
-pub(crate) fn workspace_list_rect(area: Rect, split_ratio: f32) -> Rect {
-    let (ws_area, _) = expanded_sidebar_sections(area, split_ratio);
+pub(crate) fn workspace_list_rect(
+    area: Rect,
+    split_ratio: f32,
+    health_split_ratio: Option<f32>,
+) -> Rect {
+    let (ws_area, _) = expanded_sidebar_sections(area, split_ratio, health_split_ratio);
     ws_area
 }
 
@@ -659,7 +735,11 @@ pub(crate) fn compute_workspace_list_areas(
     app: &AppState,
     area: Rect,
 ) -> (Vec<crate::app::state::WorkspaceCardArea>, Vec<()>) {
-    let ws_area = workspace_list_rect(area, app.sidebar_section_split);
+    let ws_area = workspace_list_rect(
+        area,
+        app.sidebar_section_split,
+        app.sidebar_health_section_split,
+    );
     if ws_area == Rect::default() {
         return (Vec::new(), Vec::new());
     }
@@ -973,11 +1053,140 @@ pub(super) fn render_sidebar(
         buf[(sep_x, y)].set_style(sep_style);
     }
 
-    let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+    let (ws_area, detail_area) = expanded_sidebar_sections(
+        area,
+        app.sidebar_section_split,
+        app.sidebar_health_section_split,
+    );
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
     render_agent_detail(app, terminal_runtimes, frame, detail_area);
+    render_health_check(
+        app,
+        frame,
+        health_check_rect(area, app.sidebar_health_section_split),
+    );
     render_sidebar_toggle(app, frame, area, false, p);
+}
+
+fn render_health_check(app: &AppState, frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height < 2 {
+        return;
+    }
+    let p = &app.palette;
+    let sep_line = "─".repeat(area.width as usize);
+    frame.render_widget(
+        Paragraph::new(Span::styled(sep_line, Style::default().fg(p.surface_dim))),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            " health check",
+            Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+        )),
+        Rect::new(area.x, area.y + 1, area.width, 1),
+    );
+
+    let cpu = app
+        .health
+        .cpu_usage_percentage
+        .map(|percentage| format!("{percentage}%"))
+        .unwrap_or_else(|| "n/a".to_string());
+    let battery = app
+        .health
+        .battery
+        .map(format_battery_health)
+        .unwrap_or_else(|| "n/a".to_string());
+    render_health_row(frame, area, 2, "cpu", &cpu, 0, p);
+    render_health_row(frame, area, 3, "battery", &battery, 0, p);
+
+    let value_width = area.width.saturating_sub(9) as usize;
+    let disk_reserve = if area.height == PREFERRED_HEALTH_CHECK_SECTION_ROWS {
+        2
+    } else {
+        0
+    };
+    let disk_value_width = area.width.saturating_sub(9 + disk_reserve) as usize;
+    let ram = app
+        .health
+        .ram
+        .map(|usage| format_resource_usage(usage, value_width))
+        .unwrap_or_else(|| "n/a".to_string());
+    let disk = app
+        .health
+        .disk
+        .map(|usage| format_resource_usage(usage, disk_value_width))
+        .unwrap_or_else(|| "n/a".to_string());
+    render_health_row(frame, area, 4, "ram", &ram, 0, p);
+    render_health_row(frame, area, 5, "disk", &disk, disk_reserve, p);
+}
+
+fn render_health_row(
+    frame: &mut Frame,
+    area: Rect,
+    row_offset: u16,
+    label: &str,
+    value: &str,
+    reserve_right: u16,
+    p: &Palette,
+) {
+    if row_offset >= area.height {
+        return;
+    }
+    let label_width = 9.min(area.width);
+    frame.render_widget(
+        Paragraph::new(format!(" {label}"))
+            .style(Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)),
+        Rect::new(area.x, area.y + row_offset, label_width, 1),
+    );
+    let value_width = area
+        .width
+        .saturating_sub(label_width)
+        .saturating_sub(reserve_right);
+    if value_width == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(value.to_string())
+            .style(Style::default().fg(p.subtext0))
+            .alignment(Alignment::Right),
+        Rect::new(area.x + label_width, area.y + row_offset, value_width, 1),
+    );
+}
+
+fn format_battery_health(battery: crate::health::BatteryHealth) -> String {
+    match battery.charging {
+        Some(true) => format!("{}% ↑", battery.percentage),
+        Some(false) => format!("{}% ↓", battery.percentage),
+        None => format!("{}%", battery.percentage),
+    }
+}
+
+fn format_resource_usage(usage: crate::health::ResourceUsage, max_width: usize) -> String {
+    const UNITS: [(&str, &str, u64); 5] = [
+        ("B", "B", 1),
+        ("KiB", "K", 1024),
+        ("MiB", "M", 1024 * 1024),
+        ("GiB", "G", 1024 * 1024 * 1024),
+        ("TiB", "T", 1024 * 1024 * 1024 * 1024),
+    ];
+    let (unit, compact_unit, divisor) = UNITS
+        .iter()
+        .rev()
+        .find(|(_, _, divisor)| usage.total_bytes >= *divisor)
+        .copied()
+        .unwrap_or(UNITS[0]);
+    let used = usage.used_bytes as f64 / divisor as f64;
+    let total = usage.total_bytes as f64 / divisor as f64;
+    let candidates = [
+        format!("{used:.1}/{total:.1} {unit}"),
+        format!("{used:.0}/{total:.0} {unit}"),
+        format!("{used:.0}/{total:.0}{compact_unit}"),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| display_width(candidate) <= max_width)
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn resolved_token_spans(
@@ -1611,7 +1820,11 @@ mod tests {
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) = expanded_sidebar_sections(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let body = agent_panel_body_rect(agent_area, false);
 
         let first = row_text(buffer, body.y, 25);
@@ -1662,7 +1875,11 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         terminal
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) = expanded_sidebar_sections(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let body = agent_panel_body_rect(agent_area, false);
         let buffer = terminal.backend().buffer();
         let workspace = buffer[(find_symbol_x(buffer, body.y, body.width, "o"), body.y)].style();
@@ -1834,7 +2051,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) = expanded_sidebar_sections(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let body = agent_panel_body_rect(agent_area, false);
         let first = row_text(buffer, body.y, 17);
 
@@ -1864,7 +2085,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         renderer
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let (_, agent_area) = expanded_sidebar_sections(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let body = agent_panel_body_rect(agent_area, false);
         let rendered = row_text(renderer.backend().buffer(), body.y, 9);
 
@@ -1940,7 +2165,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]; 6];
         let area = Rect::new(0, 0, 20, 10);
-        let workspace_area = workspace_list_rect(area, app.sidebar_section_split);
+        let workspace_area = workspace_list_rect(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let body = workspace_list_body_rect(workspace_area, false);
 
         let metrics = workspace_list_scroll_metrics(&app, workspace_area);
@@ -2343,17 +2572,100 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
     #[test]
     fn expanded_sidebar_sections_handle_tiny_heights() {
-        let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9);
+        let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9, None);
 
         assert_eq!(ws_area, Rect::new(0, 0, 19, 3));
         assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
+        assert_eq!(
+            health_check_rect(Rect::new(0, 0, 20, 5), None),
+            Rect::default()
+        );
+    }
+
+    #[test]
+    fn expanded_sidebar_reserves_a_compact_health_section() {
+        let area = Rect::new(0, 0, 26, 24);
+        let (ws_area, detail_area) = expanded_sidebar_sections(area, 0.5, None);
+
+        assert_eq!(ws_area, Rect::new(0, 0, 25, 9));
+        assert_eq!(detail_area, Rect::new(0, 9, 25, 9));
+        assert_eq!(health_check_rect(area, None), Rect::new(0, 18, 25, 6));
+    }
+
+    #[test]
+    fn health_divider_moves_within_usable_section_limits() {
+        let area = Rect::new(0, 0, 26, 24);
+        let near_bottom = health_split_ratio_for_row(area, 23).unwrap();
+        let near_top = health_split_ratio_for_row(area, 1).unwrap();
+
+        assert_eq!(
+            health_check_rect(area, Some(near_bottom)),
+            Rect::new(0, 21, 25, 3)
+        );
+        assert_eq!(
+            health_check_rect(area, Some(near_top)),
+            Rect::new(0, 6, 25, 18)
+        );
+        assert_eq!(
+            health_check_divider_rect(area, Some(near_bottom)),
+            Rect::new(0, 21, 25, 1)
+        );
     }
 
     #[test]
     fn sidebar_section_divider_is_hidden_for_tiny_heights() {
-        let divider = sidebar_section_divider_rect(Rect::new(0, 0, 20, 5), 0.5);
+        let divider = sidebar_section_divider_rect(Rect::new(0, 0, 20, 5), 0.5, None);
 
         assert_eq!(divider, Rect::default());
+    }
+
+    #[test]
+    fn health_check_renders_all_available_metrics() {
+        let mut app = AppState::test_new();
+        app.health = crate::health::HealthSnapshot {
+            cpu_usage_percentage: Some(42),
+            battery: Some(crate::health::BatteryHealth {
+                percentage: 81,
+                charging: Some(true),
+            }),
+            ram: crate::health::ResourceUsage::new(8 * 1024 * 1024 * 1024, 16 * 1024 * 1024 * 1024),
+            disk: crate::health::ResourceUsage::new(
+                125 * 1024 * 1024 * 1024,
+                500 * 1024 * 1024 * 1024,
+            ),
+        };
+        let backend = TestBackend::new(26, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render_sidebar(
+                    &app,
+                    &TerminalRuntimeRegistry::new(),
+                    frame,
+                    Rect::new(0, 0, 26, 24),
+                )
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 19, 26).contains("health check"));
+        assert!(row_text(buffer, 20, 26).contains("cpu"));
+        assert!(row_text(buffer, 20, 26).contains("42%"));
+        assert!(row_text(buffer, 21, 26).contains("81% ↑"));
+        assert!(row_text(buffer, 22, 26).contains("8.0/16.0 GiB"));
+        assert!(row_text(buffer, 23, 26).contains("125/500 GiB"));
+    }
+
+    #[test]
+    fn resource_usage_format_compacts_to_the_available_width() {
+        let usage =
+            crate::health::ResourceUsage::new(125 * 1024 * 1024 * 1024, 500 * 1024 * 1024 * 1024)
+                .unwrap();
+
+        assert_eq!(format_resource_usage(usage, 16), "125.0/500.0 GiB");
+        assert_eq!(format_resource_usage(usage, 11), "125/500 GiB");
+        assert_eq!(format_resource_usage(usage, 8), "125/500G");
     }
 
     #[test]
@@ -2443,7 +2755,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.sidebar_spaces.row_gap = 0;
         let area = Rect::new(0, 0, 30, 20);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area = workspace_list_rect(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -2484,7 +2800,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let area = Rect::new(0, 0, 30, 10);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
         assert_eq!(app.view.workspace_card_areas.len(), 2);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area = workspace_list_rect(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -2576,7 +2896,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.sidebar_spaces.row_gap = 0;
         let area = Rect::new(0, 0, 30, 20);
         app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        let list_area = workspace_list_rect(area, app.sidebar_section_split);
+        let list_area = workspace_list_rect(
+            area,
+            app.sidebar_section_split,
+            app.sidebar_health_section_split,
+        );
         let indicator_row = workspace_drop_indicator_row(
             &app,
             &app.view.workspace_card_areas,

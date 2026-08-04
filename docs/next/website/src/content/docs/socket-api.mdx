@@ -118,11 +118,15 @@ Raw socket method names use dot notation:
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
 their own local runtime cache. The response includes version/protocol metadata,
 focused workspace/tab/pane ids, workspace records, tab records, pane records,
-tab layout snapshots, and agent records. It is not a subscription; after reading
-it, subscribe to resource events and update the local cache from those events.
-Call `session.snapshot` again after reconnecting or when the local cache may be
-stale. Attached worktree provenance is included on workspace records. Full repo
-worktree discovery remains `worktree.list`.
+tab layout snapshots, agent records, and the latest server-host `health` sample.
+The health object can contain `cpu_usage_percentage`, `battery`, `ram`, and
+`disk`; unavailable metrics are omitted. Health is a point-in-time value, so
+clients that need a fresher sample can request `session.snapshot` again. For
+other session resources, subscribe to resource events and update the local
+cache from those events. Call `session.snapshot` again after reconnecting or
+when the local cache may be stale. Attached worktree provenance is included on
+workspace records.
+Full repo worktree discovery remains `worktree.list`.
 
 From the CLI, `herdr api snapshot` prints the live `session.snapshot` response
 as JSON for clients and agents that want a simple bootstrap command.

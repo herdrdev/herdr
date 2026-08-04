@@ -4,6 +4,7 @@
 
 ### Added
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
+- Added a resizable expanded-sidebar Health Check section with server-host CPU, battery, RAM, and disk usage.
 
 ### Fixed
 - `pane send-keys` and `agent send-keys` now preserve Shift when sending `shift+tab`, allowing agent permission modes to be cycled programmatically. (#1561, thanks @keinstn and @tomohisa)

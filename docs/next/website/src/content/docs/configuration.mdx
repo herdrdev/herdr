@@ -256,6 +256,8 @@ Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `rese
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
+The expanded desktop sidebar also includes a compact **Health Check** section. It shows CPU usage, battery percentage when a battery is present, RAM used/total, and disk used/total. Drag the divider above Health Check vertically to resize the section; the chosen position persists with the session. These values are sampled from the host running the Herdr server, so a remote attach reports the remote host. Battery displays `n/a` on desktops, containers, and other systems without a readable battery.
+
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
 ### Sidebar row layouts

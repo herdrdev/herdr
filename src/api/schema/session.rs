@@ -5,6 +5,8 @@ use super::panes::{PaneInfo, PaneLayoutSnapshot};
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
 
+pub use crate::health::HealthSnapshot;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSnapshot {
     pub version: String,
@@ -20,4 +22,6 @@ pub struct SessionSnapshot {
     pub panes: Vec<PaneInfo>,
     pub layouts: Vec<PaneLayoutSnapshot>,
     pub agents: Vec<AgentInfo>,
+    #[serde(default)]
+    pub health: HealthSnapshot,
 }

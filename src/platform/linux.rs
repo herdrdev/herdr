@@ -34,6 +34,124 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     running_inside_wsl()
 }
 
+pub(crate) fn health_probe() -> crate::health::PlatformHealthProbe {
+    crate::health::PlatformHealthProbe {
+        cpu_times: read_cpu_times("/proc/stat"),
+        battery: read_battery_health("/sys/class/power_supply"),
+        ram: read_memory_usage("/proc/meminfo"),
+        disk: read_disk_usage("/"),
+    }
+}
+
+fn read_cpu_times(path: &str) -> Option<crate::health::CpuTimes> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    parse_cpu_times(&contents)
+}
+
+fn parse_cpu_times(contents: &str) -> Option<crate::health::CpuTimes> {
+    let mut fields = contents.lines().next()?.split_whitespace();
+    if fields.next()? != "cpu" {
+        return None;
+    }
+    let values = fields
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if values.len() < 4 {
+        return None;
+    }
+
+    let idle = values[3].saturating_add(values.get(4).copied().unwrap_or(0));
+    let total = values.iter().copied().fold(0_u64, u64::saturating_add);
+    Some(crate::health::CpuTimes {
+        busy: total.saturating_sub(idle),
+        total,
+    })
+}
+
+fn read_memory_usage(path: &str) -> Option<crate::health::ResourceUsage> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    parse_memory_usage(&contents)
+}
+
+fn parse_memory_usage(contents: &str) -> Option<crate::health::ResourceUsage> {
+    let mut total_kib = None;
+    let mut available_kib = None;
+    for line in contents.lines() {
+        let (name, value) = line.split_once(':')?;
+        let kib = value.split_whitespace().next()?.parse::<u64>().ok()?;
+        match name {
+            "MemTotal" => total_kib = Some(kib),
+            "MemAvailable" => available_kib = Some(kib),
+            _ => {}
+        }
+    }
+    let total_bytes = total_kib?.saturating_mul(1024);
+    let available_bytes = available_kib?.saturating_mul(1024);
+    crate::health::ResourceUsage::new(total_bytes.saturating_sub(available_bytes), total_bytes)
+}
+
+fn read_battery_health(path: &str) -> Option<crate::health::BatteryHealth> {
+    let mut batteries = std::fs::read_dir(path)
+        .ok()?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    batteries.sort_by_key(std::fs::DirEntry::file_name);
+
+    for battery in batteries {
+        let battery_path = battery.path();
+        let Ok(kind) = std::fs::read_to_string(battery_path.join("type")) else {
+            continue;
+        };
+        if !kind.trim().eq_ignore_ascii_case("battery") {
+            continue;
+        }
+        let Ok(capacity) = std::fs::read_to_string(battery_path.join("capacity")) else {
+            continue;
+        };
+        let Ok(percentage) = capacity.trim().parse::<u8>() else {
+            continue;
+        };
+        let percentage = percentage.min(100);
+        let charging = std::fs::read_to_string(battery_path.join("status"))
+            .ok()
+            .and_then(|status| parse_battery_charging(status.trim()));
+        return Some(crate::health::BatteryHealth {
+            percentage,
+            charging,
+        });
+    }
+    None
+}
+
+fn parse_battery_charging(status: &str) -> Option<bool> {
+    if status.eq_ignore_ascii_case("charging") || status.eq_ignore_ascii_case("full") {
+        Some(true)
+    } else if status.eq_ignore_ascii_case("discharging")
+        || status.eq_ignore_ascii_case("not charging")
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn read_disk_usage(path: &str) -> Option<crate::health::ResourceUsage> {
+    let path = std::ffi::CString::new(path).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is a valid NUL-terminated string and `stats` points to
+    // writable storage for one `statvfs` result.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: a successful `statvfs` call initialized the output structure.
+    let stats = unsafe { stats.assume_init() };
+    let block_size = stats.f_frsize;
+    let total_bytes = stats.f_blocks.saturating_mul(block_size);
+    let free_bytes = stats.f_bfree.saturating_mul(block_size);
+    crate::health::ResourceUsage::new(total_bytes.saturating_sub(free_bytes), total_bytes)
+}
+
 fn running_inside_wsl() -> bool {
     proc_file_indicates_wsl("/proc/sys/kernel/osrelease")
         || proc_file_indicates_wsl("/proc/version")
@@ -747,6 +865,38 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn health_parses_linux_cpu_times() {
+        assert_eq!(
+            parse_cpu_times("cpu  100 20 30 400 50 6 7 8 0 0\ncpu0 1 2 3 4"),
+            Some(crate::health::CpuTimes {
+                busy: 171,
+                total: 621,
+            })
+        );
+    }
+
+    #[test]
+    fn health_parses_linux_memory_usage() {
+        assert_eq!(
+            parse_memory_usage(
+                "MemTotal:       16384000 kB\nMemFree:         100000 kB\nMemAvailable:   4096000 kB\n"
+            ),
+            Some(crate::health::ResourceUsage {
+                used_bytes: 12_288_000 * 1024,
+                total_bytes: 16_384_000 * 1024,
+            })
+        );
+    }
+
+    #[test]
+    fn health_parses_linux_battery_states_without_confusing_discharging() {
+        assert_eq!(parse_battery_charging("Charging"), Some(true));
+        assert_eq!(parse_battery_charging("Discharging"), Some(false));
+        assert_eq!(parse_battery_charging("Not charging"), Some(false));
+        assert_eq!(parse_battery_charging("Unknown"), None);
     }
 
     #[test]

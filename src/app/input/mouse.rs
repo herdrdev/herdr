@@ -438,6 +438,14 @@ impl AppState {
                     return None;
                 }
 
+                if self.on_sidebar_health_divider(mouse.column, mouse.row) {
+                    self.drag = Some(DragState {
+                        target: DragTarget::SidebarHealthDivider,
+                    });
+                    self.set_sidebar_health_section_split(mouse.row);
+                    return None;
+                }
+
                 if !in_sidebar {
                     if let Some(border) = self.find_border_at(mouse.column, mouse.row) {
                         let grab_offset = match border.direction {
@@ -792,6 +800,9 @@ impl AppState {
                         }
                         DragTarget::SidebarSectionDivider => {
                             self.set_sidebar_section_split(mouse.row);
+                        }
+                        DragTarget::SidebarHealthDivider => {
+                            self.set_sidebar_health_section_split(mouse.row);
                         }
                         DragTarget::ReleaseNotesScrollbar { .. }
                         | DragTarget::ProductAnnouncementScrollbar { .. }

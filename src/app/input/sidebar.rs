@@ -10,7 +10,11 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split)
+        crate::ui::workspace_list_rect(
+            sidebar,
+            self.sidebar_section_split,
+            self.sidebar_health_section_split,
+        )
     }
 
     pub(super) fn agent_panel_rect(&self) -> Rect {
@@ -18,8 +22,11 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
+        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
+            sidebar,
+            self.sidebar_section_split,
+            self.sidebar_health_section_split,
+        );
         detail_area
     }
 
@@ -279,6 +286,7 @@ impl AppState {
         let rect = crate::ui::sidebar_section_divider_rect(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_health_section_split,
         );
         rect.width > 0
             && col >= rect.x
@@ -289,14 +297,42 @@ impl AppState {
 
     pub(super) fn set_sidebar_section_split(&mut self, row: u16) {
         let sidebar = self.view.sidebar_rect;
-        let content_height = sidebar.height;
+        let (workspace, agents) = crate::ui::expanded_sidebar_sections(
+            sidebar,
+            self.sidebar_section_split,
+            self.sidebar_health_section_split,
+        );
+        let content_height = workspace.height.saturating_add(agents.height);
         if content_height < 6 {
             return;
         }
-        let relative_y = row.saturating_sub(sidebar.y);
+        let relative_y = row.saturating_sub(workspace.y);
         let ratio = (relative_y as f32) / (content_height as f32);
         self.sidebar_section_split = ratio.clamp(0.1, 0.9);
         self.mark_session_dirty();
+    }
+
+    pub(super) fn on_sidebar_health_divider(&self, col: u16, row: u16) -> bool {
+        if self.sidebar_collapsed {
+            return false;
+        }
+        let rect = crate::ui::health_check_divider_rect(
+            self.view.sidebar_rect,
+            self.sidebar_health_section_split,
+        );
+        rect.width > 0
+            && col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height
+    }
+
+    pub(super) fn set_sidebar_health_section_split(&mut self, row: u16) {
+        let sidebar = self.view.sidebar_rect;
+        if let Some(ratio) = crate::ui::health_split_ratio_for_row(sidebar, row) {
+            self.sidebar_health_section_split = Some(ratio);
+            self.mark_session_dirty();
+        }
     }
 
     pub(super) fn workspace_at_row(&self, row: u16) -> Option<usize> {
@@ -473,6 +509,7 @@ impl AppState {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_health_section_split,
         );
         let rect = crate::ui::agent_panel_toggle_rect(detail_area, self.agent_panel_sort);
         rect.width > 0
@@ -729,7 +766,17 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 16));
+        let (_, agents) = crate::ui::expanded_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_section_split,
+            app.state.sidebar_health_section_split,
+        );
+        let second_agent_row = crate::ui::agent_panel_body_rect(agents, false).y + 2;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            2,
+            second_agent_row,
+        ));
 
         assert_eq!(app.state.workspaces[0].active_tab, 1);
         assert_eq!(
@@ -855,6 +902,7 @@ mod tests {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             app.state.view.sidebar_rect,
             app.state.sidebar_section_split,
+            app.state.sidebar_health_section_split,
         );
         let toggle = crate::ui::agent_panel_toggle_rect(detail_area, app.state.agent_panel_sort);
         app.handle_mouse(mouse(
@@ -901,6 +949,7 @@ mod tests {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             app.state.view.sidebar_rect,
             app.state.sidebar_section_split,
+            app.state.sidebar_health_section_split,
         );
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -1609,7 +1658,7 @@ mod tests {
             Workspace::test_new("b"),
             Workspace::test_new("c"),
         ];
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 30));
 
         let cards = &app.state.view.workspace_card_areas;
         let bottom_slot = crate::ui::workspace_drop_indicator_row(
@@ -1894,6 +1943,7 @@ mod tests {
         let divider = crate::ui::sidebar_section_divider_rect(
             app.state.view.sidebar_rect,
             app.state.sidebar_section_split,
+            app.state.sidebar_health_section_split,
         );
 
         app.handle_mouse(mouse(
@@ -1913,6 +1963,34 @@ mod tests {
             snapshot.sidebar_section_split,
             Some(app.state.sidebar_section_split)
         );
+    }
+
+    #[test]
+    fn dragging_health_divider_resizes_and_persists_health_section() {
+        let mut app = app_for_mouse_test();
+        let divider = crate::ui::health_check_divider_rect(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_health_section_split,
+        );
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider.x + 1,
+            divider.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider.x + 1,
+            divider.y.saturating_sub(4),
+        ));
+
+        let split = app.state.sidebar_health_section_split.unwrap();
+        assert_eq!(
+            crate::ui::health_check_divider_rect(app.state.view.sidebar_rect, Some(split)).y,
+            divider.y - 4
+        );
+        let snapshot = capture_snapshot(&app.state);
+        assert_eq!(snapshot.sidebar_health_section_split, Some(split));
     }
 
     #[test]
