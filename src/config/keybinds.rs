@@ -302,10 +302,17 @@ pub struct NavigateKeybinds {
     pub pane_right: ActionKeybinds,
 }
 
+#[derive(Debug, Clone)]
+pub struct NavigatorKeybinds {
+    pub up: ActionKeybinds,
+    pub down: ActionKeybinds,
+}
+
 /// Parsed keybinds for Herdr actions.
 #[derive(Debug, Clone)]
 pub struct Keybinds {
     pub navigate: NavigateKeybinds,
+    pub navigator: NavigatorKeybinds,
     pub help: ActionKeybinds,
     pub settings: ActionKeybinds,
     pub new_workspace: ActionKeybinds,
@@ -458,6 +465,9 @@ impl Config {
         let mut navigate_registry = BindingRegistry::new(prefix, prefix_source);
         navigate_registry.reserve_direct(prefix, "keys.prefix", prefix_source);
         reserve_navigate_runtime_keys(&mut navigate_registry);
+        let mut navigator_registry = BindingRegistry::new(prefix, prefix_source);
+        navigator_registry.reserve_direct(prefix, "keys.prefix", prefix_source);
+        reserve_navigator_runtime_keys(&mut navigator_registry);
 
         macro_rules! empty_action {
             () => {
@@ -473,6 +483,10 @@ impl Config {
                 pane_down: empty_action!(),
                 pane_up: empty_action!(),
                 pane_right: empty_action!(),
+            },
+            navigator: NavigatorKeybinds {
+                up: empty_action!(),
+                down: empty_action!(),
             },
             help: empty_action!(),
             settings: empty_action!(),
@@ -602,6 +616,24 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_down, navigate_pane_down, source);
             apply_navigate!(keybinds.navigate.pane_up, navigate_pane_up, source);
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
+            if field_source!(navigate_navigator_up) == source {
+                keybinds.navigator.up = parse_navigator_bindings(
+                    "keys.navigate_navigator_up",
+                    &self.keys.navigate_navigator_up,
+                    &mut navigator_registry,
+                    &mut diagnostics,
+                    source,
+                );
+            }
+            if field_source!(navigate_navigator_down) == source {
+                keybinds.navigator.down = parse_navigator_bindings(
+                    "keys.navigate_navigator_down",
+                    &self.keys.navigate_navigator_down,
+                    &mut navigator_registry,
+                    &mut diagnostics,
+                    source,
+                );
+            }
             apply_action!(keybinds.help, help, source);
             apply_action!(keybinds.settings, settings, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
@@ -736,6 +768,30 @@ fn reserve_navigate_runtime_keys(registry: &mut BindingRegistry) {
     }
 }
 
+fn reserve_navigator_runtime_keys(registry: &mut BindingRegistry) {
+    reserve_navigate_runtime_keys(registry);
+    for combo in [
+        (KeyCode::Up, KeyModifiers::empty()),
+        (KeyCode::Down, KeyModifiers::empty()),
+        (KeyCode::Char('j'), KeyModifiers::empty()),
+        (KeyCode::Char('k'), KeyModifiers::empty()),
+        (KeyCode::Char('a'), KeyModifiers::empty()),
+        (KeyCode::Char('b'), KeyModifiers::empty()),
+        (KeyCode::Char('w'), KeyModifiers::empty()),
+        (KeyCode::Char('i'), KeyModifiers::empty()),
+        (KeyCode::Char('d'), KeyModifiers::empty()),
+        (KeyCode::Char('/'), KeyModifiers::empty()),
+        (KeyCode::Char('d'), KeyModifiers::CONTROL),
+        (KeyCode::Char('u'), KeyModifiers::CONTROL),
+        (KeyCode::Home, KeyModifiers::empty()),
+        (KeyCode::End, KeyModifiers::empty()),
+        (KeyCode::Char('G'), KeyModifiers::SHIFT),
+        (KeyCode::Char(' '), KeyModifiers::empty()),
+    ] {
+        registry.reserve_direct(combo, "navigator reserved keys", BindingSource::Default);
+    }
+}
+
 fn append_custom_command_bindings(
     config: &Config,
     keybinds: &mut Keybinds,
@@ -847,6 +903,42 @@ fn parse_navigate_bindings(
         match parse_binding_string(raw) {
             Some(ParsedBinding::Single(binding)) => {
                 if reject_navigate_binding(field, &binding, registry, diagnostics, source) {
+                    continue;
+                }
+                registry.register(&binding, field, source);
+                bindings.push(binding);
+            }
+            Some(ParsedBinding::Range(_)) => {
+                let diag = format!("range keybinding is only valid for indexed actions: {field} = {raw:?}; disabling binding");
+                warn!(message = %diag, "config diagnostic");
+                diagnostics.push(diag);
+            }
+            None => {
+                let diag = format!("invalid keybinding: {field} = {raw:?}; disabling binding");
+                warn!(message = %diag, "config diagnostic");
+                diagnostics.push(diag);
+            }
+        }
+    }
+    ActionKeybinds { bindings }
+}
+
+fn parse_navigator_bindings(
+    field: &'static str,
+    config: &BindingConfig,
+    registry: &mut BindingRegistry,
+    diagnostics: &mut Vec<String>,
+    source: BindingSource,
+) -> ActionKeybinds {
+    let mut bindings = Vec::new();
+    for raw in config.values() {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        match parse_binding_string(raw) {
+            Some(ParsedBinding::Single(binding)) => {
+                if reject_navigator_binding(field, &binding, registry, diagnostics, source) {
                     continue;
                 }
                 registry.register(&binding, field, source);
@@ -1006,6 +1098,33 @@ fn reject_navigate_binding(
         }
         let first_field = &first_binding.field;
         let diag = format!("{}: kept {first_field}, disabled {field}", binding.label);
+        warn!(message = %diag, "config diagnostic");
+        diagnostics.push(diag);
+        return true;
+    }
+
+    false
+}
+
+fn reject_navigator_binding(
+    field: &str,
+    binding: &ResolvedBinding,
+    registry: &BindingRegistry,
+    diagnostics: &mut Vec<String>,
+    source: BindingSource,
+) -> bool {
+    if reject_navigate_binding(field, binding, registry, diagnostics, source) {
+        return true;
+    }
+
+    let (code, modifiers) = normalize_key_combo(binding.trigger.combo());
+    if matches!(code, KeyCode::Char(_))
+        && (modifiers.is_empty() || modifiers == KeyModifiers::SHIFT)
+    {
+        let diag = format!(
+            "navigator keybinding must not consume printable search input: {field} = {:?}; disabling binding",
+            binding.label
+        );
         warn!(message = %diag, "config diagnostic");
         diagnostics.push(diag);
         return true;
@@ -1832,6 +1951,49 @@ navigate_pane_down = "ctrl+j"
         assert!(diagnostics.iter().any(|diag| {
             diag.contains("kept keys.navigate_workspace_up")
                 && diag.contains("disabled keys.navigate_workspace_down")
+        }));
+    }
+
+    #[test]
+    fn navigator_bindings_are_independent_from_workspace_picker_bindings() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+navigate_workspace_up = "ctrl+p"
+navigate_workspace_down = "ctrl+n"
+navigate_navigator_up = "ctrl+p"
+navigate_navigator_down = "ctrl+n"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+
+        for bindings in [&keybinds.navigate.workspace_up, &keybinds.navigator.up] {
+            assert!(bindings
+                .matches_direct_key(&TerminalKey::new(KeyCode::Char('p'), KeyModifiers::CONTROL,)));
+        }
+        for bindings in [&keybinds.navigate.workspace_down, &keybinds.navigator.down] {
+            assert!(bindings
+                .matches_direct_key(&TerminalKey::new(KeyCode::Char('n'), KeyModifiers::CONTROL,)));
+        }
+    }
+
+    #[test]
+    fn navigator_bindings_reject_printable_search_input() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+navigate_navigator_up = "x"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        let diagnostics = config.collect_diagnostics();
+
+        assert!(keybinds.navigator.up.bindings.is_empty());
+        assert!(diagnostics.iter().any(|diag| {
+            diag.contains("must not consume printable search input")
+                && diag.contains("keys.navigate_navigator_up")
         }));
     }
 

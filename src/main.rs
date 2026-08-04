@@ -232,10 +232,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resize_pane_right = ""  # optional, e.g. "ctrl+shift+alt+right"
 # toggle_sidebar = "prefix+b"
 
-# Navigate-mode movement. These local shortcuts win while navigate mode is open.
-# They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
+# Navigation movement. Navigate-mode shortcuts win while the workspace picker is open.
+# Navigator shortcuts move the Session Navigator selection. Do not include prefix+, esc, enter, tab, or 1..9 here.
 # navigate_workspace_up = "up"
 # navigate_workspace_down = "down"
+# navigate_navigator_up = "ctrl+p"
+# navigate_navigator_down = "ctrl+n"
 # navigate_pane_left = "h"      # left arrow always focuses the pane to the left
 # navigate_pane_down = "j"
 # navigate_pane_up = "k"
