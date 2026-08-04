@@ -1214,7 +1214,7 @@ fn live_handoff_accepts_canonical_pane_id_from_child_env() {
 
 #[test]
 fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     let _lock = test_lock();
     let base = unique_test_dir();
@@ -1224,17 +1224,20 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     let old_session = base.join("old-session.jsonl");
     let new_session = base.join("new-session.jsonl");
     let started_marker = base.join("agent-started");
-    let fake_pi = base.join("pi");
+    let fake_pi = base.join("launch-pi");
+    let fake_pi_process = base.join("pi");
     fs::create_dir_all(&base).unwrap();
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
-            started_marker.display()
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec {} 30\n",
+            started_marker.display(),
+            fake_pi_process.display()
         ),
     )
     .unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
+    symlink("/bin/sleep", &fake_pi_process).unwrap();
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));

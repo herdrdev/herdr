@@ -123,6 +123,14 @@ pub enum SidebarCollapsedModeConfig {
     Hidden,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarPositionConfig {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RightClickPassthroughModifierConfig(Option<KeyModifiers>);
 
@@ -788,6 +796,8 @@ pub struct UiConfig {
     pub sidebar_min_width: u16,
     /// Maximum sidebar width (columns) when expanded. Default: 36.
     pub sidebar_max_width: u16,
+    /// Desktop sidebar placement. Default: left.
+    pub sidebar_position: SidebarPositionConfig,
     /// Start with the sidebar collapsed. Default: false.
     pub sidebar_start_collapsed: bool,
     /// Collapsed sidebar presentation. Default: compact.
@@ -1010,6 +1020,7 @@ impl Default for UiConfig {
             sidebar_width: 26,
             sidebar_min_width: 18,
             sidebar_max_width: 36,
+            sidebar_position: SidebarPositionConfig::Left,
             sidebar_start_collapsed: false,
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
@@ -1407,6 +1418,23 @@ mobile_width_threshold = 96
         assert_eq!(config.ui.sidebar_min_width, 12);
         assert_eq!(config.ui.sidebar_max_width, 80);
         assert_eq!(config.ui.mobile_width_threshold, 96);
+    }
+
+    #[test]
+    fn sidebar_position_defaults_left_and_parses_right() {
+        assert_eq!(
+            Config::default().ui.sidebar_position,
+            SidebarPositionConfig::Left
+        );
+
+        let config: Config = toml::from_str(
+            r#"
+[ui]
+sidebar_position = "right"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.ui.sidebar_position, SidebarPositionConfig::Right);
     }
 
     #[test]

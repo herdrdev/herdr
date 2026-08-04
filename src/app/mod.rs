@@ -609,6 +609,7 @@ impl App {
             sidebar_width,
             sidebar_min_width,
             sidebar_max_width,
+            sidebar_position: config.ui.sidebar_position,
             mobile_width_threshold: config.ui.mobile_width_threshold,
             sidebar_width_source,
             sidebar_width_auto: false,
@@ -1413,6 +1414,7 @@ impl App {
                 }
                 self.state.sidebar_min_width = config.ui.sidebar_min_width;
                 self.state.sidebar_max_width = config.ui.sidebar_max_width;
+                self.state.sidebar_position = config.ui.sidebar_position;
                 self.state.sidebar_collapsed_mode = config.ui.sidebar_collapsed_mode;
                 self.state.mobile_width_threshold = config.ui.mobile_width_threshold;
                 // Re-clamp the live width to the new bounds. No source guard — bounds
@@ -2626,11 +2628,16 @@ mod tests {
     fn startup_uses_configured_sidebar_state() {
         let mut config = Config::default();
         config.ui.sidebar_start_collapsed = true;
+        config.ui.sidebar_position = crate::config::SidebarPositionConfig::Right;
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
 
         assert!(app.state.sidebar_collapsed);
+        assert_eq!(
+            app.state.sidebar_position,
+            crate::config::SidebarPositionConfig::Right
+        );
     }
 
     #[test]
@@ -3086,9 +3093,9 @@ mod tests {
     }
 
     #[test]
-    fn reload_config_updates_sidebar_collapsed_mode() {
+    fn reload_config_updates_sidebar_presentation() {
         let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-sidebar-collapsed-mode");
+        let path = temp_config_path("reload-config-sidebar-presentation");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
@@ -3097,13 +3104,25 @@ mod tests {
             app.state.sidebar_collapsed_mode,
             crate::config::SidebarCollapsedModeConfig::Compact
         );
+        assert_eq!(
+            app.state.sidebar_position,
+            crate::config::SidebarPositionConfig::Left
+        );
 
-        std::fs::write(&path, "[ui]\nsidebar_collapsed_mode = \"hidden\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "[ui]\nsidebar_collapsed_mode = \"hidden\"\nsidebar_position = \"right\"\n",
+        )
+        .unwrap();
         let report = app.reload_config();
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
         assert_eq!(
             app.state.sidebar_collapsed_mode,
             crate::config::SidebarCollapsedModeConfig::Hidden
+        );
+        assert_eq!(
+            app.state.sidebar_position,
+            crate::config::SidebarPositionConfig::Right
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

@@ -1557,6 +1557,7 @@ impl AppState {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_position,
         );
         self.agent_panel_scroll = crate::ui::agent_panel_scroll_for_target(
             self,

@@ -80,11 +80,11 @@ pub(crate) use self::{
         agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
         agent_panel_toggle_rect, all_agent_panel_entries, collapsed_sidebar_sections,
         collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,
-        expanded_sidebar_toggle_rect, normalized_workspace_scroll, sidebar_section_divider_rect,
-        workspace_drop_slots, workspace_group_chevron_rect, workspace_list_entries,
-        workspace_list_entries_expanded, workspace_list_rect, workspace_list_scroll_metrics,
-        workspace_list_scrollbar_rect, workspace_parent_group_state, AgentPanelEntry,
-        WorkspaceListEntry,
+        expanded_sidebar_toggle_rect, normalized_workspace_scroll, sidebar_divider_x,
+        sidebar_section_divider_rect, workspace_drop_slots, workspace_group_chevron_rect,
+        workspace_list_entries, workspace_list_entries_expanded, workspace_list_rect,
+        workspace_list_scroll_metrics, workspace_list_scrollbar_rect, workspace_parent_group_state,
+        AgentPanelEntry, WorkspaceListEntry,
     },
 };
 
@@ -234,8 +234,18 @@ fn compute_view_internal(
             .clamp(app.sidebar_min_width, app.sidebar_max_width)
     };
 
-    let [sidebar_area, main_area] =
-        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+    let (sidebar_area, main_area) = match app.sidebar_position {
+        crate::config::SidebarPositionConfig::Left => {
+            let [sidebar_area, main_area] =
+                Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+            (sidebar_area, main_area)
+        }
+        crate::config::SidebarPositionConfig::Right => {
+            let [main_area, sidebar_area] =
+                Layout::horizontal([Constraint::Min(1), Constraint::Length(sidebar_w)]).areas(area);
+            (sidebar_area, main_area)
+        }
+    };
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -245,7 +255,11 @@ fn compute_view_internal(
 
     if !app.sidebar_collapsed {
         app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
-        let (_, detail_area) = expanded_sidebar_sections(sidebar_area, app.sidebar_section_split);
+        let (_, detail_area) = expanded_sidebar_sections(
+            sidebar_area,
+            app.sidebar_section_split,
+            app.sidebar_position,
+        );
         let max_agent_scroll = agent_panel_scroll_metrics(app, detail_area).max_offset_from_bottom;
         app.agent_panel_scroll = app.agent_panel_scroll.min(max_agent_scroll);
     } else {
@@ -1031,6 +1045,35 @@ mod tests {
     }
 
     #[test]
+    fn right_sidebar_places_chrome_and_content_on_right() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_position = crate::config::SidebarPositionConfig::Right;
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+
+        assert_eq!(app.view.sidebar_rect, Rect::new(54, 0, 26, 20));
+        assert_eq!(app.view.tab_bar_rect, Rect::new(0, 0, 54, 1));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 1, 54, 19));
+        assert_eq!(app.view.workspace_card_areas[0].rect.x, 55);
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(54, 5)].symbol(), "│");
+        assert_eq!(buffer[(55, 19)].symbol(), "»");
+
+        let new_button = app.sidebar_new_button_rect();
+        assert_eq!(buffer[(new_button.x + 1, new_button.y)].symbol(), "n");
+        let menu = app.global_launcher_rect();
+        assert_eq!(buffer[(menu.x + 2, menu.y)].symbol(), "m");
+    }
+
+    #[test]
     fn hidden_collapsed_sidebar_uses_full_width_terminal_area() {
         let mut app = crate::app::state::AppState::test_new();
         app.sidebar_collapsed = true;
@@ -1053,26 +1096,47 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_sidebar_keeps_active_workspace_highlight_in_terminal_mode() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.sidebar_collapsed = true;
-        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
-        app.active = Some(1);
-        app.selected = 0;
-        app.mode = Mode::Terminal;
+    fn collapsed_sidebar_tracks_position_and_active_workspace_highlight() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = crate::app::state::AppState::test_new();
+            app.sidebar_collapsed = true;
+            app.sidebar_position = position;
+            app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+            app.active = Some(1);
+            app.selected = 0;
+            app.mode = Mode::Terminal;
 
-        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+            compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
-        let backend = TestBackend::new(80, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(&app, frame)).unwrap();
-        let buffer = terminal.backend().buffer();
+            let backend = TestBackend::new(80, 20);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|frame| render(&app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
 
-        let (ws_area, _, _) = collapsed_sidebar_sections(app.view.sidebar_rect);
-        let active_row = ws_area.y + 1;
-        let active_style = buffer[(ws_area.x, active_row)].style();
+            let (ws_area, _, _) =
+                collapsed_sidebar_sections(app.view.sidebar_rect, app.sidebar_position);
+            let expected_x = match position {
+                crate::config::SidebarPositionConfig::Left => 0,
+                crate::config::SidebarPositionConfig::Right => 77,
+            };
+            assert_eq!(ws_area.x, expected_x);
 
-        assert_eq!(active_style.bg, Some(app.palette.surface_dim));
+            let active_row = ws_area.y + 1;
+            let active_style = buffer[(ws_area.x, active_row)].style();
+            assert_eq!(active_style.bg, Some(app.palette.surface_dim));
+
+            let divider_x = sidebar_divider_x(app.view.sidebar_rect, position).unwrap();
+            assert_eq!(buffer[(divider_x, 5)].symbol(), "│");
+            let toggle = collapsed_sidebar_toggle_rect(app.view.sidebar_rect, position);
+            let expected_icon = match position {
+                crate::config::SidebarPositionConfig::Left => "»",
+                crate::config::SidebarPositionConfig::Right => "«",
+            };
+            assert_eq!(buffer[(toggle.x, toggle.y)].symbol(), expected_icon);
+        }
     }
 
     #[test]

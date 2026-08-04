@@ -10,7 +10,7 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split)
+        crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split, self.sidebar_position)
     }
 
     pub(super) fn agent_panel_rect(&self) -> Rect {
@@ -18,8 +18,11 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
+        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
+            sidebar,
+            self.sidebar_section_split,
+            self.sidebar_position,
+        );
         detail_area
     }
 
@@ -176,8 +179,17 @@ impl AppState {
 
     pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
         let footer = self.sidebar_footer_rect();
-        let width = 5u16.min(footer.width.max(1));
-        Rect::new(footer.x, footer.y, width, footer.height)
+        let inset = u16::from(
+            self.sidebar_position == crate::config::SidebarPositionConfig::Right
+                && footer.width > 1,
+        );
+        let width = 5u16.min(footer.width.saturating_sub(inset).max(1));
+        Rect::new(
+            footer.x.saturating_add(inset),
+            footer.y,
+            width,
+            footer.height,
+        )
     }
 
     pub(crate) fn global_launcher_rect(&self) -> Rect {
@@ -238,7 +250,7 @@ impl AppState {
             return false;
         }
         let sidebar = self.view.sidebar_rect;
-        let toggle = crate::ui::expanded_sidebar_toggle_rect(sidebar);
+        let toggle = crate::ui::expanded_sidebar_toggle_rect(sidebar, self.sidebar_position);
         let on_toggle = toggle.width > 0
             && col >= toggle.x
             && col < toggle.x + toggle.width
@@ -246,16 +258,16 @@ impl AppState {
             && row < toggle.y + toggle.height;
         sidebar.width > 0
             && !on_toggle
-            && col == sidebar.x + sidebar.width.saturating_sub(1)
+            && crate::ui::sidebar_divider_x(sidebar, self.sidebar_position) == Some(col)
             && row >= sidebar.y
             && row < sidebar.y + sidebar.height
     }
 
     pub(super) fn on_sidebar_toggle(&self, col: u16, row: u16) -> bool {
         let rect = if self.sidebar_collapsed {
-            crate::ui::collapsed_sidebar_toggle_rect(self.view.sidebar_rect)
+            crate::ui::collapsed_sidebar_toggle_rect(self.view.sidebar_rect, self.sidebar_position)
         } else {
-            crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect)
+            crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect, self.sidebar_position)
         };
         rect.width > 0
             && col >= rect.x
@@ -266,7 +278,15 @@ impl AppState {
 
     pub(super) fn set_manual_sidebar_width(&mut self, divider_col: u16) {
         let sidebar = self.view.sidebar_rect;
-        let width = divider_col.saturating_sub(sidebar.x).saturating_add(1);
+        let width = match self.sidebar_position {
+            crate::config::SidebarPositionConfig::Left => {
+                divider_col.saturating_sub(sidebar.x).saturating_add(1)
+            }
+            crate::config::SidebarPositionConfig::Right => sidebar
+                .x
+                .saturating_add(sidebar.width)
+                .saturating_sub(divider_col),
+        };
         self.sidebar_width = width.clamp(self.sidebar_min_width, self.sidebar_max_width);
         self.sidebar_width_source = crate::app::state::SidebarWidthSource::Manual;
         self.mark_session_dirty();
@@ -279,6 +299,7 @@ impl AppState {
         let rect = crate::ui::sidebar_section_divider_rect(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_position,
         );
         rect.width > 0
             && col >= rect.x
@@ -321,7 +342,8 @@ impl AppState {
             return None;
         }
 
-        let (ws_area, _, _) = crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect);
+        let (ws_area, _, _) =
+            crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect, self.sidebar_position);
         if ws_area == Rect::default() || row < ws_area.y || row >= ws_area.y + ws_area.height {
             return None;
         }
@@ -338,7 +360,8 @@ impl AppState {
             return None;
         }
 
-        let (_, _, detail_area) = crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect);
+        let (_, _, detail_area) =
+            crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect, self.sidebar_position);
         let detail_content_area = Rect::new(
             detail_area.x,
             detail_area.y,
@@ -473,6 +496,7 @@ impl AppState {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             self.view.sidebar_rect,
             self.sidebar_section_split,
+            self.sidebar_position,
         );
         let rect = crate::ui::agent_panel_toggle_rect(detail_area, self.agent_panel_sort);
         rect.width > 0
@@ -537,17 +561,24 @@ mod tests {
     };
 
     #[test]
-    fn clicking_launcher_opens_global_menu() {
-        let mut app = app_for_mouse_test();
-        let rect = app.state.global_launcher_rect();
+    fn clicking_launcher_opens_global_menu_from_both_sidebar_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_position = position;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+            let rect = app.state.global_launcher_rect();
 
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            rect.x + rect.width.saturating_sub(1),
-            rect.y,
-        ));
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                rect.x + rect.width.saturating_sub(1),
+                rect.y,
+            ));
 
-        assert_eq!(app.state.mode, Mode::GlobalMenu);
+            assert_eq!(app.state.mode, Mode::GlobalMenu, "position: {position:?}");
+        }
     }
 
     #[test]
@@ -844,27 +875,40 @@ mod tests {
     }
 
     #[test]
-    fn clicking_agent_panel_toggle_switches_sort() {
-        let mut app = app_for_mouse_test();
-        app.state.workspaces = vec![Workspace::test_new("test")];
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-        app.state.agent_panel_scroll = 3;
+    fn clicking_agent_panel_toggle_switches_sort_from_both_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.workspaces = vec![Workspace::test_new("test")];
+            app.state.active = Some(0);
+            app.state.selected = 0;
+            app.state.mode = Mode::Terminal;
+            app.state.agent_panel_scroll = 3;
+            app.state.sidebar_position = position;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
-        );
-        let toggle = crate::ui::agent_panel_toggle_rect(detail_area, app.state.agent_panel_sort);
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            toggle.x,
-            toggle.y,
-        ));
+            let (_, detail_area) = crate::ui::expanded_sidebar_sections(
+                app.state.view.sidebar_rect,
+                app.state.sidebar_section_split,
+                app.state.sidebar_position,
+            );
+            let toggle =
+                crate::ui::agent_panel_toggle_rect(detail_area, app.state.agent_panel_sort);
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                toggle.x,
+                toggle.y,
+            ));
 
-        assert_eq!(app.state.agent_panel_sort, AgentPanelSort::Priority);
-        assert_eq!(app.state.agent_panel_scroll, 0);
+            assert_eq!(
+                app.state.agent_panel_sort,
+                AgentPanelSort::Priority,
+                "position: {position:?}"
+            );
+            assert_eq!(app.state.agent_panel_scroll, 0, "position: {position:?}");
+        }
     }
 
     #[test]
@@ -901,6 +945,7 @@ mod tests {
         let (_, detail_area) = crate::ui::expanded_sidebar_sections(
             app.state.view.sidebar_rect,
             app.state.sidebar_section_split,
+            app.state.sidebar_position,
         );
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -1076,8 +1121,10 @@ mod tests {
         app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
         app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
 
-        let (_, _, detail_area) =
-            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        let (_, _, detail_area) = crate::ui::collapsed_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_position,
+        );
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             detail_area.x,
@@ -1121,8 +1168,10 @@ mod tests {
         set_state(&mut app, 0, first_pane, AgentState::Working);
         set_state(&mut app, 1, second_pane, AgentState::Blocked);
 
-        let (_, _, detail_area) =
-            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        let (_, _, detail_area) = crate::ui::collapsed_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_position,
+        );
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             detail_area.x,
@@ -1138,20 +1187,28 @@ mod tests {
     }
 
     #[test]
-    fn clicking_collapsed_sidebar_toggle_expands_sidebar() {
-        let mut app = app_for_mouse_test();
-        app.state.sidebar_collapsed = true;
-        app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
-        app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
+    fn clicking_collapsed_sidebar_toggle_expands_from_both_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_collapsed = true;
+            app.state.sidebar_position = position;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
-        let toggle = crate::ui::collapsed_sidebar_toggle_rect(app.state.view.sidebar_rect);
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            toggle.x,
-            toggle.y,
-        ));
+            let toggle = crate::ui::collapsed_sidebar_toggle_rect(
+                app.state.view.sidebar_rect,
+                app.state.sidebar_position,
+            );
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                toggle.x,
+                toggle.y,
+            ));
 
-        assert!(!app.state.sidebar_collapsed);
+            assert!(!app.state.sidebar_collapsed, "position: {position:?}");
+        }
     }
 
     #[test]
@@ -1168,21 +1225,29 @@ mod tests {
     }
 
     #[test]
-    fn clicking_expanded_sidebar_toggle_collapses_sidebar() {
-        let mut app = app_for_mouse_test();
-        app.state.sidebar_collapsed = false;
-        app.state.view.sidebar_rect = Rect::new(0, 0, 26, 20);
-        app.state.view.terminal_area = Rect::new(26, 0, 80, 20);
+    fn clicking_expanded_sidebar_toggle_collapses_from_both_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_collapsed = false;
+            app.state.sidebar_position = position;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
-        let toggle = crate::ui::expanded_sidebar_toggle_rect(app.state.view.sidebar_rect);
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            toggle.x,
-            toggle.y,
-        ));
+            let toggle = crate::ui::expanded_sidebar_toggle_rect(
+                app.state.view.sidebar_rect,
+                app.state.sidebar_position,
+            );
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                toggle.x,
+                toggle.y,
+            ));
 
-        assert!(app.state.sidebar_collapsed);
-        assert!(app.state.drag.is_none());
+            assert!(app.state.sidebar_collapsed, "position: {position:?}");
+            assert!(app.state.drag.is_none(), "position: {position:?}");
+        }
     }
 
     #[test]
@@ -1282,6 +1347,29 @@ mod tests {
         ));
 
         assert!(!app.state.collapsed_space_keys.contains("repo-key"));
+    }
+
+    #[test]
+    fn right_sidebar_scrollbar_uses_content_edge_for_hit_testing() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_position = crate::config::SidebarPositionConfig::Right;
+        app.state.workspaces = (0..20)
+            .map(|idx| Workspace::test_new(&format!("workspace-{idx}")))
+            .collect();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 30));
+
+        let list = app.state.workspace_list_rect();
+        let track = crate::ui::workspace_list_scrollbar_rect(&app.state, list)
+            .expect("right sidebar workspace list should scroll");
+
+        assert_eq!(track.x, list.x + list.width - 1);
+        assert!(track.x > app.state.view.sidebar_rect.x);
+        assert!(app
+            .state
+            .workspace_list_scrollbar_target_at(track.x, track.y)
+            .is_some());
     }
 
     #[test]
@@ -1847,6 +1935,31 @@ mod tests {
     }
 
     #[test]
+    fn dragging_right_sidebar_divider_tracks_both_directions() {
+        for (delta, expected_width) in [(-5i16, 31u16), (5, 21)] {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_position = crate::config::SidebarPositionConfig::Right;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+            let divider_col = app.state.view.sidebar_rect.x;
+
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                divider_col,
+                5,
+            ));
+            app.handle_mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                divider_col.saturating_add_signed(delta),
+                5,
+            ));
+
+            assert_eq!(app.state.sidebar_width, expected_width, "delta: {delta}");
+            let snapshot = capture_snapshot(&app.state);
+            assert_eq!(snapshot.sidebar_width, Some(expected_width));
+        }
+    }
+
+    #[test]
     fn dragging_sidebar_bottom_divider_still_sets_manual_width() {
         let mut app = app_for_mouse_test();
         let divider_col = app.state.view.sidebar_rect.x + app.state.view.sidebar_rect.width - 1;
@@ -1889,30 +2002,41 @@ mod tests {
     }
 
     #[test]
-    fn dragging_sidebar_section_divider_sets_split_ratio() {
-        let mut app = app_for_mouse_test();
-        let divider = crate::ui::sidebar_section_divider_rect(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
-        );
+    fn dragging_sidebar_section_divider_sets_split_ratio_from_both_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_position = position;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+            let divider = crate::ui::sidebar_section_divider_rect(
+                app.state.view.sidebar_rect,
+                app.state.sidebar_section_split,
+                app.state.sidebar_position,
+            );
 
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            divider.x + 1,
-            divider.y,
-        ));
-        app.handle_mouse(mouse(
-            MouseEventKind::Drag(MouseButton::Left),
-            divider.x + 1,
-            divider.y + 4,
-        ));
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                divider.x + 1,
+                divider.y,
+            ));
+            app.handle_mouse(mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                divider.x + 1,
+                divider.y + 4,
+            ));
 
-        assert!(app.state.sidebar_section_split > 0.5);
-        let snapshot = capture_snapshot(&app.state);
-        assert_eq!(
-            snapshot.sidebar_section_split,
-            Some(app.state.sidebar_section_split)
-        );
+            assert!(
+                app.state.sidebar_section_split > 0.5,
+                "position: {position:?}"
+            );
+            let snapshot = capture_snapshot(&app.state);
+            assert_eq!(
+                snapshot.sidebar_section_split,
+                Some(app.state.sidebar_section_split)
+            );
+        }
     }
 
     #[test]

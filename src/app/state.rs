@@ -1,5 +1,6 @@
 use crate::config::{
-    Keybinds, NewTerminalCwdConfig, SoundConfig, TabBarPositionConfig, ToastConfig, ToastDelivery,
+    Keybinds, NewTerminalCwdConfig, SidebarPositionConfig, SoundConfig, TabBarPositionConfig,
+    ToastConfig, ToastDelivery,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
@@ -1468,6 +1469,7 @@ pub struct AppState {
     pub sidebar_width: u16,
     pub sidebar_min_width: u16,
     pub sidebar_max_width: u16,
+    pub sidebar_position: SidebarPositionConfig,
     pub mobile_width_threshold: u16,
     pub sidebar_width_source: SidebarWidthSource,
     pub sidebar_width_auto: bool,
@@ -1840,6 +1842,7 @@ impl AppState {
             sidebar_width: 26,
             sidebar_min_width: 18,
             sidebar_max_width: 36,
+            sidebar_position: SidebarPositionConfig::Left,
             mobile_width_threshold: crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD,
             sidebar_width_source: SidebarWidthSource::ConfigDefault,
             sidebar_width_auto: false,

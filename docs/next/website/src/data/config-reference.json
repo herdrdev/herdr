@@ -566,6 +566,16 @@
           "description": "Maximum sidebar width (columns) when expanded."
         },
         {
+          "key": "ui.sidebar_position",
+          "type": "enum",
+          "default": "left",
+          "description": "Place the desktop sidebar on the left or right edge.",
+          "values": [
+            "left",
+            "right"
+          ]
+        },
+        {
           "key": "ui.sidebar_start_collapsed",
           "type": "boolean",
           "default": "false",

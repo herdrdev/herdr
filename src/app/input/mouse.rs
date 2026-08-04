@@ -3835,26 +3835,36 @@ mod tests {
     }
 
     #[test]
-    fn desktop_new_workspace_opens_prompt_when_enabled() {
-        let mut app = app_for_mouse_test();
-        app.state.workspaces = vec![Workspace::test_new("one")];
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-        app.state.prompt_new_workspace_name = true;
+    fn desktop_new_workspace_opens_prompt_from_both_sidebar_positions() {
+        for position in [
+            crate::config::SidebarPositionConfig::Left,
+            crate::config::SidebarPositionConfig::Right,
+        ] {
+            let mut app = app_for_mouse_test();
+            app.state.workspaces = vec![Workspace::test_new("one")];
+            app.state.active = Some(0);
+            app.state.selected = 0;
+            app.state.mode = Mode::Terminal;
+            app.state.prompt_new_workspace_name = true;
+            app.state.sidebar_position = position;
 
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
-        let new_workspace = app.state.sidebar_new_button_rect();
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            new_workspace.x + 1,
-            new_workspace.y,
-        ));
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+            let new_workspace = app.state.sidebar_new_button_rect();
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                new_workspace.x + 1,
+                new_workspace.y,
+            ));
 
-        assert_eq!(app.state.mode, Mode::RenameWorkspace);
-        assert!(app.state.pending_workspace_create_cwd.is_some());
-        assert!(app.state.name_input_replace_on_type);
-        assert_eq!(app.state.workspaces.len(), 1);
+            assert_eq!(
+                app.state.mode,
+                Mode::RenameWorkspace,
+                "position: {position:?}"
+            );
+            assert!(app.state.pending_workspace_create_cwd.is_some());
+            assert!(app.state.name_input_replace_on_type);
+            assert_eq!(app.state.workspaces.len(), 1);
+        }
     }
 
     #[tokio::test]

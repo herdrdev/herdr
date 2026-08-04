@@ -254,9 +254,15 @@ Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `rese
 
 ## UI and sidebar
 
-The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
+The sidebar is the main Herdr dashboard. Search `ui.` in the
+[Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent
+panel ordering, mouse behavior, pane borders, and other presentation settings.
+Set `sidebar_position = "right"` under `[ui]` to move the desktop sidebar to the
+right edge; the default is `"left"`.
 
-Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
+Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row
+below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars
+temporarily replace the bottom tab row while active. The default is `"top"`.
 
 ### Sidebar row layouts
 
