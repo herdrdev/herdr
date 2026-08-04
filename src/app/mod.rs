@@ -1778,6 +1778,11 @@ impl App {
     }
 
     pub(crate) fn clear_input_source(&mut self, source_id: InputSourceId) {
+        // Call this only when the input source is gone for good. A pending URL
+        // click has to outlive a plain focus change, because opening the URL
+        // raises the browser and costs the host terminal its focus before the
+        // mouse release arrives.
+        self.pending_url_click_sources.remove(&source_id);
         self.release_input_source_headless(source_id);
     }
 

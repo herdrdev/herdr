@@ -2710,7 +2710,8 @@ impl HeadlessServer {
                 .iter()
                 .any(|event| matches!(event, crate::raw_input::RawInputEvent::OuterFocusLost))
             {
-                self.app.clear_input_source(client_id);
+                // Focus loss is not a teardown, so the pending URL click stays.
+                self.app.release_input_source_headless(client_id);
             }
         }
         let events = events_for_app_routing(events, source_was_foreground, source_is_full_app);
