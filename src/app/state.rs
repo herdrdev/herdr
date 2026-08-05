@@ -646,6 +646,13 @@ pub struct WorkspaceCardArea {
     pub indented: bool,
 }
 
+/// Hit rect for a workspace-group header row in the workspace list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceGroupHeaderArea {
+    pub group_key: String,
+    pub rect: Rect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeCreateState {
     pub source_workspace_id: String,
@@ -801,6 +808,7 @@ pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
+    pub workspace_group_header_areas: Vec<WorkspaceGroupHeaderArea>,
     pub tab_bar_rect: Rect,
     pub tab_hit_areas: Vec<Rect>,
     pub tab_scroll_left_hit_area: Rect,
@@ -826,6 +834,8 @@ pub enum Mode {
     RenameWorkspace,
     RenameTab,
     RenamePane,
+    SetWorkspaceGroup,
+    RenameWorkspaceGroup,
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
@@ -1212,6 +1222,10 @@ pub enum ContextMenuKind {
         has_worktree_children: bool,
         collapsed: bool,
     },
+    WorkspaceGroupHeader {
+        group_key: String,
+        collapsed: bool,
+    },
     Tab {
         ws_idx: usize,
         tab_idx: usize,
@@ -1236,12 +1250,18 @@ pub struct ContextMenuState {
 impl ContextMenuState {
     pub fn items(&self) -> &'static [&'static str] {
         match self.kind {
-            ContextMenuKind::Workspace { .. } => &["Rename", "Close"],
+            ContextMenuKind::Workspace { .. } => &["Rename", "Set group...", "Close"],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 ..
-            } => &["Rename", "Close", "New worktree", "Open worktree..."],
+            } => &[
+                "Rename",
+                "Set group...",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+            ],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
                 ..
@@ -1253,6 +1273,7 @@ impl ContextMenuState {
                 ..
             } => &[
                 "Rename",
+                "Set group...",
                 "Close group",
                 "New worktree",
                 "Open worktree...",
@@ -1265,11 +1286,18 @@ impl ContextMenuState {
                 ..
             } => &[
                 "Rename",
+                "Set group...",
                 "Close group",
                 "New worktree",
                 "Open worktree...",
                 "Collapse",
             ],
+            ContextMenuKind::WorkspaceGroupHeader {
+                collapsed: true, ..
+            } => &["Rename group", "Expand", "Delete group"],
+            ContextMenuKind::WorkspaceGroupHeader {
+                collapsed: false, ..
+            } => &["Rename group", "Collapse", "Delete group"],
             ContextMenuKind::Tab { .. } => &["New tab", "Rename", "Close"],
             ContextMenuKind::Pane {
                 has_manual_label: true,
@@ -1454,6 +1482,15 @@ pub struct AppState {
     pub worktree_remove: Option<WorktreeRemoveState>,
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    /// User-named workspace groups, in creation order. Shared session
+    /// organization mutated through the JSON API.
+    pub workspace_groups: Vec<crate::workspace::WorkspaceGroup>,
+    pub collapsed_group_keys: std::collections::HashSet<String>,
+    /// Workspace id whose group membership the `SetWorkspaceGroup` dialog
+    /// edits; an id stays valid if the workspace list mutates while open.
+    pub set_group_target: Option<String>,
+    /// Group key the `RenameWorkspaceGroup` dialog edits.
+    pub rename_group_target: Option<String>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
@@ -1817,6 +1854,10 @@ impl AppState {
             worktree_remove: None,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: std::collections::HashSet::new(),
+            set_group_target: None,
+            rename_group_target: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -1834,6 +1875,7 @@ impl AppState {
                 layout: ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
+                workspace_group_header_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
                 tab_scroll_left_hit_area: Rect::default(),
@@ -1977,6 +2019,15 @@ impl AppState {
         state.workspaces = vec![crate::workspace::Workspace::test_adversarial_identity_state()];
         state.active = Some(0);
         state.selected = 0;
+        // Group membership rides workspace identity: keep an assigned group and
+        // a stale collapse key in the fixture so identity refactors must keep
+        // membership referencing a defined group.
+        state.workspace_groups = vec![crate::workspace::WorkspaceGroup {
+            key: "g1".into(),
+            name: "adversarial".into(),
+        }];
+        state.workspaces[0].group_key = Some("g1".into());
+        state.collapsed_group_keys.insert("g-stale".into());
         state.ensure_test_terminals();
         state
     }
@@ -2073,6 +2124,20 @@ impl AppState {
             self.workspaces.len()
         );
 
+        let mut group_keys = std::collections::HashSet::new();
+        for group in &self.workspace_groups {
+            assert!(
+                !group.key.is_empty() && !group.name.is_empty(),
+                "workspace group with empty key or name: {:?}",
+                group
+            );
+            assert!(
+                group_keys.insert(group.key.as_str()),
+                "duplicate workspace group key {}",
+                group.key
+            );
+        }
+
         let mut workspace_ids = std::collections::HashSet::new();
         let mut workspace_id_to_idx = std::collections::HashMap::new();
         let mut pane_ids = std::collections::HashSet::new();
@@ -2084,6 +2149,14 @@ impl AppState {
                 ws.id,
                 ws_idx
             );
+            if let Some(group_key) = ws.group_key.as_deref() {
+                assert!(
+                    group_keys.contains(group_key),
+                    "workspace {} references unknown group key {}",
+                    ws.id,
+                    group_key
+                );
+            }
             workspace_id_to_idx.insert(ws.id.clone(), ws_idx);
             ws.assert_invariants_for_test();
 
@@ -2249,6 +2322,14 @@ impl AppState {
                 ContextMenuKind::Workspace { ws_idx }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
+                }
+                ContextMenuKind::WorkspaceGroupHeader { ref group_key, .. } => {
+                    assert!(
+                        self.workspace_groups
+                            .iter()
+                            .any(|group| group.key == *group_key),
+                        "context menu references unknown workspace group {group_key}"
+                    );
                 }
                 ContextMenuKind::Tab { ws_idx, tab_idx } => {
                     assert_tab_index(ws_idx, tab_idx, "context menu tab")
@@ -2518,7 +2599,13 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "New worktree", "Open worktree..."]
+            &[
+                "Rename",
+                "Set group...",
+                "Close",
+                "New worktree",
+                "Open worktree..."
+            ]
         );
     }
 
@@ -2540,6 +2627,7 @@ mod tests {
             menu.items(),
             &[
                 "Rename",
+                "Set group...",
                 "Close group",
                 "New worktree",
                 "Open worktree...",

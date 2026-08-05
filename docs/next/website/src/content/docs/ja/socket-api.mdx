@@ -97,6 +97,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | クライアント | `client.window_title.set`、`client.window_title.clear` |
 | セッション | `session.snapshot` |
 | ワークスペース | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
+| ワークスペースグループ | `workspace_group.list`、`workspace_group.set`、`workspace_group.rename`、`workspace_group.delete` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | タブ | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
 | ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
@@ -110,6 +111,8 @@ herdr pane read w1:p2 --source recent --lines 50
 `agent.wait` はサーバー所有でイベント駆動です。解決したペイン占有者に固定されるため、置換されたエージェントが待機を満たすことはありません。`agent.prompt` は `until` と `timeout_ms` を持つ省略可能な `wait` オブジェクトを受け付けます。これにより、プロンプト送信と待機開始を 1 つのリクエストで行い、別々の呼び出し間の競合を避けられます。
 
 `workspace.move_block` は、順序付きの `workspace_ids` を `before_workspace_id` の前へアトミックに移動します。アンカーを省略するとブロックを末尾へ移動します。id は一意である必要があり、アンカーをブロックに含めることはできません。レスポンスにはサーバーが確定した順序付きワークスペース一覧が含まれます。
+
+`workspace_group.set` は、名前付きグループへワークスペースを割り当てます。名前が新規の場合はグループを作成し、`group` を省略するとメンバーシップを解除します。worktree スペースのメンバーへの割り当てはスペース全体に適用され、メンバーがいなくなったグループは自動的に削除されます。`workspace_group.rename` と `workspace_group.delete` は、`workspace_group.list` が返す安定した `group_key` でグループを指定します。ワークスペースのレスポンスには、メンバーシップを表す省略可能な `group` フィールドが含まれます。
 
 `session.snapshot` は、独自のローカルランタイムキャッシュを持つクライアント向けに、一度限りのブートストラップスナップショットを返します。レスポンスには、バージョン/プロトコルメタデータ、フォーカス中のワークスペース/タブ/ペイン id、ワークスペース、タブ、ペイン、タブレイアウト、エージェントの各レコードが含まれます。これは購読ではありません。取得後はリソースイベントを購読し、そのイベントでローカルキャッシュを更新してください。再接続後やキャッシュが古い可能性がある場合は、`session.snapshot` を再度呼び出します。ワークスペースレコードには、関連付けられた worktree の出自情報も含まれます。リポジトリ全体の worktree 検出には引き続き `worktree.list` を使います。
 
@@ -637,7 +640,7 @@ workspace の get/list 応答は結果の `tokens` マップを公開し、ス�
 
 最初のレスポンスは購読の確認応答です。以降の行はプッシュされるイベントです。
 
-ワークスペースのイベント購読には `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed`、`workspace.focused` があります。`workspace.metadata_updated` はプラグインイベントフックを実行せずにトークン変更と TTL 失効を報告します。その他のワークスペースイベントは Herdr の UI/ランタイムのライフサイクルを記述します。ワークスペースが worktree グループに属している場合、`workspace.created` は任意の `workspace.worktree` 出自情報を含みます。`workspace.moved` は、移動した `workspace_id`、要求された `insert_index`、更新済みの順序付き `workspaces` リストを含みます。`workspace.reordered` は、アトミックに移動した `workspace_ids`、省略可能な `before_workspace_id`、サーバーが確定した順序付き `workspaces` リストを含みます。削除前に Herdr がまだ識別できる場合、`workspace.closed` は最終的な `workspace` スナップショットを含みます。
+ワークスペースのイベント購読には `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed`、`workspace.focused` があります。`workspace.metadata_updated` はプラグインイベントフックを実行せずにトークン変更と TTL 失効を報告します。その他のワークスペースイベントは Herdr の UI/ランタイムのライフサイクルを記述します。ワークスペースが worktree グループに属している場合、`workspace.created` は任意の `workspace.worktree` 出自情報を含みます。`workspace.moved` は、移動した `workspace_id`、要求された `insert_index`、更新済みの順序付き `workspaces` リストを含みます。`workspace.reordered` は、アトミックに移動した `workspace_ids`、省略可能な `before_workspace_id`、サーバーが確定した順序付き `workspaces` リストを含みます。削除前に Herdr がまだ識別できる場合、`workspace.closed` は最終的な `workspace` スナップショットを含みます。ワークスペースグループの変更は、各グループのメンバー workspace id を含む完全なグループ一覧を持つ `workspace_group.changed` を発行します。
 タブのイベント購読には `tab.created`、`tab.closed`、`tab.focused`、`tab.renamed`、`tab.moved` があります。`tab.moved` は、移動した `tab_id`、`workspace_id`、要求された `insert_index`、そのワークスペースの更新済みの順序付き `tabs` リストを含みます。
 ペインのイベント購読には `pane.created`、`pane.updated`、`pane.closed`、`pane.focused`、`pane.moved`、`pane.exited`、`pane.agent_detected`、`pane.output_matched`、`pane.agent_status_changed`、`pane.scroll_changed` があります。ターミナルタイトルの変更は `pane.updated` を発行することがありますが、生のタイトルでスピナーだけが変化し、`terminal_title_stripped` が変わらない場合は発行しません。`pane.scroll_changed` は 1 つの `pane_id` を対象とし、Herdr がスクロールスナップショットの変化を検出するたびに `pane_id`、`workspace_id`、現在の `scroll` 情報を発行します。
 レイアウトのイベント購読には `layout.updated` があります。このイベントは 1 つのタブについて更新済みの `PaneLayoutSnapshot` を運びます。`session.snapshot` でブートストラップするクライアントは、同じ `workspace_id` と `tab_id` のキャッシュ済みレイアウトを置き換えてください。

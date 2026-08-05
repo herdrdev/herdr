@@ -513,7 +513,36 @@ impl App {
                     checkout_path: space.checkout_path.display().to_string(),
                     is_linked_worktree: space.is_linked_worktree,
                 }),
+            group: ws.group_key().and_then(|key| {
+                self.state.workspace_group(key).map(|group| {
+                    crate::api::schema::WorkspaceGroupInfo {
+                        group_key: group.key.clone(),
+                        name: group.name.clone(),
+                        workspace_ids: Vec::new(),
+                    }
+                })
+            }),
         }
+    }
+
+    /// All workspace groups with their member workspace ids, in creation order.
+    pub(super) fn workspace_group_list_info(&self) -> Vec<crate::api::schema::WorkspaceGroupInfo> {
+        self.state
+            .workspace_groups
+            .iter()
+            .map(|group| crate::api::schema::WorkspaceGroupInfo {
+                group_key: group.key.clone(),
+                name: group.name.clone(),
+                workspace_ids: self
+                    .state
+                    .workspaces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ws)| ws.group_key() == Some(group.key.as_str()))
+                    .map(|(ws_idx, _)| self.public_workspace_id(ws_idx))
+                    .collect(),
+            })
+            .collect()
     }
 }
 

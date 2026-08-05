@@ -463,6 +463,7 @@ impl App {
             false
         };
         if changed {
+            self.state.adopt_space_group_membership(ws_idx);
             self.state.mark_session_dirty();
             if emit_update {
                 self.emit_workspace_updated(ws_idx);

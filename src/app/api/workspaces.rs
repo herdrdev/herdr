@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, WorkspaceCreateParams,
+    WorkspaceGroupDeleteParams, WorkspaceGroupRenameParams, WorkspaceGroupSetParams,
     WorkspaceMoveBlockParams, WorkspaceMoveParams, WorkspaceRenameParams,
     WorkspaceReportMetadataParams, WorkspaceTarget,
 };
@@ -116,6 +117,122 @@ impl App {
                 workspace: self.workspace_info(index),
             },
         )
+    }
+
+    pub(super) fn handle_workspace_group_list(&mut self, id: String) -> String {
+        encode_success(
+            id,
+            ResponseResult::WorkspaceGroupList {
+                groups: self.workspace_group_list_info(),
+            },
+        )
+    }
+
+    pub(super) fn handle_workspace_group_set(
+        &mut self,
+        id: String,
+        params: WorkspaceGroupSetParams,
+    ) -> String {
+        let Some(index) = self.parse_workspace_id(&params.workspace_id) else {
+            return workspace_not_found(id, &params.workspace_id);
+        };
+        if self.state.workspaces.get(index).is_none() {
+            return workspace_not_found(id, &params.workspace_id);
+        }
+        if params
+            .group
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return encode_error(
+                id,
+                "workspace_group_set_failed",
+                "group name must not be empty".to_string(),
+            );
+        }
+        if self
+            .state
+            .set_workspace_group(index, params.group.as_deref())
+        {
+            self.schedule_session_save();
+            self.emit_workspace_groups_changed();
+        }
+
+        encode_success(
+            id,
+            ResponseResult::WorkspaceInfo {
+                workspace: self.workspace_info(index),
+            },
+        )
+    }
+
+    pub(super) fn handle_workspace_group_rename(
+        &mut self,
+        id: String,
+        params: WorkspaceGroupRenameParams,
+    ) -> String {
+        if self.state.workspace_group(&params.group_key).is_none() {
+            return workspace_group_not_found(id, &params.group_key);
+        }
+        let name = params.name.trim();
+        if name.is_empty() {
+            return encode_error(
+                id,
+                "workspace_group_rename_failed",
+                "group name must not be empty".to_string(),
+            );
+        }
+        if self
+            .state
+            .workspace_group_by_name(name)
+            .is_some_and(|group| group.key != params.group_key)
+        {
+            return encode_error(
+                id,
+                "workspace_group_rename_failed",
+                format!("a group named {name:?} already exists"),
+            );
+        }
+        if self.state.rename_workspace_group(&params.group_key, name) {
+            self.schedule_session_save();
+            self.emit_workspace_groups_changed();
+        }
+
+        encode_success(
+            id,
+            ResponseResult::WorkspaceGroupList {
+                groups: self.workspace_group_list_info(),
+            },
+        )
+    }
+
+    pub(super) fn handle_workspace_group_delete(
+        &mut self,
+        id: String,
+        params: WorkspaceGroupDeleteParams,
+    ) -> String {
+        if self.state.workspace_group(&params.group_key).is_none() {
+            return workspace_group_not_found(id, &params.group_key);
+        }
+        if self.state.delete_workspace_group(&params.group_key) {
+            self.schedule_session_save();
+            self.emit_workspace_groups_changed();
+        }
+
+        encode_success(
+            id,
+            ResponseResult::WorkspaceGroupList {
+                groups: self.workspace_group_list_info(),
+            },
+        )
+    }
+
+    pub(super) fn emit_workspace_groups_changed(&mut self) {
+        let groups = self.workspace_group_list_info();
+        self.emit_event(EventEnvelope {
+            event: EventKind::WorkspaceGroupsChanged,
+            data: EventData::WorkspaceGroupsChanged { groups },
+        });
     }
 
     pub(super) fn handle_workspace_move(
@@ -345,6 +462,14 @@ fn workspace_not_found(id: String, workspace_id: &str) -> String {
         id,
         "workspace_not_found",
         format!("workspace {workspace_id} not found"),
+    )
+}
+
+fn workspace_group_not_found(id: String, group_key: &str) -> String {
+    encode_error(
+        id,
+        "workspace_group_not_found",
+        format!("workspace group {group_key} not found"),
     )
 }
 
@@ -706,5 +831,185 @@ mod tests {
         };
         assert_eq!(workspaces[0].workspace_id, moved_id);
         assert!(event_hub.events_after(0).is_empty());
+    }
+
+    fn group_test_app(names: &[&str]) -> (App, crate::api::EventHub) {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        (app, event_hub)
+    }
+
+    #[test]
+    fn api_workspace_group_set_creates_group_and_emits_event() {
+        let (mut app, event_hub) = group_test_app(&["one", "two"]);
+        let workspace_id = app.public_workspace_id(0);
+
+        let response = app.handle_workspace_group_set(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id,
+                group: Some("github".into()),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorkspaceInfo { workspace } = success.result else {
+            panic!("expected workspace info");
+        };
+        let group = workspace.group.expect("workspace should report its group");
+        assert_eq!(group.name, "github");
+        assert_eq!(app.state.workspace_groups.len(), 1);
+        let events = event_hub.events_after(0);
+        assert_eq!(events.len(), 1);
+        let crate::api::schema::EventData::WorkspaceGroupsChanged { groups } = &events[0].1.data
+        else {
+            panic!("expected workspace_group.changed event");
+        };
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "github");
+        assert_eq!(groups[0].workspace_ids.len(), 1);
+    }
+
+    #[test]
+    fn api_workspace_group_set_noop_does_not_emit_event() {
+        let (mut app, event_hub) = group_test_app(&["one"]);
+        let workspace_id = app.public_workspace_id(0);
+        app.handle_workspace_group_set(
+            "req1".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id: workspace_id.clone(),
+                group: Some("github".into()),
+            },
+        );
+        let seen = event_hub.events_after(0).len();
+
+        let response = app.handle_workspace_group_set(
+            "req2".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id,
+                group: Some("github".into()),
+            },
+        );
+
+        assert!(serde_json::from_str::<SuccessResponse>(&response).is_ok());
+        assert_eq!(event_hub.events_after(0).len(), seen);
+    }
+
+    #[test]
+    fn api_workspace_group_set_rejects_blank_names_and_unknown_workspaces() {
+        let (mut app, _event_hub) = group_test_app(&["one"]);
+        let workspace_id = app.public_workspace_id(0);
+
+        let blank = app.handle_workspace_group_set(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id,
+                group: Some("   ".into()),
+            },
+        );
+        assert!(blank.contains("workspace_group_set_failed"));
+
+        let missing = app.handle_workspace_group_set(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id: "w_missing".into(),
+                group: Some("github".into()),
+            },
+        );
+        assert!(missing.contains("workspace_not_found"));
+    }
+
+    #[test]
+    fn api_workspace_group_rename_validates_and_lists_groups() {
+        let (mut app, _event_hub) = group_test_app(&["one", "two"]);
+        for (idx, name) in [(0usize, "github"), (1, "work")] {
+            let workspace_id = app.public_workspace_id(idx);
+            app.handle_workspace_group_set(
+                "seed".into(),
+                crate::api::schema::WorkspaceGroupSetParams {
+                    workspace_id,
+                    group: Some(name.into()),
+                },
+            );
+        }
+        let group_key = app.state.workspace_groups[0].key.clone();
+
+        let duplicate = app.handle_workspace_group_rename(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupRenameParams {
+                group_key: group_key.clone(),
+                name: "work".into(),
+            },
+        );
+        assert!(duplicate.contains("workspace_group_rename_failed"));
+
+        let renamed = app.handle_workspace_group_rename(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupRenameParams {
+                group_key,
+                name: "personal".into(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&renamed).unwrap();
+        let ResponseResult::WorkspaceGroupList { groups } = success.result else {
+            panic!("expected group list");
+        };
+        assert_eq!(groups[0].name, "personal");
+
+        let missing = app.handle_workspace_group_rename(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupRenameParams {
+                group_key: "g9".into(),
+                name: "other".into(),
+            },
+        );
+        assert!(missing.contains("workspace_group_not_found"));
+    }
+
+    #[test]
+    fn api_workspace_group_delete_clears_membership() {
+        let (mut app, event_hub) = group_test_app(&["one"]);
+        let workspace_id = app.public_workspace_id(0);
+        app.handle_workspace_group_set(
+            "seed".into(),
+            crate::api::schema::WorkspaceGroupSetParams {
+                workspace_id,
+                group: Some("github".into()),
+            },
+        );
+        let group_key = app.state.workspace_groups[0].key.clone();
+        let seen = event_hub.events_after(0).len();
+
+        let response = app.handle_workspace_group_delete(
+            "req".into(),
+            crate::api::schema::WorkspaceGroupDeleteParams { group_key },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorkspaceGroupList { groups } = success.result else {
+            panic!("expected group list");
+        };
+        assert!(groups.is_empty());
+        assert!(app.state.workspaces[0].group_key.is_none());
+        assert_eq!(event_hub.events_after(0).len(), seen + 1);
+    }
+
+    #[test]
+    fn api_workspace_group_set_dispatches_through_dot_method_name() {
+        let (mut app, _event_hub) = group_test_app(&["one"]);
+        let workspace_id = app.public_workspace_id(0);
+        let request: crate::api::schema::Request = serde_json::from_value(serde_json::json!({
+            "id": "req",
+            "method": "workspace_group.set",
+            "params": { "workspace_id": workspace_id, "group": "github" }
+        }))
+        .unwrap();
+
+        let response = app.handle_api_request(request);
+
+        assert!(serde_json::from_str::<SuccessResponse>(&response).is_ok());
+        assert_eq!(app.state.workspace_groups.len(), 1);
     }
 }

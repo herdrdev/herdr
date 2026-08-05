@@ -231,6 +231,24 @@ fn workspace_row_height_in_body(
 }
 
 fn workspace_entry_gap(app: &AppState, entries: &[WorkspaceListEntry], entry_idx: usize) -> u16 {
+    // A group header hugs its first member so the group reads as one block; a
+    // collapsed group with no visible member keeps the normal gap to whatever
+    // unrelated entry follows.
+    if let Some(WorkspaceListEntry::GroupHeader { key }) = entries.get(entry_idx) {
+        let next_is_member = match entries.get(entry_idx + 1) {
+            Some(WorkspaceListEntry::Workspace { ws_idx, .. }) => {
+                effective_workspace_group_key(app, *ws_idx).as_deref() == Some(key.as_str())
+            }
+            _ => false,
+        };
+        return if next_is_member {
+            0
+        } else if entry_idx + 1 < entries.len() {
+            app.sidebar_spaces.row_gap
+        } else {
+            0
+        };
+    }
     if entry_idx + 1 < entries.len() && !next_entry_is_indented_workspace(entries, entry_idx) {
         app.sidebar_spaces.row_gap
     } else {
@@ -255,6 +273,41 @@ fn space_aggregate_state(app: &AppState, key: &str) -> (AgentState, bool) {
         .map(|ws| ws.aggregate_state(&app.terminals))
         .max_by_key(|(state, seen)| workspace_attention_priority(*state, *seen))
         .unwrap_or((AgentState::Unknown, true))
+}
+
+pub(crate) fn group_aggregate_state(app: &AppState, group_key: &str) -> (AgentState, bool) {
+    app.workspaces
+        .iter()
+        .enumerate()
+        .filter(|(ws_idx, _)| {
+            effective_workspace_group_key(app, *ws_idx).as_deref() == Some(group_key)
+        })
+        .map(|(_, ws)| ws.aggregate_state(&app.terminals))
+        .max_by_key(|(state, seen)| workspace_attention_priority(*state, *seen))
+        .unwrap_or((AgentState::Unknown, true))
+}
+
+/// The workspace-group key a workspace renders under. Worktree-space members
+/// follow their space parent so a space never straddles two groups; keys that
+/// no longer resolve to a defined group are ignored.
+pub(crate) fn effective_workspace_group_key(app: &AppState, ws_idx: usize) -> Option<String> {
+    let ws = app.workspaces.get(ws_idx)?;
+    let source = match ws.worktree_space() {
+        Some(space) if space.is_linked_worktree => app
+            .workspaces
+            .iter()
+            .find(|member| {
+                member.worktree_space().is_some_and(|member_space| {
+                    member_space.key == space.key && !member_space.is_linked_worktree
+                })
+            })
+            .unwrap_or(ws),
+        _ => ws,
+    };
+    source
+        .group_key()
+        .filter(|key| app.workspace_groups.iter().any(|group| group.key == *key))
+        .map(str::to_string)
 }
 
 pub(crate) fn workspace_parent_group_state(
@@ -301,7 +354,11 @@ pub(crate) fn grouped_child_display_label(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WorkspaceListEntry {
     Workspace { ws_idx: usize, indented: bool },
+    GroupHeader { key: String },
 }
+
+/// Fixed row height of a workspace-group header entry.
+pub(crate) const GROUP_HEADER_ROW_HEIGHT: u16 = 1;
 
 pub(crate) fn next_entry_is_indented_workspace(entries: &[WorkspaceListEntry], idx: usize) -> bool {
     matches!(
@@ -371,64 +428,120 @@ fn workspace_list_entries_inner(app: &AppState, force_expanded: bool) -> Vec<Wor
             .map(|space| space.key.clone())
     });
 
-    let mut emitted_groups = std::collections::HashSet::<String>::new();
-    let mut entries = Vec::new();
+    // Display blocks: a loose workspace, or a whole worktree space that always
+    // renders (and moves between groups) as one unit.
+    enum Block {
+        Loose(usize),
+        Space { key: String, parent_idx: usize },
+    }
+    let block_root = |block: &Block| match block {
+        Block::Loose(ws_idx) => *ws_idx,
+        Block::Space { parent_idx, .. } => *parent_idx,
+    };
+
+    let mut emitted_spaces = std::collections::HashSet::<String>::new();
+    let mut blocks = Vec::new();
     for (ws_idx, ws) in app.workspaces.iter().enumerate() {
-        let Some(space) = ws
+        match ws
             .worktree_space()
             .filter(|space| grouped_keys.contains(&space.key))
-        else {
-            entries.push(WorkspaceListEntry::Workspace {
-                ws_idx,
-                indented: false,
-            });
-            continue;
-        };
-
-        if !emitted_groups.insert(space.key.clone()) {
-            continue;
-        }
-
-        let Some(members) = members_by_key.get(&space.key) else {
-            continue;
-        };
-        let Some(parent_idx) = members.iter().copied().find(|idx| {
-            app.workspaces
-                .get(*idx)
-                .and_then(|member| member.worktree_space())
-                .is_some_and(|member_space| !member_space.is_linked_worktree)
-        }) else {
-            entries.push(WorkspaceListEntry::Workspace {
-                ws_idx,
-                indented: false,
-            });
-            continue;
-        };
-        let collapsed = !force_expanded && app.collapsed_space_keys.contains(&space.key);
-        entries.push(WorkspaceListEntry::Workspace {
-            ws_idx: parent_idx,
-            indented: false,
-        });
-
-        if collapsed {
-            if let Some(active_idx) = visible_group_idx
-                .filter(|idx| *idx != parent_idx)
-                .filter(|_| active_group.as_deref() == Some(space.key.as_str()))
-            {
-                entries.push(WorkspaceListEntry::Workspace {
-                    ws_idx: active_idx,
-                    indented: true,
-                });
-            }
-        } else {
-            for member_idx in members {
-                if *member_idx == parent_idx {
+        {
+            Some(space) => {
+                if !emitted_spaces.insert(space.key.clone()) {
                     continue;
                 }
-                entries.push(WorkspaceListEntry::Workspace {
-                    ws_idx: *member_idx,
-                    indented: true,
+                let parent_idx = members_by_key.get(&space.key).and_then(|members| {
+                    members.iter().copied().find(|idx| {
+                        app.workspaces
+                            .get(*idx)
+                            .and_then(|member| member.worktree_space())
+                            .is_some_and(|member_space| !member_space.is_linked_worktree)
+                    })
                 });
+                match parent_idx {
+                    Some(parent_idx) => blocks.push(Block::Space {
+                        key: space.key.clone(),
+                        parent_idx,
+                    }),
+                    None => blocks.push(Block::Loose(ws_idx)),
+                }
+            }
+            None => blocks.push(Block::Loose(ws_idx)),
+        }
+    }
+
+    let push_block = |entries: &mut Vec<WorkspaceListEntry>, block: &Block| match block {
+        Block::Loose(ws_idx) => entries.push(WorkspaceListEntry::Workspace {
+            ws_idx: *ws_idx,
+            indented: false,
+        }),
+        Block::Space { key, parent_idx } => {
+            let collapsed = !force_expanded && app.collapsed_space_keys.contains(key);
+            entries.push(WorkspaceListEntry::Workspace {
+                ws_idx: *parent_idx,
+                indented: false,
+            });
+            if collapsed {
+                if let Some(active_idx) = visible_group_idx
+                    .filter(|idx| *idx != *parent_idx)
+                    .filter(|_| active_group.as_deref() == Some(key.as_str()))
+                {
+                    entries.push(WorkspaceListEntry::Workspace {
+                        ws_idx: active_idx,
+                        indented: true,
+                    });
+                }
+            } else if let Some(members) = members_by_key.get(key) {
+                for member_idx in members {
+                    if *member_idx == *parent_idx {
+                        continue;
+                    }
+                    entries.push(WorkspaceListEntry::Workspace {
+                        ws_idx: *member_idx,
+                        indented: true,
+                    });
+                }
+            }
+        }
+    };
+
+    // Emit workspace groups on first encounter, then their member blocks in
+    // display order; ungrouped blocks stay where they are.
+    let mut emitted_group_keys = std::collections::HashSet::<String>::new();
+    let mut entries = Vec::new();
+    for (block_idx, block) in blocks.iter().enumerate() {
+        match effective_workspace_group_key(app, block_root(block)) {
+            None => push_block(&mut entries, block),
+            Some(group_key) => {
+                if !emitted_group_keys.insert(group_key.clone()) {
+                    continue;
+                }
+                entries.push(WorkspaceListEntry::GroupHeader {
+                    key: group_key.clone(),
+                });
+                let group_collapsed =
+                    !force_expanded && app.collapsed_group_keys.contains(&group_key);
+                if group_collapsed {
+                    // Keep the active/selected workspace reachable while the
+                    // rest of the group is hidden.
+                    if let Some(visible_idx) = visible_group_idx.filter(|idx| {
+                        effective_workspace_group_key(app, *idx).as_deref()
+                            == Some(group_key.as_str())
+                    }) {
+                        entries.push(WorkspaceListEntry::Workspace {
+                            ws_idx: visible_idx,
+                            indented: false,
+                        });
+                    }
+                } else {
+                    for member_block in &blocks[block_idx..] {
+                        if effective_workspace_group_key(app, block_root(member_block)).as_deref()
+                            == Some(group_key.as_str())
+                        {
+                            push_block(&mut entries, member_block);
+                        }
+                    }
+                }
             }
         }
     }
@@ -472,6 +585,10 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                     workspace_entry_gap(app, &entries, entry_idx),
                 )
             }
+            WorkspaceListEntry::GroupHeader { .. } => (
+                GROUP_HEADER_ROW_HEIGHT.min(body.height),
+                workspace_entry_gap(app, &entries, entry_idx),
+            ),
         };
         if used_rows.saturating_add(row_height) > body.height {
             break;
@@ -489,13 +606,17 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
     let mut used_rows = 0u16;
     let mut start = entries.len();
     for (entry_idx, entry) in entries.iter().enumerate().rev() {
-        let WorkspaceListEntry::Workspace { ws_idx, indented } = entry;
-        let Some(workspace) = app.workspaces.get(*ws_idx) else {
-            continue;
+        let row_height = match entry {
+            WorkspaceListEntry::Workspace { ws_idx, indented } => {
+                let Some(workspace) = app.workspaces.get(*ws_idx) else {
+                    continue;
+                };
+                workspace_row_height_in_body(app, workspace, *indented, body.height)
+            }
+            WorkspaceListEntry::GroupHeader { .. } => GROUP_HEADER_ROW_HEIGHT.min(body.height),
         };
         let gap = workspace_entry_gap(app, &entries, entry_idx);
-        let needed = workspace_row_height_in_body(app, workspace, *indented, body.height)
-            .saturating_add(gap);
+        let needed = row_height.saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
             break;
         }
@@ -658,7 +779,10 @@ pub(crate) fn agent_panel_scrollbar_rect(app: &AppState, area: Rect) -> Option<R
 pub(crate) fn compute_workspace_list_areas(
     app: &AppState,
     area: Rect,
-) -> (Vec<crate::app::state::WorkspaceCardArea>, Vec<()>) {
+) -> (
+    Vec<crate::app::state::WorkspaceCardArea>,
+    Vec<crate::app::state::WorkspaceGroupHeaderArea>,
+) {
     let ws_area = workspace_list_rect(area, app.sidebar_section_split);
     if ws_area == Rect::default() {
         return (Vec::new(), Vec::new());
@@ -674,7 +798,7 @@ pub(crate) fn compute_workspace_list_areas(
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
     let mut cards = Vec::new();
-    let headers = Vec::new();
+    let mut headers = Vec::new();
 
     let entries = workspace_list_entries(app);
     for (entry_idx, entry) in entries.iter().enumerate().skip(scroll) {
@@ -692,6 +816,21 @@ pub(crate) fn compute_workspace_list_areas(
                     ws_idx: *ws_idx,
                     rect: Rect::new(body.x, row_y, body.width, row_height),
                     indented: *indented,
+                });
+                row_y = row_y
+                    .saturating_add(row_height)
+                    .saturating_add(gap)
+                    .min(body_bottom);
+            }
+            WorkspaceListEntry::GroupHeader { key } => {
+                let row_height = GROUP_HEADER_ROW_HEIGHT.min(body.height);
+                let gap = workspace_entry_gap(app, &entries, entry_idx);
+                if row_y.saturating_add(row_height) > body_bottom {
+                    break;
+                }
+                headers.push(crate::app::state::WorkspaceGroupHeaderArea {
+                    group_key: key.clone(),
+                    rect: Rect::new(body.x, row_y, body.width, row_height),
                 });
                 row_y = row_y
                     .saturating_add(row_height)
@@ -719,6 +858,21 @@ pub(crate) fn workspace_group_chevron_rect(card: &crate::app::state::WorkspaceCa
     Rect::new(
         card.rect.x + card.rect.width.saturating_sub(1),
         card.rect.y,
+        1,
+        1,
+    )
+}
+
+pub(crate) fn workspace_group_header_chevron_rect(
+    header: &crate::app::state::WorkspaceGroupHeaderArea,
+) -> Rect {
+    if header.rect.width == 0 || header.rect.height == 0 {
+        return Rect::default();
+    }
+
+    Rect::new(
+        header.rect.x + header.rect.width.saturating_sub(1),
+        header.rect.y,
         1,
         1,
     )
@@ -890,8 +1044,40 @@ pub(crate) fn workspace_drop_slots(
                     ws_idx,
                     indented: false,
                 } => Some(*ws_idx),
-                WorkspaceListEntry::Workspace { .. } => None,
+                WorkspaceListEntry::Workspace { .. } | WorkspaceListEntry::GroupHeader { .. } => {
+                    None
+                }
             })
+    };
+
+    // The executed drop is a raw-array reorder that cannot move a workspace
+    // across group boundaries, and grouped members always render pulled
+    // together. Advertise only slots the reorder can actually honor: an
+    // ungrouped source never lands between two members of the same group, and
+    // a grouped source only reorders within its own group.
+    let drag_source_group = match app.drag.as_ref().map(|drag| &drag.target) {
+        Some(crate::app::state::DragTarget::WorkspaceReorder { source_ws_idx, .. }) => {
+            Some(effective_workspace_group_key(app, *source_ws_idx))
+        }
+        _ => None,
+    };
+    let slot_allowed = |prev_group: &Option<String>, next_group: &Option<String>| {
+        let Some(source_group) = drag_source_group.as_ref() else {
+            return true;
+        };
+        match source_group {
+            None => !(prev_group.is_some() && prev_group == next_group),
+            Some(group) => {
+                prev_group.as_deref() == Some(group.as_str())
+                    || next_group.as_deref() == Some(group.as_str())
+            }
+        }
+    };
+    // First workspace (in raw order) rendering under a group's header; a drop
+    // targeting it lands the source ahead of the whole group.
+    let group_anchor = |group: &str| {
+        (0..app.workspaces.len())
+            .find(|idx| effective_workspace_group_key(app, *idx).as_deref() == Some(group))
     };
 
     let mut slots = Vec::new();
@@ -906,10 +1092,36 @@ pub(crate) fn workspace_drop_slots(
         if previous_root == Some(root_idx) {
             continue;
         }
+        let prev_group = previous_root.and_then(|idx| effective_workspace_group_key(app, idx));
         previous_root = Some(root_idx);
-        if let Some(row) = card.rect.y.checked_sub(1).filter(|row| *row < list_bottom) {
+        let next_group = effective_workspace_group_key(app, root_idx);
+        if !slot_allowed(&prev_group, &next_group) {
+            continue;
+        }
+        // A slot at a group's start sits above the header row and targets the
+        // group's render anchor so the drop lands where the indicator shows.
+        let starts_group = next_group.is_some() && prev_group != next_group;
+        let (target_idx, row_offset) = if starts_group {
+            let anchor = next_group
+                .as_deref()
+                .and_then(group_anchor)
+                .unwrap_or(root_idx);
+            let header_above = matches!(
+                entry_idx.checked_sub(1).and_then(|idx| entries.get(idx)),
+                Some(WorkspaceListEntry::GroupHeader { .. })
+            );
+            (anchor, if header_above { 2 } else { 1 })
+        } else {
+            (root_idx, 1)
+        };
+        if let Some(row) = card
+            .rect
+            .y
+            .checked_sub(row_offset)
+            .filter(|row| *row < list_bottom)
+        {
             slots.push((
-                crate::app::state::WorkspaceDropTarget::Before(root_idx),
+                crate::app::state::WorkspaceDropTarget::Before(target_idx),
                 row,
             ));
         }
@@ -928,12 +1140,28 @@ pub(crate) fn workspace_drop_slots(
     ) {
         return slots;
     }
-    let target = match next_entry {
-        Some(WorkspaceListEntry::Workspace { ws_idx, .. }) => {
-            crate::app::state::WorkspaceDropTarget::Before(*ws_idx)
+    let prev_group =
+        block_root_at(last_entry_idx).and_then(|idx| effective_workspace_group_key(app, idx));
+    let (target, next_group) = match next_entry {
+        Some(WorkspaceListEntry::Workspace { ws_idx, .. }) => (
+            crate::app::state::WorkspaceDropTarget::Before(*ws_idx),
+            effective_workspace_group_key(app, *ws_idx),
+        ),
+        Some(WorkspaceListEntry::GroupHeader { key }) => {
+            // Drop lands ahead of the whole following group.
+            match group_anchor(key) {
+                Some(ws_idx) => (
+                    crate::app::state::WorkspaceDropTarget::Before(ws_idx),
+                    Some(key.clone()),
+                ),
+                None => (crate::app::state::WorkspaceDropTarget::End, None),
+            }
         }
-        None => crate::app::state::WorkspaceDropTarget::End,
+        None => (crate::app::state::WorkspaceDropTarget::End, None),
     };
+    if !slot_allowed(&prev_group, &next_group) {
+        return slots;
+    }
     let row = last.rect.y.saturating_add(last.rect.height);
     if row < list_bottom
         && slots
@@ -1222,6 +1450,53 @@ fn render_workspace_list(
     let cards = &app.view.workspace_card_areas;
     let entries = workspace_list_entries(app);
 
+    for header in &app.view.workspace_group_header_areas {
+        if header.rect.y >= list_bottom || header.rect.width == 0 {
+            continue;
+        }
+        let Some(group) = app
+            .workspace_groups
+            .iter()
+            .find(|group| group.key == header.group_key)
+        else {
+            continue;
+        };
+        let collapsed = app.collapsed_group_keys.contains(&header.group_key);
+        let mut spans = Vec::new();
+        if collapsed {
+            let (agg_state, agg_seen) = group_aggregate_state(app, &header.group_key);
+            let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(icon, icon_style));
+            spans.push(Span::raw(" "));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+        let used = spans
+            .iter()
+            .map(|span| display_width(span.content.as_ref()))
+            .sum::<usize>();
+        let max_name_width = usize::from(header.rect.width).saturating_sub(used + 2);
+        spans.push(Span::styled(
+            truncate_end(&group.name, max_name_width),
+            Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(header.rect.x, header.rect.y, header.rect.width, 1),
+        );
+        let chevron_rect = workspace_group_header_chevron_rect(header);
+        if chevron_rect.width > 0 && chevron_rect.y < list_bottom {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    if collapsed { "▸" } else { "▾" },
+                    Style::default().fg(p.accent),
+                ))),
+                chevron_rect,
+            );
+        }
+    }
+
     for card in cards {
         let i = card.ws_idx;
         let ws = &app.workspaces[i];
@@ -1264,7 +1539,11 @@ fn render_workspace_list(
         } else {
             label
         };
-        let parent_group = (!card.indented)
+        // A space parent shown alone under a collapsed workspace group has no
+        // visible children, so its space chevron would be a dead toggle.
+        let in_collapsed_group = effective_workspace_group_key(app, i)
+            .is_some_and(|key| app.collapsed_group_keys.contains(&key));
+        let parent_group = (!card.indented && !in_collapsed_group)
             .then(|| workspace_parent_group_state(app, i))
             .flatten();
         let is_last_child = card.indented
@@ -2796,6 +3075,185 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 },
             ]
         );
+    }
+
+    fn set_group(app: &mut AppState, ws_idx: usize, name: &str) -> String {
+        assert!(app.set_workspace_group(ws_idx, Some(name)));
+        app.workspaces[ws_idx]
+            .group_key()
+            .expect("group membership should be set")
+            .to_string()
+    }
+
+    #[test]
+    fn workspace_list_entries_emit_group_header_before_members() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("one"),
+            Workspace::test_new("loose"),
+            Workspace::test_new("two"),
+        ];
+        let key = set_group(&mut app, 0, "github");
+        assert_eq!(set_group(&mut app, 2, "github"), key);
+
+        // Grouped members are pulled together under the header at the first
+        // member's position; ungrouped workspaces keep their own order.
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::GroupHeader { key: key.clone() },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_list_entries_keep_worktree_space_intact_inside_group() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            workspace_with_worktree_space("main", Some("repo-key"), "/repo/herdr"),
+            workspace_with_worktree_space("issue", Some("repo-key"), "/repo/herdr-issue"),
+            Workspace::test_new("loose"),
+        ];
+        let key = set_group(&mut app, 0, "github");
+        // The linked member follows the space parent's membership.
+        assert_eq!(app.workspaces[1].group_key.as_deref(), Some(key.as_str()));
+
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::GroupHeader { key },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: true,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsed_group_hides_members_except_active_workspace() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("one"),
+            Workspace::test_new("two"),
+            Workspace::test_new("loose"),
+        ];
+        let key = set_group(&mut app, 0, "github");
+        assert_eq!(set_group(&mut app, 1, "github"), key);
+        app.collapsed_group_keys.insert(key.clone());
+        app.active = Some(1);
+        app.mode = Mode::Terminal;
+
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::GroupHeader { key: key.clone() },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false,
+                },
+            ]
+        );
+
+        // With the active workspace outside the group, only the header shows.
+        app.active = Some(2);
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::GroupHeader { key },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn expanded_entries_ignore_group_collapse_for_mobile() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        let key = set_group(&mut app, 0, "github");
+        app.collapsed_group_keys.insert(key.clone());
+
+        assert_eq!(
+            workspace_list_entries_expanded(&app),
+            vec![
+                WorkspaceListEntry::GroupHeader { key },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false,
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn dangling_group_membership_renders_flat_without_header() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        // Membership pointing at a group that no longer exists is ignored.
+        app.workspaces[0].group_key = Some("g9".into());
+
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![WorkspaceListEntry::Workspace {
+                ws_idx: 0,
+                indented: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn compute_workspace_list_areas_positions_group_headers() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("loose")];
+        let key = set_group(&mut app, 0, "github");
+        app.sidebar_spaces.rows = vec![vec![
+            crate::config::SpaceSidebarToken::StateIcon,
+            crate::config::SpaceSidebarToken::Workspace,
+        ]];
+        app.sidebar_spaces.row_gap = 0;
+        let area = Rect::new(0, 0, 30, 20);
+
+        let (cards, headers) = compute_workspace_list_areas(&app, area);
+
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].group_key, key);
+        assert_eq!(cards.len(), 2);
+        // Header row sits directly above its first member (no gap between).
+        assert_eq!(headers[0].rect.height, GROUP_HEADER_ROW_HEIGHT);
+        assert_eq!(cards[0].rect.y, headers[0].rect.y + GROUP_HEADER_ROW_HEIGHT);
+        assert_eq!(cards[0].ws_idx, 0);
+        assert_eq!(cards[1].ws_idx, 1);
     }
 
     #[test]

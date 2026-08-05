@@ -385,6 +385,8 @@ impl App {
             sidebar_width_source,
             sidebar_section_split,
             collapsed_space_keys,
+            workspace_groups,
+            collapsed_group_keys,
         ) = if no_session {
             (
                 Vec::new(),
@@ -393,6 +395,8 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
+                Vec::new(),
                 std::collections::HashSet::new(),
             )
         } else if let Some(snap) = crate::persist::load() {
@@ -430,11 +434,17 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    Vec::new(),
+                    snap.collapsed_group_keys,
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
                 let active = snap.active.filter(|&i| i < ws.len());
                 let selected = snap.selected.min(ws.len().saturating_sub(1));
+                let workspace_groups = crate::workspace::retain_referenced_workspace_groups(
+                    snap.workspace_groups,
+                    &ws,
+                );
                 (
                     ws,
                     active,
@@ -447,6 +457,8 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    workspace_groups,
+                    snap.collapsed_group_keys,
                 )
             }
         } else {
@@ -457,6 +469,8 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
+                Vec::new(),
                 std::collections::HashSet::new(),
             )
         };
@@ -550,6 +564,10 @@ impl App {
             worktree_remove: None,
             worktree_directory,
             collapsed_space_keys,
+            workspace_groups,
+            collapsed_group_keys,
+            set_group_target: None,
+            rename_group_target: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -576,6 +594,7 @@ impl App {
                 layout: state::ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
+                workspace_group_header_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
                 tab_scroll_left_hit_area: Rect::default(),
@@ -833,6 +852,11 @@ impl App {
             app.state.sidebar_section_split = split;
         }
         app.state.collapsed_space_keys = snapshot.collapsed_space_keys.clone();
+        app.state.workspace_groups = crate::workspace::retain_referenced_workspace_groups(
+            snapshot.workspace_groups.clone(),
+            &app.state.workspaces,
+        );
+        app.state.collapsed_group_keys = snapshot.collapsed_group_keys.clone();
         app.state.mode = if app.state.active.is_some() {
             state::Mode::Terminal
         } else {
@@ -1811,7 +1835,11 @@ impl App {
             Mode::Copy => {
                 self.handle_copy_mode_key(key);
             }
-            Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
+            Mode::RenameWorkspace
+            | Mode::RenameTab
+            | Mode::RenamePane
+            | Mode::SetWorkspaceGroup
+            | Mode::RenameWorkspaceGroup => {
                 self.handle_rename_key_via_api(key_event);
             }
             Mode::NewLinkedWorktree => {
@@ -5986,11 +6014,20 @@ last_pane = "prefix+tab"
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.confirm_close = false;
-        app.state.context_menu = Some(state::ContextMenuState {
+        let menu = state::ContextMenuState {
             kind: state::ContextMenuKind::Workspace { ws_idx: 1 },
             x: 2,
             y: 2,
-            list: state::MenuListState::new(1),
+            list: state::MenuListState::new(0),
+        };
+        let close_idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close")
+            .expect("workspace menu should offer Close");
+        app.state.context_menu = Some(state::ContextMenuState {
+            list: state::MenuListState::new(close_idx),
+            ..menu
         });
         app.state.mode = Mode::ContextMenu;
 

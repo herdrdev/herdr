@@ -26,6 +26,10 @@ pub struct SessionSnapshot {
     pub sidebar_section_split: Option<f32>,
     #[serde(default)]
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub workspace_groups: Vec<crate::workspace::WorkspaceGroup>,
+    #[serde(default)]
+    pub collapsed_group_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +59,8 @@ pub struct WorkspaceSnapshot {
     pub identity_cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_key: Option<String>,
     #[serde(default)]
     pub public_pane_numbers: HashMap<u32, usize>,
     #[serde(default)]
@@ -158,6 +164,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             custom_name: snap.custom_name,
             identity_cwd,
             worktree_space: None,
+            group_key: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -184,6 +191,10 @@ struct RawSessionSnapshot {
     sidebar_section_split: Option<f32>,
     #[serde(default)]
     collapsed_space_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    workspace_groups: Vec<crate::workspace::WorkspaceGroup>,
+    #[serde(default)]
+    collapsed_group_keys: std::collections::HashSet<String>,
 }
 
 fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
@@ -199,7 +210,28 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         sidebar_width: raw.sidebar_width,
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
+        workspace_groups: sanitize_workspace_groups(raw.workspace_groups),
+        collapsed_group_keys: raw.collapsed_group_keys,
     })
+}
+
+/// Lenient group-definition cleanup for hand-edited or corrupted snapshots:
+/// entries with empty keys or names and duplicate keys or names are dropped
+/// (first occurrence wins) so restored state satisfies group invariants.
+fn sanitize_workspace_groups(
+    groups: Vec<crate::workspace::WorkspaceGroup>,
+) -> Vec<crate::workspace::WorkspaceGroup> {
+    let mut keys = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    groups
+        .into_iter()
+        .filter(|group| {
+            !group.key.is_empty()
+                && !group.name.is_empty()
+                && keys.insert(group.key.clone())
+                && names.insert(group.name.clone())
+        })
+        .collect()
 }
 
 fn migrate_workspace(raw: serde_json::Value) -> Result<WorkspaceSnapshot, String> {
@@ -261,6 +293,8 @@ pub fn capture(
     sidebar_width: u16,
     sidebar_section_split: f32,
     collapsed_space_keys: std::collections::HashSet<String>,
+    workspace_groups: Vec<crate::workspace::WorkspaceGroup>,
+    collapsed_group_keys: std::collections::HashSet<String>,
 ) -> SessionSnapshot {
     SessionSnapshot {
         version: SNAPSHOT_VERSION,
@@ -273,6 +307,8 @@ pub fn capture(
         sidebar_width: Some(sidebar_width),
         sidebar_section_split: Some(sidebar_section_split),
         collapsed_space_keys,
+        workspace_groups,
+        collapsed_group_keys,
     }
 }
 
@@ -291,6 +327,7 @@ fn capture_workspace(
             .resolved_identity_cwd_from(terminals, terminal_runtimes)
             .unwrap_or_else(|| ws.identity_cwd.clone()),
         worktree_space: ws.worktree_space.clone(),
+        group_key: ws.group_key.clone(),
         public_pane_numbers: ws
             .public_pane_numbers
             .iter()
@@ -541,6 +578,8 @@ mod tests {
             state.sidebar_width,
             state.sidebar_section_split,
             state.collapsed_space_keys.clone(),
+            state.workspace_groups.clone(),
+            state.collapsed_group_keys.clone(),
         )
     }
 
@@ -605,6 +644,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
@@ -668,6 +709,7 @@ mod tests {
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
                 public_tab_numbers: vec![1],
@@ -692,6 +734,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
             version: SNAPSHOT_VERSION,
         };
 
@@ -895,6 +939,107 @@ mod tests {
         assert_eq!(
             snapshot.workspaces[0].worktree_space,
             state.workspaces[0].worktree_space
+        );
+    }
+
+    #[test]
+    fn capture_contract_tracks_workspace_groups() {
+        let mut state = state_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+
+        let snapshot = capture_from_state(&state);
+        assert_eq!(snapshot.workspace_groups, state.workspace_groups);
+        assert_eq!(snapshot.workspaces[0].group_key.as_deref(), Some("g1"));
+        assert_eq!(snapshot.workspaces[1].group_key, None);
+    }
+
+    #[test]
+    fn capture_contract_tracks_collapsed_group_keys() {
+        let mut state = state_with_workspaces(&["one"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        state.collapsed_group_keys.insert("g1".into());
+
+        let snapshot = capture_from_state(&state);
+        assert!(snapshot.collapsed_group_keys.contains("g1"));
+    }
+
+    #[test]
+    fn old_snapshot_defaults_workspace_group_fields() {
+        let json = serde_json::json!({
+            "version": SNAPSHOT_VERSION,
+            "workspaces": [{
+                "id": "wtest",
+                "identity_cwd": "/tmp",
+                "tabs": [{
+                    "layout": { "Pane": 0 },
+                    "panes": { "0": { "cwd": "/tmp" } },
+                    "zoomed": false,
+                    "focused": 0,
+                    "root_pane": 0
+                }],
+                "active_tab": 0
+            }],
+            "active": 0,
+            "selected": 0
+        })
+        .to_string();
+
+        let restored = parse_snapshot(&json).unwrap();
+
+        assert!(restored.workspace_groups.is_empty());
+        assert!(restored.collapsed_group_keys.is_empty());
+        assert_eq!(restored.workspaces[0].group_key, None);
+    }
+
+    #[test]
+    fn workspace_groups_round_trip_through_snapshot_json() {
+        let mut state = state_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        assert!(state.set_workspace_group(1, Some("work")));
+        state.collapsed_group_keys.insert("g2".into());
+
+        let snapshot = capture_from_state(&state);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let restored = parse_snapshot(&json).unwrap();
+
+        assert_eq!(restored.workspace_groups, state.workspace_groups);
+        assert_eq!(restored.workspaces[0].group_key.as_deref(), Some("g1"));
+        assert_eq!(restored.workspaces[1].group_key.as_deref(), Some("g2"));
+        assert!(restored.collapsed_group_keys.contains("g2"));
+    }
+
+    #[test]
+    fn parse_snapshot_drops_invalid_and_duplicate_workspace_groups() {
+        let json = serde_json::json!({
+            "version": SNAPSHOT_VERSION,
+            "workspaces": [],
+            "active": null,
+            "selected": 0,
+            "workspace_groups": [
+                { "key": "g1", "name": "github" },
+                { "key": "g1", "name": "other" },
+                { "key": "g2", "name": "github" },
+                { "key": "", "name": "empty-key" },
+                { "key": "g3", "name": "" },
+                { "key": "g4", "name": "work" }
+            ]
+        })
+        .to_string();
+
+        let restored = parse_snapshot(&json).unwrap();
+
+        assert_eq!(
+            restored.workspace_groups,
+            vec![
+                crate::workspace::WorkspaceGroup {
+                    key: "g1".into(),
+                    name: "github".into(),
+                },
+                crate::workspace::WorkspaceGroup {
+                    key: "g4".into(),
+                    name: "work".into(),
+                },
+            ]
         );
     }
 
@@ -1230,6 +1375,7 @@ mod tests {
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1254,6 +1400,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
 
         let json = serde_json::to_string(&snap).unwrap();

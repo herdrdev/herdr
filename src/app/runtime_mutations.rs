@@ -1,7 +1,8 @@
 use crate::api::schema::{
     EmptyParams, LayoutSetSplitRatioParams, Method, PaneFocusDirectionParams, PaneRenameParams,
     PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneZoomParams, TabCreateParams,
-    TabMoveParams, TabRenameParams, TabTarget, WorkspaceCreateParams, WorkspaceMoveBlockParams,
+    TabMoveParams, TabRenameParams, TabTarget, WorkspaceCreateParams, WorkspaceGroupDeleteParams,
+    WorkspaceGroupRenameParams, WorkspaceGroupSetParams, WorkspaceMoveBlockParams,
     WorkspaceMoveParams, WorkspaceRenameParams, WorkspaceTarget, WorktreeCreateParams,
     WorktreeOpenParams, WorktreeRemoveParams,
 };
@@ -67,6 +68,30 @@ impl App {
         workspace_id: String,
     ) -> String {
         self.dispatch_runtime_mutation(id, Method::WorkspaceClose(WorkspaceTarget { workspace_id }))
+    }
+
+    pub(crate) fn runtime_workspace_group_set(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceGroupSetParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceGroupSet(params))
+    }
+
+    pub(crate) fn runtime_workspace_group_rename(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceGroupRenameParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceGroupRename(params))
+    }
+
+    pub(crate) fn runtime_workspace_group_delete(
+        &mut self,
+        id: &'static str,
+        params: WorkspaceGroupDeleteParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::WorkspaceGroupDelete(params))
     }
 
     pub(crate) fn runtime_tab_create(

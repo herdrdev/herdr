@@ -381,6 +381,40 @@ pub(super) fn open_rename_workspace(
     state.mode = Mode::RenameWorkspace;
 }
 
+/// Open the group-assignment dialog for a workspace. Submitting an empty name
+/// clears membership; naming a group that does not exist yet creates it.
+pub(super) fn open_set_workspace_group(state: &mut AppState, ws_idx: usize) {
+    if ws_idx >= state.workspaces.len() {
+        return;
+    }
+    state.pending_workspace_create_cwd = None;
+    state.rename_pane_target = None;
+    state.selected = ws_idx;
+    state.set_group_target = Some(state.workspaces[ws_idx].id.clone());
+    state.name_input = state.workspaces[ws_idx]
+        .group_key()
+        .and_then(|key| state.workspace_group(key))
+        .map(|group| group.name.clone())
+        .unwrap_or_default();
+    state.name_input_replace_on_type = true;
+    state.mode = Mode::SetWorkspaceGroup;
+}
+
+pub(super) fn open_rename_workspace_group(state: &mut AppState, group_key: &str) {
+    let Some(name) = state
+        .workspace_group(group_key)
+        .map(|group| group.name.clone())
+    else {
+        return;
+    };
+    state.pending_workspace_create_cwd = None;
+    state.rename_pane_target = None;
+    state.name_input = name;
+    state.rename_group_target = Some(group_key.to_string());
+    state.name_input_replace_on_type = false;
+    state.mode = Mode::RenameWorkspaceGroup;
+}
+
 pub(crate) fn open_new_workspace_dialog(state: &mut AppState, cwd: std::path::PathBuf) {
     let suggested_name = crate::workspace::derive_label_from_cwd(&cwd);
     state.creating_new_tab = false;
@@ -809,6 +843,40 @@ pub(super) fn apply_context_menu_action(
         }
         (
             ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Set group..."),
+        ) => {
+            open_set_workspace_group(state, ws_idx);
+            if state.mode == Mode::ContextMenu {
+                leave_modal(state);
+            }
+        }
+        (ContextMenuKind::WorkspaceGroupHeader { group_key, .. }, Some("Rename group")) => {
+            open_rename_workspace_group(state, &group_key);
+            if state.mode == Mode::ContextMenu {
+                leave_modal(state);
+            }
+        }
+        (
+            ContextMenuKind::WorkspaceGroupHeader {
+                group_key,
+                collapsed,
+            },
+            Some("Collapse" | "Expand"),
+        ) => {
+            if collapsed {
+                state.collapsed_group_keys.remove(&group_key);
+            } else {
+                state.collapsed_group_keys.insert(group_key);
+            }
+            state.mark_session_dirty();
+            leave_modal(state);
+        }
+        (ContextMenuKind::WorkspaceGroupHeader { group_key, .. }, Some("Delete group")) => {
+            state.delete_workspace_group(&group_key);
+            leave_modal(state);
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Close" | "Close group"),
         ) => {
             state.selected = ws_idx;
@@ -1094,6 +1162,31 @@ impl App {
                     }
                 }
             }
+            Mode::SetWorkspaceGroup => {
+                if let Some(workspace_id) = self.state.set_group_target.clone() {
+                    let group = (!new_name.is_empty()).then_some(new_name);
+                    self.runtime_workspace_group_set(
+                        "tui.workspace_group.set",
+                        crate::api::schema::WorkspaceGroupSetParams {
+                            workspace_id,
+                            group,
+                        },
+                    );
+                }
+            }
+            Mode::RenameWorkspaceGroup => {
+                if let Some(group_key) = self.state.rename_group_target.clone() {
+                    if !new_name.is_empty() {
+                        self.runtime_workspace_group_rename(
+                            "tui.workspace_group.rename",
+                            crate::api::schema::WorkspaceGroupRenameParams {
+                                group_key,
+                                name: new_name,
+                            },
+                        );
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -1239,6 +1332,44 @@ impl App {
             (
                 ContextMenuKind::Workspace { ws_idx }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
+                Some("Set group..."),
+            ) => {
+                open_set_workspace_group(&mut self.state, ws_idx);
+                if self.state.mode == Mode::ContextMenu {
+                    leave_modal(&mut self.state);
+                }
+            }
+            (ContextMenuKind::WorkspaceGroupHeader { group_key, .. }, Some("Rename group")) => {
+                open_rename_workspace_group(&mut self.state, &group_key);
+                if self.state.mode == Mode::ContextMenu {
+                    leave_modal(&mut self.state);
+                }
+            }
+            (
+                ContextMenuKind::WorkspaceGroupHeader {
+                    group_key,
+                    collapsed,
+                },
+                Some("Collapse" | "Expand"),
+            ) => {
+                if collapsed {
+                    self.state.collapsed_group_keys.remove(&group_key);
+                } else {
+                    self.state.collapsed_group_keys.insert(group_key);
+                }
+                self.state.mark_session_dirty();
+                leave_modal(&mut self.state);
+            }
+            (ContextMenuKind::WorkspaceGroupHeader { group_key, .. }, Some("Delete group")) => {
+                self.runtime_workspace_group_delete(
+                    "tui.workspace_group.delete",
+                    crate::api::schema::WorkspaceGroupDeleteParams { group_key },
+                );
+                leave_modal(&mut self.state);
+            }
+            (
+                ContextMenuKind::Workspace { ws_idx }
+                | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Close" | "Close group"),
             ) => {
                 self.state.selected = ws_idx;
@@ -1368,6 +1499,8 @@ fn cancel_rename_modal(state: &mut AppState) {
     state.requested_new_tab_name = None;
     state.pending_workspace_create_cwd = None;
     state.rename_pane_target = None;
+    state.set_group_target = None;
+    state.rename_group_target = None;
     state.name_input.clear();
     state.name_input_replace_on_type = false;
     leave_modal(state);
@@ -2168,7 +2301,12 @@ mod tests {
         };
         let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
-        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, 1);
+        let close_idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close group")
+            .expect("parent worktree menu should offer Close group");
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, close_idx);
 
         assert_eq!(state.selected, 0);
         assert_eq!(state.mode, Mode::ConfirmClose);

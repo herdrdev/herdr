@@ -1301,8 +1301,9 @@ impl AppState {
         };
         let order = entries
             .into_iter()
-            .map(|entry| match entry {
-                crate::ui::WorkspaceListEntry::Workspace { ws_idx, .. } => ws_idx,
+            .filter_map(|entry| match entry {
+                crate::ui::WorkspaceListEntry::Workspace { ws_idx, .. } => Some(ws_idx),
+                crate::ui::WorkspaceListEntry::GroupHeader { .. } => None,
             })
             .collect::<Vec<_>>();
         if order.is_empty() {
@@ -1459,6 +1460,189 @@ impl AppState {
             .and_then(|id| self.workspaces.iter().position(|ws| ws.id == id))
             .unwrap_or(0);
         self.ensure_workspace_visible(self.selected);
+        true
+    }
+
+    pub fn workspace_group(&self, key: &str) -> Option<&crate::workspace::WorkspaceGroup> {
+        self.workspace_groups.iter().find(|group| group.key == key)
+    }
+
+    pub fn workspace_group_by_name(&self, name: &str) -> Option<&crate::workspace::WorkspaceGroup> {
+        self.workspace_groups
+            .iter()
+            .find(|group| group.name == name)
+    }
+
+    /// Workspaces sharing `workspace_idx`'s worktree space, including itself.
+    /// Group membership applies to the whole space so it renders as a unit.
+    fn workspace_group_scope(&self, workspace_idx: usize) -> Vec<usize> {
+        let Some(workspace) = self.workspaces.get(workspace_idx) else {
+            return Vec::new();
+        };
+        match workspace.worktree_space() {
+            Some(space) => {
+                let key = space.key.clone();
+                self.workspaces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ws)| ws.worktree_space().is_some_and(|member| member.key == key))
+                    .map(|(idx, _)| idx)
+                    .collect()
+            }
+            None => vec![workspace_idx],
+        }
+    }
+
+    /// Assign the workspace (and its worktree-space members) to the group with
+    /// the given name, creating the group when it does not exist yet. `None`
+    /// clears membership. Groups left without members are dropped.
+    pub fn set_workspace_group(&mut self, workspace_idx: usize, name: Option<&str>) -> bool {
+        if workspace_idx >= self.workspaces.len() {
+            return false;
+        }
+        let target_key = match name {
+            Some(name) => {
+                let name = name.trim();
+                if name.is_empty() {
+                    return false;
+                }
+                match self.workspace_group_by_name(name) {
+                    Some(group) => Some(group.key.clone()),
+                    None => {
+                        let key =
+                            crate::workspace::generate_workspace_group_key(&self.workspace_groups);
+                        self.workspace_groups
+                            .push(crate::workspace::WorkspaceGroup {
+                                key: key.clone(),
+                                name: name.to_string(),
+                            });
+                        Some(key)
+                    }
+                }
+            }
+            None => None,
+        };
+        let mut changed = false;
+        for idx in self.workspace_group_scope(workspace_idx) {
+            if let Some(workspace) = self.workspaces.get_mut(idx) {
+                if workspace.group_key != target_key {
+                    workspace.group_key = target_key.clone();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.prune_empty_workspace_groups();
+            self.mark_session_dirty();
+        }
+        changed
+    }
+
+    pub fn rename_workspace_group(&mut self, group_key: &str, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty()
+            || self
+                .workspace_group_by_name(name)
+                .is_some_and(|group| group.key != group_key)
+        {
+            return false;
+        }
+        let Some(group) = self
+            .workspace_groups
+            .iter_mut()
+            .find(|group| group.key == group_key)
+        else {
+            return false;
+        };
+        if group.name == name {
+            return false;
+        }
+        group.name = name.to_string();
+        self.mark_session_dirty();
+        true
+    }
+
+    /// Remove a group definition; member workspaces stay and become ungrouped.
+    pub fn delete_workspace_group(&mut self, group_key: &str) -> bool {
+        let Some(position) = self
+            .workspace_groups
+            .iter()
+            .position(|group| group.key == group_key)
+        else {
+            return false;
+        };
+        self.workspace_groups.remove(position);
+        self.collapsed_group_keys.remove(group_key);
+        for workspace in &mut self.workspaces {
+            if workspace.group_key.as_deref() == Some(group_key) {
+                workspace.group_key = None;
+            }
+        }
+        self.mark_session_dirty();
+        true
+    }
+
+    /// Align a workspace's group membership with its worktree space: spaces
+    /// group as a unit, so a workspace joining a space adopts the group its
+    /// space parent (or, failing that, any grouped member) already belongs to.
+    pub(crate) fn adopt_space_group_membership(&mut self, workspace_idx: usize) {
+        let Some(space_key) = self
+            .workspaces
+            .get(workspace_idx)
+            .and_then(|ws| ws.worktree_space())
+            .map(|space| space.key.clone())
+        else {
+            return;
+        };
+        let adopted = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(idx, ws)| {
+                *idx != workspace_idx
+                    && ws
+                        .worktree_space()
+                        .is_some_and(|member| member.key == space_key)
+            })
+            .min_by_key(|(_, ws)| {
+                ws.worktree_space()
+                    .map_or(1, |member| usize::from(member.is_linked_worktree))
+            })
+            .and_then(|(_, ws)| ws.group_key.clone())
+            .filter(|key| self.workspace_groups.iter().any(|group| group.key == *key));
+        let Some(adopted) = adopted else {
+            return;
+        };
+        if let Some(workspace) = self.workspaces.get_mut(workspace_idx) {
+            if workspace.group_key.as_ref() != Some(&adopted) {
+                workspace.group_key = Some(adopted);
+                self.mark_session_dirty();
+            }
+        }
+    }
+
+    /// Drop group definitions no workspace references anymore. Returns whether
+    /// any definition was removed.
+    pub(crate) fn prune_empty_workspace_groups(&mut self) -> bool {
+        let referenced = self
+            .workspaces
+            .iter()
+            .filter_map(|workspace| workspace.group_key.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let removed = self
+            .workspace_groups
+            .iter()
+            .filter(|group| !referenced.contains(&group.key))
+            .map(|group| group.key.clone())
+            .collect::<Vec<_>>();
+        if removed.is_empty() {
+            return false;
+        }
+        self.workspace_groups
+            .retain(|group| referenced.contains(&group.key));
+        for key in &removed {
+            self.collapsed_group_keys.remove(key);
+        }
         true
     }
 
@@ -1710,6 +1894,7 @@ impl AppState {
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
         }
+        self.prune_empty_workspace_groups();
         self.remove_unattached_terminal_ids(terminal_ids);
         if self.workspaces.is_empty() {
             self.active = None;
@@ -3337,6 +3522,7 @@ impl AppState {
                 .map(|ws| ws.id.clone());
             let selected_workspace_id = self.workspaces.get(self.selected).map(|ws| ws.id.clone());
             self.workspaces.remove(ws_idx);
+            self.prune_empty_workspace_groups();
             self.remove_unattached_terminal_ids(workspace_terminal_ids);
             if self.workspaces.is_empty() {
                 self.active = None;
@@ -3439,6 +3625,151 @@ mod tests {
             checkout_path: "/repo/herdr".into(),
             is_linked_worktree: false,
         });
+    }
+
+    #[test]
+    fn set_workspace_group_creates_group_and_assigns_membership() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+
+        assert!(state.set_workspace_group(0, Some("github")));
+
+        assert_eq!(state.workspace_groups.len(), 1);
+        assert_eq!(state.workspace_groups[0].key, "g1");
+        assert_eq!(state.workspace_groups[0].name, "github");
+        assert_eq!(state.workspaces[0].group_key.as_deref(), Some("g1"));
+        assert_eq!(state.workspaces[1].group_key, None);
+        assert!(state.session_dirty);
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn set_workspace_group_reuses_existing_group_by_name() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+
+        assert!(state.set_workspace_group(1, Some("github")));
+
+        assert_eq!(state.workspace_groups.len(), 1);
+        assert_eq!(state.workspaces[1].group_key.as_deref(), Some("g1"));
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn set_workspace_group_applies_to_whole_worktree_space() {
+        let mut state = app_with_workspaces(&["main", "child", "outsider"]);
+        mark_parent_worktree(&mut state, 0);
+        mark_linked_worktree(&mut state, 1);
+
+        assert!(state.set_workspace_group(1, Some("github")));
+
+        assert_eq!(state.workspaces[0].group_key.as_deref(), Some("g1"));
+        assert_eq!(state.workspaces[1].group_key.as_deref(), Some("g1"));
+        assert_eq!(state.workspaces[2].group_key, None);
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn set_workspace_group_none_clears_membership_and_prunes_empty_group() {
+        let mut state = app_with_workspaces(&["one"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        state.collapsed_group_keys.insert("g1".into());
+
+        assert!(state.set_workspace_group(0, None));
+
+        assert_eq!(state.workspaces[0].group_key, None);
+        assert!(state.workspace_groups.is_empty());
+        assert!(state.collapsed_group_keys.is_empty());
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn set_workspace_group_is_noop_for_same_group_and_blank_names() {
+        let mut state = app_with_workspaces(&["one"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        state.session_dirty = false;
+
+        assert!(!state.set_workspace_group(0, Some("github")));
+        assert!(!state.set_workspace_group(0, Some("   ")));
+        assert!(!state.set_workspace_group(9, Some("github")));
+
+        assert!(!state.session_dirty);
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn rename_workspace_group_rejects_duplicates_and_blank_names() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        assert!(state.set_workspace_group(1, Some("work")));
+
+        assert!(state.rename_workspace_group("g1", "personal"));
+        assert_eq!(state.workspace_groups[0].name, "personal");
+
+        assert!(!state.rename_workspace_group("g1", "work"));
+        assert!(!state.rename_workspace_group("g1", "  "));
+        assert!(!state.rename_workspace_group("g9", "other"));
+        assert!(!state.rename_workspace_group("g1", "personal"));
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn delete_workspace_group_clears_membership_and_collapse_state() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        assert!(state.set_workspace_group(1, Some("github")));
+        state.collapsed_group_keys.insert("g1".into());
+
+        assert!(state.delete_workspace_group("g1"));
+
+        assert!(state.workspace_groups.is_empty());
+        assert!(state.collapsed_group_keys.is_empty());
+        assert_eq!(state.workspaces[0].group_key, None);
+        assert_eq!(state.workspaces[1].group_key, None);
+        assert!(!state.delete_workspace_group("g1"));
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn closing_last_group_member_prunes_group_definition() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        state.collapsed_group_keys.insert("g1".into());
+        state.selected = 0;
+        state.active = Some(0);
+
+        state.close_selected_workspace();
+
+        assert!(state.workspace_groups.is_empty());
+        assert!(state.collapsed_group_keys.is_empty());
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn workspace_joining_space_adopts_parent_group_membership() {
+        let mut state = app_with_workspaces(&["main", "newcomer"]);
+        mark_parent_worktree(&mut state, 0);
+        assert!(state.set_workspace_group(0, Some("github")));
+
+        mark_linked_worktree(&mut state, 1);
+        state.adopt_space_group_membership(1);
+
+        assert_eq!(state.workspaces[1].group_key.as_deref(), Some("g1"));
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn workspace_group_keys_are_not_reused_while_occupied() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        assert!(state.set_workspace_group(0, Some("github")));
+        assert!(state.set_workspace_group(1, Some("work")));
+
+        assert!(state.set_workspace_group(0, None));
+        assert!(state.set_workspace_group(0, Some("new")));
+
+        // "g1" was pruned when github emptied, so it can be reused; "g2" is taken.
+        assert_eq!(state.workspaces[0].group_key.as_deref(), Some("g1"));
+        assert_eq!(state.workspace_groups.len(), 2);
+        state.assert_invariants_for_test();
     }
 
     #[test]

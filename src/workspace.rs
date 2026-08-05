@@ -40,6 +40,47 @@ pub struct WorktreeSpaceMembership {
     pub is_linked_worktree: bool,
 }
 
+/// A user-named grouping of workspaces shown as a collapsible section of the
+/// workspace list. Group definitions are shared session organization: they live
+/// in server state, persist in the session snapshot, and are mutated through
+/// the JSON API.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceGroup {
+    /// Stable internal identity; survives renames.
+    pub key: String,
+    /// User-visible group name; unique across groups.
+    pub name: String,
+}
+
+/// Keep only group definitions that at least one workspace still references —
+/// used when restoring, where member workspaces may have failed to restore.
+pub(crate) fn retain_referenced_workspace_groups(
+    groups: Vec<WorkspaceGroup>,
+    workspaces: &[Workspace],
+) -> Vec<WorkspaceGroup> {
+    groups
+        .into_iter()
+        .filter(|group| {
+            workspaces
+                .iter()
+                .any(|ws| ws.group_key() == Some(group.key.as_str()))
+        })
+        .collect()
+}
+
+/// Generate a group key unused by `existing`. Keys are dense `g<n>` values so
+/// they stay deterministic for tests and stable across snapshot round trips.
+pub(crate) fn generate_workspace_group_key(existing: &[WorkspaceGroup]) -> String {
+    let mut n = 1usize;
+    loop {
+        let candidate = format!("g{n}");
+        if existing.iter().all(|group| group.key != candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceGitStatus {
     pub workspace_id: String,
@@ -189,6 +230,9 @@ pub struct Workspace {
     pub(crate) cached_git_space: Option<GitSpaceMetadata>,
     /// Explicit Herdr-managed worktree grouping provenance.
     pub worktree_space: Option<WorktreeSpaceMembership>,
+    /// Membership in a user-named workspace group; references
+    /// `AppState::workspace_groups` by key.
+    pub group_key: Option<String>,
     pub(crate) metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub(crate) metadata_token_sequences: HashMap<String, u64>,
     /// Public pane numbers within this workspace. Closed pane numbers are not reused.
@@ -255,6 +299,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space: None,
+            group_key: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -454,6 +499,7 @@ impl Workspace {
                 cached_git_ahead_behind: None,
                 cached_git_space,
                 worktree_space: None,
+                group_key: None,
                 metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
                 metadata_token_sequences: HashMap::new(),
                 public_pane_numbers,
@@ -1167,6 +1213,10 @@ impl Workspace {
         self.worktree_space.as_ref()
     }
 
+    pub fn group_key(&self) -> Option<&str> {
+        self.group_key.as_deref()
+    }
+
     #[cfg(test)]
     pub fn refresh_git_ahead_behind(&mut self) {
         let cwd = self.resolved_identity_cwd();
@@ -1286,6 +1336,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space: None,
             worktree_space: None,
+            group_key: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,

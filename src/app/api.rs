@@ -997,6 +997,18 @@ impl App {
             Method::WorkspaceClose(target) => {
                 return self.handle_workspace_close(request.id, target)
             }
+            Method::WorkspaceGroupList(_) => {
+                return self.handle_workspace_group_list(request.id);
+            }
+            Method::WorkspaceGroupSet(params) => {
+                return self.handle_workspace_group_set(request.id, params);
+            }
+            Method::WorkspaceGroupRename(params) => {
+                return self.handle_workspace_group_rename(request.id, params);
+            }
+            Method::WorkspaceGroupDelete(params) => {
+                return self.handle_workspace_group_delete(request.id, params);
+            }
             Method::WorktreeList(params) => return self.handle_worktree_list(request.id, params),
             Method::WorktreeCreate(params) => {
                 let _ = params;

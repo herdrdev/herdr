@@ -454,6 +454,55 @@ fn pane_process_info_request_round_trips() {
 }
 
 #[test]
+fn workspace_group_requests_round_trip() {
+    let requests = [
+        (
+            Request {
+                id: "req_group_set".into(),
+                method: Method::WorkspaceGroupSet(WorkspaceGroupSetParams {
+                    workspace_id: "w_1".into(),
+                    group: Some("github".into()),
+                }),
+            },
+            "workspace_group.set",
+        ),
+        (
+            Request {
+                id: "req_group_rename".into(),
+                method: Method::WorkspaceGroupRename(WorkspaceGroupRenameParams {
+                    group_key: "g1".into(),
+                    name: "work".into(),
+                }),
+            },
+            "workspace_group.rename",
+        ),
+        (
+            Request {
+                id: "req_group_delete".into(),
+                method: Method::WorkspaceGroupDelete(WorkspaceGroupDeleteParams {
+                    group_key: "g1".into(),
+                }),
+            },
+            "workspace_group.delete",
+        ),
+        (
+            Request {
+                id: "req_group_list".into(),
+                method: Method::WorkspaceGroupList(EmptyParams::default()),
+            },
+            "workspace_group.list",
+        ),
+    ];
+
+    for (request, dot_name) in requests {
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["method"], dot_name);
+        let restored: Request = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, request);
+    }
+}
+
+#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {
@@ -478,6 +527,16 @@ fn event_envelope_round_trips() {
                 workspace_ids: vec!["w_1".into(), "w_2".into()],
                 before_workspace_id: Some("w_3".into()),
                 workspaces: vec![],
+            },
+        },
+        EventEnvelope {
+            event: EventKind::WorkspaceGroupsChanged,
+            data: EventData::WorkspaceGroupsChanged {
+                groups: vec![WorkspaceGroupInfo {
+                    group_key: "g1".into(),
+                    name: "github".into(),
+                    workspace_ids: vec!["w_1".into()],
+                }],
             },
         },
         EventEnvelope {
@@ -719,6 +778,7 @@ fn worktree_request_and_response_round_trip() {
                     checkout_path: "/worktrees/herdr/worktree-api".into(),
                     is_linked_worktree: true,
                 }),
+                group: None,
             },
             tab: TabInfo {
                 tab_id: "w_1:1".into(),
@@ -805,6 +865,7 @@ fn worktree_lifecycle_events_round_trip() {
             checkout_path: "/worktrees/herdr/worktree-api".into(),
             is_linked_worktree: true,
         }),
+        group: None,
     };
     let worktree = WorktreeInfo {
         path: "/worktrees/herdr/worktree-api".into(),

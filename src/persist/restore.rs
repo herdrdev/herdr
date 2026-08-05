@@ -272,6 +272,11 @@ fn restore_with_imports_and_failures(
     let mut terminal_runtimes = HashMap::new();
     let mut resumed_agent_sessions = HashSet::new();
     let mut failed_imports = 0;
+    let group_keys = snapshot
+        .workspace_groups
+        .iter()
+        .map(|group| group.key.clone())
+        .collect::<HashSet<_>>();
     for (idx, ws_snap) in snapshot.workspaces.iter().enumerate() {
         let runtime_context = RestoreRuntimeContext {
             scrollback_limit_bytes,
@@ -289,6 +294,7 @@ fn restore_with_imports_and_failures(
             &runtime_context,
             &mut resumed_agent_sessions,
             imported_panes,
+            &group_keys,
         );
         failed_imports += workspace_failed_imports;
         if let Some((workspace, restored_terminals, restored_runtimes)) = restored {
@@ -311,6 +317,7 @@ fn restore_workspace(
     runtime_context: &RestoreRuntimeContext<'_>,
     resumed_agent_sessions: &mut HashSet<String>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
+    group_keys: &HashSet<String>,
 ) -> RestoreFailures<Option<RestoredWorkspace>> {
     let mut tabs = Vec::new();
     let mut terminals = Vec::new();
@@ -418,6 +425,7 @@ fn restore_workspace(
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space,
+            group_key: restored_group_key(snap.group_key.clone(), group_keys),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -441,6 +449,11 @@ fn restored_worktree_space_membership(
             && crate::workspace::git_space_metadata(&space.checkout_path)
                 .is_some_and(|current| current.key == space.key)
     })
+}
+
+/// Drop group membership whose key no longer resolves to a group definition.
+fn restored_group_key(key: Option<String>, group_keys: &HashSet<String>) -> Option<String> {
+    key.filter(|key| group_keys.contains(key))
 }
 
 fn restore_tab(
@@ -1010,6 +1023,18 @@ mod tests {
     }
 
     #[test]
+    fn restored_group_key_drops_unknown_group() {
+        let group_keys = HashSet::from(["g1".to_string()]);
+
+        assert_eq!(
+            restored_group_key(Some("g1".into()), &group_keys),
+            Some("g1".to_string())
+        );
+        assert_eq!(restored_group_key(Some("g9".into()), &group_keys), None);
+        assert_eq!(restored_group_key(None, &group_keys), None);
+    }
+
+    #[test]
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
@@ -1177,6 +1202,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1211,6 +1237,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1257,6 +1285,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::from([(10, 1), (20, 3)]),
                 next_public_pane_number: 4,
                 public_tab_numbers: vec![5],
@@ -1304,6 +1333,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1366,6 +1397,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::from([(10, 1), (11, 2), (12, 3), (13, 4)]),
                 next_public_pane_number: 5,
                 public_tab_numbers: vec![1, 3, 4, 5],
@@ -1411,6 +1443,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1449,6 +1483,7 @@ mod tests {
             custom_name: None,
             identity_cwd: cwd,
             worktree_space: None,
+            group_key: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -1488,6 +1523,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1522,6 +1558,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1697,6 +1735,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd,
                 worktree_space: None,
+                group_key: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1716,6 +1755,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: Default::default(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         };
         (snapshot, history)
     }

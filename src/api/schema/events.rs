@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::common::{AgentStatus, ReadSource};
 use super::panes::{PaneInfo, PaneReadResult, PaneScrollInfo};
 use super::tabs::TabInfo;
-use super::workspaces::WorkspaceInfo;
+use super::workspaces::{WorkspaceGroupInfo, WorkspaceInfo};
 use super::worktrees::WorktreeInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -32,6 +32,8 @@ pub enum Subscription {
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
     WorkspaceFocused {},
+    #[serde(rename = "workspace_group.changed")]
+    WorkspaceGroupsChanged {},
     #[serde(rename = "worktree.created")]
     WorktreeCreated {},
     #[serde(rename = "worktree.opened")]
@@ -200,6 +202,7 @@ pub enum EventKind {
     WorkspaceMoved,
     WorkspaceReordered,
     WorkspaceFocused,
+    WorkspaceGroupsChanged,
     WorktreeCreated,
     WorktreeOpened,
     WorktreeRemoved,
@@ -231,6 +234,7 @@ impl EventKind {
             EventKind::WorkspaceMoved => "workspace.moved",
             EventKind::WorkspaceReordered => "workspace.reordered",
             EventKind::WorkspaceFocused => "workspace.focused",
+            EventKind::WorkspaceGroupsChanged => "workspace_group.changed",
             EventKind::WorktreeCreated => "worktree.created",
             EventKind::WorktreeOpened => "worktree.opened",
             EventKind::WorktreeRemoved => "worktree.removed",
@@ -263,6 +267,7 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::WorkspaceMoved,
     EventKind::WorkspaceReordered,
     EventKind::WorkspaceFocused,
+    EventKind::WorkspaceGroupsChanged,
     EventKind::WorktreeCreated,
     EventKind::WorktreeOpened,
     EventKind::WorktreeRemoved,
@@ -451,6 +456,9 @@ pub enum EventData {
     },
     WorkspaceFocused {
         workspace_id: String,
+    },
+    WorkspaceGroupsChanged {
+        groups: Vec<WorkspaceGroupInfo>,
     },
     WorktreeCreated {
         workspace: WorkspaceInfo,

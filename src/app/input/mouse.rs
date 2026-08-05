@@ -390,7 +390,11 @@ impl AppState {
 
                 if matches!(
                     self.mode,
-                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane
+                    Mode::RenameWorkspace
+                        | Mode::RenameTab
+                        | Mode::RenamePane
+                        | Mode::SetWorkspaceGroup
+                        | Mode::RenameWorkspaceGroup
                 ) {
                     let action = self
                         .rename_modal_inner()
@@ -562,25 +566,52 @@ impl AppState {
                         return None;
                     }
 
-                    let cards = if self.view.workspace_card_areas.is_empty() {
-                        crate::ui::compute_workspace_card_areas(self, self.view.sidebar_rect)
+                    let (cards, group_headers) = if self.view.workspace_card_areas.is_empty()
+                        && self.view.workspace_group_header_areas.is_empty()
+                    {
+                        crate::ui::compute_workspace_list_areas(self, self.view.sidebar_rect)
                     } else {
-                        self.view.workspace_card_areas.clone()
+                        (
+                            self.view.workspace_card_areas.clone(),
+                            self.view.workspace_group_header_areas.clone(),
+                        )
                     };
+                    // Clicking anywhere on a group header row toggles the group.
+                    if let Some(header) = group_headers.iter().find(|header| {
+                        mouse.row == header.rect.y
+                            && mouse.column >= header.rect.x
+                            && mouse.column < header.rect.x + header.rect.width
+                            && header.rect.width > 0
+                    }) {
+                        if self.collapsed_group_keys.contains(&header.group_key) {
+                            self.collapsed_group_keys.remove(&header.group_key);
+                        } else {
+                            self.collapsed_group_keys.insert(header.group_key.clone());
+                        }
+                        self.mark_session_dirty();
+                        return None;
+                    }
                     if let Some(card) = cards.iter().find(|card| {
                         let chevron = crate::ui::workspace_group_chevron_rect(card);
                         mouse.row == chevron.y && mouse.column == chevron.x && chevron.width > 0
                     }) {
-                        if let Some((key, collapsed)) =
-                            crate::ui::workspace_parent_group_state(self, card.ws_idx)
-                        {
-                            if collapsed {
-                                self.collapsed_space_keys.remove(&key);
-                            } else {
-                                self.collapsed_space_keys.insert(key);
+                        // Match the render: no space chevron on a card shown
+                        // alone under a collapsed workspace group.
+                        let in_collapsed_group =
+                            crate::ui::effective_workspace_group_key(self, card.ws_idx)
+                                .is_some_and(|key| self.collapsed_group_keys.contains(&key));
+                        if !in_collapsed_group {
+                            if let Some((key, collapsed)) =
+                                crate::ui::workspace_parent_group_state(self, card.ws_idx)
+                            {
+                                if collapsed {
+                                    self.collapsed_space_keys.remove(&key);
+                                } else {
+                                    self.collapsed_space_keys.insert(key);
+                                }
+                                self.mark_session_dirty();
+                                return None;
                             }
-                            self.mark_session_dirty();
-                            return None;
                         }
                     }
 
@@ -1023,6 +1054,31 @@ impl AppState {
                     .workspace_list_scrollbar_target_at(mouse.column, mouse.row)
                     .is_some()
                 {
+                    return None;
+                }
+                if let Some(header) = self
+                    .view
+                    .workspace_group_header_areas
+                    .iter()
+                    .find(|header| {
+                        mouse.row == header.rect.y
+                            && mouse.column >= header.rect.x
+                            && mouse.column < header.rect.x + header.rect.width
+                            && header.rect.width > 0
+                    })
+                    .cloned()
+                {
+                    let collapsed = self.collapsed_group_keys.contains(&header.group_key);
+                    self.context_menu = Some(ContextMenuState {
+                        kind: ContextMenuKind::WorkspaceGroupHeader {
+                            group_key: header.group_key,
+                            collapsed,
+                        },
+                        x: mouse.column,
+                        y: mouse.row,
+                        list: MenuListState::new(0),
+                    });
+                    self.mode = Mode::ContextMenu;
                     return None;
                 }
                 if let Some(idx) = self.workspace_at_row(mouse.row) {
@@ -2872,11 +2928,20 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.state.context_menu = Some(ContextMenuState {
+        let menu = ContextMenuState {
             kind: ContextMenuKind::Workspace { ws_idx: 1 },
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
+            list: MenuListState::new(0),
+        };
+        let close_idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Close")
+            .expect("workspace menu should offer Close");
+        app.state.context_menu = Some(ContextMenuState {
+            list: MenuListState::new(close_idx),
+            ..menu
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(
@@ -2920,11 +2985,20 @@ mod tests {
         });
         app.state.mode = Mode::ContextMenu;
 
+        let close_idx = app
+            .state
+            .context_menu
+            .as_ref()
+            .unwrap()
+            .items()
+            .iter()
+            .position(|item| *item == "Close")
+            .expect("workspace menu should offer Close") as u16;
         let menu = app.state.context_menu_rect().unwrap();
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             menu.x + 2,
-            menu.y + 2,
+            menu.y + 1 + close_idx,
         ));
 
         assert_eq!(app.state.workspaces.len(), 1);

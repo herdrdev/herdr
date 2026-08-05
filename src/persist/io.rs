@@ -207,6 +207,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            workspace_groups: Vec::new(),
+            collapsed_group_keys: Default::default(),
         }
     }
 
