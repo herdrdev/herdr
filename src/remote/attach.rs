@@ -1,12 +1,17 @@
 //! Remote thin-client launcher over SSH command stdio.
 
+use super::shell_quote;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write as _};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use interprocess::local_socket::traits::Listener as _;
+#[cfg(windows)]
+use interprocess::local_socket::traits::Stream as _;
+use interprocess::local_socket::ListenerNonblockingMode;
+use interprocess::TryClone as _;
 use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -16,6 +21,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
+#[cfg(windows)]
+const BRIDGE_IO_POLL: Duration = Duration::from_millis(1);
 const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
 const REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -189,53 +196,6 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     )?;
 
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
-}
-
-pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
-    ensure_remote_server_running()?;
-
-    let socket_path = crate::server::socket_paths::client_socket_path();
-    let stream = UnixStream::connect(&socket_path).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!(
-                "failed to connect to remote Herdr client socket {}: {err}",
-                socket_path.display()
-            ),
-        )
-    })?;
-
-    let mut stdout = io::stdout().lock();
-    let mut socket_to_stdout = stream.try_clone()?;
-    let mut stdin_to_socket = stream;
-
-    let _upload = thread::spawn(move || {
-        let mut stdin = io::stdin();
-        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
-        let _ = stdin_to_socket.shutdown(std::net::Shutdown::Write);
-    });
-
-    copy_flush(&mut socket_to_stdout, &mut stdout).map(|_| ())
-}
-
-fn ensure_remote_server_running() -> io::Result<()> {
-    let socket_path = crate::server::socket_paths::client_socket_path();
-    if crate::server::autodetect::is_server_listening() {
-        let status = crate::api::read_runtime_status_at(
-            &crate::api::socket_path(),
-            Duration::from_millis(500),
-        )?
-        .ok_or_else(|| io::Error::other("remote server status API is unavailable"))?;
-        if status.protocol == Some(CURRENT_PROTOCOL) {
-            return Ok(());
-        }
-        return Err(io::Error::other(
-            "remote herdr server must restart before this bridge can attach; rerun `herdr --remote` from an interactive terminal to approve stopping it",
-        ));
-    }
-
-    crate::server::autodetect::spawn_server_daemon()?;
-    crate::server::autodetect::wait_for_server_socket(&socket_path, Duration::from_secs(5))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,7 +395,7 @@ struct PreparedRemoteHerdr {
 #[derive(Clone)]
 struct ManagedSshOptions {
     config_path: PathBuf,
-    control_path: PathBuf,
+    control_path: Option<PathBuf>,
 }
 
 struct ManagedSshConfig {
@@ -613,9 +573,14 @@ fn remote_install_commit_script(tmp_path: &str, dest_path: &str) -> String {
 
 impl Drop for RemoteSsh {
     fn drop(&mut self) {
-        if self.managed_config.is_none() {
+        let Some(_options) = self
+            .managed_config
+            .as_ref()
+            .map(|config| &config.options)
+            .filter(|options| options.control_path.is_some())
+        else {
             return;
-        }
+        };
 
         let _ = self
             .base_command()
@@ -636,15 +601,16 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
         return;
     };
 
-    command
-        .arg("-F")
-        .arg(&options.config_path)
-        .arg("-S")
-        .arg(&options.control_path)
-        .arg("-o")
-        .arg("ControlMaster=auto")
-        .arg("-o")
-        .arg("ControlPersist=yes");
+    command.arg("-F").arg(&options.config_path);
+    if let Some(control_path) = &options.control_path {
+        command
+            .arg("-S")
+            .arg(control_path)
+            .arg("-o")
+            .arg("ControlMaster=auto")
+            .arg("-o")
+            .arg("ControlPersist=yes");
+    }
 }
 
 impl InstallSource {
@@ -1577,14 +1543,15 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
 }
 
 fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
-    let base = std::env::temp_dir();
+    let base = crate::platform::remote_private_temp_base();
+    fs::create_dir_all(&base)?;
     for attempt in 0..100 {
         let dir = base.join(format!(
             "herdr-remote-{}-{}-{attempt}",
             std::process::id(),
             asset_key
         ));
-        match fs::create_dir(&dir) {
+        match crate::platform::create_remote_private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
@@ -1651,8 +1618,9 @@ fn reattach_command(
     keybindings: RemoteKeybindings,
     live_handoff: bool,
 ) -> String {
-    let program = if program.is_empty() { "herdr" } else { program };
-    let mut command = format!("{} --remote {}", shell_quote(program), shell_quote(target));
+    let program = crate::platform::remote_reattach_program(program);
+    let target = crate::platform::remote_reattach_argument(target);
+    let mut command = format!("{program} --remote {target}");
     if keybindings != RemoteKeybindings::Local {
         command.push_str(" --remote-keybindings ");
         command.push_str(keybindings.as_str());
@@ -1662,25 +1630,9 @@ fn reattach_command(
     }
     if session_name != crate::session::DEFAULT_SESSION_NAME {
         command.push_str(" --session ");
-        command.push_str(&shell_quote(session_name));
+        command.push_str(&crate::platform::remote_reattach_argument(session_name));
     }
     command
-}
-
-fn shell_quote(value: &str) -> String {
-    if !value.is_empty()
-        && value.chars().all(|ch| {
-            ch.is_ascii_alphanumeric()
-                || matches!(
-                    ch,
-                    '@' | '%' | '_' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
-                )
-        })
-    {
-        return value.to_string();
-    }
-
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn command_failed(context: &str, output: &Output) -> io::Error {
@@ -1695,6 +1647,7 @@ fn command_failed(context: &str, output: &Output) -> io::Error {
 
 struct SshStdioBridge {
     local_socket: PathBuf,
+    socket_identity: crate::ipc::SocketFileIdentity,
     should_stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -1707,10 +1660,21 @@ impl SshStdioBridge {
         session_name: String,
         ssh_options: Option<&ManagedSshOptions>,
     ) -> io::Result<Self> {
-        let _ = std::fs::remove_file(&local_socket);
-        let listener = UnixListener::bind(&local_socket)?;
-        crate::ipc::restrict_socket_permissions(&local_socket, BRIDGE_SOCKET_PERMISSION_MODE)?;
-        listener.set_nonblocking(true)?;
+        crate::ipc::prepare_socket_path(&local_socket, |path| {
+            format!("remote bridge is already listening at {}", path.display())
+        })?;
+        let listener = crate::ipc::bind_private_local_listener(&local_socket)?;
+        let socket_identity = crate::ipc::socket_file_identity(&local_socket)?;
+        if let Err(err) =
+            crate::ipc::restrict_socket_permissions(&local_socket, BRIDGE_SOCKET_PERMISSION_MODE)
+        {
+            let _ = crate::ipc::remove_socket_file_if_owned(&local_socket, &socket_identity);
+            return Err(err);
+        }
+        if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
+            let _ = crate::ipc::remove_socket_file_if_owned(&local_socket, &socket_identity);
+            return Err(err);
+        }
 
         let should_stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&should_stop);
@@ -1718,19 +1682,14 @@ impl SshStdioBridge {
         let thread = thread::spawn(move || {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((stream, _addr)) => {
-                        if let Err(err) = stream.set_nonblocking(false) {
-                            eprintln!(
-                                "herdr: remote bridge failed to prepare client socket: {err}"
-                            );
-                            continue;
-                        }
+                    Ok(stream) => {
                         if let Err(err) = bridge_connection(
                             stream,
                             &target,
                             &remote_herdr,
                             &session_name,
                             thread_ssh_options.as_ref(),
+                            &thread_stop,
                         ) {
                             eprintln!("herdr: remote bridge failed: {err}");
                         }
@@ -1748,6 +1707,7 @@ impl SshStdioBridge {
 
         Ok(Self {
             local_socket,
+            socket_identity,
             should_stop,
             thread: Some(thread),
         })
@@ -1757,100 +1717,64 @@ impl SshStdioBridge {
 impl Drop for SshStdioBridge {
     fn drop(&mut self) {
         self.should_stop.store(true, Ordering::Release);
-        let _ = std::fs::remove_file(&self.local_socket);
+        #[cfg(unix)]
+        let _ = crate::ipc::remove_socket_file_if_owned(&self.local_socket, &self.socket_identity);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        #[cfg(windows)]
+        let _ = crate::ipc::remove_socket_file_if_owned(&self.local_socket, &self.socket_identity);
     }
 }
 
-/// Creates a fresh user-only (`0700`) directory for the generated ssh config
-/// and control socket, returning its path.
-///
-/// Using a private directory created with fail-if-exists semantics — rather
-/// than a predictable file in the world-writable temp dir — stops a local user
-/// from pre-planting a symlink or world-writable file that herdr would write
-/// and `ssh -F` would then read.
-fn private_ssh_config_dir() -> io::Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    let mut bases = vec![std::env::temp_dir()];
-    let short_tmp = PathBuf::from("/tmp");
-    if bases.first() != Some(&short_tmp) {
-        bases.push(short_tmp);
-    }
-
-    let mut last_error = None;
-    for base in bases {
-        for attempt in 0..100 {
-            let dir = base.join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
-            if !fits_unix_socket_path(&dir.join(SSH_CONTROL_SOCKET_NAME)) {
-                continue;
-            }
-            match fs::DirBuilder::new().mode(0o700).create(&dir) {
-                Ok(()) => return Ok(dir),
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(err) => {
-                    last_error = Some(err);
-                    break;
-                }
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "failed to create private herdr ssh config directory",
-        )
-    }))
-}
-
-/// Quotes a path for an ssh_config `Include` so a path containing spaces (or
-/// glob metacharacters) is treated as one literal token instead of being split
-/// or expanded by ssh — otherwise the user's config might not be Included and
-/// herdr's fallback would wrongly take effect.
 fn ssh_config_quote(path: &str) -> String {
     format!("\"{path}\"")
 }
 
-/// Builds a temporary ssh config for remote attach commands without overriding
-/// the user's own settings, returning its path.
-///
-/// The file `Include`s the user's real ssh config first, so ssh's
-/// first-value-wins rule keeps any `ServerAlive*` the user set there (including
-/// an explicit `0` to disable it). Herdr's keepalive values apply only when
-/// the user has none.
-fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
-    use std::os::unix::fs::OpenOptionsExt;
+fn ssh_config_include_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' {
+        ssh_config_quote(&path.replace('\\', "/"))
+    } else {
+        ssh_config_quote(&path)
+    }
+}
 
-    let dir = private_ssh_config_dir()?;
+/// Builds a temporary ssh config that includes the user's settings first, so
+/// OpenSSH's first-value-wins behavior preserves explicit user keepalives.
+fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
+    let paths = crate::platform::remote_ssh_config_paths();
+    let dir = crate::platform::create_remote_ssh_config_dir(SSH_CONTROL_SOCKET_NAME)?;
     let path = dir.join("config");
-    let control_path = dir.join(SSH_CONTROL_SOCKET_NAME);
+    let control_path = paths
+        .multiplexing
+        .then(|| dir.join(SSH_CONTROL_SOCKET_NAME));
 
     let mut contents = String::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        let user_config = PathBuf::from(home).join(".ssh").join("config");
-        if user_config.is_file() {
-            contents.push_str(&format!(
-                "Include {}\n",
-                ssh_config_quote(&user_config.to_string_lossy())
-            ));
-        }
+    if let Some(user_config) = paths.user_config.filter(|path| path.is_file()) {
+        contents.push_str(&format!(
+            "Include {}\n",
+            ssh_config_include_path(&user_config)
+        ));
     }
-    if Path::new("/etc/ssh/ssh_config").is_file() {
-        contents.push_str("Include /etc/ssh/ssh_config\n");
+    if let Some(system_config) = paths.system_config.filter(|path| path.is_file()) {
+        contents.push_str(&format!(
+            "Include {}\n",
+            ssh_config_include_path(&system_config)
+        ));
     }
     contents.push_str("Host *\n");
     contents.push_str("  ServerAliveInterval 15\n");
     contents.push_str("  ServerAliveCountMax 4\n");
 
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(BRIDGE_SOCKET_PERMISSION_MODE)
-        .open(&path)?;
-    file.write_all(contents.as_bytes())?;
+    let write_result = (|| {
+        let mut file = crate::platform::create_remote_ssh_config_file(&path)?;
+        file.write_all(contents.as_bytes())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(err);
+    }
     Ok(ManagedSshConfig {
         options: ManagedSshOptions {
             config_path: path,
@@ -1859,20 +1783,21 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
     })
 }
 
+#[cfg(unix)]
 fn bridge_connection(
-    stream: UnixStream,
+    stream: crate::ipc::LocalStream,
     target: &str,
     remote_herdr: &RemoteHerdr,
     session_name: &str,
     ssh_options: Option<&ManagedSshOptions>,
+    _bridge_stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     let mut command = Command::new("ssh");
     apply_managed_ssh_options(&mut command, ssh_options);
     command
         .arg("-T")
         .arg(target)
-        .arg(remote_bridge_command(remote_herdr, session_name));
-    command
+        .arg(remote_bridge_command(remote_herdr, session_name))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
@@ -1896,7 +1821,7 @@ fn bridge_connection(
     });
     let download = thread::spawn(move || {
         let _ = copy_flush(&mut child_stdout, &mut child_to_stream);
-        let _ = child_to_stream.shutdown(std::net::Shutdown::Write);
+        let _ = crate::ipc::shutdown_local_stream_write(&child_to_stream);
     });
 
     let status = child.wait()?;
@@ -1913,6 +1838,157 @@ fn bridge_connection(
     }
 }
 
+#[cfg(windows)]
+fn bridge_connection(
+    stream: crate::ipc::LocalStream,
+    target: &str,
+    remote_herdr: &RemoteHerdr,
+    session_name: &str,
+    ssh_options: Option<&ManagedSshOptions>,
+    bridge_stop: &Arc<AtomicBool>,
+) -> io::Result<()> {
+    let mut command = Command::new("ssh");
+    apply_managed_ssh_options(&mut command, ssh_options);
+    command
+        .arg("-T")
+        .arg(target)
+        .arg(remote_bridge_command(remote_herdr, session_name))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| io::Error::new(err.kind(), format!("failed to start ssh bridge: {err}")))?;
+    let mut child_stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => return terminate_bridge_child(child, "ssh bridge stdin missing"),
+    };
+    let mut child_stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => return terminate_bridge_child(child, "ssh bridge stdout missing"),
+    };
+    let stream_to_child = match stream.try_clone() {
+        Ok(stream) => stream,
+        Err(err) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
+    };
+    if let Err(err) = stream.set_nonblocking(true) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(err);
+    }
+    let mut child_to_stream = stream;
+
+    let connection_stop = Arc::new(AtomicBool::new(false));
+    let upload_stop = Arc::new(AtomicBool::new(false));
+    let upload_failed = Arc::new(AtomicBool::new(false));
+    let download_done = Arc::new(AtomicBool::new(false));
+    let client_closed = Arc::new(AtomicBool::new(false));
+    let upload_cancel = Arc::clone(&upload_stop);
+    let upload_bridge_stop = Arc::clone(bridge_stop);
+    let upload_failed_worker = Arc::clone(&upload_failed);
+    let upload_client_closed = Arc::clone(&client_closed);
+    let upload = thread::spawn(move || {
+        let result = copy_local_stream_to_writer(
+            stream_to_child,
+            &mut child_stdin,
+            &upload_cancel,
+            &upload_bridge_stop,
+            &upload_client_closed,
+        );
+        upload_failed_worker.store(result.is_err(), Ordering::Release);
+        result
+    });
+    let download_stop = Arc::clone(&connection_stop);
+    let download_bridge_stop = Arc::clone(bridge_stop);
+    let download_done_worker = Arc::clone(&download_done);
+    let download_upload_stop = Arc::clone(&upload_stop);
+    let download = thread::spawn(move || {
+        let result = copy_reader_to_local_stream(
+            &mut child_stdout,
+            &mut child_to_stream,
+            &download_stop,
+            &download_bridge_stop,
+        );
+        download_done_worker.store(true, Ordering::Release);
+        download_upload_stop.store(true, Ordering::Release);
+        result
+    });
+
+    let mut stopped_at = None;
+    let (status_result, child_exited) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                upload_stop.store(true, Ordering::Release);
+                break (Ok(status), true);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                connection_stop.store(true, Ordering::Release);
+                upload_stop.store(true, Ordering::Release);
+                let _ = child.kill();
+                let _ = child.wait();
+                break (Err(err), false);
+            }
+        }
+        if bridge_stop.load(Ordering::Acquire) {
+            connection_stop.store(true, Ordering::Release);
+            upload_stop.store(true, Ordering::Release);
+            let _ = child.kill();
+            break (child.wait(), false);
+        }
+        if client_closed.load(Ordering::Acquire)
+            || upload_failed.load(Ordering::Acquire)
+            || download_done.load(Ordering::Acquire)
+        {
+            upload_stop.store(true, Ordering::Release);
+            let stopped_at = stopped_at.get_or_insert_with(Instant::now);
+            if stopped_at.elapsed() >= Duration::from_millis(250) {
+                connection_stop.store(true, Ordering::Release);
+                let _ = child.kill();
+                break (child.wait(), false);
+            }
+        }
+        thread::sleep(BRIDGE_ACCEPT_POLL);
+    };
+    upload_stop.store(true, Ordering::Release);
+    if !child_exited {
+        connection_stop.store(true, Ordering::Release);
+    }
+    let upload_result = upload
+        .join()
+        .map_err(|_| io::Error::other("remote bridge upload worker panicked"))?;
+    let download_result = download
+        .join()
+        .map_err(|_| io::Error::other("remote bridge download worker panicked"))?;
+    let status = status_result?;
+
+    let stopping = bridge_stop.load(Ordering::Acquire);
+    let client_closed = client_closed.load(Ordering::Acquire);
+    if !stopping && !client_closed {
+        upload_result.map_err(|err| {
+            io::Error::new(err.kind(), format!("remote bridge upload failed: {err}"))
+        })?;
+        download_result.map_err(|err| {
+            io::Error::new(err.kind(), format!("remote bridge download failed: {err}"))
+        })?;
+    }
+
+    if status.success() || stopping || client_closed {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            format!("ssh bridge exited with {status}"),
+        ))
+    }
+}
+
+#[cfg(unix)]
 fn copy_flush<R: io::Read, W: io::Write>(reader: &mut R, writer: &mut W) -> io::Result<u64> {
     let mut buffer = [0_u8; 16 * 1024];
     let mut total = 0;
@@ -1929,6 +2005,80 @@ fn copy_flush<R: io::Read, W: io::Write>(reader: &mut R, writer: &mut W) -> io::
         writer.flush()?;
         total += bytes_read as u64;
     }
+}
+
+#[cfg(windows)]
+fn terminate_bridge_child(mut child: std::process::Child, message: &'static str) -> io::Result<()> {
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(io::Error::new(io::ErrorKind::BrokenPipe, message))
+}
+
+#[cfg(windows)]
+fn copy_reader_to_local_stream<R: io::Read>(
+    reader: &mut R,
+    stream: &mut crate::ipc::LocalStream,
+    connection_stop: &AtomicBool,
+    bridge_stop: &AtomicBool,
+) -> io::Result<u64> {
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut total = 0;
+
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(total),
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        let mut written = 0;
+        while written < read {
+            if connection_stop.load(Ordering::Acquire) || bridge_stop.load(Ordering::Acquire) {
+                return Ok(total);
+            }
+            let chunk_len = (read - written).min(4 * 1024);
+            match stream.write(&buffer[written..written + chunk_len]) {
+                Ok(0) => thread::sleep(BRIDGE_IO_POLL),
+                Ok(count) => written += count,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(BRIDGE_IO_POLL);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        stream.flush()?;
+        total += read as u64;
+    }
+}
+
+#[cfg(windows)]
+fn copy_local_stream_to_writer<W: io::Write>(
+    mut stream: crate::ipc::LocalStream,
+    writer: &mut W,
+    connection_stop: &AtomicBool,
+    bridge_stop: &AtomicBool,
+    client_closed: &AtomicBool,
+) -> io::Result<u64> {
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut total = 0;
+
+    while !connection_stop.load(Ordering::Acquire) && !bridge_stop.load(Ordering::Acquire) {
+        match crate::ipc::poll_local_stream_read_count(&mut stream, &mut buffer)? {
+            crate::ipc::LocalStreamReadCount::Data(read) => {
+                writer.write_all(&buffer[..read])?;
+                writer.flush()?;
+                total += read as u64;
+            }
+            crate::ipc::LocalStreamReadCount::Pending => thread::sleep(BRIDGE_IO_POLL),
+            crate::ipc::LocalStreamReadCount::Closed => {
+                client_closed.store(true, Ordering::Release);
+                break;
+            }
+        }
+    }
+
+    Ok(total)
 }
 
 fn run_client_process(
@@ -1966,37 +2116,18 @@ fn local_forward_socket_path(target: &str, session_name: &str) -> PathBuf {
     let pid = std::process::id();
     let target_clean = sanitize_path_component(target);
     let session_clean = sanitize_path_component(session_name);
-
-    let tmpdir = std::env::temp_dir();
-    let readable = tmpdir.join(format!(
-        "herdr-remote-{pid}-{target_clean}-{session_clean}.sock"
-    ));
-    if fits_unix_socket_path(&readable) {
-        return readable;
-    }
-
-    // macOS' per-user TMPDIR (~49 chars under /var/folders/...) can push the
-    // readable name past sun_path's 104-byte ceiling. Fall back to a hashed
-    // short name in TMPDIR, then to /tmp as a last resort when TMPDIR itself
-    // is longer than the budget. The hash covers the full unsanitized
-    // target/session so uniqueness does not depend on the prefix truncation;
-    // the prefix is kept only for debuggability.
+    let readable_name = format!("herdr-remote-{pid}-{target_clean}-{session_clean}.sock");
     let target_prefix: String = target_clean.chars().take(8).collect();
     let hash = short_socket_hash(target, session_name);
     let short_name = format!("herdr-r-{pid}-{target_prefix}-{hash}.sock");
-    let short_in_tmp = tmpdir.join(&short_name);
-    if fits_unix_socket_path(&short_in_tmp) {
-        return short_in_tmp;
-    }
-    PathBuf::from("/tmp").join(short_name)
+    crate::platform::remote_bridge_endpoint_path(&readable_name, &short_name)
 }
 
+#[cfg(all(test, unix))]
 fn fits_unix_socket_path(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
-    // sun_path is byte-limited: 104 bytes on macOS, 108 on Linux. Reserve
-    // 1 byte for the trailing NUL and use the smaller cap for portability.
-    const MAX: usize = 103;
-    path.as_os_str().as_bytes().len() <= MAX
+
+    path.as_os_str().as_bytes().len() <= 103
 }
 
 fn short_socket_hash(target: &str, session: &str) -> String {
@@ -2028,6 +2159,7 @@ fn sanitize_path_component(input: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn bridge_socket_is_user_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -2056,13 +2188,42 @@ mod tests {
         let _ = std::fs::remove_file(socket);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_bridge_drop_while_waiting_for_client_is_bounded() {
+        let socket = local_forward_socket_path("drop-test", "default");
+        let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
+            os: "linux",
+            arch: "x86_64",
+        });
+        let bridge = SshStdioBridge::start(
+            "example".to_string(),
+            remote_herdr,
+            socket.clone(),
+            "default".to_string(),
+            None,
+        )
+        .expect("start bridge listener");
+        let started = Instant::now();
+
+        drop(bridge);
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!socket.exists());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn managed_ssh_config_includes_user_config_then_fallback() {
         use std::os::unix::fs::PermissionsExt;
 
         let managed_config = write_managed_ssh_config().expect("write managed config");
         let path = managed_config.options.config_path.clone();
-        let control_path = managed_config.options.control_path.clone();
+        let control_path = managed_config
+            .options
+            .control_path
+            .clone()
+            .expect("Unix managed config has a control path");
         let contents = std::fs::read_to_string(&path).expect("read keepalive config");
 
         // herdr's fallback transport settings are present...
@@ -2124,11 +2285,16 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn remote_ssh_command_uses_managed_config_when_present() {
         let managed_config = write_managed_ssh_config().expect("write managed config");
         let config_path = managed_config.options.config_path.clone();
-        let control_path = managed_config.options.control_path.clone();
+        let control_path = managed_config
+            .options
+            .control_path
+            .clone()
+            .expect("Unix managed config has a control path");
         let ssh = RemoteSsh {
             target: "example".to_string(),
             managed_config: Some(managed_config),
@@ -2154,6 +2320,45 @@ mod tests {
                 "-T".to_string(),
                 "example".to_string(),
             ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_ssh_config_uses_keepalives_without_control_socket() {
+        let managed_config = write_managed_ssh_config().expect("write managed config");
+        let config_path = managed_config.options.config_path.clone();
+        assert!(managed_config.options.control_path.is_none());
+        let contents = std::fs::read_to_string(&config_path).expect("read managed config");
+        assert!(contents.contains("ServerAliveInterval 15"));
+        assert!(contents.contains("ServerAliveCountMax 4"));
+
+        let ssh = RemoteSsh {
+            target: "example".to_string(),
+            managed_config: Some(managed_config),
+        };
+        let args = ssh
+            .command()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "-F".to_string(),
+                config_path.to_string_lossy().into_owned(),
+                "-T".to_string(),
+                "example".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ssh_config_include_uses_forward_slashes() {
+        assert_eq!(
+            ssh_config_include_path(Path::new(r"C:\Users\A B\.ssh\config")),
+            r#""C:/Users/A B/.ssh/config""#
         );
     }
 
@@ -2379,6 +2584,7 @@ mod tests {
         assert!(RemotePlatform::from_uname("FreeBSD", "x86_64").is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn reattach_command_includes_remote_and_session() {
         assert_eq!(
@@ -2420,6 +2626,25 @@ mod tests {
                 true,
             ),
             "herdr --remote host --handoff"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reattach_command_uses_current_executable() {
+        let executable = std::env::current_exe().expect("current test executable");
+        assert_eq!(
+            reattach_command(
+                r"C:\Program Files\Herdr\herdr.exe",
+                "host'name",
+                "work'name",
+                RemoteKeybindings::Local,
+                false,
+            ),
+            format!(
+                "& '{}' --remote 'host''name' --session 'work''name'",
+                executable.display().to_string().replace('\'', "''")
+            )
         );
     }
 
@@ -3009,16 +3234,29 @@ mod tests {
         assert!(source.temporary_dir.is_none());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_local_forward_endpoint_uses_private_state_dir() {
+        let path = local_forward_socket_path("user@example.com", "work");
+        assert!(path.starts_with(crate::platform::remote_private_temp_base()));
+        assert!(path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("herdr-r-")));
+    }
+
+    #[cfg(unix)]
     fn remote_env_lock() -> &'static std::sync::Mutex<()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 
+    #[cfg(unix)]
     fn socket_path_byte_len(path: &Path) -> usize {
         use std::os::unix::ffi::OsStrExt;
         path.as_os_str().as_bytes().len()
     }
 
+    #[cfg(unix)]
     #[test]
     fn local_forward_socket_path_uses_readable_name_when_it_fits() {
         let _guard = remote_env_lock().lock().unwrap();
@@ -3043,6 +3281,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn local_forward_socket_path_fits_in_sun_path() {
         let _guard = remote_env_lock().lock().unwrap();
@@ -3060,6 +3299,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn local_forward_socket_path_falls_back_to_tmp_when_dir_is_long() {
         let _guard = remote_env_lock().lock().unwrap();

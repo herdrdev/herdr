@@ -49,11 +49,15 @@ schemars = { version = "1.2.1", features = ["derive"] }
 portable-pty = { path = "vendor/portable-pty" }
 
 [target.'cfg(windows)'.dependencies]
+# UTF-16 SDDL input for interprocess security descriptors.
+widestring = "1.2"
 wmi = { version = "0.18.4", default-features = false }
 windows-sys = { version = "0.61.2", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
