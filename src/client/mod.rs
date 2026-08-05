@@ -415,6 +415,7 @@ fn setup_terminal_with_capabilities(
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
         reset_keyboard_enhancement_flags: enable_client_protocols,
+        restored: Arc::new(AtomicBool::new(false)),
         #[cfg(windows)]
         restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
     })
@@ -431,6 +432,10 @@ struct TerminalGuard {
     /// Only set when setup pushed a keyboard enhancement stack entry. Direct
     /// attach never pushes, so it must not pop on teardown either.
     reset_keyboard_enhancement_flags: bool,
+    /// Shared with the panic hook. Unwinding runs the hook first and then drops
+    /// this guard, so without a shared latch the teardown path would run twice
+    /// and the second pop would take a stack entry herdr never pushed.
+    restored: Arc<AtomicBool>,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
 }
@@ -570,12 +575,23 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
     }
 }
 
+/// Returns true for the first caller only, so the terminal is restored once
+/// no matter how many teardown paths fire.
+fn claim_terminal_restore(restored: &AtomicBool) -> bool {
+    !restored.swap(true, Ordering::SeqCst)
+}
+
 fn restore_terminal_state(
+    restored: &AtomicBool,
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
     reset_keyboard_enhancement_flags: bool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) {
+    if !claim_terminal_restore(restored) {
+        return;
+    }
+
     let _ = clear_received_kitty_graphics(&mut io::stdout());
 
     // Reset modifyOtherKeys if we enabled it.
@@ -655,6 +671,7 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore_terminal_state(
+            &self.restored,
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
             self.reset_keyboard_enhancement_flags,
@@ -1213,11 +1230,13 @@ fn run_client_with_mode(
     let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
     let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
     let panic_resets_keyboard_enhancement_flags = terminal_guard.reset_keyboard_enhancement_flags;
+    let panic_restored = Arc::clone(&terminal_guard.restored);
     #[cfg(windows)]
     let panic_restore_windows_input_mode = terminal_guard.restore_windows_input_mode;
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal_state(
+            &panic_restored,
             panic_resets_modify_other_keys,
             panic_resets_host_color_scheme_reports,
             panic_resets_keyboard_enhancement_flags,
@@ -2304,6 +2323,15 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn terminal_restore_is_claimed_once_across_teardown_paths() {
+        let restored = Arc::new(AtomicBool::new(false));
+        let panic_hook_copy = Arc::clone(&restored);
+
+        assert!(claim_terminal_restore(&panic_hook_copy));
+        assert!(!claim_terminal_restore(&restored));
     }
 
     #[test]
