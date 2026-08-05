@@ -4,9 +4,10 @@
   "type": "module",
   "scripts": {
     "prepare-docs": "node scripts/prepare-docs.mjs",
-    "dev": "node scripts/prepare-docs.mjs && astro dev",
+    "dev": "node scripts/prepare-docs.mjs --draft && astro dev",
     "test": "bun test",
     "build": "bun run test && node scripts/prepare-docs.mjs && astro build && node scripts/check-built-docs.mjs",
+    "build:draft": "node scripts/prepare-docs.mjs --draft && astro build && node scripts/check-built-docs.mjs",
     "preview": "astro preview"
   },
   "dependencies": {

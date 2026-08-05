@@ -399,6 +399,9 @@ impl App {
                     }
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),
+                        SettingsAction::SaveStatusIndicators(style) => {
+                            self.save_status_indicators(style)
+                        }
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                         SettingsAction::SaveToastDelivery(delivery) => {
                             self.save_toast_delivery(delivery)
@@ -772,6 +775,7 @@ impl AppState {
                 cwd,
                 self.pane_scrollback_limit_bytes,
                 self.host_terminal_theme,
+                self.host_terminal_appearance,
                 crate::pane::PaneShellConfig::new(&self.default_shell, self.shell_mode),
                 Vec::new(),
             ) {

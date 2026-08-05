@@ -363,10 +363,13 @@ state should own their files or database.
 ## Marketplace
 
 Community plugins are discoverable in the [marketplace](/plugins/), an automatic
-index of public GitHub repositories tagged with the topic `herdr-plugin`.
-Plugins stay ordinary GitHub repositories: publish one with `herdr-plugin.toml`,
-then share `herdr plugin install owner/repo[/subdir]`.
+index of public GitHub repositories tagged with `herdr-plugin` that contain one
+or more `herdr-plugin.toml` files whose required metadata can be parsed. Plugins
+stay ordinary GitHub repositories: publish one, then share
+`herdr plugin install owner/repo[/subdir]`.
 
-To get a plugin listed, add the GitHub topic `herdr-plugin` to its public
-repository. The index refreshes every 30 minutes. See
+To get plugins listed, add the GitHub topic `herdr-plugin` and place their
+manifests at the root or in subdirectories of the repository's default branch.
+One repository card can contain multiple separately installable plugins. The
+index refreshes every 30 minutes. See
 [Marketplace](/docs/marketplace/) for how discovery works.

@@ -171,6 +171,7 @@ for (const integration of integrations) {
       { reason: "startup" },
       {
         hasUI: true,
+        mode: "tui",
         isIdle: () => true,
         sessionManager: {
           getSessionFile: () => undefined,
@@ -197,6 +198,7 @@ for (const integration of integrations) {
       { reason: "reload" },
       {
         hasUI: true,
+        mode: "tui",
         isIdle: () => false,
         sessionManager: {
           getSessionFile: () => undefined,
@@ -268,6 +270,25 @@ test("Pi reports idle only after the agent settles", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
 });
 
+test("Pi ignores RPC sessions even when UI APIs are available", async () => {
+  const requests = await startRecordingServer("pi-rpc");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    ...piContext(() => true),
+    hasUI: true,
+    mode: "rpc",
+  };
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("agent_start")?.({}, context);
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+
+  expect(requests).toEqual([]);
+});
+
 test("Pi settlement preserves explicit blocked-state precedence", async () => {
   const requests = await startRecordingServer("pi-settled-blocked");
   const { eventHandlers, handlers, pi } = createExtensionHarness();
@@ -307,6 +328,7 @@ test("Pi reports the session replacement source", async () => {
     { reason: "new" },
     {
       hasUI: true,
+      mode: "tui",
       isIdle: () => true,
       sessionManager: {
         getSessionFile: () => "/tmp/pi-new.jsonl",
@@ -370,6 +392,7 @@ test("Pi waits for a replacement session report before publishing state", async 
     { reason: "new" },
     {
       hasUI: true,
+      mode: "tui",
       isIdle: () => false,
       sessionManager: {
         getSessionFile: () => "/tmp/pi-new.jsonl",
@@ -489,6 +512,7 @@ test("Pi retries working state after an unanswered socket attempt", async () => 
     { reason: "startup" },
     {
       hasUI: true,
+      mode: "tui",
       isIdle: () => false,
       sessionManager: {
         getSessionFile: () => undefined,
@@ -524,6 +548,7 @@ function completionHandlers(handlers: Map<string, Handler>): string[] {
 function piContext(isIdle: () => boolean) {
   return {
     hasUI: true,
+    mode: "tui",
     isIdle,
     sessionManager: {
       getSessionFile: () => undefined,

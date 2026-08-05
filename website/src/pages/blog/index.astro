@@ -1,38 +1,42 @@
 ---
 import { getCollection } from 'astro:content';
-import MarketingLayout from '../../components/MarketingLayout.astro';
+import SiteLayout from '../../components/SiteLayout.astro';
 
+/* Drafts render locally and never in a build, so an unpublished post can be
+   reviewed on the dev server without being one deploy away from going live. */
 const posts = (await getCollection('blog'))
-  .filter((post) => !post.data.draft)
+  .filter((post) => import.meta.env.DEV || !post.data.draft)
   .map((post) => ({ ...post, slug: post.id.replace(/\.(md|mdx)$/i, '') }))
   .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+
+const stamp = (date) =>
+  date.toLocaleDateString('en', { year: 'numeric', month: 'short', day: 'numeric' });
 ---
 
-<MarketingLayout
+<SiteLayout
   title="Herdr blog"
-  description="Notes on terminal-native agent workflows and the engineering behind Herdr."
+  description="Notes on the agent runtime — product decisions, implementation writeups, and what we learned running agents on machines nobody is watching."
   canonicalPath="/blog/"
 >
-  <main class="content-shell">
-    <section class="page-hero page-hero-compact">
-      <p class="eyebrow"><span class="status-dot dot-working"></span>Blog</p>
-      <h1>Notes from Herdr.</h1>
-      <p class="hero-lede">
-        Product notes and implementation writeups for the terminal-native agent multiplexer.
-      </p>
-    </section>
+  <header class="ph">
+    <div class="hd-eyebrow"><s></s>the blog</div>
+    <h1>Notes from the herd.</h1>
+    <p>
+      Product decisions, implementation writeups, and what we learn running agents on
+      machines nobody is watching.
+    </p>
+  </header>
 
-    <section class="section section-narrow" aria-label="Blog posts">
-      <div class="post-list">
-        {posts.map((post) => (
-          <article class="post-card">
-            <a class="post-card-link" href={`/blog/${post.slug}/`}>
-              <h2>{post.data.title}</h2>
-              <span aria-hidden="true">→</span>
-            </a>
-          </article>
-        ))}
-      </div>
-    </section>
-  </main>
-</MarketingLayout>
+  <div class="posts">
+    {posts.map((post) => (
+      <a href={`/blog/${post.slug}/`}>
+        <time datetime={post.data.date.toISOString()}>{stamp(post.data.date)}</time>
+        <div>
+          <h2>{post.data.title}</h2>
+          {post.data.description && <p>{post.data.description}</p>}
+        </div>
+        <span class="go-arrow" aria-hidden="true">→</span>
+      </a>
+    ))}
+  </div>
+</SiteLayout>

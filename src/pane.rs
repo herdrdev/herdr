@@ -265,8 +265,13 @@ struct AgentDetectionPresence {
 }
 
 #[cfg(unix)]
+fn absolute_process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    crate::platform::process_cwd(pid).filter(|cwd| cwd.is_absolute())
+}
+
+#[cfg(unix)]
 fn usable_process_cwd(pid: u32) -> Option<std::path::PathBuf> {
-    crate::platform::process_cwd(pid).filter(|cwd| cwd.is_absolute() && cwd.is_dir())
+    absolute_process_cwd(pid).filter(|cwd| cwd.is_dir())
 }
 
 #[cfg(unix)]
@@ -279,7 +284,7 @@ fn foreground_member_cwd_different_from_shell(
         if process.pid == shell_pid {
             continue;
         }
-        let Some(cwd) = usable_process_cwd(process.pid) else {
+        let Some(cwd) = absolute_process_cwd(process.pid) else {
             continue;
         };
         if shell_cwd != Some(&cwd) {
@@ -1122,6 +1127,18 @@ impl PaneRuntimeIo {
         }
     }
 
+    fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.write_terminal_response(response),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                if let Some(bytes) = response() {
+                    let _ = sender.try_send(bytes);
+                }
+            }
+        }
+    }
+
     fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
         match self {
             PaneRuntimeIo::Actor(actor) => {
@@ -1605,6 +1622,16 @@ impl PaneRuntime {
         self.terminal.apply_host_terminal_theme(theme);
     }
 
+    pub fn apply_host_terminal_appearance(
+        &self,
+        appearance: Option<crate::terminal_theme::HostAppearance>,
+    ) {
+        self.io
+            .write_terminal_response(|| self.terminal.apply_host_terminal_appearance(appearance));
+    }
+
+    // Runtime construction threads PTY geometry, host context, launch policy, and render hooks.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         pane_id: PaneId,
         rows: u16,
@@ -1612,6 +1639,7 @@ impl PaneRuntime {
         cwd: std::path::PathBuf,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         events: mpsc::Sender<AppEvent>,
@@ -1625,6 +1653,7 @@ impl PaneRuntime {
             cwd,
             scrollback_limit_bytes,
             host_terminal_theme,
+            host_terminal_appearance,
             shell_config,
             launch_env,
             None,
@@ -1643,6 +1672,7 @@ impl PaneRuntime {
         cwd: std::path::PathBuf,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
@@ -1662,6 +1692,7 @@ impl PaneRuntime {
             cols,
             scrollback_limit_bytes,
             host_terminal_theme,
+            host_terminal_appearance,
             events,
             render_notify,
             render_dirty,
@@ -1688,6 +1719,7 @@ impl PaneRuntime {
         agent_detection: AgentDetection,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1702,6 +1734,7 @@ impl PaneRuntime {
             cols,
             scrollback_limit_bytes,
             host_terminal_theme,
+            host_terminal_appearance,
             events,
             render_notify,
             render_dirty,
@@ -1724,6 +1757,7 @@ impl PaneRuntime {
         agent_detection: AgentDetection,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1747,6 +1781,7 @@ impl PaneRuntime {
             cols,
             scrollback_limit_bytes,
             host_terminal_theme,
+            host_terminal_appearance,
             events,
             render_notify,
             render_dirty,
@@ -1762,6 +1797,7 @@ impl PaneRuntime {
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1798,6 +1834,7 @@ impl PaneRuntime {
         }
         let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
         pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
         pane_terminal.seed_terminal_title(terminal_title);
         if let Some(input_state) = input_state {
             pane_terminal.seed_handoff_input_state(input_state);
@@ -1911,6 +1948,7 @@ impl PaneRuntime {
         cols: u16,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1931,6 +1969,7 @@ impl PaneRuntime {
         }
         let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
         pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
         pane_terminal.set_windows_powershell_prompt_cwd_reporting(
             initial_state.windows_powershell_prompt_cwd_reporting,
         );
@@ -2821,12 +2860,12 @@ impl PaneRuntime {
         #[cfg(unix)]
         {
             let pid = self.child_pid.load(Ordering::Acquire);
-            let shell_cwd = usable_process_cwd(pid);
+            let shell_cwd = absolute_process_cwd(pid);
             let foreground_pgid = self
                 .io
                 .foreground_process_group_id()
                 .or_else(|| crate::platform::foreground_process_group_id(pid));
-            let leader_cwd = foreground_pgid.and_then(usable_process_cwd);
+            let leader_cwd = foreground_pgid.and_then(absolute_process_cwd);
 
             if leader_cwd.as_ref() == shell_cwd.as_ref() {
                 foreground_member_cwd_different_from_shell(pid, shell_cwd.as_ref()).or(leader_cwd)
@@ -2953,6 +2992,51 @@ mod tests {
         std::fs::remove_dir(&cwd).expect("remove reported cwd after admission");
 
         assert_eq!(runtime.cwd(), Some(cwd));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_cwd_does_not_require_traversing_the_directory_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "herdr-process-cwd-no-stat-{}-{stamp}",
+            std::process::id()
+        ));
+        let private = base.join("private");
+        let cwd = private.join("cwd");
+        std::fs::create_dir_all(&cwd).expect("create process cwd");
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .current_dir(&cwd)
+            .spawn()
+            .expect("spawn process in cwd");
+        let expected_cwd = crate::platform::process_cwd(child.id())
+            .expect("resolve process cwd before restricting traversal");
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000))
+            .expect("make cwd path untraversable");
+
+        let path_is_traversable = cwd.is_dir();
+        let observed = (!path_is_traversable)
+            .then(|| absolute_process_cwd(child.id()))
+            .flatten();
+
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755))
+            .expect("restore cwd path permissions");
+        let _ = child.kill();
+        let _ = child.wait();
+        std::fs::remove_dir_all(&base).expect("remove process cwd");
+
+        if path_is_traversable {
+            eprintln!("skipping untraversable cwd assertion for privileged test process");
+            return;
+        }
+        assert_eq!(observed, Some(expected_cwd));
     }
 
     #[cfg(unix)]
@@ -3343,7 +3427,7 @@ mod tests {
         let runtime = PaneRuntime::test_with_screen_bytes(
             80,
             24,
-            b"\x1b[>5u\x1b[>4;2m\x1b[?1h\x1b[?2004h\x1b[?1004h\x1b[?1002h\x1b[?1006h",
+            b"\x1b[>5u\x1b[>4;2m\x1b[?1h\x1b[?2004h\x1b[?1004h\x1b[?1002h\x1b[?1006h\x1b[?2031h",
         );
 
         runtime.test_process_pty_bytes("\x1b]2;✳ 修复🙂标题\x1b\\".as_bytes());
@@ -3364,6 +3448,7 @@ mod tests {
                 mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Sgr,
                 mouse_alternate_scroll: true,
                 modify_other_keys: true,
+                color_scheme_reporting: true,
             })
         );
     }
@@ -3456,6 +3541,17 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn subscribed_idle_child_receives_color_scheme_transition() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark));
+        runtime.test_process_pty_bytes(b"\x1b[?2031h");
+
+        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light));
+
+        assert_eq!(rx.recv().await, Some(Bytes::from_static(b"\x1b[?997;2n")));
     }
 
     #[test]

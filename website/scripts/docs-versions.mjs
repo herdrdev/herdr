@@ -1,7 +1,14 @@
-import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  createGit,
+  extractGitTree,
+  gitPathExists,
+  gitTreesEqual,
+  listDocumentationPaths,
+  resolveCommit,
+} from './docs-snapshot.mjs';
 
 const websiteDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = process.env.HERDR_DOCS_REPO_ROOT
@@ -11,6 +18,7 @@ const versionsDir = resolve(repoRoot, 'docs/versions');
 const manifestPath = resolve(versionsDir, 'manifest.json');
 const stableDocsDir = resolve(repoRoot, 'website/src/content/docs');
 const stableReferencePath = resolve(repoRoot, 'website/src/data/config-reference.json');
+const git = createGit(repoRoot);
 
 const VERSION_PATTERN = /^v?(\d+\.\d+\.\d+)$/;
 
@@ -21,94 +29,58 @@ export function normalizeVersion(value) {
 }
 
 export function sortVersionsNewestFirst(versions) {
-  return [...versions].sort((left, right) => {
-    const a = left.version.split('.').map(Number);
-    const b = right.version.split('.').map(Number);
-    for (let index = 0; index < 3; index += 1) {
-      if (a[index] !== b[index]) return b[index] - a[index];
-    }
-    return 0;
-  });
+  return [...versions].sort((left, right) => compareVersions(right.version, left.version));
 }
 
-function git(args, options = {}) {
-  return execFileSync('git', args, {
-    cwd: repoRoot,
-    encoding: options.binary ? undefined : 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-}
-
-function gitTreesEqual(ref, left, right) {
-  try {
-    git(['diff', '--quiet', `${ref}:${left}`, `${ref}:${right}`]);
-    return true;
-  } catch {
-    return false;
+function compareVersions(left, right) {
+  const a = left.split('.').map(Number);
+  const b = right.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
   }
-}
-
-function gitPathExists(ref, path) {
-  try {
-    git(['cat-file', '-e', `${ref}:${path}`]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function listGitFiles(ref, root) {
-  const output = git(['ls-tree', '-r', '--name-only', ref, '--', root]);
-  return output.split('\n').filter(Boolean);
-}
-
-async function extractGitTree(ref, sourceRoot, destinationRoot) {
-  const files = listGitFiles(ref, sourceRoot);
-  if (files.length === 0) throw new Error(`${ref}:${sourceRoot} contains no files`);
-
-  await rm(destinationRoot, { recursive: true, force: true });
-  for (const file of files) {
-    const destination = resolve(destinationRoot, relative(sourceRoot, file));
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, git(['show', `${ref}:${file}`], { binary: true }));
-  }
+  return 0;
 }
 
 async function readManifest() {
   try {
     return JSON.parse(await readFile(manifestPath, 'utf8'));
   } catch (error) {
-    if (error.code === 'ENOENT') return { schema_version: 1, current: null, versions: [] };
+    if (error.code === 'ENOENT') {
+      return { schema_version: 1, stable_source: 'legacy', current: null, versions: [] };
+    }
     throw error;
   }
 }
 
 async function writeManifest(manifest) {
-  manifest.versions = sortVersionsNewestFirst(manifest.versions).map(({ version, tag, source }) => ({
-    version,
-    tag,
-    source,
-  }));
+  manifest.versions = sortVersionsNewestFirst(manifest.versions).map(
+    ({ version, tag, commit, source }) => ({
+      version,
+      tag,
+      ...(commit ? { commit } : {}),
+      source,
+    }),
+  );
   await mkdir(dirname(manifestPath), { recursive: true });
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
 function releaseMetadata(tag) {
   const version = normalizeVersion(tag);
-  return { version, tag: `v${version}` };
+  const normalizedTag = `v${version}`;
+  return { version, tag: normalizedTag, commit: resolveCommit(git, normalizedTag) };
 }
 
 async function snapshotTag(tag, sourceRoot) {
   const metadata = { ...releaseMetadata(tag), source: sourceRoot };
   const destination = resolve(versionsDir, metadata.version);
   await rm(destination, { recursive: true, force: true });
-  await extractGitTree(tag, sourceRoot, resolve(destination, 'website/src/content/docs'));
+  await extractGitTree(git, tag, sourceRoot, resolve(destination, 'website/src/content/docs'));
 
   const referenceSource = sourceRoot.includes('docs/next/')
     ? 'docs/next/website/src/data/config-reference.json'
     : 'website/src/data/config-reference.json';
-  if (gitPathExists(tag, referenceSource)) {
+  if (gitPathExists(git, tag, referenceSource)) {
     const referenceDestination = resolve(destination, 'website/src/data/config-reference.json');
     await mkdir(dirname(referenceDestination), { recursive: true });
     await writeFile(referenceDestination, git(['show', `${tag}:${referenceSource}`], { binary: true }));
@@ -124,12 +96,16 @@ export async function backfillVersions() {
 
   for (const tag of tags) {
     const version = normalizeVersion(tag);
-    if (entries.has(version) || !gitPathExists(tag, 'website/src/content/docs')) continue;
+    if (entries.has(version)) continue;
     const nextRoot = 'docs/next/website/src/content/docs';
+    const legacyRoot = 'website/src/content/docs';
+    const hasNext = gitPathExists(git, tag, nextRoot);
+    const hasLegacy = gitPathExists(git, tag, legacyRoot);
+    if (!hasNext && !hasLegacy) continue;
     const sourceRoot =
-      gitPathExists(tag, nextRoot) && !gitTreesEqual(tag, 'website/src/content/docs', nextRoot)
+      hasNext && (!hasLegacy || !gitTreesEqual(git, tag, legacyRoot, nextRoot))
         ? nextRoot
-        : 'website/src/content/docs';
+        : legacyRoot;
     const metadata = await snapshotTag(tag, sourceRoot);
     entries.set(metadata.version, metadata);
     process.stdout.write(`snapshotted ${tag}\n`);
@@ -138,6 +114,7 @@ export async function backfillVersions() {
   const current = JSON.parse(await readFile(resolve(repoRoot, 'website/latest.json'), 'utf8')).version;
   await writeManifest({
     schema_version: 1,
+    stable_source: manifest.stable_source ?? 'legacy',
     current: normalizeVersion(current),
     versions: [...entries.values()],
   });
@@ -145,7 +122,11 @@ export async function backfillVersions() {
 
 export async function checkVersions() {
   const manifest = await readManifest();
-  if (manifest.schema_version !== 1 || typeof manifest.current !== 'string') {
+  if (
+    manifest.schema_version !== 1 ||
+    typeof manifest.current !== 'string' ||
+    !['legacy', 'snapshot'].includes(manifest.stable_source ?? 'legacy')
+  ) {
     throw new Error(`${manifestPath} has an unsupported schema`);
   }
 
@@ -166,83 +147,101 @@ export async function checkVersions() {
     if (normalizeVersion(entry.tag) !== entry.version) {
       throw new Error(`docs version ${entry.version} has mismatched tag ${entry.tag}`);
     }
+    const requiresCommit =
+      entry.source === 'docs/next/website/src/content/docs' ||
+      ((manifest.stable_source ?? 'legacy') === 'snapshot' && entry.version === manifest.current);
+    if (requiresCommit && !entry.commit) {
+      throw new Error(`docs version ${entry.version} is missing commit provenance`);
+    }
+    if (entry.commit) {
+      if (!/^[0-9a-f]{40}$/.test(entry.commit)) {
+        throw new Error(`docs version ${entry.version} has invalid commit ${entry.commit}`);
+      }
+      const taggedCommit = resolveCommit(git, entry.tag);
+      if (taggedCommit !== entry.commit) {
+        throw new Error(
+          `docs version ${entry.version} tag ${entry.tag} moved from ${entry.commit} to ${taggedCommit}`,
+        );
+      }
+    }
     if (!['website/src/content/docs', 'docs/next/website/src/content/docs'].includes(entry.source)) {
       throw new Error(`docs version ${entry.version} has unsupported source ${entry.source}`);
     }
-    const sourceRoot = entry.source;
-    const snapshotRoot = resolve(versionsDir, entry.version, 'website/src/content/docs');
-    const expected = listGitFiles(entry.tag, sourceRoot).map((path) => relative(sourceRoot, path)).sort();
-    const actual = (await listFiles(snapshotRoot)).sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      throw new Error(`documentation file list for ${entry.version} differs from ${entry.tag}:${sourceRoot}`);
-    }
-    for (const relativePath of expected) {
-      const actualContent = await readFile(resolve(snapshotRoot, relativePath));
-      const taggedPath = `${sourceRoot}/${relativePath.split('\\').join('/')}`;
-      const taggedContent = git(['show', `${entry.tag}:${taggedPath}`], { binary: true });
-      if (!actualContent.equals(taggedContent)) {
-        throw new Error(`${entry.version}/${relativePath} differs from ${entry.tag}:${sourceRoot}`);
-      }
+
+    const versionRoot = resolve(versionsDir, entry.version, 'website');
+    const documentationPaths = await listDocumentationPaths(
+      resolve(versionRoot, 'src/content/docs'),
+    );
+    if (!documentationPaths.includes('index.md') && !documentationPaths.includes('index.mdx')) {
+      throw new Error(`docs version ${entry.version} has no root index`);
     }
 
-    const referenceSource = sourceRoot.includes('docs/next/')
-      ? 'docs/next/website/src/data/config-reference.json'
-      : 'website/src/data/config-reference.json';
-    const referenceSnapshot = resolve(
-      versionsDir,
-      entry.version,
-      'website/src/data/config-reference.json',
-    );
-    if (gitPathExists(entry.tag, referenceSource)) {
-      const actualReference = await readFile(referenceSnapshot);
-      const taggedReference = git(['show', `${entry.tag}:${referenceSource}`], { binary: true });
-      if (!actualReference.equals(taggedReference)) {
-        throw new Error(`${entry.version} config reference differs from ${entry.tag}:${referenceSource}`);
-      }
-    } else {
-      try {
-        await readFile(referenceSnapshot);
-        throw new Error(`${entry.version} has an unexpected config reference snapshot`);
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-      }
+    try {
+      JSON.parse(await readFile(resolve(versionRoot, 'src/data/config-reference.json'), 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
     }
   }
 
   if (!seen.has(manifest.current)) {
     throw new Error(`current docs version ${manifest.current} has no snapshot`);
   }
-  process.stdout.write(`validated ${manifest.versions.length} documentation snapshots\n`);
+  process.stdout.write(`validated ${manifest.versions.length} documentation versions\n`);
 }
 
 export async function publishVersion(tag) {
   const release = releaseMetadata(tag);
-  if (!gitPathExists(tag, 'docs/next/website/src/content/docs')) {
+  if (!gitPathExists(git, tag, 'docs/next/website/src/content/docs')) {
     throw new Error(`${tag} does not contain staged website documentation`);
   }
 
   const manifest = await readManifest();
   const existing = manifest.versions.find((entry) => entry.version === release.version);
-  if (existing && existing.tag !== release.tag) {
-    throw new Error(`version ${release.version} is already associated with ${existing.tag}`);
+  if (manifest.current === release.version) {
+    if ((manifest.stable_source ?? 'legacy') === 'legacy') {
+      process.stdout.write(`documentation ${release.tag} is already published with the legacy stable source\n`);
+      return;
+    }
+    if (!existing?.commit || existing.commit !== release.commit) {
+      throw new Error(`published documentation ${release.version} has mismatched commit provenance`);
+    }
+    process.stdout.write(`documentation ${release.tag} is already published\n`);
+    return;
+  }
+  if (manifest.current && compareVersions(release.version, manifest.current) < 0) {
+    if (existing) {
+      if (existing.tag !== release.tag) {
+        throw new Error(`version ${release.version} is already associated with ${existing.tag}`);
+      }
+      if (existing.commit && existing.commit !== release.commit) {
+        throw new Error(`version ${release.version} has mismatched commit provenance`);
+      }
+      process.stdout.write(`documentation ${release.tag} is already archived\n`);
+      return;
+    }
+    const archived = await snapshotTag(tag, 'docs/next/website/src/content/docs');
+    const archivedEntries = new Map(manifest.versions.map((entry) => [entry.version, entry]));
+    archivedEntries.set(archived.version, archived);
+    await writeManifest({
+      ...manifest,
+      versions: [...archivedEntries.values()],
+    });
+    process.stdout.write(
+      `archived documentation snapshot ${release.tag} without changing current ${manifest.current}\n`,
+    );
+    return;
+  }
+  if (existing) {
+    throw new Error(`version ${release.version} already has published documentation`);
   }
 
   const metadata = await snapshotTag(tag, 'docs/next/website/src/content/docs');
-  const snapshotRoot = resolve(versionsDir, metadata.version, 'website');
-  await replaceDirectory(resolve(snapshotRoot, 'src/content/docs'), stableDocsDir);
-
-  const snapshotReference = resolve(snapshotRoot, 'src/data/config-reference.json');
-  try {
-    await mkdir(dirname(stableReferencePath), { recursive: true });
-    await writeFile(stableReferencePath, await readFile(snapshotReference));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await rm(stableReferencePath, { force: true });
-  }
+  await rm(stableDocsDir, { recursive: true, force: true });
+  await rm(stableReferencePath, { force: true });
 
   for (const readme of ['README.md', 'README.zh-CN.md']) {
     const nextReadme = `docs/next/${readme}`;
-    if (gitPathExists(tag, nextReadme)) {
+    if (gitPathExists(git, tag, nextReadme)) {
       await writeFile(resolve(repoRoot, readme), git(['show', `${tag}:${nextReadme}`], { binary: true }));
     }
   }
@@ -251,41 +250,11 @@ export async function publishVersion(tag) {
   entries.set(metadata.version, metadata);
   await writeManifest({
     schema_version: 1,
+    stable_source: 'snapshot',
     current: metadata.version,
     versions: [...entries.values()],
   });
   process.stdout.write(`published documentation snapshot ${metadata.tag}\n`);
-}
-
-async function replaceDirectory(source, destination) {
-  await rm(destination, { recursive: true, force: true });
-  await copyDirectory(source, destination);
-}
-
-async function listFiles(root) {
-  const files = [];
-  async function walk(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile()) files.push(relative(root, path));
-    }
-  }
-  await walk(root);
-  return files;
-}
-
-async function copyDirectory(source, destination) {
-  await mkdir(destination, { recursive: true });
-  for (const entry of await readdir(source, { withFileTypes: true })) {
-    const sourcePath = join(source, entry.name);
-    const destinationPath = join(destination, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectory(sourcePath, destinationPath);
-    } else if (entry.isFile()) {
-      await writeFile(destinationPath, await readFile(sourcePath));
-    }
-  }
 }
 
 async function main() {
@@ -302,7 +271,14 @@ async function main() {
     await checkVersions();
     return;
   }
-  throw new Error('usage: node website/scripts/docs-versions.mjs backfill | check | publish <tag>');
+  if (command === 'current' && !value) {
+    const manifest = await readManifest();
+    process.stdout.write(`${manifest.current ?? ''}\n`);
+    return;
+  }
+  throw new Error(
+    'usage: node website/scripts/docs-versions.mjs backfill | check | current | publish <tag>',
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -6,6 +6,7 @@ on:
       - ".github/workflows/website.yml"
       - "website/**"
       - "docs/next/website/**"
+      - "docs/preview/**"
       - "docs/versions/**"
       - "scripts/test_preview.py"
   push:
@@ -14,6 +15,7 @@ on:
       - ".github/workflows/website.yml"
       - "website/**"
       - "docs/next/website/**"
+      - "docs/preview/**"
       - "docs/versions/**"
       - "scripts/test_preview.py"
 
@@ -40,8 +42,13 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Validate version snapshots
-        run: node website/scripts/docs-versions.mjs check
+      - name: Validate published documentation
+        run: |
+          node website/scripts/docs-versions.mjs check
+          node website/scripts/docs-preview.mjs check
 
-      - name: Build website
+      - name: Build published website
         run: cd website && bun install --frozen-lockfile && bun run build
+
+      - name: Validate unpublished draft
+        run: cd website && bun run build:draft

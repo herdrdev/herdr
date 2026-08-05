@@ -1,7 +1,33 @@
 ---
 import { readFile } from 'node:fs/promises';
+import { agentCount, fmt, releaseVersion, siteStats } from '../site-data';
 
+/* The numbers in the nav and hero strip are baked here at build time from the
+   snapshots and latest.json, so the page ships with real values, renders
+   correctly without JS, and can never be more than one deploy stale. A small
+   script on the page refreshes the counts live afterwards. */
 const homepage = await readFile(new URL('../../index.html', import.meta.url), 'utf8');
+
+const { starCount, installCount, pluginCount } = await siteStats();
+const version = await releaseVersion();
+const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
+
+/* the line drops out entirely rather than showing a placeholder if the
+   manifests can't be read — a missing sentence beats a wrong number */
+const agents = await agentCount();
+const agentsNote = agents ? `${agents} agents detected out of the box` : '';
+/* the strip carried a hardcoded 19; same source as row 04 now */
+const agentsCount = agents ? String(agents) : '—';
+
+/* replaceAll, not replace: the star count appears in the nav as well as the
+   strip, and replace() would fill only the first of them. */
+const page = homepage
+  .replaceAll('<!--N_STARS-->', fmt(starCount))
+  .replaceAll('<!--N_INSTALLS-->', fmt(installCount))
+  .replaceAll('<!--N_PLUGINS-->', fmt(pluginCount))
+  .replaceAll('<!--FACTS-->', facts)
+  .replaceAll('<!--AGENTS_NOTE-->', agentsNote)
+  .replaceAll('<!--N_AGENTS-->', agentsCount);
 ---
 
-<Fragment set:html={homepage} />
+<Fragment set:html={page} />

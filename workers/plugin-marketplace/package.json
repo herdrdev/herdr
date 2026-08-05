@@ -6,5 +6,8 @@
     "dev": "bunx wrangler dev",
     "deploy": "bunx wrangler deploy",
     "test": "bun test"
+  },
+  "dependencies": {
+    "smol-toml": "1.7.1"
   }
 }

@@ -9,10 +9,12 @@ GitHub repositories, not a reviewed catalog.
 
 ## Browse plugins
 
-The [marketplace](/plugins/) lists every public repository tagged with the
-GitHub topic `herdr-plugin`. Search by name, owner, description, or language,
-and sort by popularity, recent activity, or newest. Each listing links straight
-to its source repository on GitHub.
+The [marketplace](/plugins/) lists public repositories tagged with the GitHub
+topic `herdr-plugin` when their default branch contains at least one
+`herdr-plugin.toml` whose required metadata can be parsed. Search by repository
+or plugin metadata, and sort repository cards by popularity, recent activity,
+or newest. Each card links to its source repository and lists every discovered
+plugin inside it.
 
 Discovery is automatic and unreviewed. A listing means a repository tagged
 itself, not that Herdr vetted it, so the
@@ -34,20 +36,19 @@ its root, or in a subdirectory, and that command works. See
 
 ## Get your plugin listed
 
-Add the GitHub topic `herdr-plugin` to a public repository. That topic is the
-only signal the index uses, so tagging a public plugin is all it takes. The
-index refreshes automatically every 30 minutes, so a newly tagged repository
-shows up shortly after, and one that drops the topic disappears on the next
-refresh.
+Add the GitHub topic `herdr-plugin` to a public repository and put one or more
+`herdr-plugin.toml` manifests with parseable required metadata on its default
+branch. Manifests may be at the root or in subdirectories. The marketplace uses
+one card per repository and lists each valid manifest as a separately
+installable plugin. The index refreshes automatically every 30 minutes and
+rescans repositories when their default-branch head changes.
 
 ## What a listing shows
 
 Each card shows GitHub repository metadata: the repository name and owner, its
-description, star count, primary language, and the time it was last pushed, with
-a link back to the source. The index reads this from GitHub's repository search,
-so keeping your repository description and topics accurate is what makes your
-listing useful.
-
-The index does not parse `herdr-plugin.toml` yet, so manifest fields like the
-plugin `id`, declared `platforms`, and `min_herdr_version` are not shown in v1.
-Forks and archived repositories are excluded from the list.
+description, star count, primary language, and the time it was last pushed. Its
+plugin rows show each manifest's `name` and `version` and link to the exact
+source directory. The index records the manifest path, `id`, `name`, `version`,
+`platforms`, and `min_herdr_version` together with the exact default-branch
+commit. Forks, archived repositories, repositories without a valid plugin
+manifest, and malformed manifest metadata are excluded.

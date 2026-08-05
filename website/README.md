@@ -1,21 +1,34 @@
 # herdr website
 
-The homepage is `index.html`. The documentation source is in `src/content/docs/` and is rendered by Astro Starlight.
+The homepage is `index.html`. Astro Starlight renders the documentation.
 
 ```bash
 bun install
-bun run dev
-bun run build
+bun run dev          # render the unpublished docs/next draft locally
+bun run build        # render only published stable and preview snapshots
+bun run build:draft  # validate the unpublished draft
 ```
 
 The build output is `dist/`. Configure Cloudflare Pages to use `website` as the project root and publish `dist`.
 
-Stable docs live in `src/content/docs/`. Unreleased docs live in `../docs/next/website/src/content/docs/` and are generated at `/docs/preview/`. Immutable release snapshots live in `../docs/versions/` and are generated at `/docs/<version>/`.
+Documentation has three lifecycle states:
 
-Do not promote docs manually before a release. After the GitHub Release succeeds, release CI runs:
+- `../docs/next/website/` is the committed, author-edited draft. Production builds never read it.
+- `../docs/preview/website/` is the latest preview release snapshot, rendered at `/docs/preview/`.
+- `../docs/versions/<version>/website/` contains maintained stable-release documentation, rendered at `/docs/<version>/`. Release CI seeds a new version from its tag; later factual corrections are made directly in that version directory and mirrored to `docs/next` when they also apply to future releases.
+
+The version selected by `docs/versions/manifest.json` is also rendered at `/docs/`. `src/content/docs/` is entirely generated and ignored.
+
+Preview CI snapshots the selected commit and updates `preview.json` in one commit:
+
+```bash
+node website/scripts/docs-preview.mjs snapshot <commit>
+node website/scripts/docs-preview.mjs check
+```
+
+Stable release CI seeds a new maintained version from the exact tag after the GitHub Release succeeds:
 
 ```bash
 node website/scripts/docs-versions.mjs publish <tag>
+node website/scripts/docs-versions.mjs check
 ```
-
-This snapshots the tagged next docs and promotes the same tagged content to stable before the website deploy. Use `node website/scripts/docs-versions.mjs check` to validate committed snapshots against their release tags.

@@ -114,7 +114,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--docs-root",
-        default="website/src/content/docs",
+        default="docs/next/website/src/content/docs",
         type=Path,
         help="Docs content root containing English .mdx files and locale subdirectories.",
     )

@@ -257,6 +257,8 @@ impl App {
                 self.query_host_terminal_theme();
                 self.set_host_terminal_appearance(appearance, true)
             }
+            // Cell size reports are consumed by the thin client, not the runtime.
+            crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => false,
             crate::raw_input::RawInputEvent::Unsupported => false,
         };
         self.sync_prefix_input_source(previous_mode);

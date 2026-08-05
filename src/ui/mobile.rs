@@ -11,10 +11,11 @@ use super::sidebar::{
     next_entry_is_indented_workspace, workspace_list_entries_expanded, AgentPanelEntry,
     WorkspaceListEntry,
 };
-use super::status::state_dot;
+use super::status::{state_icon, state_icon_symbol};
 use super::text::{display_width_u16, truncate_end};
 use crate::app::state::{Palette, ToastKind, ToastNotification};
 use crate::app::AppState;
+use crate::config::StatusIndicatorStyle;
 use crate::detect::AgentState;
 use crate::layout::PaneId;
 use crate::terminal::TerminalRuntimeRegistry;
@@ -326,7 +327,7 @@ fn render_header_status(
     };
 
     let (state, seen) = ws.aggregate_state(&app.terminals);
-    let (dot, dot_style) = state_dot(state, seen, p);
+    let (dot, dot_style) = state_icon(state, seen, app.status_indicators, p);
     let tab_label = mobile_tab_status(ws);
     let row1 = Rect::new(area.x, area.y, area.width, 1);
     let tab_w = display_width_u16(&tab_label)
@@ -406,9 +407,10 @@ fn render_switch_button(app: &AppState, frame: &mut Frame, area: Rect) {
     // "tap me" without the user reading the summary row.
     if global_agent_counts(app).blocked > 0 {
         let bx = area.x + area.width.saturating_sub(1);
+        let (symbol, style) = state_icon(AgentState::Blocked, true, app.status_indicators, p);
         frame.buffer_mut()[(bx, area.y)]
-            .set_symbol("●")
-            .set_style(Style::default().fg(p.red).bg(p.surface0));
+            .set_symbol(symbol)
+            .set_style(style.bg(p.surface0));
     }
 }
 
@@ -532,7 +534,7 @@ fn render_mobile_switcher_content(
                 entry.ws_idx == ws_idx && entry.tab_idx == tab_idx && entry.pane_id == pane_id
             });
             let bg = mobile_item_bg(false, active, p);
-            let (icon, icon_style) = state_dot(entry.state, entry.seen, p);
+            let (icon, icon_style) = state_icon(entry.state, entry.seen, app.status_indicators, p);
             let title = Line::from(vec![
                 Span::styled("  ", Style::default().bg(bg)),
                 Span::styled(icon, icon_style.bg(bg)),
@@ -595,7 +597,7 @@ fn render_mobile_switcher_content(
         let selected = *ws_idx == app.selected;
         let bg = mobile_item_bg(selected, active, p);
         let (state, seen) = ws.aggregate_state(&app.terminals);
-        let (dot, dot_style) = state_dot(state, seen, p);
+        let (dot, dot_style) = state_icon(state, seen, app.status_indicators, p);
 
         let mut title_spans = vec![Span::styled("  ", Style::default().bg(bg))];
         // Worktrees of the same space render as branches off their parent, so a
@@ -1010,7 +1012,10 @@ enum SummaryTone {
 
 /// Ordered, non-zero breakdown for the header roll-up: attention states lead
 /// (blocked → done → working → idle). Pure so it can be unit-tested.
-fn agent_summary_segments(counts: GlobalAgentCounts) -> Vec<(String, SummaryTone)> {
+fn agent_summary_segments(
+    counts: GlobalAgentCounts,
+    indicator_style: StatusIndicatorStyle,
+) -> Vec<(String, SummaryTone)> {
     if counts.total() == 0 {
         return vec![("no agents".to_string(), SummaryTone::Muted)];
     }
@@ -1020,20 +1025,75 @@ fn agent_summary_segments(counts: GlobalAgentCounts) -> Vec<(String, SummaryTone
     let mut segments = Vec::new();
     if counts.blocked > 0 {
         segments.push((
-            format!("◉ {} blocked", counts.blocked),
+            agent_summary_text(
+                indicator_style,
+                AgentState::Blocked,
+                true,
+                Some("◉"),
+                counts.blocked,
+                "blocked",
+            ),
             SummaryTone::Blocked,
         ));
     }
     if counts.done > 0 {
-        segments.push((format!("● {} done", counts.done), SummaryTone::Done));
+        segments.push((
+            agent_summary_text(
+                indicator_style,
+                AgentState::Idle,
+                false,
+                Some("●"),
+                counts.done,
+                "done",
+            ),
+            SummaryTone::Done,
+        ));
     }
     if counts.working > 0 {
-        segments.push((format!("{} working", counts.working), SummaryTone::Working));
+        segments.push((
+            agent_summary_text(
+                indicator_style,
+                AgentState::Working,
+                true,
+                None,
+                counts.working,
+                "working",
+            ),
+            SummaryTone::Working,
+        ));
     }
     if counts.idle > 0 {
-        segments.push((format!("{} idle", counts.idle), SummaryTone::Idle));
+        segments.push((
+            agent_summary_text(
+                indicator_style,
+                AgentState::Idle,
+                true,
+                None,
+                counts.idle,
+                "idle",
+            ),
+            SummaryTone::Idle,
+        ));
     }
     segments
+}
+
+fn agent_summary_text(
+    indicator_style: StatusIndicatorStyle,
+    state: AgentState,
+    seen: bool,
+    dot_style_symbol: Option<&str>,
+    count: usize,
+    label: &str,
+) -> String {
+    let symbol = match indicator_style {
+        StatusIndicatorStyle::Dots => dot_style_symbol,
+        StatusIndicatorStyle::Symbols => Some(state_icon_symbol(state, seen, indicator_style)),
+    };
+    match symbol {
+        Some(symbol) => format!("{symbol} {count} {label}"),
+        None => format!("{count} {label}"),
+    }
 }
 
 /// Greedily keep the most-urgent segments that fit `max_width` (counting the
@@ -1060,7 +1120,7 @@ fn fit_summary_segments(
 }
 
 fn agent_summary_line(app: &AppState, p: &Palette, max_width: u16) -> Line<'static> {
-    let segments = agent_summary_segments(global_agent_counts(app));
+    let segments = agent_summary_segments(global_agent_counts(app), app.status_indicators);
     let (shown, truncated) = fit_summary_segments(segments, max_width as usize);
 
     let mut spans = vec![Span::styled(" ", Style::default().bg(p.panel_bg))];
@@ -1211,7 +1271,7 @@ mod tests {
             working: 2,
             idle: 1,
         };
-        let segments = agent_summary_segments(counts);
+        let segments = agent_summary_segments(counts, StatusIndicatorStyle::Dots);
         let labels: Vec<&str> = segments.iter().map(|(text, _)| text.as_str()).collect();
         assert_eq!(
             labels,
@@ -1221,13 +1281,59 @@ mod tests {
     }
 
     #[test]
+    fn distinct_agent_summary_uses_configured_symbols_for_every_state() {
+        let counts = GlobalAgentCounts {
+            blocked: 2,
+            done: 1,
+            working: 2,
+            idle: 1,
+        };
+        let labels: Vec<String> = agent_summary_segments(counts, StatusIndicatorStyle::Symbols)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert_eq!(
+            labels,
+            ["× 2 blocked", "✓ 1 done", "◐ 2 working", "○ 1 idle"]
+        );
+    }
+
+    #[test]
+    fn distinct_status_style_updates_mobile_blocked_badge() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("blocked")];
+        app.ensure_test_terminals();
+        app.status_indicators = StatusIndicatorStyle::Symbols;
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal_state.detected_agent = Some(crate::detect::Agent::Claude);
+        terminal_state.state = AgentState::Blocked;
+
+        let area = Rect::new(0, 0, 12, 2);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                .unwrap();
+        terminal
+            .draw(|frame| render_switch_button(&app, frame, area))
+            .unwrap();
+
+        assert_eq!(
+            terminal.backend().buffer()[(area.width - 1, 0)].symbol(),
+            "×"
+        );
+    }
+
+    #[test]
     fn agent_summary_hides_empty_categories() {
         let counts = GlobalAgentCounts {
             done: 1,
             working: 2,
             ..Default::default()
         };
-        let labels: Vec<String> = agent_summary_segments(counts)
+        let labels: Vec<String> = agent_summary_segments(counts, StatusIndicatorStyle::Dots)
             .into_iter()
             .map(|(text, _)| text)
             .collect();
@@ -1244,7 +1350,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            agent_summary_segments(counts),
+            agent_summary_segments(counts, StatusIndicatorStyle::Dots),
             vec![("all idle".to_string(), SummaryTone::Muted)]
         );
     }
@@ -1257,7 +1363,10 @@ mod tests {
             working: 2,
             idle: 1,
         };
-        let (shown, truncated) = fit_summary_segments(agent_summary_segments(counts), 24);
+        let (shown, truncated) = fit_summary_segments(
+            agent_summary_segments(counts, StatusIndicatorStyle::Dots),
+            24,
+        );
         let labels: Vec<&str> = shown.iter().map(|(text, _)| text.as_str()).collect();
         assert_eq!(labels, vec!["◉ 2 blocked", "● 1 done"]);
         assert!(truncated);
@@ -1271,7 +1380,10 @@ mod tests {
             working: 2,
             idle: 1,
         };
-        let (shown, truncated) = fit_summary_segments(agent_summary_segments(counts), 60);
+        let (shown, truncated) = fit_summary_segments(
+            agent_summary_segments(counts, StatusIndicatorStyle::Dots),
+            60,
+        );
         assert_eq!(shown.len(), 4);
         assert!(!truncated);
     }
@@ -1279,7 +1391,7 @@ mod tests {
     #[test]
     fn agent_summary_reports_no_agents_when_empty() {
         assert_eq!(
-            agent_summary_segments(GlobalAgentCounts::default()),
+            agent_summary_segments(GlobalAgentCounts::default(), StatusIndicatorStyle::Dots,),
             vec![("no agents".to_string(), SummaryTone::Muted)]
         );
     }
@@ -1473,6 +1585,7 @@ mod tests {
             live_cwd.clone(),
             0,
             crate::terminal_theme::TerminalTheme::default(),
+            None,
             crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
             &crate::pane::PaneLaunchEnv::default(),
             events,
