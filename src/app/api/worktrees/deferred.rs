@@ -518,13 +518,9 @@ impl App {
                     } else {
                         remove.error = Some(message.clone());
                     }
+                    self.stop_worktree_remove_spinner();
+                    self.state.mode = crate::app::Mode::ConfirmRemoveWorktree;
                 }
-            }
-            if self.state.worktree_remove.as_ref().is_some_and(|remove| {
-                remove.workspace_id == result.workspace_id && remove.path == result.path
-            }) {
-                self.stop_worktree_remove_spinner();
-                self.state.mode = crate::app::Mode::ConfirmRemoveWorktree;
             }
             Self::send_api_response(api.respond_to, encode_error(api.id, code, message));
             return;
