@@ -54,10 +54,22 @@ fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io:
     let tmp_path = target.with_extension("json.tmp");
     std::fs::write(&tmp_path, &json)?;
     if let Err(err) = std::fs::rename(&tmp_path, &target) {
+        if is_cross_filesystem_rename_error(err.kind()) {
+            let result = std::fs::write(&target, &json);
+            let _ = std::fs::remove_file(&tmp_path);
+            return result;
+        }
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
     Ok(())
+}
+
+fn is_cross_filesystem_rename_error(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::ResourceBusy | std::io::ErrorKind::CrossesDevices
+    )
 }
 
 pub(super) fn save_to_paths(
@@ -336,5 +348,32 @@ mod tests {
             .file_type()
             .is_symlink());
         assert!(target.exists());
+    }
+
+    #[test]
+    fn cross_filesystem_rename_error_detection() {
+        assert!(is_cross_filesystem_rename_error(
+            std::io::ErrorKind::ResourceBusy
+        ));
+        assert!(is_cross_filesystem_rename_error(
+            std::io::ErrorKind::CrossesDevices
+        ));
+        assert!(!is_cross_filesystem_rename_error(
+            std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn save_to_path_propagates_unrelated_rename_errors() {
+        // Renaming the temp file onto an existing directory fails with
+        // `NotADirectory`, which is not a cross-filesystem error. Herdr must
+        // still report the error and clean up the temp file.
+        let target = temp_session_path("rename-onto-directory");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let err = save_to_path(&target, &empty_snapshot()).unwrap_err();
+
+        assert!(!is_cross_filesystem_rename_error(err.kind()));
+        assert!(!target.with_extension("json.tmp").exists());
     }
 }
