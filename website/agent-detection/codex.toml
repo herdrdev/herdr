@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.07.18.1"
+version = "2026.08.05.1"
 min_engine_version = 2
-updated_at = "2026-07-18T00:00:00Z"
+updated_at = "2026-08-05T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -10,6 +10,14 @@ priority = 1100
 region = "osc_title"
 visible_blocker = true
 contains = ["Action Required"]
+
+[[rules]]
+id = "model_capacity_blocked"
+state = "blocked"
+priority = 1090
+region = "bottom_non_empty_lines(3)"
+visible_blocker = true
+contains = ["Selected model is at capacity. Please try a different model."]
 
 [[rules]]
 id = "osc_title_working"

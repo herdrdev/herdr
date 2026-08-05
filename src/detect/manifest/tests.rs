@@ -734,6 +734,38 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
+fn codex_model_capacity_error_is_blocked() {
+    let screen = "⚠ Selected model is at capacity. Please try a different model.\n\n\
+        › Summarize recent commits\n\n\
+        gpt-5.6-sol high · /work · Ready\n";
+    let result = osc_explain(Agent::Codex, screen, "project", "");
+
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("model_capacity_blocked")
+    );
+    assert!(result.visible_blocker);
+}
+
+#[test]
+fn codex_stale_model_capacity_error_remains_idle() {
+    let screen = "⚠ Selected model is at capacity. Please try a different model.\n\n\
+        • Explored\n\
+        └ Read Cargo.toml\n\n\
+        › Summarize recent commits\n\n\
+        gpt-5.6-sol high · /work · Ready\n";
+    let result = osc_explain(Agent::Codex, screen, "project", "");
+
+    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_idle")
+    );
+    assert!(result.visible_idle);
+}
+
+#[test]
 fn codex_background_terminal_screen_does_not_override_osc_idle() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
     // They should not make Codex look busy once the foreground turn is idle.
