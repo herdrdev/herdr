@@ -12,6 +12,51 @@ const PLUGIN_COMMAND_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 pub(super) const MAX_PLUGIN_COMMANDS_IN_FLIGHT: usize = 32;
 const PLUGIN_COMMAND_LOG_LIMIT: usize = 200;
 
+/// Ensures a `PluginCommandFinished` event is always delivered for a spawned
+/// plugin command. `plugin_commands_in_flight` is only decremented when the
+/// app processes that event, so if the executing thread panics or otherwise
+/// never reaches the normal `send`, the guard's Drop emits a terminal (failed)
+/// finished event and the in-flight slot is always released instead of leaking
+/// until `MAX_PLUGIN_COMMANDS_IN_FLIGHT` blocks all further plugin commands.
+struct PluginCommandFinishedGuard {
+    event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    log_id: String,
+    sent: bool,
+}
+
+impl PluginCommandFinishedGuard {
+    fn new(event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>, log_id: String) -> Self {
+        Self {
+            event_tx,
+            log_id,
+            sent: false,
+        }
+    }
+
+    fn send(mut self, finished: crate::events::AppEvent) {
+        self.sent = true;
+        let _ = self.event_tx.blocking_send(finished);
+    }
+}
+
+impl Drop for PluginCommandFinishedGuard {
+    fn drop(&mut self) {
+        if self.sent {
+            return;
+        }
+        // The thread panicked or never reached a normal send; release the slot.
+        let finished = crate::events::AppEvent::PluginCommandFinished {
+            log_id: self.log_id.clone(),
+            finished_unix_ms: current_unix_ms(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some("plugin command thread terminated before completion".to_string()),
+        };
+        let _ = self.event_tx.blocking_send(finished);
+    }
+}
+
 impl App {
     pub(super) fn start_plugin_command(
         &mut self,
@@ -119,6 +164,9 @@ impl App {
         self.state.plugin_commands_in_flight += 1;
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
+            // Drop of this guard emits a plugin.finished fallback if the thread
+            // panics or never calls `send`, releasing the in-flight counter.
+            let guard = PluginCommandFinishedGuard::new(event_tx, log_id.clone());
             let child =
                 crate::plugin_command::command_for_argv_in_dir(&program, &args, &plugin_root)
                     .envs(env)
@@ -175,7 +223,7 @@ impl App {
                     error: Some(err.to_string()),
                 },
             };
-            let _ = event_tx.blocking_send(finished);
+            guard.send(finished);
         });
         Ok(log)
     }
@@ -308,4 +356,70 @@ pub(super) fn read_capped_plugin_output(mut reader: impl Read, cap: usize) -> St
         ));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recv_finished(
+        rx: &mut tokio::sync::mpsc::Receiver<crate::events::AppEvent>,
+    ) -> crate::events::AppEvent {
+        rx.blocking_recv()
+            .expect("expected a PluginCommandFinished event")
+    }
+
+    #[test]
+    fn guard_emits_fallback_on_drop_without_send() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::events::AppEvent>(8);
+        {
+            let _guard = PluginCommandFinishedGuard::new(tx, "log-drop".to_string());
+            // Dropped without a successful send: the in-flight slot must still
+            // be released via a fallback finished event.
+        }
+        match recv_finished(&mut rx) {
+            crate::events::AppEvent::PluginCommandFinished {
+                log_id,
+                error,
+                exit_code,
+                ..
+            } => {
+                assert_eq!(log_id, "log-drop");
+                assert!(error.is_some(), "fallback must be marked failed");
+                assert_eq!(exit_code, None);
+            }
+            _ => panic!("expected PluginCommandFinished"),
+        }
+        // Exactly one event was emitted.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn guard_does_not_double_send_after_explicit_send() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::events::AppEvent>(8);
+        let guard = PluginCommandFinishedGuard::new(tx, "log-send".to_string());
+        guard.send(crate::events::AppEvent::PluginCommandFinished {
+            log_id: "log-send".to_string(),
+            finished_unix_ms: 1,
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            error: None,
+        });
+        match recv_finished(&mut rx) {
+            crate::events::AppEvent::PluginCommandFinished {
+                log_id,
+                error,
+                exit_code,
+                ..
+            } => {
+                assert_eq!(log_id, "log-send");
+                assert!(error.is_none());
+                assert_eq!(exit_code, Some(0));
+            }
+            _ => panic!("expected PluginCommandFinished"),
+        }
+        // The guard's Drop must not emit a second event.
+        assert!(rx.try_recv().is_err());
+    }
 }
