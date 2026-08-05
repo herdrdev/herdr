@@ -68,7 +68,7 @@ impl App {
         };
         let shell_config = crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode);
         let split_result = match params.ratio {
-            Some(ratio) => ws.split_pane_with_ratio(
+            Some(ratio) if ratio.is_finite() => ws.split_pane_with_ratio(
                 target_pane_id,
                 direction,
                 ratio,
@@ -82,7 +82,7 @@ impl App {
                 extra_env,
                 params.focus,
             ),
-            None => ws.split_pane(
+            Some(_) | None => ws.split_pane(
                 target_pane_id,
                 direction,
                 rows,

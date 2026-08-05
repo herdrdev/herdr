@@ -763,8 +763,11 @@ impl RetainedTextBuffer {
             let start_span = &line.spans[start_index];
             let end_span = &line.spans[end_index];
             start_span.byte_start <= end_span.byte_end
-                && text_fingerprint(&line.text[start_span.byte_start..end_span.byte_end])
-                    == text_match.source_fingerprint
+                && line
+                    .text
+                    .get(start_span.byte_start..end_span.byte_end)
+                    .map(text_fingerprint)
+                    == Some(text_match.source_fingerprint)
         })
     }
 

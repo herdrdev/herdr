@@ -208,7 +208,10 @@ impl TileLayout {
         }
         let target = self.focus;
         let ids = self.pane_ids();
-        let pos = ids.iter().position(|id| *id == target).unwrap();
+        let Some(pos) = ids.iter().position(|id| *id == target) else {
+            self.focus = ids.first().copied().unwrap_or(target);
+            return false;
+        };
         let ordered = if pos + 1 < ids.len() {
             ids[pos + 1]
         } else {

@@ -16,6 +16,14 @@ fn program_for_cwd(program: &str, cwd: &Path) -> OsString {
     let has_separator = program.contains('/') || (cfg!(windows) && program.contains('\\'));
     if path.is_relative() && has_separator {
         let relative = path.strip_prefix(Path::new(".")).unwrap_or(path);
+        // Reject parent-directory traversal so a plugin manifest cannot
+        // escape the plugin root via command[0] = "../bin/evil".
+        if relative
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return program.into();
+        }
         cwd.join(relative).into_os_string()
     } else {
         path.as_os_str().to_os_string()

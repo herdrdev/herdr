@@ -24,11 +24,21 @@ impl App {
 
         let content = std::fs::read_to_string(&path).unwrap_or_default();
         let new_content = update(&content);
-        if let Err(err) = std::fs::write(&path, new_content) {
+        let tmp_path = path.with_extension("toml.tmp");
+        if let Err(err) = std::fs::write(&tmp_path, &new_content) {
             crate::logging::config_write_failed(&path, error_context, &err.to_string());
             self.state.config_diagnostic = Some(format!("failed to save {error_context}: {err}"));
             self.config_diagnostic_deadline =
                 Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+            let _ = std::fs::remove_file(&tmp_path);
+            return false;
+        }
+        if let Err(err) = std::fs::rename(&tmp_path, &path) {
+            crate::logging::config_write_failed(&path, error_context, &err.to_string());
+            self.state.config_diagnostic = Some(format!("failed to save {error_context}: {err}"));
+            self.config_diagnostic_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+            let _ = std::fs::remove_file(&tmp_path);
             return false;
         }
 
