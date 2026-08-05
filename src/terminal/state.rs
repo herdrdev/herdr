@@ -127,6 +127,13 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    /// Interpreter environment this pane was restored into.
+    ///
+    /// A live pane only reports one while it is running a command, so the
+    /// restored value is kept here for the moments it cannot be observed: a
+    /// deferred agent resume needs it after the pane is already back, and a
+    /// save taken at an idle prompt would otherwise drop it.
+    pub virtual_env: Option<crate::platform::VirtualEnvActivation>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -160,6 +167,7 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            virtual_env: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,

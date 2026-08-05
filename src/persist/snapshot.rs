@@ -107,6 +107,40 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_env: Option<PaneVirtualEnvSnapshot>,
+}
+
+/// The interpreter environment a pane was working in.
+///
+/// Only the prefix and its name are stored. Rebuilding `PATH` from the prefix
+/// on restore keeps a restored pane on the current `PATH` instead of pinning it
+/// to whatever the machine looked like when the snapshot was written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneVirtualEnvSnapshot {
+    /// `conda` or `venv`.
+    pub kind: String,
+    pub prefix: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl PaneVirtualEnvSnapshot {
+    fn from_activation(activation: &crate::platform::VirtualEnvActivation) -> Self {
+        Self {
+            kind: activation.kind.as_str().to_string(),
+            prefix: activation.prefix.clone(),
+            name: activation.name.clone(),
+        }
+    }
+
+    pub(crate) fn to_activation(&self) -> Option<crate::platform::VirtualEnvActivation> {
+        Some(crate::platform::VirtualEnvActivation {
+            kind: crate::platform::VirtualEnvKind::from_str(&self.kind)?,
+            prefix: self.prefix.clone(),
+            name: self.name.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +372,20 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        // A live pane only reports an activation while it is running
+        // something, so an idle pane falls back to the one it was restored
+        // into. Without that, saving a restored session at an idle prompt
+        // would lose the environment on the next restore.
+        //
+        // That fallback is sticky: deactivating and then saving at an idle
+        // prompt brings the environment back on the next restore. A shell
+        // deactivates in its own process, and that is not observable from
+        // outside it, so there is nothing here to notice the change.
+        let virtual_env = tab
+            .virtual_env_for_pane(*id, terminal_runtimes)
+            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))
+            .as_ref()
+            .map(PaneVirtualEnvSnapshot::from_activation);
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -368,6 +416,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                virtual_env,
             },
         );
     }
@@ -648,6 +697,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                virtual_env: None,
             },
         );
         panes.insert(
@@ -659,6 +709,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                virtual_env: None,
             },
         );
 
@@ -716,6 +767,77 @@ mod tests {
         );
         assert_eq!(restored.sidebar_width, Some(26));
         assert_eq!(restored.sidebar_section_split, Some(0.5));
+    }
+
+    #[test]
+    fn pane_virtual_env_survives_a_snapshot_round_trip() {
+        let pane = PaneSnapshot {
+            cwd: PathBuf::from("/home/can/Projects/herdr"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+            virtual_env: Some(PaneVirtualEnvSnapshot {
+                kind: "conda".into(),
+                prefix: PathBuf::from("/opt/conda/envs/web"),
+                name: Some("web".into()),
+            }),
+        };
+
+        let json = serde_json::to_string(&pane).unwrap();
+        let restored: PaneSnapshot = serde_json::from_str(&json).unwrap();
+
+        let activation = restored
+            .virtual_env
+            .as_ref()
+            .and_then(PaneVirtualEnvSnapshot::to_activation)
+            .expect("expected an activation");
+        assert_eq!(activation.kind, crate::platform::VirtualEnvKind::Conda);
+        assert_eq!(activation.prefix, PathBuf::from("/opt/conda/envs/web"));
+        assert_eq!(activation.name.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn pane_without_a_virtual_env_stays_absent_from_the_snapshot() {
+        let pane = PaneSnapshot {
+            cwd: PathBuf::from("/home/can/Projects/herdr"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+            virtual_env: None,
+        };
+
+        let json = serde_json::to_value(&pane).unwrap();
+
+        assert!(json.get("virtual_env").is_none());
+    }
+
+    #[test]
+    fn snapshot_written_before_virtual_env_still_parses() {
+        let pane: PaneSnapshot = serde_json::from_value(serde_json::json!({
+            "cwd": "/home/can/Projects/herdr",
+            "label": "api",
+        }))
+        .unwrap();
+
+        assert!(pane.virtual_env.is_none());
+    }
+
+    #[test]
+    fn unknown_virtual_env_kind_restores_as_no_activation() {
+        // A newer herdr could record a tool this build does not know how to
+        // re-enter; dropping it leaves the pane on the inherited environment
+        // instead of building a broken PATH from it.
+        let snapshot = PaneVirtualEnvSnapshot {
+            kind: "poetry".into(),
+            prefix: PathBuf::from("/opt/poetry/envs/web"),
+            name: None,
+        };
+
+        assert!(snapshot.to_activation().is_none());
     }
 
     #[test]
@@ -1207,6 +1329,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                virtual_env: None,
             },
         );
         panes.insert(
@@ -1220,6 +1343,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                virtual_env: None,
             },
         );
 
