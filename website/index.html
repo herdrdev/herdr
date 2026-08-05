@@ -1,51 +1,51 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="catppuccin" data-mode="ink">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Herdr: one terminal for the whole herd</title>
+        <title>Herdr: the runtime coding agents run on</title>
         <meta
             name="description"
-            content="Herdr is to coding agents what tmux is to terminals: an agent multiplexer that runs where your agents run. Real panes, agent state at a glance, ssh from anywhere, no app."
+            content="Herdr is the runtime your coding agents live on. It holds real terminals open on your laptop, your desktop or a box you rent, so the work survives the lid closing — and you can attach again from anything with a keyboard."
         />
-        <meta name="theme-color" content="#f0eee9" />
+        <meta name="theme-color" content="#17171a" />
         <link rel="canonical" href="https://herdr.dev/" />
 
         <meta property="og:type" content="website" />
         <meta property="og:site_name" content="Herdr" />
-        <meta property="og:title" content="Herdr: one terminal for the whole herd" />
+        <meta property="og:title" content="Herdr: the runtime coding agents run on" />
         <meta
             property="og:description"
-            content="To coding agents what tmux is to terminals. Runs where your agents run: close the laptop, ssh from anywhere, nothing dies."
+            content="Run them anywhere. Leave them running. Herdr holds real terminals open so your agents keep working when you close the laptop, and gets you back in from any tty."
         />
         <meta property="og:url" content="https://herdr.dev/" />
         <meta
             property="og:image"
-            content="https://herdr.dev/assets/og-card-v8.png"
+            content="https://herdr.dev/assets/og-card-v9.png"
         />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="Herdr. One terminal. The whole herd." />
+        <meta property="og:image:alt" content="Herdr — run them anywhere, leave them running." />
         <script type="application/ld+json">
             {
                 "@context": "https://schema.org",
                 "@type": "WebPage",
                 "url": "https://herdr.dev/",
-                "primaryImageOfPage": "https://herdr.dev/assets/og-card-v8.png"
+                "primaryImageOfPage": "https://herdr.dev/assets/og-card-v9.png"
             }
         </script>
 
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Herdr: one terminal for the whole herd" />
+        <meta name="twitter:title" content="Herdr: the runtime coding agents run on" />
         <meta
             name="twitter:description"
-            content="To coding agents what tmux is to terminals. Runs where your agents run: close the laptop, ssh from anywhere, nothing dies."
+            content="Run them anywhere. Leave them running. Herdr holds real terminals open so your agents keep working when you close the laptop."
         />
         <meta
             name="twitter:image"
-            content="https://herdr.dev/assets/og-card-v8.png"
+            content="https://herdr.dev/assets/og-card-v9.png"
         />
-        <meta name="twitter:image:alt" content="Herdr. One terminal. The whole herd." />
+        <meta name="twitter:image:alt" content="Herdr — run them anywhere, leave them running." />
 
         <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon.png?v=14" />
         <link rel="apple-touch-icon" href="/assets/logo.png" />
@@ -56,148 +56,135 @@
             type="font/woff2"
             crossorigin
         />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
         <script>
-            (function () {
-                var saved = localStorage.getItem("herdr-palette");
-                var system = window.matchMedia("(prefers-color-scheme: dark)").matches
-                    ? "tokyo-night"
-                    : "tokyo-night-day";
-                document.documentElement.setAttribute("data-palette", saved || system);
-            })();
+            /* Ground selection, shared with the docs.
+               Starlight's `starlight-theme` key is the single source of truth,
+               so a choice made in docs carries to the marketing pages and back.
+               It stores dark | light | auto; we deliberately treat `auto` as
+               dark, because the default here is a presentation decision and
+               must not follow the reader's OS. The mock palette follows the
+               ground: solarized-light on paper, catppuccin on ink. */
+            window.herdrGround = {
+                read: function () {
+                    try {
+                        return localStorage.getItem("starlight-theme") === "light" ? "paper" : "ink";
+                    } catch (e) {
+                        return "ink";
+                    }
+                },
+                apply: function (mode) {
+                    var root = document.documentElement;
+                    root.setAttribute("data-mode", mode);
+                    root.setAttribute("data-palette", mode === "paper" ? "solarized-light" : "catppuccin");
+                    return mode;
+                },
+                save: function (mode) {
+                    try {
+                        localStorage.setItem("starlight-theme", mode === "paper" ? "light" : "dark");
+                    } catch (e) {}
+                },
+            };
+            window.herdrGround.apply(window.herdrGround.read());
         </script>
         <link rel="stylesheet" href="/css/style.css?v=59" />
+        <link rel="stylesheet" href="/css/site.css?v=60" />
     </head>
-    <body>
-        <header class="site-header">
-            <nav class="nav" aria-label="Primary navigation">
-                <a class="brand" href="/" aria-label="Herdr home">
-                    <span class="brand-logo" aria-hidden="true"></span>
-                    <span>herdr</span>
-                </a>
-                <details class="nav-menu">
-                    <summary class="nav-menu-button" aria-label="Open navigation">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </summary>
-                    <div class="nav-menu-panel">
-                        <a href="/">Home</a>
-                        <a href="/compare/">Compare</a>
-                        <a href="/plugins/">Plugins</a>
-                        <a href="/stats/">Stats</a>
-                        <a href="/blog/">Blog</a>
-                        <a href="/docs/quick-start/">Quick start</a>
-                        <a href="/docs/">Docs</a>
-                        <a href="/docs/socket-api/">API</a>
-                        <a href="/docs/install/">Install</a>
-                        <a href="https://github.com/herdrdev/herdr">GitHub</a>
+    <body class="site">
+    <div class="hd-frame">
+
+        <nav class="hd-nav">
+            <a class="lock" href="/"><span class="ram"></span><b>herdr</b></a>
+            <div class="sp"></div>
+            <a class="lnk" href="/docs/">Docs</a>
+            <a class="lnk" href="/plugins/">Plugins</a>
+            <a class="lnk" href="/blog/">Blog</a>
+            <a class="ico wide" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub — star count">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
+                <b data-stars><!--N_STARS--></b>
+            </a>
+            <a class="ico" href="https://x.com/herdrdev" aria-label="Herdr on X">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" /></svg>
+            </a>
+            <div class="mode">
+                <button type="button" data-ground="ink" aria-pressed="true">ink</button>
+                <button type="button" data-ground="paper" aria-pressed="false">paper</button>
+            </div>
+            <a class="btn" href="#install">Install</a>
+            <button type="button" class="menu" id="nav-menu" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu">
+                <span></span><span></span><span></span>
+            </button>
+        </nav>
+
+        <div class="sheet" id="nav-sheet">
+            <a href="/docs/">Docs</a>
+            <a href="/plugins/">Plugins</a>
+            <a href="/blog/">Blog</a>
+            <a href="https://x.com/herdrdev">@herdrdev</a>
+            <div class="sheet-ground">
+                <span>Ground</span>
+                <div class="mode">
+                    <button type="button" data-ground="ink" aria-pressed="true">ink</button>
+                    <button type="button" data-ground="paper" aria-pressed="false">paper</button>
+                </div>
+            </div>
+        </div>
+
+        <header class="hd-hero">
+            <span class="ram ghost"></span>
+            <div class="in">
+                <div class="hd-eyebrow"><s></s>the agent runtime</div>
+                <h1>Run them <em>anywhere.</em> Leave them running.</h1>
+                <p class="lede">Herdr is the runtime your coding agents live on — laptop, desktop, or a box you rent. It holds real terminals open so the work survives the lid closing, and <b>gets you back in from anything with a keyboard.</b></p>
+                <div class="go">
+                    <div class="hd-cmd">
+                        <code id="install-cmd"><b>$</b>curl -fsSL https://herdr.dev/install.sh | sh</code>
+                        <button type="button" id="copy-btn" aria-label="Copy install command">copy</button>
                     </div>
-                </details>
-                <div class="nav-links">
-                    <a href="/">Home</a>
-                    <a href="/compare/">Compare</a>
-                    <a href="/plugins/">Plugins</a>
-                    <a href="/stats/">Stats</a>
-                    <a href="/blog/">Blog</a>
-                    <a href="/docs/quick-start/">Quick start</a>
-                    <a href="/docs/">Docs</a>
-                    <a href="/docs/socket-api/">API</a>
                 </div>
-                <div class="nav-tools">
-                    <a class="nav-icon-link has-count" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
-                        <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-                        </svg>
-                        <span class="nav-star-count" data-stat-stars></span>
-                    </a>
-                    <a class="nav-icon-link" href="https://x.com/herdrdev" aria-label="Herdr on X">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" />
-                        </svg>
-                    </a>
-                    <a class="nav-cta" href="/docs/install/">Install</a>
-                </div>
-            </nav>
+                <div class="meta">macOS · Linux · Windows beta · Apache 2.0 &nbsp;—&nbsp; <a href="/docs/install/">windows, homebrew, nix and manual install →</a></div>
+            </div>
         </header>
 
-        <main>
-            <section class="hero" id="hero">
-                <div class="hero-left">
-                    <div class="hero-copy">
-                    <p class="eyebrow">
-                        <span class="status-dot dot-done"></span>
-                        Agent multiplexer · a binary, not an app
-                    </p>
-                    <h1>One terminal. The whole herd.</h1>
-                    <p class="hero-lede">
-                        Run all your coding agents from one terminal, on any
-                        box, even over ssh. Each runs in its own real terminal,
-                        on a server that keeps it alive when you close the
-                        laptop. See
-                        <span class="state blocked">blocked</span>,
-                        <span class="state working">working</span>, and
-                        <span class="state done">done</span> at a glance, and
-                        reattach from your phone.
-                    </p>
-                    <div class="hero-actions">
-                        <a class="button button-primary" href="/docs/quick-start/"
-                            >Quick start</a
-                        >
-                        <a class="button button-secondary" href="/docs/"
-                            >Read the docs</a
-                        >
-                    </div>
-                    <div class="install-panel" aria-label="Install options">
-                        <div class="install-methods" role="group" aria-label="Install method">
-                            <span class="install-label">Stable install</span>
-                            <button
-                                class="install-method is-active"
-                                type="button"
-                                data-command="curl -fsSL https://herdr.dev/install.sh | sh"
-                                data-size="compact"
-                                aria-pressed="true"
-                            >Script</button>
-                            <button
-                                class="install-method"
-                                type="button"
-                                data-command="brew install herdr"
-                                data-size="normal"
-                                aria-pressed="false"
-                            >Homebrew</button>
-                            <button
-                                class="install-method"
-                                type="button"
-                                data-command="nix run github:herdrdev/herdr"
-                                data-size="normal"
-                                aria-pressed="false"
-                            >Nix flake</button>
-                        </div>
-                        <div class="install-card" aria-label="Install command">
-                            <span class="prompt">$</span>
-                            <code id="install-cmd" class="is-compact"
-                                >curl -fsSL https://herdr.dev/install.sh | sh</code
-                            >
-                            <button id="copy-btn" type="button" data-copy-target="install-cmd">Copy</button>
-                        </div>
-                        <div class="windows-install" aria-label="Windows beta preview install">
-                            <div class="windows-install-heading">
-                                <span>Windows beta · preview only</span>
-                                <a href="/docs/preview/windows-beta/">Next docs</a>
-                            </div>
-                            <div class="install-card install-card-secondary" aria-label="Windows beta install command">
-                                <span class="prompt">PS&gt;</span>
-                                <code id="windows-install-cmd" class="is-compact"
-                                    >irm https://herdr.dev/install.ps1 | iex</code
-                                >
-                                <button type="button" data-copy-target="windows-install-cmd">Copy</button>
-                            </div>
-                        </div>
-                    </div>
-                    <p class="hero-note">Stable Linux/macOS · Windows preview beta · no Electron, no account, no telemetry · <a href="/stats/">live stats</a></p>
-                </div>
-                </div>
+        <div class="strip">
+            <a class="stat" href="https://github.com/herdrdev/herdr" data-count>
+                <b id="n-stars"><!--N_STARS--></b>
+                <span>
+                    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.9 6.5.95-4.7 4.6 1.1 6.45L12 17.45 6.2 20.5l1.1-6.45-4.7-4.6 6.5-.95z"/></svg>
+                    github stars <i class="live"></i>
+                </span>
+            </a>
+            <a class="stat" href="https://github.com/herdrdev/herdr/releases" data-count>
+                <b id="n-installs"><!--N_INSTALLS--></b>
+                <span>
+                    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v3h16v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+                    installs to date
+                </span>
+            </a>
+            <a class="stat" href="/plugins/" data-count>
+                <b id="n-plugins"><!--N_PLUGINS--></b>
+                <span>
+                    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                    community plugins
+                </span>
+            </a>
+            <a class="stat" href="/docs/agents/" data-count>
+                <b><!--N_AGENTS--></b>
+                <span>
+                    <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6l6 6-6 6M13 18h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+                    agent CLIs detected
+                </span>
+            </a>
+        </div>
 
-                <div class="hero-right">
+        <section class="fig">
+        <div class="fighd">
+            <span>the herd, from a client that isn't there</span>
+            <span class="r">click an agent</span>
+        </div>
+        <div class="plate">
                 <figure class="hero-product-shot">
                     <div
                         class="herdr-ui-mock"
@@ -212,21 +199,21 @@
                                 <span class="mock-dot dot-working"></span>
                                 <div><strong>herdr</strong><small>master</small></div>
                             </div>
-                            <div class="mock-space" data-ws="llm-proxy">
+                            <div class="mock-space" data-ws="web-dashboard">
                                 <span class="mock-dot dot-blocked"></span>
-                                <div><strong>llm-proxy</strong><small>master</small></div>
+                                <div><strong>web-dashboard</strong><small>feat/usage-charts</small></div>
                             </div>
-                            <div class="mock-space" data-ws="qmp">
+                            <div class="mock-space" data-ws="data-pipeline">
                                 <span class="mock-dot dot-done"></span>
-                                <div><strong>qmp</strong><small>autoresearch/qmp-ra…</small></div>
+                                <div><strong>data-pipeline</strong><small>backfill/events-v2</small></div>
                             </div>
                             </div>
                             <div class="mock-sidebar-half mock-sidebar-agents">
                             <div class="mock-agent-title"><span>agents</span><span>grouped</span></div>
                             <div class="mock-agent working active" data-agent="herdr" data-kind="claude" data-ws-link="herdr" data-tab-link="main"><span>●</span><div><strong>herdr</strong><small>working · claude</small></div></div>
                             <div class="mock-agent" data-agent="explore" data-kind="opencode" data-ws-link="herdr" data-tab-link="opencode"><span>○</span><div><strong>explore</strong><small>idle · opencode</small></div></div>
-                            <div class="mock-agent blocked" data-agent="llm-proxy" data-kind="claude" data-ws-link="llm-proxy" data-tab-link="main"><span>●</span><div><strong>llm-proxy</strong><small>blocked · claude</small></div></div>
-                            <div class="mock-agent done" data-agent="qmp" data-kind="codex" data-ws-link="qmp" data-tab-link="main"><span>●</span><div><strong>qmp</strong><small>done · codex</small></div></div>
+                            <div class="mock-agent blocked" data-agent="web-dashboard" data-kind="claude" data-ws-link="web-dashboard" data-tab-link="main"><span>◉</span><div><strong>web-dashboard</strong><small>blocked · claude</small></div></div>
+                            <div class="mock-agent done" data-agent="data-pipeline" data-kind="codex" data-ws-link="data-pipeline" data-tab-link="main"><span>●</span><div><strong>data-pipeline</strong><small>done · codex</small></div></div>
                             </div>
                         </aside>
                         <section class="mock-main">
@@ -306,9 +293,9 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="mock-view" data-view="llm-proxy">
+                            <div class="mock-view" data-view="web-dashboard">
                                 <div class="mock-tabs">
-                                    <span class="active" data-tab="main">migrate</span><span data-tab="logs">logs</span><span>+</span>
+                                    <span class="active" data-tab="main">claude</span><span data-tab="logs">dev server</span><span>+</span>
                                 </div>
                                 <div class="mock-panes single active" data-tab="main">
                                     <div class="mock-pane focused tui">
@@ -319,20 +306,20 @@
                                             <div class="cc-header-text">
                                                 <div><b>Claude Code</b> <span class="dim">v2.1.198</span></div>
                                                 <div class="dim">Fable 5 with high effort · Claude Max</div>
-                                                <div class="dim">~/Projects/llm-proxy</div>
+                                                <div class="dim">~/Projects/web-dashboard</div>
                                             </div>
                                         </div>
                                         <br />
-                                        <div><b>❯</b> prep the request-log migration and run it</div>
+                                        <div><b>❯</b> finish the usage chart and ship it to staging</div>
                                         <br />
-                                        <div><span class="cc-bullet">●</span> Wrote migrations/0007_request_log.sql — request_log table, retention index on created_at, daily rollup view.</div>
+                                        <div><span class="cc-bullet">●</span> Wrote src/components/UsageChart.tsx — stacked area, empty state, and the tooltip you asked for.</div>
                                         <br />
-                                        <div><span class="cc-bullet">●</span> Local checks pass: sqlx prepare is clean, backfill dry-run touches 41,209 rows. Ready to apply.</div>
+                                        <div><span class="cc-bullet">●</span> Typecheck and build are clean, 41.2 kB gzipped. Ready to push to staging.</div>
                                         <div class="tui-bottom">
                                             <div class="cc-permission">
                                                 <div><b>Bash command</b></div>
-                                                <div><span class="cmd">cargo</span> sqlx migrate run</div>
-                                                <div class="dim">Apply pending database migrations</div>
+                                                <div><span class="cmd">bunx</span> wrangler deploy --env staging</div>
+                                                <div class="dim">Deploy the dashboard to the staging environment</div>
                                                 <br />
                                                 <div>Do you want to proceed?</div>
                                                 <div class="sel">❯ 1. Yes</div>
@@ -343,57 +330,56 @@
                                 </div>
                                 <div class="mock-panes single" data-tab="logs">
                                     <div class="mock-pane focused">
-                                        <div class="mock-prompt"><span>~/Projects/llm-proxy</span> <em>master</em></div>
-                                        <div><b>❯</b> <span class="cmd">tail</span> -f logs/proxy.log</div>
-                                        <div><span class="time">02:30:58</span> <span class="blue">INFO</span> request id=4818 route=/v1/messages 200 312ms</div>
-                                        <div><span class="time">02:31:04</span> <span class="blue">INFO</span> request id=4819 route=/v1/messages 200 287ms</div>
-                                        <div><span class="time">02:31:09</span> <span class="dim">DEBUG</span> cache hit ratio 0.93</div>
-                                        <div><span class="time">02:31:12</span> <span class="blue">INFO</span> request id=4820 route=/v1/messages 200 301ms</div>
-                                        <div><span class="time">02:31:15</span> <span class="red">WARN</span> upstream latency p99 1.8s</div>
-                                        <div><span class="time">02:31:18</span> <span class="blue">INFO</span> request id=4821 route=/v1/messages 200 295ms</div>
-                                        <div><span class="time">02:31:21</span> <span class="red">WARN</span> 429 from upstream, retrying in 2s</div>
-                                        <div><span class="time">02:31:24</span> <span class="blue">INFO</span> request id=4822 route=/v1/messages 200 1102ms</div>
-                                        <div><span class="time">02:31:30</span> <span class="dim">DEBUG</span> cache hit ratio 0.94</div>
-                                        <div><span class="time">02:31:33</span> <span class="blue">INFO</span> request id=4823 route=/v1/embeddings 200 88ms</div>
+                                        <div class="mock-prompt"><span>~/Projects/web-dashboard</span> <em>feat/usage-charts</em></div>
+                                        <div><b>❯</b> <span class="cmd">bun</span> run dev</div>
+                                        <div class="dim">VITE v6.3.1 ready in 412 ms</div>
+                                        <div><span class="dim">Local</span> <span class="blue">http://localhost:5173/</span></div>
+                                        <div><span class="time">02:30:58</span> <span class="green">hmr update</span> /src/components/UsageChart.tsx</div>
+                                        <div><span class="time">02:31:04</span> <span class="green">hmr update</span> /src/styles/chart.css</div>
+                                        <div><span class="time">02:31:09</span> <span class="dim">page reload</span> src/routes/usage.tsx</div>
+                                        <div><span class="time">02:31:15</span> <span class="red">WARN</span> chunk "charts" is 512 kB after minification</div>
+                                        <div><span class="time">02:31:18</span> <span class="green">hmr update</span> /src/components/UsageChart.tsx</div>
+                                        <div><span class="time">02:31:24</span> <span class="green">hmr update</span> /src/components/Tooltip.tsx</div>
+                                        <div><span class="time">02:31:33</span> <span class="dim">✓ built in</span> 1.94s</div>
                                     </div>
                                 </div>
                             </div>
-                            <div class="mock-view" data-view="qmp">
+                            <div class="mock-view" data-view="data-pipeline">
                                 <div class="mock-tabs">
-                                    <span class="active" data-tab="main">codex</span><span data-tab="server">server</span><span>+</span>
+                                    <span class="active" data-tab="main">codex</span><span data-tab="server">backfill</span><span>+</span>
                                 </div>
                                 <div class="mock-panes single active" data-tab="main">
                                     <div class="mock-pane focused tui">
                                         <div><span class="cx-bullet">•</span> <b>Explored</b></div>
-                                        <div class="dim">&nbsp;&nbsp;└ Read live_handoff.rs</div>
+                                        <div class="dim">&nbsp;&nbsp;└ Read jobs/backfill_events.py</div>
                                         <br />
                                         <div><span class="cx-bullet">•</span> <b>Ran</b></div>
-                                        <div class="dim">&nbsp;&nbsp;└ cargo nextest run -E 'test(live_handoff)'</div>
+                                        <div class="dim">&nbsp;&nbsp;└ uv run pytest tests/test_backfill.py</div>
                                         <div class="dim">&nbsp;&nbsp;└ 14 passed · 0 failed · 41.3s</div>
                                         <br />
-                                        <div><span class="cx-bullet">•</span> The handoff suite passes. Pane PTYs survive server replacement, and long-lived workloads — including the http.server in the next tab — keep responding afterward.</div>
+                                        <div><span class="cx-bullet">•</span> Checkpointing works, so the job resumes from the last committed offset instead of restarting. The backfill in the next tab has been running for six hours and is unaffected by your laptop.</div>
                                         <br />
-                                        <div><span class="cx-bullet">•</span> Next I can wire the soak test into nightly CI and fail on p95 regressions. Want that?</div>
+                                        <div><span class="cx-bullet">•</span> Next I can add the p95 lag alert to the nightly run. Want that?</div>
                                         <div class="tui-bottom">
                                             <div class="cc-rule"></div>
                                             <div><b>›</b> <span class="cursor"></span></div>
                                             <br />
-                                            <div class="dim">gpt-5.5 medium · ~/qmp · master · Context 6% used</div>
+                                            <div class="dim">gpt-5.5 medium · ~/data-pipeline · backfill/events-v2 · Context 6% used</div>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="mock-panes single" data-tab="server">
                                     <div class="mock-pane focused">
-                                        <div class="mock-prompt"><span>~/qmp</span> <em>master</em></div>
-                                        <div><b>❯</b> <span class="cmd">python3</span> -m http.server 8080</div>
-                                        <div class="dim">Serving HTTP on 0.0.0.0 port 8080 ...</div>
-                                        <div><span class="time">02:28:41</span> "GET /runs/latest.json" <span class="green">200</span></div>
-                                        <div><span class="time">02:29:03</span> "GET /runs/latest.json" <span class="green">200</span></div>
-                                        <div><span class="time">02:29:25</span> "GET /qmp/report.html" <span class="green">200</span></div>
-                                        <div><span class="time">02:30:07</span> "GET /runs/latest.json" <span class="green">200</span></div>
-                                        <div><span class="time">02:30:18</span> "GET /favicon.ico" <span class="red">404</span></div>
-                                        <div><span class="time">02:30:42</span> "GET /qmp/report.html" <span class="green">200</span></div>
-                                        <div><span class="time">02:31:09</span> "GET /runs/latest.json" <span class="green">200</span></div>
+                                        <div class="mock-prompt"><span>~/data-pipeline</span> <em>backfill/events-v2</em></div>
+                                        <div><b>❯</b> <span class="cmd">uv</span> run jobs/backfill_events.py --from 2024-01-01</div>
+                                        <div class="dim">connected · batch size 5,000 · checkpoint every 60s</div>
+                                        <div><span class="time">02:28:41</span> batch 4,102 <span class="green">ok</span> <span class="dim">20,510,000 rows</span></div>
+                                        <div><span class="time">02:29:03</span> batch 4,103 <span class="green">ok</span> <span class="dim">checkpoint written</span></div>
+                                        <div><span class="time">02:29:25</span> batch 4,104 <span class="green">ok</span></div>
+                                        <div><span class="time">02:30:07</span> batch 4,105 <span class="green">ok</span></div>
+                                        <div><span class="time">02:30:18</span> <span class="red">WARN</span> upstream throttled, retrying in 2s</div>
+                                        <div><span class="time">02:30:42</span> batch 4,106 <span class="green">ok</span> <span class="dim">checkpoint written</span></div>
+                                        <div><span class="time">02:31:09</span> <span class="dim">elapsed 6h 12m · 68% complete · eta 2h 54m</span></div>
                                     </div>
                                 </div>
                             </div>
@@ -403,795 +389,324 @@
                         The whole herd in one terminal. Click the sidebar, it's a real layout.
                     </figcaption>
                 </figure>
-                </div>
-            </section>
+        </div>
+        <p class="figcap">A real session: three workspaces, four agents, two of them mid-task. <b>Nobody is attached to any of it right now</b> — that's the point. Click an agent in the sidebar, it's a live layout, not an image.</p>
+        </section>
 
-            <section class="section community-section" id="community" aria-labelledby="community-title">
-                <div class="section-heading-wide">
-                    <div>
-                        <p class="section-kicker"># from the community</p>
-                        <h2 id="community-title">Watch Herdr through other developers' workflows.</h2>
-                    </div>
-                    <p>
-                        Independent walkthroughs from Jilles, DevOps Toolbox, and Better Stack. See how Herdr feels as a tmux-style multiplexer for coding agents, remote sessions, and day-to-day agent orchestration.
-                    </p>
+        <div class="caps">
+            <a class="cap" href="/docs/session-state/">
+                <div class="n"><span>01</span></div>
+                <div class="cap-in">
+                    <h3>Always running.&nbsp;<b class="arw">&#8594;</b></h3>
+                    <p>Herdr isn't an app you keep open. It's a server running in the background, and the terminals live inside it. Close the lid or drop the network and the agents keep working; restart the machine and Herdr brings the layout back and resumes their sessions.</p>
                 </div>
-                <div class="community-video-grid" aria-label="Community videos about Herdr">
-                    <a class="community-video-card" href="https://www.youtube.com/watch?v=qnIu-Xu64H0" target="_blank" rel="noopener">
-                        <span class="community-video-thumb">
-                            <span
-                                class="community-video-image"
-                                role="img"
-                                aria-label="Thumbnail for Jilles' Herdr in about 6 minutes video"
-                                style="--thumbnail: url('https://i.ytimg.com/vi/qnIu-Xu64H0/maxresdefault.jpg')"
-                            ></span>
-                            <span class="play-badge" aria-hidden="true"></span>
-                        </span>
-                        <span class="community-video-copy">
-                            <span class="community-video-meta">Jilles · 6:37</span>
-                            <span class="community-video-title">Herdr in about 6 minutes</span>
-                            <span class="community-video-desc">The fastest practical intro: install, workspaces, agent states, persistence, and the agent skill workflow.</span>
-                        </span>
-                    </a>
-                    <a class="community-video-card" href="https://www.youtube.com/watch?v=5GtkyPvuvbQ" target="_blank" rel="noopener">
-                        <span class="community-video-thumb">
-                            <span
-                                class="community-video-image"
-                                role="img"
-                                aria-label="Thumbnail for DevOps Toolbox's This Tmux Rewrite Is Actually Brilliant video"
-                                style="--thumbnail: url('https://i.ytimg.com/vi/5GtkyPvuvbQ/maxresdefault.jpg')"
-                            ></span>
-                            <span class="play-badge" aria-hidden="true"></span>
-                        </span>
-                        <span class="community-video-copy">
-                            <span class="community-video-meta">DevOps Toolbox · 16:40</span>
-                            <span class="community-video-title">This Tmux "Rewrite" Is Actually Brilliant</span>
-                            <span class="community-video-desc">A deeper hands-on look at the full package: mouse-first panes, remote use, agent support, and the CLI.</span>
-                        </span>
-                    </a>
-                    <a class="community-video-card" href="https://www.youtube.com/watch?v=PlN86TvzGy4" target="_blank" rel="noopener">
-                        <span class="community-video-thumb">
-                            <span
-                                class="community-video-image"
-                                role="img"
-                                aria-label="Thumbnail for Better Stack's Herdr agent multiplexer video"
-                                style="--thumbnail: url('https://i.ytimg.com/vi/PlN86TvzGy4/maxresdefault.jpg')"
-                            ></span>
-                            <span class="play-badge" aria-hidden="true"></span>
-                        </span>
-                        <span class="community-video-copy">
-                            <span class="community-video-meta">Better Stack · 7:10</span>
-                            <span class="community-video-title">Is This the Ultimate Agent Multiplexer?</span>
-                            <span class="community-video-desc">A clear tmux comparison with agent awareness, remote attach, and why Herdr stays inside your terminal.</span>
-                        </span>
-                    </a>
+                <!-- the evidence column describes the session in the plate above,
+                     so the two never state different numbers -->
+                <div class="ev" aria-hidden="true">
+                    <div class="ev-row"><span>herdr-server</span><b><i class="beat"></i>up</b></div>
+                    <div class="ev-note">3 workspaces &middot; 4 agents &middot; nobody attached</div>
                 </div>
-            </section>
-
-            <section class="section access-section why-section" id="why">
-                <div class="section-heading-wide">
-                    <div>
-                        <p class="section-kicker"># why herdr</p>
-                        <h2>Run agents where the work is. Attach from anywhere.</h2>
-                    </div>
-                    <p>
-                        Agents run wherever the work is: a server, a Mac Mini,
-                        a sandbox VM, anywhere you can ssh. You attach from any
-                        terminal, even a phone. Desktop agent managers can't
-                        leave the machine with the GUI. Herdr can.
-                        <a href="/compare/">Why switch from an app →</a>
-                    </p>
-                </div>
-                <div class="access-grid">
-                    <article class="access-card">
-                        <span class="access-label">local</span>
-                        <h3>Your machine</h3>
-                        <p>
-                            Split panes, create tabs, and keep agents running
-                            while your terminal comes and goes.
-                        </p>
-                        <pre><code>$ herdr</code></pre>
-                    </article>
-                    <article class="access-card">
-                        <span class="access-label">over ssh</span>
-                        <h3>Like tmux, on the server</h3>
-                        <p>
-                            SSH in and run Herdr on the remote shell. The session
-                            stays after you detach, ideal from a phone SSH client.
-                        </p>
-                        <pre><code>$ ssh you@server
-$ herdr</code></pre>
-                    </article>
-                    <article class="access-card">
-                        <span class="access-label">thin client</span>
-                        <h3>Native remote attach</h3>
-                        <p>
-                            A local client to a remote session. Installs Herdr on
-                            the host for you, bridges your local clipboard
-                            (including image paste), and keeps your keybindings.
-                        </p>
-                        <pre><code>$ herdr --remote workbox</code></pre>
-                    </article>
-                </div>
-                <div class="mobile-proof">
-                    <div class="mobile-copy">
-                        <p class="section-kicker"># responsive tui</p>
-                        <h3>Mobile-first when the terminal gets small.</h3>
-                        <p>
-                            Herdr stays usable over SSH from a phone or tablet.
-                            The terminal view remains real, while narrow screens
-                            get a switcher built for touch-sized decisions.
-                        </p>
-                    </div>
-                    <div class="mobile-shots">
-                        <figure>
-                            <img
-                                src="/assets/mobile-agent-session-v2.jpeg"
-                                alt="Herdr agent session over SSH on a phone"
-                                loading="lazy"
-                            />
-                            <figcaption>agent session over SSH</figcaption>
-                        </figure>
-                        <figure>
-                            <img
-                                src="/assets/mobile-switch-menu-v2.jpeg"
-                                alt="Herdr responsive switch menu on a phone"
-                                loading="lazy"
-                            />
-                            <figcaption>responsive switch menu</figcaption>
-                        </figure>
-                        <p class="mobile-shout">
-                            screenshots taken with
-                            <a href="https://getmoshi.app/" target="_blank" rel="noopener">moshi</a>
-                            ❤️ on iPhone
-                        </p>
-                    </div>
-                </div>
-            </section>
-
-            <section class="section compare-section">
-                <div class="section-heading-wide">
-                    <div>
-                        <p class="section-kicker"># why different</p>
-                        <h2>Most agent managers are apps. Herdr is a multiplexer.</h2>
-                    </div>
-                    <p>
-                        tmux and Zellij own persistent terminal sessions but don't understand agents. Desktop agent apps understand agents but live on one machine. Herdr keeps the multiplexer in your terminal and makes it agent-aware.
-                        <a href="/compare/">See the full comparison →</a>
-                    </p>
-                </div>
-                <div class="contrast-grid" aria-label="What Herdr is not">
-                    <article>
-                        <span>not a terminal emulator</span>
-                        <p>Ghostty, Kitty, iTerm, Alacritty: your terminal stays.</p>
-                    </article>
-                    <article>
-                        <span>not a browser dashboard</span>
-                        <p>No web view, no account, no hosted control plane.</p>
-                    </article>
-                    <article>
-                        <span>more than tmux for agents</span>
-                        <p>Persistence plus clickable panes, agent state, an API.</p>
-                    </article>
-                </div>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Capability</th>
-                                <th>tmux / Zellij</th>
-                                <th>agent apps</th>
-                                <th>worktree orchestrators</th>
-                                <th>Herdr</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Runs inside your terminal</td>
-                                <td>✓</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td>✓</td>
-                            </tr>
-                            <tr>
-                                <td>Persistent PTY sessions</td>
-                                <td>✓</td>
-                                <td>limited</td>
-                                <td>embedded</td>
-                                <td>✓</td>
-                            </tr>
-                            <tr>
-                                <td>Remote SSH attach</td>
-                                <td>✓</td>
-                                <td>limited</td>
-                                <td>remote projects</td>
-                                <td>✓</td>
-                            </tr>
-                            <tr>
-                                <td>Semantic agent state</td>
-                                <td>—</td>
-                                <td>partial</td>
-                                <td>workspace status</td>
-                                <td>✓</td>
-                            </tr>
-                            <tr>
-                                <td>Direct agent attach</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td>—</td>
-                                <td>✓</td>
-                            </tr>
-                            <tr>
-                                <td>Agents can orchestrate it</td>
-                                <td>scriptable</td>
-                                <td>partial</td>
-                                <td>workflow-owned</td>
-                                <td>✓</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div class="compare-cards" aria-label="Mobile comparison">
-                    <article>
-                        <h3>Runs inside your terminal</h3>
-                        <span>tmux/Zellij <b>✓</b></span>
-                        <span>agent apps <b>—</b></span>
-                        <span>worktree apps <b>—</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                    <article>
-                        <h3>Persistent PTY sessions</h3>
-                        <span>tmux/Zellij <b>✓</b></span>
-                        <span>agent apps <b>limited</b></span>
-                        <span>worktree apps <b>embedded</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                    <article>
-                        <h3>Remote SSH attach</h3>
-                        <span>tmux/Zellij <b>✓</b></span>
-                        <span>agent apps <b>limited</b></span>
-                        <span>worktree apps <b>remote projects</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                    <article>
-                        <h3>Semantic agent state</h3>
-                        <span>tmux/Zellij <b>—</b></span>
-                        <span>agent apps <b>partial</b></span>
-                        <span>worktree apps <b>workspace status</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                    <article>
-                        <h3>Direct agent attach</h3>
-                        <span>tmux/Zellij <b>—</b></span>
-                        <span>agent apps <b>—</b></span>
-                        <span>worktree apps <b>—</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                    <article>
-                        <h3>Agents can orchestrate it</h3>
-                        <span>tmux/Zellij <b>scriptable</b></span>
-                        <span>agent apps <b>partial</b></span>
-                        <span>worktree apps <b>workflow-owned</b></span>
-                        <span class="herdr">Herdr <b>✓</b></span>
-                    </article>
-                </div>
-            </section>
-
-            <section class="section marketplace-teaser" id="marketplace">
-                <div class="marketplace-teaser-top">
-                    <div class="marketplace-teaser-copy">
-                        <p class="section-kicker"># marketplace</p>
-                        <h2>Make it yours.</h2>
-                        <p class="marketplace-teaser-lede">
-                            Review diffs beside the agent. Approve from your phone.
-                            Navigate like vim. Watch your agents graze as pixel-art
-                            sheep. If herdr doesn't do it, one of
-                            <span data-plugin-count>150+</span> community plugins
-                            does, or you publish your own with one GitHub topic.
-                        </p>
-                        <div class="hero-actions">
-                            <a class="button button-primary" href="/plugins/">Browse plugins</a>
-                            <a class="button button-secondary" href="/docs/plugins/">Build a plugin</a>
-                        </div>
-                    </div>
-                    <div class="marketplace-teaser-install">
-                        <div class="install-card" aria-label="Plugin install command">
-                            <span class="prompt">$</span>
-                            <code>herdr plugin install &lt;owner&gt;/&lt;repo&gt;</code>
-                        </div>
-                        <p class="marketplace-install-output"># any public repo tagged herdr-plugin</p>
-                        <p class="marketplace-install-note">
-                            <span data-plugin-count>150+</span> community plugins, auto-discovered from GitHub
-                        </p>
-                    </div>
-                </div>
-                <div class="marketplace-teaser-grid">
-                    <a class="mp-chip" href="https://github.com/smarzban/herdr-file-viewer" target="_blank" rel="noopener" data-repo="smarzban/herdr-file-viewer">
-                        <span class="mp-chip-name">smarzban/<b>herdr-file-viewer</b></span>
-                        <span class="mp-chip-desc">Git-aware file tree, diffs, and rendered markdown in a side pane.</span>
-                        <span class="mp-chip-meta">Rust</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/persiyanov/herdr-reviewr" target="_blank" rel="noopener" data-repo="persiyanov/herdr-reviewr">
-                        <span class="mp-chip-name">persiyanov/<b>herdr-reviewr</b></span>
-                        <span class="mp-chip-desc">Review the agent's diff, comment on lines, send notes back to its prompt.</span>
-                        <span class="mp-chip-meta">Rust</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/paulbkim-dev/vim-herdr-navigation" target="_blank" rel="noopener" data-repo="paulbkim-dev/vim-herdr-navigation">
-                        <span class="mp-chip-name">paulbkim-dev/<b>vim-herdr-navigation</b></span>
-                        <span class="mp-chip-desc">Ctrl+h/j/k/l moves seamlessly across herdr panes and vim splits.</span>
-                        <span class="mp-chip-meta">Shell</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/yuk1ty/herdr-spreader" target="_blank" rel="noopener" data-repo="yuk1ty/herdr-spreader">
-                        <span class="mp-chip-name">yuk1ty/<b>herdr-spreader</b></span>
-                        <span class="mp-chip-desc">Whole workspace layouts, tabs, panes and commands, from one YAML file.</span>
-                        <span class="mp-chip-meta">Rust</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/AltanS/collie" target="_blank" rel="noopener" data-repo="AltanS/collie">
-                        <span class="mp-chip-name">AltanS/<b>collie</b></span>
-                        <span class="mp-chip-desc">A phone PWA for your herd over Tailscale, with push when an agent needs you.</span>
-                        <span class="mp-chip-meta">TypeScript</span>
-                    </a>
-                    <a class="mp-chip" href="https://github.com/ragamo/herdr-flock" target="_blank" rel="noopener" data-repo="ragamo/herdr-flock">
-                        <span class="mp-chip-name">ragamo/<b>herdr-flock</b></span>
-                        <span class="mp-chip-desc">Your agents as pixel-art sheep on a farm. Ended sessions rest in the graveyard.</span>
-                        <span class="mp-chip-meta">Rust</span>
-                    </a>
-                </div>
-            </section>
-
-            <section class="section capability-section">
-                <div class="section-heading-wide">
-                    <div>
-                        <p class="section-kicker"># what you get</p>
-                        <h2>Real panes, agent state, and an API to drive them.</h2>
-                    </div>
-                    <p>
-                        No rebuilt chat view. Real processes in real PTYs, with
-                        clickable layout, persistent sessions, and a control
-                        surface your agents can use themselves.
-                    </p>
-                </div>
-                <div class="capability-body">
-                    <div class="capability-cards">
-                        <article>
-                            <h3>Real panes</h3>
-                            <p>Mouse-first panes, tabs, and workspaces. Keep your shell, fonts, and keybinds.</p>
-                        </article>
-                        <article>
-                            <h3>Agent state</h3>
-                            <p>Blocked, working, done, and idle at a glance across the whole session.</p>
-                        </article>
-                        <article>
-                            <h3>Persistence</h3>
-                            <p>Detach and reattach. Sessions and agents survive the terminal closing.</p>
-                        </article>
-                        <article>
-                            <h3>Control surface</h3>
-                            <p>A CLI and JSON socket API expose workspaces, panes, output, and waits.</p>
-                        </article>
-                    </div>
-                    <div class="code-card" aria-label="Herdr CLI orchestration example">
-                        <pre><code><span class="comment"># create workspace structure</span>
-<span class="cmd">herdr</span> workspace create <span class="flag">--cwd</span> <span class="str">~/project</span> <span class="flag">--label</span> <span class="str">api</span>
-<span class="cmd">herdr</span> tab create <span class="flag">--label</span> <span class="str">logs</span>
-
-<span class="comment"># split a pane and run work</span>
-<span class="cmd">herdr</span> pane split <span class="str">1-1</span> <span class="flag">--direction</span> <span class="str">right</span>
-<span class="cmd">herdr</span> pane run <span class="str">1-2</span> <span class="str">"just test"</span>
-
-<span class="comment"># wait, inspect, and continue</span>
-<span class="cmd">herdr</span> wait agent-status <span class="str">1-1</span> <span class="flag">--status</span> <span class="str">done</span>
-<span class="cmd">herdr</span> pane read <span class="str">1-2</span> <span class="flag">--source</span> <span class="str">recent-unwrapped</span></code></pre>
-                    </div>
-                </div>
-                <div class="inline-links">
-                    <a href="/docs/cli-reference/">CLI reference →</a>
-                    <a href="/docs/socket-api/">Socket API →</a>
-                    <a href="/docs/agent-skill/">Agent skill →</a>
-                </div>
-            </section>
-
-            <section class="section integrations-section">
-                <div class="section-heading">
-                    <p class="section-kicker"># integrations</p>
-                    <h2>Bring your existing agents into the herd.</h2>
-                </div>
-                <div class="agent-grid" aria-label="Supported agents">
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/pi.svg')"></span><span>Pi</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/claude.svg')"></span><span>Claude Code</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/codex-mask.svg')"></span><span>Codex</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/droid.png')"></span><span>Droid</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/amp.svg')"></span><span>Amp</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/opencode.svg')"></span><span>OpenCode</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/grok.svg')"></span><span>Grok CLI</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/hermes.svg')"></span><span>Hermes</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/cursor.svg')"></span><span>Cursor</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/antigravity.svg')"></span><span>Antigravity</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/kimi.svg')"></span><span>Kimi</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/kiro-mask.svg')"></span><span>Kiro</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/github-copilot.svg')"></span><span>Copilot</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/qoder-mask.svg')"></span><span>Qoder CLI</span></div>
-                    <div class="agent-card"><span class="agent-icon" style="--agent-icon: url('/assets/agent-icons/mastracode.svg')"></span><span>MastraCode</span></div>
-                    <a class="agent-card agent-more" href="/docs/integrations/"><span>+ yours</span></a>
-                </div>
-                <p class="integration-note">
-                    Any terminal agent works out of the box.
-                    <a href="/docs/integrations/">Integrations</a> add richer
-                    state and session resume.
-                </p>
-            </section>
-
-            <section class="final-cta">
-                <p class="section-kicker"># start the herd</p>
-                <h2>Install Herdr, run two agents, detach once.</h2>
-                <p>
-                    The value shows up the first time the herd keeps running
-                    after your terminal disappears.
-                </p>
-                <div class="hero-actions center">
-                    <a class="button button-primary" href="/docs/install/"
-                        >Install Herdr</a
-                    >
-                    <a class="button button-secondary" href="/docs/quick-start/"
-                        >Quick start</a
-                    >
-                </div>
-            </section>
-        </main>
-
-        <footer class="footer">
-            <a class="brand" href="/" aria-label="Herdr home">
-                <span class="brand-logo" aria-hidden="true"></span>
-                <span>herdr</span>
             </a>
-            <div>
-                <a href="/compare/">Compare</a>
-                <a href="/docs/">Docs</a>
-                <a href="/docs/configuration/">Configuration</a>
-                <a href="/docs/socket-api/">API</a>
-                <a href="https://github.com/herdrdev/herdr/releases"
-                    >Releases</a
-                >
-                <a href="mailto:hey@herdr.dev">hey@herdr.dev</a>
+            <a class="cap" href="/docs/agents/">
+                <div class="n"><span>02</span></div>
+                <div class="cap-in">
+                    <h3>You never hunt for the stuck one.&nbsp;<b class="arw">&#8594;</b></h3>
+                    <p>Herdr reads every pane and marks each agent working, blocked or idle. When one stops and needs an answer it says so, so you don't go pane by pane looking for whoever is waiting on you.</p>
+                </div>
+                <div class="ev" aria-hidden="true">
+                    <div class="ev-row"><span>web-dashboard</span><b><i class="b"></i>blocked</b></div>
+                    <div class="ev-row"><span>herdr</span><b><i class="w"></i>working</b></div>
+                    <div class="ev-row"><span>data-pipeline</span><b><i class="i"></i>idle</b></div>
+                </div>
+            </a>
+            <a class="cap" href="/docs/agent-automation/">
+                <div class="n"><span>03</span></div>
+                <div class="cap-in">
+                    <h3>Agent-native.&nbsp;<b class="arw">&#8594;</b></h3>
+                    <p>The CLI and the socket API are the same surface agents drive. They split panes, start each other, prompt each other, and wait until another agent is genuinely blocked instead of firing keystrokes and hoping.</p>
+                </div>
+                <!-- real lines from docs/agent-automation, in the order a
+                     review workflow actually runs them -->
+                <div class="ev">
+                    <div class="tape" aria-hidden="true"><b>$</b><span data-tape></span></div>
+                </div>
+            </a>
+            <a class="cap" href="/docs/integrations/">
+                <div class="n"><span>04</span></div>
+                <div class="cap-in">
+                    <h3>Runs what you already run.&nbsp;<b class="arw">&#8594;</b></h3>
+                    <p>Claude Code, Codex, Cursor, opencode, Grok and the rest. Herdr doesn't wrap them or replace them, it just owns their terminals — one binary, macOS and Linux, Windows in beta.</p>
+                </div>
+                <div class="ev">
+                    <!-- named, not bare marks: several of these silhouettes are
+                         unreadable at this size on their own, and the name is
+                         what a visitor is scanning for anyway -->
+                    <div class="herd">
+                        <span><i style="--m: url('/assets/agent-icons/claude.svg')"></i>Claude Code</span>
+                        <span><i style="--m: url('/assets/agent-icons/codex-mask.svg')"></i>Codex</span>
+                        <span><i style="--m: url('/assets/agent-icons/pi.svg')"></i>Pi</span>
+                        <span><i style="--m: url('/assets/agent-icons/opencode.svg')"></i>opencode</span>
+                        <span><i style="--m: url('/assets/agent-icons/cursor.svg')"></i>Cursor</span>
+                        <span><i style="--m: url('/assets/agent-icons/grok.svg')"></i>Grok</span>
+                        <span><i style="--m: url('/assets/agent-icons/github-copilot.svg')"></i>Copilot</span>
+                        <span><i style="--m: url('/assets/agent-icons/hermes.svg')"></i>Hermes</span>
+                    </div>
+                    <div class="ev-note"><!--AGENTS_NOTE--></div>
+                </div>
+            </a>
+            <!-- 05 stays redacted. There is no reveal and no link: the whole
+                 point is that something is there and it isn't saying what.
+                 The real copy is deliberately not in this page at all — not in
+                 a hidden element and not in a comment — because view-source
+                 ships to everyone and the product hasn't launched. The only
+                 thing that leaks is the shape of a command, which is the
+                 tease. Blocks are aria-hidden so a screen reader gets the
+                 caption instead of a mouthful of gibberish. -->
+            <div class="cap cap-soon">
+                <div class="n"><span>05</span></div>
+                <div class="cap-in">
+                    <h3 aria-hidden="true"><span class="mask">█████ ██████</span></h3>
+                    <p aria-hidden="true"><span class="mask">████ █████████ █████████ ████ █ ████████ ████ ███ ██ ██ ██████ ███ ███ ██████ █████ █████ █████</span></p>
+                    <p class="sr">Redacted. Something is coming.</p>
+                </div>
+                <div class="ev">
+                    <div class="tape" aria-hidden="true"><b>$</b><span class="mask">█████ █████ █████</span></div>
+                    <div class="ev-note" aria-hidden="true"><span class="mask">███████ ███ █████ █████</span></div>
+                </div>
             </div>
-            <nav class="footer-social" aria-label="Social links">
-                <a href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-                    </svg>
+        </div>
+
+        <section class="end" id="install">
+            <span class="ram"></span>
+            <div class="in">
+                <h2>Give them somewhere to live.</h2>
+                <p>One command, and nothing else about your setup changes — the agent CLIs you already run keep working exactly as they did, except now they don't stop when you do.</p>
+                <div class="go">
+                    <div class="hd-cmd">
+                        <code id="install-cmd-2"><b>$</b>curl -fsSL https://herdr.dev/install.sh | sh</code>
+                        <button type="button" id="copy-btn-2" aria-label="Copy install command">copy</button>
+                    </div>
+                </div>
+                <div class="meta">Windows beta: <code>irm https://herdr.dev/install.ps1 | iex</code> &nbsp;—&nbsp; <a href="/docs/">all install methods →</a></div>
+            </div>
+        </section>
+
+        <footer class="foot">
+            <span class="ram"></span>
+            <a href="/docs/">docs</a>
+            <a href="/plugins/">plugins</a>
+            <a href="/blog/">blog</a>
+            <span>built in the terminal</span>
+            <span class="fact"><!--FACTS--></span>
+            <span class="out">
+                <a class="ico" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
                 </a>
-                <a href="https://x.com/herdrdev" aria-label="Herdr on X">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" />
-                    </svg>
+                <a class="ico" href="https://x.com/herdrdev" aria-label="Herdr on X">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" /></svg>
                 </a>
-            </nav>
+                <a href="mailto:hey@herdr.dev">hey@herdr.dev</a>
+            </span>
         </footer>
 
-        <div class="logo-menu" id="logo-menu" hidden>
-            <a href="/assets/logo.svg" download="herdr-logo.svg">Download SVG</a>
-            <a href="/assets/logo.png" download="herdr-logo.png">Download PNG</a>
-            <button type="button" id="copy-logo-url">Copy SVG URL</button>
-        </div>
+    </div>
 
-        <div class="theme-hint" id="theme-hint" title="Press / or t to switch theme">
-            <span class="theme-hint-dot"></span>
-            <span class="theme-hint-label" id="theme-hint-label">light</span>
-            <span class="theme-hint-key">[/]</span>
-        </div>
+    <script>
+        /* ground toggle — writes through to the key the docs read */
+        (function () {
+            var buttons = document.querySelectorAll("[data-ground]");
+            function paint(mode) {
+                window.herdrGround.apply(mode);
+                buttons.forEach(function (b) {
+                    b.setAttribute("aria-pressed", String(b.dataset.ground === mode));
+                });
+            }
+            buttons.forEach(function (b) {
+                b.addEventListener("click", function () {
+                    window.herdrGround.save(b.dataset.ground);
+                    paint(b.dataset.ground);
+                });
+            });
+            paint(window.herdrGround.read());
+        })();
 
-        <div class="theme-overlay" id="theme-overlay" hidden>
-            <div class="theme-overlay-panel" role="dialog" aria-label="Theme switcher" aria-modal="true">
-                <div class="theme-overlay-title">settings</div>
-                <div class="theme-overlay-tabs">
-                    <span class="active">theme</span>
-                </div>
-                <div class="theme-overlay-list" id="theme-overlay-list" role="listbox" aria-label="Themes">
-                    <div class="theme-sep"><span>dark</span></div>
-                    <button type="button" role="option" data-value="catppuccin">catppuccin</button>
-                    <button type="button" role="option" data-value="terminal">terminal</button>
-                    <button type="button" role="option" data-value="tokyo-night">tokyo night</button>
-                    <button type="button" role="option" data-value="dracula">dracula</button>
-                    <button type="button" role="option" data-value="nord">nord</button>
-                    <button type="button" role="option" data-value="gruvbox">gruvbox</button>
-                    <button type="button" role="option" data-value="one-dark">one dark</button>
-                    <button type="button" role="option" data-value="solarized">solarized</button>
-                    <button type="button" role="option" data-value="kanagawa">kanagawa</button>
-                    <button type="button" role="option" data-value="rose-pine">rose pine</button>
-                    <button type="button" role="option" data-value="vesper">vesper</button>
-                    <div class="theme-sep"><span>light</span></div>
-                    <button type="button" role="option" data-value="catppuccin-latte">catppuccin latte</button>
-                    <button type="button" role="option" data-value="tokyo-night-day">tokyo day</button>
-                    <button type="button" role="option" data-value="gruvbox-light">gruvbox light</button>
-                    <button type="button" role="option" data-value="one-light">one light</button>
-                    <button type="button" role="option" data-value="solarized-light">solarized light</button>
-                    <button type="button" role="option" data-value="kanagawa-lotus">kanagawa lotus</button>
-                    <button type="button" role="option" data-value="rose-pine-dawn">rose pine dawn</button>
-                </div>
-                <div class="theme-overlay-footer">
-                    <span class="theme-overlay-hints"><span class="key">↑↓</span> select</span>
-                    <span class="theme-overlay-actions"><span class="theme-apply-btn">↵ apply</span><button class="theme-close-btn" type="button" id="theme-close-btn">esc close</button></span>
-                </div>
-            </div>
-        </div>
+        /* nav sheet — the links, the account and the ground toggle that don't
+           fit the bar on a phone */
+        (function () {
+            var btn = document.getElementById("nav-menu");
+            var sheet = document.getElementById("nav-sheet");
+            if (!btn || !sheet) return;
+            function set(open) {
+                sheet.classList.toggle("open", open);
+                btn.setAttribute("aria-expanded", String(open));
+            }
+            btn.addEventListener("click", function (event) {
+                event.stopPropagation();
+                set(!sheet.classList.contains("open"));
+            });
+            /* the ground buttons live in the sheet, so a tap inside must not
+               close it — only taps on the page behind do */
+            document.addEventListener("click", function (event) {
+                if (!sheet.contains(event.target)) set(false);
+            });
+            document.addEventListener("keydown", function (event) {
+                if (event.key === "Escape") set(false);
+            });
+        })();
 
-        <script>
-            (function () {
-                fetch("https://assets.herdr.dev/plugins/index.json")
-                    .then(function (res) {
-                        return res.ok ? res.json() : null;
-                    })
-                    .then(function (data) {
-                        if (!data || !Array.isArray(data.plugins)) return;
-                        document.querySelectorAll("[data-plugin-count]").forEach(function (el) {
-                            el.textContent = String(data.plugins.length);
-                        });
-                        var byName = {};
-                        data.plugins.forEach(function (p) {
-                            byName[p.fullName] = p;
-                        });
-                        document.querySelectorAll(".mp-chip[data-repo]").forEach(function (chip) {
-                            var p = byName[chip.getAttribute("data-repo")];
-                            if (!p || typeof p.stars !== "number") return;
-                            var meta = chip.querySelector(".mp-chip-meta");
-                            if (meta) meta.textContent = "★ " + p.stars + " · " + meta.textContent;
-                        });
-                    })
-                    .catch(function () {});
+        /* The typing line in row 03. The commands are real and in workflow
+           order — split a pane, start a reviewer, prompt it, wait until it is
+           actually blocked, read what it said — so the animation is a demo
+           rather than decoration. Runs only while the row is on screen, and
+           reduced-motion gets the first line held still. */
+        (function () {
+            var out = document.querySelector("[data-tape]");
+            if (!out) return;
 
-                fetch("https://assets.herdr.dev/stats/stats.json")
-                    .then(function (res) {
-                        return res.ok ? res.json() : null;
-                    })
-                    .then(function (data) {
-                        var stars = data && data.stars && data.stars.total;
-                        if (typeof stars !== "number") return;
-                        var compact =
-                            stars >= 1000
-                                ? (stars / 1000).toFixed(1).replace(/\.0$/, "") + "k"
-                                : String(stars);
-                        document.querySelectorAll("[data-stat-stars]").forEach(function (el) {
-                            el.textContent = compact;
-                        });
-                    })
-                    .catch(function () {});
-            })();
-        </script>
-        <script>
-            (function () {
-                var overlay = document.getElementById("theme-overlay");
-                var list = document.getElementById("theme-overlay-list");
-                var hintLabel = document.getElementById("theme-hint-label");
-                if (!overlay || !list) return;
+            var LINES = [
+                "herdr pane split --current --direction right --no-focus",
+                "herdr agent start reviewer --kind codex",
+                'herdr agent prompt reviewer "Review the current diff" --wait',
+                "herdr agent wait reviewer --until blocked",
+                "herdr agent read reviewer --source recent-unwrapped",
+                'herdr pane wait-output w1:p3 --regex "passed|failed"',
+            ];
 
-                var options = Array.prototype.slice.call(list.querySelectorAll("[role='option']"));
-                var media = window.matchMedia("(prefers-color-scheme: dark)");
-                var saved = localStorage.getItem("herdr-palette") || "";
-                var committed = saved || defaultPalette();
+            if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                out.textContent = LINES[0];
+                return;
+            }
 
-                function defaultPalette() {
-                    return media.matches ? "tokyo-night" : "tokyo-night-day";
+            var line = 0, ch = 0, erasing = false, live = false, timer = null;
+
+            function tick() {
+                var text = LINES[line];
+                if (!erasing) {
+                    ch++;
+                    out.textContent = text.slice(0, ch);
+                    if (ch >= text.length) {
+                        erasing = true;
+                        return schedule(1900);
+                    }
+                    return schedule(26 + Math.random() * 44);
                 }
-
-                function setPalette(value) {
-                    document.documentElement.setAttribute("data-palette", value || defaultPalette());
+                ch -= 3;
+                if (ch <= 0) {
+                    ch = 0;
+                    erasing = false;
+                    line = (line + 1) % LINES.length;
+                    out.textContent = "";
+                    return schedule(360);
                 }
+                out.textContent = text.slice(0, ch);
+                return schedule(14);
+            }
 
-                function updateUI(value) {
-                    var activeValue = value || defaultPalette();
-                    options.forEach(function (opt) {
-                        var selected = opt.dataset.value === activeValue;
-                        opt.setAttribute("aria-selected", String(selected));
-                    });
-                    var active = options.find(function (o) { return o.dataset.value === activeValue; });
-                    if (hintLabel && active) hintLabel.textContent = active.textContent.trim();
-                }
+            function schedule(ms) {
+                timer = setTimeout(function () {
+                    if (live) tick();
+                }, ms);
+            }
 
-                function openOverlay() {
-                    overlay.hidden = false;
-                    document.body.style.overflow = "hidden";
-                    committed = localStorage.getItem("herdr-palette") || defaultPalette();
-                    updateUI(committed);
-                    var active = list.querySelector("[aria-selected='true']") || options[0];
-                    if (active) active.focus();
-                }
-
-                function closeOverlay() {
-                    overlay.hidden = true;
-                    document.body.style.overflow = "";
-                }
-
-                function toggleOverlay() {
-                    if (overlay.hidden) openOverlay();
-                    else closeOverlay();
-                }
-
-                function preview(index) {
-                    if (index < 0 || index >= options.length) return;
-                    setPalette(options[index].dataset.value);
-                    updateUI(options[index].dataset.value);
-                    options[index].focus();
-                }
-
-                function commit(value) {
-                    setPalette(value);
-                    localStorage.setItem("herdr-palette", value);
-                    updateUI(value);
-                    closeOverlay();
-                }
-
-                function revert() {
-                    setPalette(committed);
-                    updateUI(committed);
-                    closeOverlay();
-                }
-
-                media.addEventListener("change", function () {
-                    if (!localStorage.getItem("herdr-palette")) {
-                        setPalette("");
-                        updateUI("");
+            /* no point animating a row nobody is looking at */
+            new IntersectionObserver(function (entries) {
+                entries.forEach(function (e) {
+                    if (e.isIntersecting && !live) {
+                        live = true;
+                        tick();
+                    } else if (!e.isIntersecting && live) {
+                        live = false;
+                        clearTimeout(timer);
                     }
                 });
+            }, { threshold: 0.35 }).observe(out.closest(".tape"));
+        })();
 
-                options.forEach(function (opt, idx) {
-                    opt.addEventListener("click", function () {
-                        commit(opt.dataset.value);
-                    });
-                    opt.addEventListener("mouseenter", function () {
-                        preview(idx);
-                    });
+        /* copy buttons */
+        (function () {
+            [["copy-btn", "install-cmd"], ["copy-btn-2", "install-cmd-2"]].forEach(function (pair) {
+                var button = document.getElementById(pair[0]);
+                var source = document.getElementById(pair[1]);
+                if (!button || !source) return;
+                button.addEventListener("click", function () {
+                    var text = source.textContent.replace(/^\s*\$\s*/, "").trim();
+                    if (!text) return;
+                    navigator.clipboard.writeText(text).then(function () {
+                        var was = button.textContent;
+                        button.textContent = "copied";
+                        setTimeout(function () { button.textContent = was; }, 1400);
+                    }).catch(function () {});
                 });
+            });
+        })();
 
-                document.addEventListener("keydown", function (e) {
-                    if ((e.key === "t" || e.key === "/") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                        var tag = document.activeElement && document.activeElement.tagName;
-                        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-                        e.preventDefault();
-                        toggleOverlay();
-                        return;
-                    }
-                    if (overlay.hidden) return;
-                    var current = document.activeElement;
-                    var idx = options.indexOf(current);
-                    if (e.key === "ArrowDown") {
-                        e.preventDefault();
-                        var nextIdx = idx >= 0 ? Math.min(options.length - 1, idx + 1) : 0;
-                        preview(nextIdx);
-                    } else if (e.key === "ArrowUp") {
-                        e.preventDefault();
-                        var prevIdx = idx >= 0 ? Math.max(0, idx - 1) : options.length - 1;
-                        preview(prevIdx);
-                    } else if (e.key === "Enter" && idx >= 0) {
-                        e.preventDefault();
-                        commit(options[idx].dataset.value);
-                    } else if (e.key === "Escape") {
-                        e.preventDefault();
-                        revert();
-                    }
+        /* braille spinner in the mock */
+        (function () {
+            var frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+            var tick = 0;
+            setInterval(function () {
+                tick = (tick + 1) % frames.length;
+                var els = document.querySelectorAll(".braille-spinner");
+                for (var i = 0; i < els.length; i++) els[i].textContent = frames[tick];
+            }, 80);
+        })();
+
+        /* the strip is already correct when it ships — baked at build from the
+           same snapshots /stats/ and /plugins/ read. This refreshes it live and
+           counts up to the new value if it moved since the last deploy. */
+        (function () {
+            var fmt = function (n) { return n.toLocaleString("en-US"); };
+            var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+            function settle(el, target) {
+                if (!el || typeof target !== "number") return;
+                var from = Number(String(el.textContent).replace(/[^0-9]/g, "")) || 0;
+                if (reduced || !from || from === target) { el.textContent = fmt(target); return; }
+                var started = null, span = target - from;
+                requestAnimationFrame(function step(now) {
+                    if (started === null) started = now;
+                    var t = Math.min(1, (now - started) / 900);
+                    var eased = 1 - Math.pow(1 - t, 3);
+                    el.textContent = fmt(Math.round(from + span * eased));
+                    if (t < 1) requestAnimationFrame(step);
                 });
+            }
 
-                var themeHint = document.getElementById("theme-hint");
-                if (localStorage.getItem("herdr-theme-hint-seen") === "1") {
-                    themeHint.classList.add("is-seen");
-                }
-                themeHint.addEventListener("mouseenter", function () {
-                    localStorage.setItem("herdr-theme-hint-seen", "1");
-                    themeHint.classList.add("is-seen");
-                }, { once: true });
-                themeHint.addEventListener("click", toggleOverlay);
-                document.getElementById("theme-close-btn").addEventListener("click", revert);
-
-                setPalette(saved);
-                updateUI(saved);
-            })();
-
-            (function () {
-                var menu = document.getElementById("logo-menu");
-                var copyButton = document.getElementById("copy-logo-url");
-                var logos = document.querySelectorAll(".brand-logo");
-                if (!menu || !logos.length) return;
-
-                function hideMenu() {
-                    menu.hidden = true;
-                }
-
-                function showMenu(event) {
-                    event.preventDefault();
-                    menu.hidden = false;
-                    var menuWidth = menu.offsetWidth;
-                    var menuHeight = menu.offsetHeight;
-                    var left = Math.min(event.clientX, window.innerWidth - menuWidth - 12);
-                    var top = Math.min(event.clientY, window.innerHeight - menuHeight - 12);
-                    menu.style.left = Math.max(12, left) + "px";
-                    menu.style.top = Math.max(12, top) + "px";
-                }
-
-                logos.forEach(function (logo) {
-                    logo.addEventListener("contextmenu", showMenu);
-                });
-
-                document.addEventListener("click", function (event) {
-                    if (!menu.contains(event.target)) hideMenu();
-                });
-                document.addEventListener("keydown", function (event) {
-                    if (event.key === "Escape") hideMenu();
-                });
-                window.addEventListener("scroll", hideMenu, { passive: true });
-                window.addEventListener("resize", hideMenu);
-
-                if (copyButton) {
-                    copyButton.addEventListener("click", async function () {
-                        var url = new URL("/assets/logo.svg", window.location.href).href;
-                        try {
-                            await navigator.clipboard.writeText(url);
-                            copyButton.textContent = "Copied";
-                            setTimeout(function () {
-                                copyButton.textContent = "Copy SVG URL";
-                            }, 1500);
-                        } catch (error) {
-                            window.prompt("Copy logo URL", url);
-                        }
-                    });
-                }
-            })();
-
-            (function () {
-                var copyButton = document.getElementById("copy-btn");
-                var command = document.getElementById("install-cmd");
-                var methods = Array.prototype.slice.call(
-                    document.querySelectorAll(".install-method"),
-                );
-                if (!copyButton || !command || methods.length === 0) return;
-
-                methods.forEach(function (method) {
-                    method.addEventListener("click", function () {
-                        methods.forEach(function (entry) {
-                            var active = entry === method;
-                            entry.classList.toggle("is-active", active);
-                            entry.setAttribute("aria-pressed", String(active));
+            fetch("https://assets.herdr.dev/stats/stats.json", { headers: { accept: "application/json" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) {
+                    if (!d) return;
+                    if (d.stars) {
+                        settle(document.getElementById("n-stars"), d.stars.total);
+                        document.querySelectorAll("[data-stars]").forEach(function (el) {
+                            settle(el, d.stars.total);
                         });
-                        command.textContent = method.dataset.command;
-                        command.classList.toggle(
-                            "is-compact",
-                            method.dataset.size === "compact",
+                    }
+                    if (d.downloads) {
+                        settle(
+                            document.getElementById("n-installs"),
+                            (d.downloads.github || 0) + (d.downloads.brew || 0)
                         );
-                        copyButton.textContent = "Copy";
-                    });
-                });
-
-                document.querySelectorAll("[data-copy-target]").forEach(function (button) {
-                    button.addEventListener("click", async function () {
-                        var target = document.getElementById(button.dataset.copyTarget);
-                        if (!target) return;
-
-                        try {
-                            await navigator.clipboard.writeText(
-                                target.textContent.trim(),
-                            );
-                            button.textContent = "Copied";
-                            setTimeout(function () {
-                                button.textContent = "Copy";
-                            }, 1500);
-                        } catch (error) {
-                            button.textContent = "Select";
-                        }
-                    });
-                });
-            })();
-
-            (function () {
-                var frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
-                var tick = 0;
-                setInterval(function () {
-                    tick = (tick + 1) % frames.length;
-                    var els = document.querySelectorAll(".braille-spinner");
-                    for (var i = 0; i < els.length; i++) {
-                        els[i].textContent = frames[tick];
                     }
-                }, 80);
-            })();
+                })
+                .catch(function () {});
 
-            /* herd mock: clickable workspaces, tabs, and agents */
+            fetch("https://assets.herdr.dev/plugins/index.json", { headers: { accept: "application/json" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) {
+                    if (!d) return;
+                    /* pluginCount is validated manifests, which is what /plugins/
+                       lists. source.totalCount is the raw GitHub topic search and
+                       still counts blacklisted and manifest-less repositories, so
+                       reading it here made the homepage disagree with the page it
+                       links to. */
+                    var total = d.pluginCount || (d.plugins && d.plugins.length);
+                    if (total) settle(document.getElementById("n-plugins"), total);
+                })
+                .catch(function () {});
+        })();
+
+/* herd mock: clickable workspaces, tabs, and agents */
             (function () {
                 var mock = document.getElementById("herd-mock");
                 if (!mock) return;
@@ -1275,6 +790,7 @@ $ herdr</code></pre>
                 }
 
             })();
-        </script>
+
+    </script>
     </body>
 </html>

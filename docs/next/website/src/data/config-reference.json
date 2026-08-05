@@ -53,6 +53,12 @@
           "description": "Override the panel_bg color token on top of the base theme. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
         },
         {
+          "key": "theme.custom.sidebar_bg",
+          "type": "color",
+          "default": "unset",
+          "description": "Set the desktop sidebar background without changing other panel surfaces. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        },
+        {
           "key": "theme.custom.surface0",
           "type": "color",
           "default": "unset",
@@ -653,6 +659,12 @@
           "description": "Draw borders around split panes."
         },
         {
+          "key": "ui.pane_scrollbars",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw interactive scrollbars beside terminal panes. Disable to reclaim the scrollbar column and keep it out of terminal-native selections."
+        },
+        {
           "key": "ui.pane_gaps",
           "type": "boolean",
           "default": "true",
@@ -688,6 +700,16 @@
           "values": [
             "spaces",
             "priority"
+          ]
+        },
+        {
+          "key": "ui.status_indicators",
+          "type": "enum",
+          "default": "\"dots\"",
+          "description": "Choose compact color dots or distinct static symbols for agent states.",
+          "values": [
+            "dots",
+            "symbols"
           ]
         },
         {

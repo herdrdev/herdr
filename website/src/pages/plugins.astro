@@ -1,5 +1,5 @@
 ---
-import MarketingLayout from '../components/MarketingLayout.astro';
+import SiteLayout from '../components/SiteLayout.astro';
 import fixture from '../data/plugins-fixture.json';
 
 const snapshotUrl = 'https://assets.herdr.dev/plugins/index.json';
@@ -17,29 +17,45 @@ try {
 }
 const initialData = liveData ?? (import.meta.env.DEV ? fixture : null);
 const initialIsFixture = !liveData && import.meta.env.DEV;
+// A card is a repository; a plugin is a validated manifest inside it. A monorepo
+// with three manifests is one card and three plugins, so the two counts differ
+// and both are stated. `source.totalCount` is the raw GitHub topic search and
+// still includes blacklisted and manifest-less repositories, so it is not used.
+const repos = initialData?.plugins ?? [];
+const repositoryCount = initialData?.repositoryCount ?? repos.length;
+const pluginCount =
+  initialData?.pluginCount ??
+  repos.reduce((n, repo) => n + (repo.manifests?.length || 1), 0);
 const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
 ---
 
-<MarketingLayout
+<SiteLayout
   title="Herdr plugins: community plugin marketplace"
   description="Discover community Herdr plugins published on GitHub. An automatic index of public repositories tagged with the herdr-plugin topic."
   canonicalPath="/plugins/"
 >
   <main class="plugins-page">
-    <section class="section plugins-hero">
-      <p class="section-kicker"># marketplace</p>
-      <h2>Plugins built on Herdr.</h2>
-      <p class="plugins-lede">
-        Community plugins published on GitHub. Install any of them with
+    <header class="ph ph-split">
+      <div>
+      <div class="hd-eyebrow"><s></s>the marketplace</div>
+      <h1>Built by the herd.</h1>
+      <p>
+        Community plugins published on GitHub, discovered automatically from the
+        <code>herdr-plugin</code> topic. Install any of them with
         <code>herdr plugin install</code>, or publish your own and get listed.
       </p>
       <p class="plugins-trust">
         <span class="status-dot dot-idle"></span>
-        Listings are discovered automatically from the GitHub topic
-        <code>herdr-plugin</code>. They are not reviewed by Herdr, so install at
-        your own discretion. <a href="/docs/plugins/#trust-and-security">Trust guidance</a>.
+        Listings aren't reviewed by Herdr, so install at your own discretion.
+        <a href="/docs/plugins/#trust-and-security">Trust guidance →</a>
       </p>
-    </section>
+      </div>
+      <aside class="ph-side">
+        <b>{pluginCount.toLocaleString('en-US')}</b>
+        <span>plugins across {repositoryCount.toLocaleString('en-US')} repositories</span>
+        <a href="/docs/plugins/">Publish yours →</a>
+      </aside>
+    </header>
 
     <section class="section plugins-controls">
       <div class="plugins-search-wrap">
@@ -48,7 +64,7 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
           id="plugins-search"
           type="search"
           class="plugins-search"
-          placeholder="search plugins, owners, languages…"
+          placeholder="search plugins, repositories, owners, languages…"
           autocomplete="off"
           spellcheck="false"
           aria-label="Search plugins"
@@ -63,6 +79,9 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
           <option value="name">Name</option>
         </select>
       </label>
+    </section>
+
+    <section class="section plugins-metabar">
       <p id="plugins-meta" class="plugins-meta" aria-live="polite"></p>
     </section>
 
@@ -98,8 +117,8 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
     const moreButton = document.getElementById("plugins-more");
 
     // 24 fills complete rows in both the 3-column and 2-column grid layouts.
-    const SHOW_LIMIT = 24;
-    let showAll = false;
+    const PAGE_SIZE = 24;
+    let visibleLimit = PAGE_SIZE;
 
     const LANG_COLORS = {
       TypeScript: "#3178c6",
@@ -113,7 +132,8 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       Ruby: "#701516",
     };
 
-    let plugins = [];
+    // One entry per repository. Its `manifests` are the plugins it ships.
+    let repos = [];
     let usingFallback = false;
 
     function timeAgo(iso) {
@@ -188,23 +208,58 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
         meta.appendChild(lang);
       }
 
+      // Nearly every repository ships exactly one plugin whose name restates the
+      // repository name, so only its version earns a place in the meta row.
+      const manifests = manifestsOf(p);
+      if (manifests.length === 1 && manifests[0].version) {
+        meta.appendChild(el("span", "plugin-stat plugin-version", "v" + manifests[0].version));
+      }
+
       const updated = timeAgo(p.pushedAt);
       if (updated) meta.appendChild(el("span", "plugin-stat plugin-updated", "updated " + updated));
 
       card.appendChild(meta);
+
+      // A monorepo is the case the card title can't answer on its own, so it
+      // gets the extra row: how many plugins, and which.
+      if (manifests.length > 1) {
+        const ships = el("div", "plugin-ships");
+        ships.appendChild(el("span", "plugin-ship-count", manifests.length + " plugins"));
+        ships.appendChild(
+          el("span", "plugin-ship-list", manifests.map(manifestLabel).join(" · ")),
+        );
+        card.appendChild(ships);
+      }
+
       return card;
+    }
+
+    function manifestsOf(p) {
+      return Array.isArray(p.manifests) ? p.manifests : [];
+    }
+
+    function manifestLabel(m) {
+      return m.name || m.id || m.path || "plugin";
     }
 
     function matches(p, q) {
       if (!q) return true;
-      const hay = [p.fullName, p.owner, p.name, p.description, p.language, ...(p.topics || [])]
+      const hay = [
+        p.fullName,
+        p.owner,
+        p.name,
+        p.description,
+        p.language,
+        ...(p.topics || []),
+        ...manifestsOf(p).flatMap((m) => [m.name, m.id, m.description]),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return q.split(/\s+/).every((term) => hay.includes(term));
     }
 
-    function sortPlugins(list, mode) {
+    function sortRepos(list, mode) {
       const by = [...list];
       const t = (v) => new Date(v || 0).getTime() || 0;
       if (mode === "recent") by.sort((a, b) => t(b.pushedAt) - t(a.pushedAt));
@@ -219,16 +274,18 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
 
     function render() {
       const q = searchInput.value.trim().toLowerCase();
-      const visible = sortPlugins(plugins.filter((p) => matches(p, q)), sortSelect.value);
-      const shown = showAll ? visible : visible.slice(0, SHOW_LIMIT);
+      const visible = sortRepos(repos.filter((p) => matches(p, q)), sortSelect.value);
+      const shown = visible.slice(0, visibleLimit);
 
       grid.replaceChildren();
       for (const p of shown) grid.appendChild(buildCard(p));
 
-      const hiddenCount = visible.length - shown.length;
-      moreButton.hidden = hiddenCount === 0;
-      if (hiddenCount > 0) {
-        moreButton.textContent = "show " + hiddenCount + " more";
+      // Grow a page at a time, and name the real remainder on the last step so
+      // the button never promises 24 and delivers 5.
+      const remaining = visible.length - shown.length;
+      moreButton.hidden = remaining === 0;
+      if (remaining > 0) {
+        moreButton.textContent = "show " + Math.min(PAGE_SIZE, remaining) + " more";
       }
 
       if (visible.length === 0) {
@@ -241,23 +298,28 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       }
     }
 
-    function setMeta(generatedAt) {
+    function setMeta(data) {
       const parts = [];
-      parts.push(plugins.length + (plugins.length === 1 ? " plugin" : " plugins"));
-      const ago = timeAgo(generatedAt);
+      const repoCount = (data && data.repositoryCount) ?? repos.length;
+      const total =
+        (data && data.pluginCount) ??
+        repos.reduce((n, repo) => n + (manifestsOf(repo).length || 1), 0);
+      parts.push(total + (total === 1 ? " plugin" : " plugins"));
+      parts.push(repoCount + (repoCount === 1 ? " repository" : " repositories"));
+      const ago = timeAgo(data && data.generatedAt);
       if (ago) parts.push("updated " + ago);
       if (usingFallback) parts.push("preview data");
       metaEl.textContent = parts.join(" · ");
     }
 
     function apply(data) {
-      plugins = Array.isArray(data && data.plugins) ? data.plugins : [];
-      setMeta(data && data.generatedAt);
+      repos = Array.isArray(data && data.plugins) ? data.plugins : [];
+      setMeta(data);
       render();
     }
 
     function showError() {
-      plugins = [];
+      repos = [];
       metaEl.textContent = "";
       grid.replaceChildren();
       moreButton.hidden = true;
@@ -288,10 +350,16 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       }
     }
 
-    searchInput.addEventListener("input", render);
-    sortSelect.addEventListener("change", render);
+    // A new query or order is a new list, so paging starts over.
+    function resetAndRender() {
+      visibleLimit = PAGE_SIZE;
+      render();
+    }
+
+    searchInput.addEventListener("input", resetAndRender);
+    sortSelect.addEventListener("change", resetAndRender);
     moreButton.addEventListener("click", () => {
-      showAll = true;
+      visibleLimit += PAGE_SIZE;
       render();
     });
     load();
@@ -300,6 +368,7 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
   <style is:global>
     .plugins-page {
       padding-bottom: 5rem;
+      --plugins-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M1.5 1.5l9 9M10.5 1.5l-9 9' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
     }
 
     /* Reuse .section only for max-width centering, not its 5rem padding + top divider. */
@@ -414,6 +483,23 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
     .plugins-search:focus {
       outline: none;
       border-color: var(--accent);
+    }
+
+    /* Chromium paints the native clear button in the OS accent colour, which
+       belongs to no ground the site defines. Redraw it from our own tokens. */
+    .plugins-search::-webkit-search-cancel-button {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 0.7rem;
+      height: 0.7rem;
+      cursor: pointer;
+      background: var(--muted-2);
+      -webkit-mask: var(--plugins-clear-icon) center / contain no-repeat;
+      mask: var(--plugins-clear-icon) center / contain no-repeat;
+    }
+
+    .plugins-search::-webkit-search-cancel-button:hover {
+      background: var(--ink);
     }
 
     .plugins-sort-wrap {
@@ -566,6 +652,43 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       color: var(--muted-2);
     }
 
+    /* What the repository ships. Sits below the repo stats, separated by a rule,
+       so the repository stays the primary identity of the card. */
+    .plugin-ships {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.45rem;
+      padding-top: 0.7rem;
+      border-top: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.5;
+      min-width: 0;
+    }
+
+    .plugin-version {
+      color: var(--muted-2);
+    }
+
+    .plugin-ship-count {
+      flex: 0 0 auto;
+      padding: 0.05rem 0.4rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--muted-2);
+    }
+
+    .plugin-ship-list {
+      align-self: stretch;
+      min-width: 0;
+      color: var(--muted);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
     .plugins-status {
       padding: 3rem 1rem;
       text-align: center;
@@ -626,4 +749,4 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       }
     }
   </style>
-</MarketingLayout>
+</SiteLayout>

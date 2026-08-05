@@ -577,6 +577,13 @@ fn print_agent_transport_error(
     if super::protocol_mismatch_was_reported(&err) {
         return Ok(1);
     }
+    // A dead-server marker reaches here from `send_request` in the agent
+    // startup path; surface its deferred response exactly once instead of
+    // printing a second, generic transport-error line.
+    if let Some(response) = super::server_not_running_reported_response(&err) {
+        let value = serde_json::to_value(response).map_err(std::io::Error::other)?;
+        return super::print_response(&value);
+    }
     super::print_response(&cli_agent_error(request_id, code, err.to_string()))
 }
 

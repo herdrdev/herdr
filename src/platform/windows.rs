@@ -5,21 +5,31 @@ use std::{
     mem::{size_of, MaybeUninit},
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc, LazyLock, Mutex,
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+mod clipboard_image;
 
 use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
-            CloseHandle, GlobalFree, LocalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, NTSTATUS,
-            STATUS_SUCCESS, UNICODE_STRING,
+            CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
+            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
+        Security::SECURITY_ATTRIBUTES,
+        Storage::FileSystem::CreateDirectoryW,
         System::{
             Console::GetConsoleWindow,
-            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+                RegisterClipboardFormatW, SetClipboardData,
+            },
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
@@ -31,11 +41,15 @@ use windows_sys::{
                 IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
-            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
-            Ole::CF_UNICODETEXT,
+            Memory::{
+                GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
+                MEMORY_BASIC_INFORMATION,
+            },
+            Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, OpenProcess, TerminateProcess,
-                CREATE_NO_WINDOW, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
+                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
                 PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
             },
         },
@@ -63,6 +77,123 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
+const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+const MAX_PROCESS_ENVIRONMENT_BYTES: usize = 256 * 1024;
+const PROCESS_ENVIRONMENT_READ_CHUNK_BYTES: usize = 16 * 1024;
+const PROCESS_RUNTIME_MARKER_CACHE_CAPACITY: usize = 1_024;
+const PROCESS_RUNTIME_MARKER_CACHE_RETENTION: Duration = Duration::from_secs(60);
+const PROCESS_RUNTIME_MARKER_NEGATIVE_TTL: Duration = Duration::from_secs(1);
+
+static NEXT_PANE_RUNTIME_MARKER: AtomicU64 = AtomicU64::new(1);
+static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRuntimeMarker>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
+    super::RemoteSshConfigPaths {
+        user_config: std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .map(|home| home.join(".ssh").join("config")),
+        system_config: std::env::var_os("PROGRAMDATA")
+            .map(PathBuf::from)
+            .map(|dir| dir.join("ssh").join("ssh_config")),
+        multiplexing: false,
+    }
+}
+
+pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
+    let base = remote_private_temp_base();
+    std::fs::create_dir_all(&base)?;
+    for attempt in 0..100 {
+        let dir = base.join(format!("ssh-{}-{attempt}", std::process::id()));
+        match create_remote_private_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to create private herdr ssh config directory",
+    ))
+}
+
+pub(crate) fn create_remote_ssh_config_file(
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    use interprocess::os::windows::security_descriptor::{
+        AsSecurityDescriptorExt as _, SecurityDescriptor,
+    };
+    use widestring::U16CString;
+
+    let sddl = U16CString::from_str("D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;OW)")
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+    let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
+    let mut security_attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+        lpSecurityDescriptor: null_mut(),
+        bInheritHandle: 0,
+    };
+    security_descriptor.write_to_security_attributes(&mut security_attributes);
+    let path = extended_length_path(path)?;
+    if unsafe { CreateDirectoryW(path.as_ptr(), &security_attributes) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let path = std::path::absolute(path)?;
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let mut extended = if wide.starts_with(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16])
+        || wide.starts_with(&[b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16])
+    {
+        wide
+    } else if wide.starts_with(&[b'\\' as u16, b'\\' as u16]) {
+        "\\\\?\\UNC\\"
+            .encode_utf16()
+            .chain(wide.into_iter().skip(2))
+            .collect()
+    } else {
+        "\\\\?\\".encode_utf16().chain(wide).collect()
+    };
+    extended.push(0);
+    Ok(extended)
+}
+
+pub(crate) fn remote_private_temp_base() -> PathBuf {
+    crate::config::state_dir().join("remote")
+}
+
+pub(crate) fn remote_bridge_endpoint_path(_readable_name: &str, short_name: &str) -> PathBuf {
+    remote_private_temp_base().join(short_name)
+}
+
+pub(crate) fn remote_reattach_program(program: &str) -> String {
+    let path = std::env::current_exe()
+        .ok()
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| PathBuf::from(program));
+    format!(
+        "& {}",
+        remote_reattach_argument(&path.display().to_string())
+    )
+}
+
+pub(crate) fn remote_reattach_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
 
 /// Encode native or targeted semantic Win32 input for a compatible ConPTY destination.
 pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
@@ -110,6 +241,21 @@ struct ProcessSnapshotCache {
     cached: Option<CachedProcessSnapshot>,
 }
 
+#[derive(Debug)]
+struct CachedProcessRuntimeMarker {
+    creation_time: u64,
+    marker: Option<String>,
+    cached_at: Instant,
+    last_used: Instant,
+}
+
+#[derive(Debug)]
+struct CachedGitBashProcess {
+    creation_time: u64,
+    is_git_bash: bool,
+    last_used: Instant,
+}
+
 static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
     Mutex::new(ProcessSnapshotCache { cached: None });
 
@@ -128,6 +274,21 @@ struct WindowsProcessEntry {
 }
 
 pub fn raise_server_nofile_limit() {}
+
+pub(crate) fn apply_pane_runtime_marker_platform(command: &mut portable_pty::CommandBuilder) {
+    if command_uses_git_bash(command) {
+        command.env(PANE_RUNTIME_MARKER_ENV_VAR, next_pane_runtime_marker());
+    }
+}
+
+fn next_pane_runtime_marker() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let counter = NEXT_PANE_RUNTIME_MARKER.fetch_add(1, AtomicOrdering::Relaxed);
+    format!("{:x}-{timestamp:x}-{counter:x}", std::process::id())
+}
 
 fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString {
     comspec
@@ -511,17 +672,59 @@ fn select_pane_foreground_job(
     shell_pid: u32,
     entries: &[WindowsProcessEntry],
 ) -> Option<ForegroundJob> {
+    select_pane_foreground_job_with_runtime_inspection(
+        shell_pid,
+        entries,
+        |shell| process_is_git_bash(shell.pid),
+        |entry| process_runtime_marker(entry.pid),
+    )
+}
+
+fn select_pane_foreground_job_with_runtime_inspection(
+    shell_pid: u32,
+    entries: &[WindowsProcessEntry],
+    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
+    mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> Option<ForegroundJob> {
     let shell = entries.iter().find(|entry| entry.pid == shell_pid)?;
     let descendants = descendant_entries(shell_pid, entries);
     let mut candidates = Vec::new();
     for entry in std::iter::once(shell).chain(descendants) {
-        if crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some() {
+        if process_entry_identifies_agent(entry) {
             candidates.push(entry);
         }
     }
 
-    let selected = select_topmost_agent_chain_candidate(&candidates, entries).unwrap_or(shell);
+    if let Some(selected) = select_topmost_agent_chain_candidate(&candidates, entries) {
+        return Some(foreground_job_from_entry(selected));
+    }
+    if !candidates.is_empty() || !shell_is_git_bash(shell) {
+        return Some(foreground_job_from_entry(shell));
+    }
+
+    let escaped_candidates: Vec<_> = entries
+        .iter()
+        .filter(|entry| process_entry_identifies_agent(entry))
+        .collect();
+    if escaped_candidates.is_empty() {
+        return Some(foreground_job_from_entry(shell));
+    }
+
+    let Some(shell_runtime_marker) = runtime_marker(shell).filter(|marker| !marker.is_empty())
+    else {
+        return Some(foreground_job_from_entry(shell));
+    };
+    let matching_candidates: Vec<_> = escaped_candidates
+        .into_iter()
+        .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
+        .collect();
+    let selected =
+        select_topmost_agent_chain_candidate(&matching_candidates, entries).unwrap_or(shell);
     Some(foreground_job_from_entry(selected))
+}
+
+fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
+    crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
 }
 
 fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
@@ -677,6 +880,288 @@ fn process_command_line(pid: u32) -> Option<String> {
     let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
     let parameters = read_process_parameters(process.0)?;
     read_unicode_string(process.0, parameters.command_line)
+}
+
+fn process_is_git_bash(pid: u32) -> bool {
+    let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
+        return false;
+    };
+    let Some(creation_time) = process_creation_time(process.0) else {
+        return false;
+    };
+    {
+        let mut cache = GIT_BASH_PROCESS_CACHE
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = cache.get_mut(&pid) {
+            if cached.creation_time == creation_time {
+                cached.last_used = Instant::now();
+                return cached.is_git_bash;
+            }
+        }
+    }
+
+    let is_git_bash = process_executable_path(process.0)
+        .as_deref()
+        .is_some_and(|path| is_git_bash_executable_path(std::path::Path::new(path)));
+    let mut cache = GIT_BASH_PROCESS_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if cache.len() >= PROCESS_RUNTIME_MARKER_CACHE_CAPACITY {
+        cache.retain(|_, cached| {
+            cached.last_used.elapsed() < PROCESS_RUNTIME_MARKER_CACHE_RETENTION
+        });
+        if cache.len() >= PROCESS_RUNTIME_MARKER_CACHE_CAPACITY {
+            cache.clear();
+        }
+    }
+    cache.insert(
+        pid,
+        CachedGitBashProcess {
+            creation_time,
+            is_git_bash,
+            last_used: Instant::now(),
+        },
+    );
+    is_git_bash
+}
+
+fn process_executable_path(process: HANDLE) -> Option<String> {
+    let mut path = vec![0_u16; 32_768];
+    let mut len = path.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut len) } == 0 {
+        return None;
+    }
+    String::from_utf16(&path[..len as usize]).ok()
+}
+
+fn command_uses_git_bash(command: &portable_pty::CommandBuilder) -> bool {
+    let Some(program) = command.get_argv().first() else {
+        return false;
+    };
+    let path = std::path::Path::new(program);
+    if path.is_absolute() {
+        return is_git_bash_executable_path(path);
+    }
+    if program.to_string_lossy().contains(['/', '\\']) {
+        return false;
+    }
+
+    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let candidate_name = if file_name.eq_ignore_ascii_case("bash") {
+        "bash.exe"
+    } else if file_name.eq_ignore_ascii_case("bash.exe") {
+        file_name
+    } else {
+        return false;
+    };
+    let search_path = command
+        .get_env("PATH")
+        .map(OsStr::to_os_string)
+        .or_else(|| std::env::var_os("PATH"));
+    search_path.is_some_and(|search_path| {
+        std::env::split_paths(&search_path)
+            .map(|directory| directory.join(candidate_name))
+            .find(|candidate| candidate.is_file())
+            .is_some_and(|candidate| is_git_bash_executable_path(&candidate))
+    })
+}
+
+fn is_git_bash_executable_path(path: &std::path::Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    if !file_name.eq_ignore_ascii_case("bash.exe") || !path.is_absolute() || !path.is_file() {
+        return false;
+    }
+
+    let Some(bin_dir) = path.parent() else {
+        return false;
+    };
+    if !bin_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("bin"))
+    {
+        return false;
+    }
+
+    let Some(mut root) = bin_dir.parent() else {
+        return false;
+    };
+    if root
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("usr"))
+    {
+        let Some(parent) = root.parent() else {
+            return false;
+        };
+        root = parent;
+    }
+
+    root.join("usr").join("bin").join("msys-2.0.dll").is_file()
+        && root.join("cmd").join("git.exe").is_file()
+}
+
+fn process_runtime_marker(pid: u32) -> Option<String> {
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)?;
+    let creation_time = process_creation_time(process.0)?;
+    {
+        let mut cache = PROCESS_RUNTIME_MARKER_CACHE
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = cache.get_mut(&pid) {
+            if cached.creation_time == creation_time
+                && (cached.marker.is_some()
+                    || cached.cached_at.elapsed() < PROCESS_RUNTIME_MARKER_NEGATIVE_TTL)
+            {
+                cached.last_used = Instant::now();
+                return cached.marker.clone();
+            }
+        }
+    }
+
+    let marker = process_runtime_marker_from_handle(process.0)?;
+    let mut cache = PROCESS_RUNTIME_MARKER_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if cache.len() >= PROCESS_RUNTIME_MARKER_CACHE_CAPACITY {
+        cache.retain(|_, cached| {
+            cached.last_used.elapsed() < PROCESS_RUNTIME_MARKER_CACHE_RETENTION
+        });
+        if cache.len() >= PROCESS_RUNTIME_MARKER_CACHE_CAPACITY {
+            cache.clear();
+        }
+    }
+    cache.insert(
+        pid,
+        CachedProcessRuntimeMarker {
+            creation_time,
+            marker: marker.clone(),
+            cached_at: Instant::now(),
+            last_used: Instant::now(),
+        },
+    );
+    marker
+}
+
+fn process_creation_time(process: HANDLE) -> Option<u64> {
+    let mut creation_time = FILETIME::default();
+    let mut exit_time = FILETIME::default();
+    let mut kernel_time = FILETIME::default();
+    let mut user_time = FILETIME::default();
+    if unsafe {
+        GetProcessTimes(
+            process,
+            &mut creation_time,
+            &mut exit_time,
+            &mut kernel_time,
+            &mut user_time,
+        )
+    } == 0
+    {
+        return None;
+    }
+    Some((u64::from(creation_time.dwHighDateTime) << 32) | u64::from(creation_time.dwLowDateTime))
+}
+
+fn process_runtime_marker_from_handle(process: HANDLE) -> Option<Option<String>> {
+    let parameters = read_process_parameters(process)?;
+    let environment = read_process_environment(process, parameters.environment)?;
+    Some(environment_variable_from_utf16(
+        &environment,
+        PANE_RUNTIME_MARKER_ENV_VAR,
+    ))
+}
+
+fn read_process_environment(process: HANDLE, address: *const c_void) -> Option<Vec<u16>> {
+    if address.is_null() {
+        return None;
+    }
+
+    let mut memory = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+    let queried = unsafe {
+        VirtualQueryEx(
+            process,
+            address,
+            memory.as_mut_ptr(),
+            size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    if queried == 0 {
+        return None;
+    }
+    let memory = unsafe { memory.assume_init() };
+    let address = address as usize;
+    let base = memory.BaseAddress as usize;
+    let offset = address.checked_sub(base)?;
+    let available = memory.RegionSize.checked_sub(offset)?;
+    let read_len = available.min(MAX_PROCESS_ENVIRONMENT_BYTES);
+    if read_len < size_of::<u16>() {
+        return None;
+    }
+
+    let max_units = read_len / size_of::<u16>();
+    let chunk_units = PROCESS_ENVIRONMENT_READ_CHUNK_BYTES / size_of::<u16>();
+    let mut environment = Vec::new();
+    while environment.len() < max_units {
+        let unit_count = (max_units - environment.len()).min(chunk_units);
+        let chunk_bytes = unit_count * size_of::<u16>();
+        let mut chunk = vec![0_u16; unit_count];
+        let mut bytes_read = 0;
+        let offset = environment.len().checked_mul(size_of::<u16>())?;
+        let chunk_address = address.checked_add(offset)?;
+        if unsafe {
+            ReadProcessMemory(
+                process,
+                chunk_address as *const c_void,
+                chunk.as_mut_ptr().cast::<c_void>(),
+                chunk_bytes,
+                &mut bytes_read,
+            )
+        } == 0
+        {
+            break;
+        }
+        chunk.truncate(bytes_read / size_of::<u16>());
+        if chunk.is_empty() {
+            break;
+        }
+        environment.extend_from_slice(&chunk);
+        if let Some(end) = environment
+            .windows(2)
+            .position(|pair| pair == [0, 0])
+            .map(|index| index + 2)
+        {
+            environment.truncate(end);
+            return Some(environment);
+        }
+        if bytes_read < chunk_bytes {
+            break;
+        }
+    }
+    None
+}
+
+fn environment_variable_from_utf16(environment: &[u16], name: &str) -> Option<String> {
+    for variable in environment.split(|unit| *unit == 0) {
+        if variable.is_empty() {
+            break;
+        }
+        let Some(separator) = variable.iter().position(|unit| *unit == u16::from(b'=')) else {
+            continue;
+        };
+        let Ok(variable_name) = String::from_utf16(&variable[..separator]) else {
+            continue;
+        };
+        if variable_name.eq_ignore_ascii_case(name) {
+            return String::from_utf16(&variable[separator + 1..]).ok();
+        }
+    }
+    None
 }
 
 fn read_process_parameters(process: HANDLE) -> Option<RtlUserProcessParameters> {
@@ -869,10 +1354,74 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     }
 }
 
-// Windows does not wire clipboard-image bridging into semantic input yet.
-#[cfg_attr(windows, allow(dead_code))]
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
+    for attempt in 0..10 {
+        if unsafe { OpenClipboard(null_mut()) } != 0 {
+            let _clipboard = ClipboardGuard;
+            if let Some(bytes) = read_registered_png_clipboard() {
+                return Some(ClipboardImage {
+                    bytes,
+                    extension: "png",
+                });
+            }
+            for format in [CF_DIBV5 as u32, CF_DIB as u32] {
+                if let Some(bytes) =
+                    clipboard_global_bytes(format, clipboard_image::MAX_CLIPBOARD_ALLOCATION)
+                {
+                    if let Some(bytes) = clipboard_image::dib_to_png(&bytes) {
+                        return Some(ClipboardImage {
+                            bytes,
+                            extension: "png",
+                        });
+                    }
+                }
+            }
+            return None;
+        }
+        if attempt < 9 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     None
+}
+
+fn read_registered_png_clipboard() -> Option<Vec<u8>> {
+    static PNG_FORMAT: LazyLock<u32> = LazyLock::new(|| {
+        let name = wide_null("PNG");
+        unsafe { RegisterClipboardFormatW(name.as_ptr()) }
+    });
+    if *PNG_FORMAT == 0 {
+        return None;
+    }
+    let bytes = clipboard_global_bytes(
+        *PNG_FORMAT,
+        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD + 64 * 1024,
+    )?;
+    clipboard_image::validated_png(&bytes)
+}
+
+fn clipboard_global_bytes(format: u32, max_bytes: usize) -> Option<Vec<u8>> {
+    let handle = unsafe { GetClipboardData(format) };
+    if handle.is_null() {
+        return None;
+    }
+    let data = unsafe { GlobalLock(handle) };
+    if data.is_null() {
+        return None;
+    }
+    let size = unsafe { GlobalSize(handle) };
+    if size == 0 || size > max_bytes {
+        unsafe {
+            GlobalUnlock(handle);
+        }
+        return None;
+    }
+    let mut bytes = vec![0_u8; size];
+    unsafe {
+        copy_nonoverlapping(data.cast::<u8>(), bytes.as_mut_ptr(), size);
+        GlobalUnlock(handle);
+    }
+    Some(bytes)
 }
 
 pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
@@ -1049,6 +1598,7 @@ struct RtlUserProcessParameters {
     dll_path: UNICODE_STRING,
     image_path_name: UNICODE_STRING,
     command_line: UNICODE_STRING,
+    environment: *mut c_void,
 }
 
 fn read_process_value<T: Copy>(process: HANDLE, address: *const c_void) -> Option<T> {
@@ -1412,6 +1962,21 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn private_remote_directory_supports_long_paths() {
+        let base = std::env::temp_dir().join(format!(
+            "herdr-private-remote-dir-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&base).expect("create test base");
+        let private = base.join("x".repeat(240));
+
+        super::create_remote_private_dir(&private).expect("create private long-path directory");
+        fs::write(private.join("probe"), b"ok").expect("write inherited private file");
+
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
 
     #[test]
     fn windows_conpty_native_encoder_uses_canonical_phase_and_repeat_count() {
@@ -1880,17 +2445,203 @@ mod tests {
     }
 
     #[test]
+    fn windows_process_environment_reads_runtime_marker() {
+        let shell =
+            std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
+        let mut child = Command::new(shell)
+            .args(["/D", "/Q", "/C", "ping -n 11 127.0.0.1 > NUL"])
+            .env(super::PANE_RUNTIME_MARKER_ENV_VAR, "pane-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cmd");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut observed = None;
+        while Instant::now() < deadline {
+            observed = super::process_runtime_marker(child.id());
+            if observed.as_deref() == Some("pane-test") {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(observed.as_deref(), Some("pane-test"));
+    }
+
+    #[test]
     fn windows_process_tree_selects_direct_agent_descendant() {
         let entries = vec![
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 10, "codex.exe", &["codex.exe"]),
         ];
 
-        let job = super::select_pane_foreground_job(10, &entries).unwrap();
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| panic!("Git Bash fallback must not run after normal detection succeeds"),
+            |_| panic!("runtime marker must not be read after normal detection succeeds"),
+        )
+        .unwrap();
 
         assert_eq!(job.process_group_id, 20);
         assert_eq!(job.processes.len(), 1);
         assert_eq!(job.processes[0].name, "codex.exe");
+    }
+
+    #[test]
+    fn windows_process_tree_recovers_git_bash_exec_chain_from_runtime_marker() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(
+                11,
+                10,
+                "bash.exe",
+                &[r"C:\Program Files\Git\usr\bin\bash.exe"],
+            ),
+            test_entry(
+                20,
+                99,
+                "sh.exe",
+                &[r"C:\Program Files\Git\usr\bin\sh.exe", "/c/npm/codex"],
+            ),
+            test_entry(
+                30,
+                20,
+                "node.exe",
+                &[
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\Users\user\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
+                ],
+            ),
+            test_entry(
+                40,
+                30,
+                "codex.exe",
+                &[r"C:\npm\node_modules\@openai\codex\bin\codex.exe"],
+            ),
+        ];
+        let mut inspected = Vec::new();
+
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| true,
+            |entry| {
+                inspected.push(entry.pid);
+                Some("pane-a".to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 20);
+        assert_eq!(job.processes[0].name, "sh.exe");
+        assert_eq!(inspected, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn windows_process_tree_skips_runtime_inspection_for_non_git_bash_shell() {
+        let entries = vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+        ];
+
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| false,
+            |_| panic!("runtime marker must not be read for non-Git-Bash panes"),
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 10);
+    }
+
+    #[test]
+    fn windows_process_tree_skips_runtime_inspection_without_agent_candidate() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(20, 99, "git.exe", &["git.exe", "status"]),
+        ];
+
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| true,
+            |_| panic!("runtime marker must not be read without an agent candidate"),
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 10);
+    }
+
+    #[test]
+    fn windows_process_tree_rejects_missing_or_empty_shell_runtime_marker() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+        ];
+
+        for shell_marker in [None, Some(String::new())] {
+            let job = super::select_pane_foreground_job_with_runtime_inspection(
+                10,
+                &entries,
+                |_| true,
+                |entry| {
+                    if entry.pid == 10 {
+                        shell_marker.clone()
+                    } else {
+                        Some("pane-a".to_string())
+                    }
+                },
+            )
+            .unwrap();
+
+            assert_eq!(job.process_group_id, 10);
+        }
+    }
+
+    #[test]
+    fn windows_process_tree_rejects_runtime_marker_from_another_pane() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+        ];
+
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| true,
+            |entry| Some(if entry.pid == 10 { "pane-a" } else { "pane-b" }.to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 10);
+        assert_eq!(job.processes[0].name, "bash.exe");
+    }
+
+    #[test]
+    fn windows_process_tree_rejects_ambiguous_runtime_marker_candidates() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+            test_entry(30, 98, "claude.exe", &["claude.exe"]),
+        ];
+
+        let job = super::select_pane_foreground_job_with_runtime_inspection(
+            10,
+            &entries,
+            |_| true,
+            |_| Some("pane-a".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 10);
+        assert_eq!(job.processes[0].name, "bash.exe");
     }
 
     #[test]
@@ -2187,6 +2938,62 @@ mod tests {
             argv: Some(argv.iter().map(|value| (*value).to_string()).collect()),
             cmdline: Some(argv.join(" ")),
         }
+    }
+
+    #[test]
+    fn process_environment_variable_parser_reads_case_insensitive_marker() {
+        let environment: Vec<u16> = "PATH=C:\\Windows\0herdr_pane_runtime_id=pane-a\0\0"
+            .encode_utf16()
+            .collect();
+
+        assert_eq!(
+            super::environment_variable_from_utf16(
+                &environment,
+                super::PANE_RUNTIME_MARKER_ENV_VAR,
+            )
+            .as_deref(),
+            Some("pane-a")
+        );
+    }
+
+    #[test]
+    fn pane_runtime_markers_are_distinct() {
+        let first = super::next_pane_runtime_marker();
+        let second = super::next_pane_runtime_marker();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn pane_runtime_marker_is_added_only_to_git_bash_environment() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-git-bash-test-{}",
+            super::next_pane_runtime_marker()
+        ));
+        fs::create_dir_all(root.join("bin")).expect("create Git Bash bin fixture");
+        fs::create_dir_all(root.join("usr").join("bin")).expect("create Git Bash usr/bin fixture");
+        fs::create_dir_all(root.join("cmd")).expect("create Git Bash cmd fixture");
+        fs::write(root.join("bin").join("bash.exe"), []).expect("create Bash fixture");
+        fs::write(root.join("usr").join("bin").join("msys-2.0.dll"), [])
+            .expect("create MSYS runtime fixture");
+        fs::write(root.join("cmd").join("git.exe"), []).expect("create Git fixture");
+
+        let mut git_bash = portable_pty::CommandBuilder::new(root.join("bin").join("bash.exe"));
+        super::apply_pane_runtime_marker_platform(&mut git_bash);
+        let mut path_resolved_git_bash = portable_pty::CommandBuilder::new("bash.exe");
+        path_resolved_git_bash.env("PATH", root.join("bin"));
+        super::apply_pane_runtime_marker_platform(&mut path_resolved_git_bash);
+        let mut cmd = portable_pty::CommandBuilder::new("cmd.exe");
+        super::apply_pane_runtime_marker_platform(&mut cmd);
+
+        assert!(git_bash
+            .get_env(super::PANE_RUNTIME_MARKER_ENV_VAR)
+            .is_some_and(|value| !value.is_empty()));
+        assert!(path_resolved_git_bash
+            .get_env(super::PANE_RUNTIME_MARKER_ENV_VAR)
+            .is_some_and(|value| !value.is_empty()));
+        assert!(cmd.get_env(super::PANE_RUNTIME_MARKER_ENV_VAR).is_none());
+        fs::remove_dir_all(root).expect("remove Git Bash fixture");
     }
 
     #[test]

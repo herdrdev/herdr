@@ -1,11 +1,13 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-06-20T12:00:00.000Z",
+  "pluginCount": 10,
+  "repositoryCount": 7,
   "source": {
     "provider": "github",
     "query": "topic:herdr-plugin",
-    "totalCount": 7,
-    "collectedCount": 7,
+    "totalCount": 8,
+    "collectedCount": 8,
     "truncated": false
   },
   "plugins": [
@@ -25,7 +27,18 @@
       "updatedAt": "2026-06-19T19:58:26Z",
       "pushedAt": "2026-06-19T19:58:26Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "herdr-plugin.toml",
+          "id": "github-start",
+          "name": "GitHub Start",
+          "version": "1.4.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Start an agent from a GitHub issue, PR, or discussion.",
+          "platforms": ["linux", "macos"]
+        }
+      ]
     },
     {
       "id": 223456789,
@@ -43,7 +56,36 @@
       "updatedAt": "2026-06-18T08:10:00Z",
       "pushedAt": "2026-06-18T08:10:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "agent-telegram-notify/herdr-plugin.toml",
+          "id": "agent-telegram-notify",
+          "name": "Telegram Notify",
+          "version": "0.3.1",
+          "minHerdrVersion": "0.7.0",
+          "description": "Send a Telegram message when an agent blocks or finishes.",
+          "platforms": ["linux", "macos"]
+        },
+        {
+          "path": "link-preview/herdr-plugin.toml",
+          "id": "link-preview",
+          "name": "Link Preview",
+          "version": "0.2.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Preview a URL from pane output without leaving the terminal.",
+          "platforms": ["linux", "macos"]
+        },
+        {
+          "path": "worktree-bootstrap/herdr-plugin.toml",
+          "id": "worktree-bootstrap",
+          "name": "Worktree Bootstrap",
+          "version": "0.5.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Create a worktree, install dependencies, and open a layout in one step.",
+          "platforms": ["linux", "macos", "windows"]
+        }
+      ]
     },
     {
       "id": 323456789,
@@ -61,7 +103,18 @@
       "updatedAt": "2026-06-17T14:02:00Z",
       "pushedAt": "2026-06-17T14:02:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "herdr-plugin.toml",
+          "id": "lindqvist.board",
+          "name": "Board",
+          "version": "2.1.0",
+          "minHerdrVersion": "0.7.5",
+          "description": "A live project board pane that tracks agent tasks across worktrees.",
+          "platforms": ["linux", "macos"]
+        }
+      ]
     },
     {
       "id": 423456789,
@@ -79,7 +132,18 @@
       "updatedAt": "2026-06-15T09:30:00Z",
       "pushedAt": "2026-06-15T09:30:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "herdr-plugin.toml",
+          "id": "layout-presets",
+          "name": "Layout Presets",
+          "version": "0.9.2",
+          "minHerdrVersion": "0.7.0",
+          "description": "Apply opinionated split-pane layouts per project with one keybinding.",
+          "platforms": ["linux", "macos"]
+        }
+      ]
     },
     {
       "id": 523456789,
@@ -97,7 +161,27 @@
       "updatedAt": "2026-06-10T11:45:00Z",
       "pushedAt": "2026-06-10T11:45:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "plugin/herdr-plugin.toml",
+          "id": "jira-bridge",
+          "name": "Jira Bridge",
+          "version": "0.4.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Open Jira tickets as workspaces and push agent summaries back as comments.",
+          "platforms": ["linux", "macos"]
+        },
+        {
+          "path": "plugin-cloud/herdr-plugin.toml",
+          "id": "jira-bridge-cloud",
+          "name": "Jira Bridge Cloud",
+          "version": "0.4.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "The Jira Cloud variant of the bridge.",
+          "platforms": ["linux", "macos"]
+        }
+      ]
     },
     {
       "id": 623456789,
@@ -115,7 +199,18 @@
       "updatedAt": "2026-06-08T16:20:00Z",
       "pushedAt": "2026-06-08T16:20:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "herdr-plugin.toml",
+          "id": "notify",
+          "name": "Notify",
+          "version": "1.0.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Desktop and mobile notifications when an agent finishes, blocks, or needs input.",
+          "platforms": ["linux", "macos", "windows"]
+        }
+      ]
     },
     {
       "id": 723456789,
@@ -133,7 +228,18 @@
       "updatedAt": "2026-06-14T10:00:00Z",
       "pushedAt": "2026-06-14T10:00:00Z",
       "archived": false,
-      "fork": false
+      "fork": false,
+      "manifests": [
+        {
+          "path": "herdr-plugin.toml",
+          "id": "snippet-runner",
+          "name": "snippet-runner",
+          "version": "0.1.0",
+          "minHerdrVersion": "0.7.0",
+          "description": null,
+          "platforms": ["linux"]
+        }
+      ]
     }
   ]
 }

@@ -17,6 +17,7 @@ pub(crate) const KIMI_CODE_HOME_ENV_VAR: &str = "KIMI_CODE_HOME";
 pub(crate) const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 pub(crate) const QODERCLI_CONFIG_DIR_ENV_VAR: &str = "QODER_CONFIG_DIR";
 pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
+pub(crate) const ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CLI_CONFIG_DIR";
 pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
@@ -140,6 +141,13 @@ pub(crate) fn cursor_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn mastracode_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".mastracode"))
+}
+
+pub(crate) fn antigravity_cli_dir() -> io::Result<PathBuf> {
+    // Antigravity CLI discovers global customizations (hooks.json included)
+    // from ~/.gemini/config; ~/.gemini/antigravity-cli holds runtime data and
+    // is never read for hooks.
+    config_dir_from_env_or_home(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &[".gemini", "config"])
 }
 
 pub(crate) fn grok_dir() -> io::Result<PathBuf> {

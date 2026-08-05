@@ -2119,6 +2119,7 @@
             "qodercli",
             "cursor",
             "mastracode",
+            "antigravity_cli",
             "grok"
           ],
           "type": "string"
@@ -7113,6 +7114,7 @@
             "qodercli",
             "cursor",
             "mastracode",
+            "antigravity_cli",
             "grok"
           ],
           "type": "string"

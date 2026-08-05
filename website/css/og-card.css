@@ -1,0 +1,102 @@
+/* ──────────────────────────────────────────────────────────────
+   Shared chassis for the OG cards.
+
+   Cards are authored as real 1200x630 HTML so they use the same fonts
+   and palette as the site and can be regenerated with a screenshot
+   instead of a design session. Tokens mirror site.css's ink ground —
+   duplicated deliberately, because a card is a frozen artifact and
+   must not change shape when the site's CSS does.
+   ────────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: block;
+  src: url("/assets/jbm.woff2?v=2") format("woff2");
+}
+
+:root {
+  --bg: #0c0c12;
+  --panel: #111119;
+  --mass: #1a1a24;
+  --ink: #e9e6f2;
+  --dim: #a29db8;
+  --faint: #736e8a;
+  --line: #1a1a24;
+  --line2: #2a2839;
+  --spot: #cba6f7;
+  --run: #5fae74;
+  --wait: #d3a027;
+  --idle: #5a615c;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --disp: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+/* On a card page the document IS the card, so a full-page capture is the
+   finished asset at exactly 1200x630 whatever the window size. Scoped to
+   .og so the comparison viewer, which loads this same file for the tokens,
+   isn't clamped to card dimensions. */
+html.og, body.og {
+  margin: 0; padding: 0; background: var(--bg);
+  width: 1200px; height: 630px; overflow: hidden;
+}
+
+.card {
+  position: relative;
+  width: 1200px;
+  height: 630px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* the ram as mass, bleeding off the right edge */
+.card .ram {
+  background: currentColor;
+  -webkit-mask: url("/assets/ram.svg") center/contain no-repeat;
+  mask: url("/assets/ram.svg") center/contain no-repeat;
+  display: block;
+}
+.card .mass {
+  position: absolute;
+  right: -110px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 620px;
+  height: 620px;
+  color: var(--mass);
+  z-index: 0;
+}
+.card .in { position: relative; z-index: 1; height: 100%; }
+
+/* lockup */
+.lockup { display: flex; align-items: center; gap: 14px; }
+.lockup .ram { width: 38px; height: 38px; color: var(--ink); }
+.lockup b {
+  font-family: var(--disp);
+  font-weight: 900;
+  font-size: 34px;
+  letter-spacing: -0.045em;
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--spot);
+  font-size: 19px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+.eyebrow s { width: 56px; height: 2px; background: var(--spot); text-decoration: none; }
+
+/* keep the safe area generous: some surfaces crop toward square */
+.pad { padding: 54px 62px; }

@@ -159,18 +159,11 @@ fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
             protocol: status.protocol,
             capabilities: status.capabilities,
         }),
-        Err(ApiClientError::Io(err)) if server_not_running_error(&err) => {
+        Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
             Ok(ServerRuntimeStatus::NotRunning)
         }
         Err(err) => Err(api_client_error_to_io(err)),
     }
-}
-
-fn server_not_running_error(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-    )
 }
 
 fn api_client_error_to_io(err: ApiClientError) -> std::io::Error {

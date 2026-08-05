@@ -319,10 +319,12 @@ v1 没有 Herdr 管理的插件存储 API。需要持久状态的插件应自己
 
 ## 插件市场
 
-社区插件可以在[插件市场](/plugins/)中发现,它是打了 `herdr-plugin` 主题
-标签的公开 GitHub 仓库的自动索引。插件仍然是普通的 GitHub 仓库: 发布一个
-带 `herdr-plugin.toml` 的仓库,然后分享
+社区插件可以在[插件市场](/plugins/)中发现,它是打了 `herdr-plugin` 主题标签且
+包含一个或多个必需元数据可解析的 `herdr-plugin.toml` 的公开 GitHub 仓库自动索引。
+插件仍然是普通的 GitHub 仓库: 发布后分享
 `herdr plugin install owner/repo[/subdir]`。
 
-要让插件被收录,给它的公开仓库添加 GitHub 主题标签 `herdr-plugin`。索引
-每 30 分钟刷新一次。发现机制的工作方式见[插件市场](/zh-cn/docs/marketplace/)。
+要让插件被收录,给公开仓库添加 GitHub 主题标签 `herdr-plugin`,并在默认分支的
+根目录或子目录放置清单。一张仓库卡片可以包含多个插件。索引每 30 分钟刷新一次。
+发现机制的工作方式见
+[插件市场](/zh-cn/docs/marketplace/)。

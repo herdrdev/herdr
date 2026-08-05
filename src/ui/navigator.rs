@@ -8,7 +8,7 @@ use ratatui::{
 
 use super::{
     scrollbar::{render_scrollbar, should_show_scrollbar},
-    status::{state_dot, state_label_color},
+    status::{state_icon, state_label_color},
     text::{display_width_u16, middle_elide, truncate_end},
     widgets::{panel_contrast_fg, render_panel_shell},
 };
@@ -113,7 +113,7 @@ fn push_state_chip(
     label: &'static str,
     app: &AppState,
 ) {
-    let (icon, icon_style) = state_dot(state, seen, &app.palette);
+    let (icon, icon_style) = state_icon(state, seen, app.status_indicators, &app.palette);
     spans.push(Span::styled(icon, icon_style.add_modifier(Modifier::BOLD)));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
@@ -201,7 +201,7 @@ fn render_row(
     } else {
         Style::default().fg(p.subtext0).bg(p.panel_bg)
     };
-    let (status_icon, status_style) = state_dot(row.status, row.seen, p);
+    let (status_icon, status_style) = state_icon(row.status, row.seen, app.status_indicators, p);
     let status_style = if selected {
         base_style.add_modifier(Modifier::BOLD)
     } else if context_only {
