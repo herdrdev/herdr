@@ -152,13 +152,6 @@ pub(crate) fn palette_commands(app: &AppState) -> Vec<PaletteCommand> {
     const WORKSPACES: &str = "workspaces / tabs";
     push(
         WORKSPACES,
-        "workspace navigation",
-        keybind_label(&kb.workspace_picker),
-        PaletteAction::Navigate(NavigateAction::WorkspacePicker),
-        "workspace_picker",
-    );
-    push(
-        WORKSPACES,
         "session navigator",
         keybind_label(&kb.goto),
         PaletteAction::Navigate(NavigateAction::OpenNavigator),

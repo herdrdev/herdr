@@ -309,7 +309,7 @@ pub struct LoadedConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeysConfig {
-    /// Prefix key to enter navigation mode (e.g. "esc", "ctrl+b", "f12"). Default: "esc".
+    /// Prefix key to enter navigation mode (e.g. "ctrl+s", "esc", "f12"). Default: "ctrl+s".
     pub prefix: String,
     /// Open the command palette. Default: "prefix+space"
     pub commands: BindingConfig,
@@ -327,21 +327,23 @@ pub struct KeysConfig {
     pub rename_workspace: BindingConfig,
     /// Close the selected workspace. Default: "prefix+shift+d"
     pub close_workspace: BindingConfig,
-    /// Open the workspace navigation surface. Default: "prefix+w"
-    pub workspace_picker: BindingConfig,
     /// Open the session navigator. Default: "prefix+g"
     pub goto: BindingConfig,
-    /// Move workspace selection up in navigate mode. Default: "up".
+    /// Switch to the previous workspace in navigate mode, staying in navigate mode. Default: "up".
     pub navigate_workspace_up: BindingConfig,
-    /// Move workspace selection down in navigate mode. Default: "down".
+    /// Switch to the next workspace in navigate mode, staying in navigate mode. Default: "down".
     pub navigate_workspace_down: BindingConfig,
-    /// Focus the pane to the left in navigate mode. Default: "h". Left arrow is always an alias.
+    /// Switch to the previous tab in navigate mode, staying in navigate mode. Default: "left".
+    pub navigate_tab_previous: BindingConfig,
+    /// Switch to the next tab in navigate mode, staying in navigate mode. Default: "right".
+    pub navigate_tab_next: BindingConfig,
+    /// Focus the pane to the left in navigate mode. Default: "h".
     pub navigate_pane_left: BindingConfig,
     /// Focus the pane below in navigate mode. Default: "j".
     pub navigate_pane_down: BindingConfig,
     /// Focus the pane above in navigate mode. Default: "k".
     pub navigate_pane_up: BindingConfig,
-    /// Focus the pane to the right in navigate mode. Default: "l". Right arrow is always an alias.
+    /// Focus the pane to the right in navigate mode. Default: "l".
     pub navigate_pane_right: BindingConfig,
     /// Detach from server/client mode, or exit --no-session mode. Default: "prefix+q".
     pub detach: BindingConfig,
@@ -349,9 +351,9 @@ pub struct KeysConfig {
     pub reload_config: BindingConfig,
     /// Focus the currently visible notification target. Default: "prefix+o".
     pub open_notification_target: BindingConfig,
-    /// Select the previous workspace. Unset by default.
+    /// Select the previous workspace. Default: "prefix+i".
     pub previous_workspace: BindingConfig,
-    /// Select the next workspace. Unset by default.
+    /// Select the next workspace. Default: "prefix+e".
     pub next_workspace: BindingConfig,
     /// Focus the previous agent shown in the agent panel. Unset by default.
     pub previous_agent: BindingConfig,
@@ -361,13 +363,13 @@ pub struct KeysConfig {
     pub focus_agent: BindingConfig,
     /// Local-client shortcut that sends a clipboard image to a remote Herdr session. Default: "ctrl+v".
     pub remote_image_paste: String,
-    /// Create a new tab in the active workspace. Default: "prefix+c"
+    /// Create a new tab in the active workspace. Default: "prefix+t"
     pub new_tab: BindingConfig,
     /// Rename the active tab. Default: "prefix+shift+t".
     pub rename_tab: BindingConfig,
-    /// Select the previous tab. Default: "prefix+p".
+    /// Select the previous tab. Default: "prefix+n".
     pub previous_tab: BindingConfig,
-    /// Select the next tab. Default: "prefix+n".
+    /// Select the next tab. Default: "prefix+a".
     pub next_tab: BindingConfig,
     /// Switch to tab 1-9. Default: "prefix+1..9".
     pub switch_tab: BindingConfig,
@@ -377,7 +379,7 @@ pub struct KeysConfig {
     pub close_tab: BindingConfig,
     /// Rename the focused pane. Default: "prefix+shift+p".
     pub rename_pane: BindingConfig,
-    /// Open the focused pane scrollback in $EDITOR. Default: "prefix+e".
+    /// Open the focused pane scrollback in $EDITOR. Default: "prefix+shift+e".
     pub edit_scrollback: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
@@ -447,13 +449,15 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     close_workspace: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    workspace_picker: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     goto: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_up: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigate_tab_previous: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigate_tab_next: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_pane_left: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -566,10 +570,11 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(remove_worktree);
         apply_field!(rename_workspace);
         apply_field!(close_workspace);
-        apply_field!(workspace_picker);
         apply_field!(goto);
         apply_field!(navigate_workspace_up);
         apply_field!(navigate_workspace_down);
+        apply_field!(navigate_tab_previous);
+        apply_field!(navigate_tab_next);
         apply_field!(navigate_pane_left);
         apply_field!(navigate_pane_down);
         apply_field!(navigate_pane_up);
@@ -664,10 +669,11 @@ impl KeysConfig {
         copy_effective_action_field!(remove_worktree, keybinds.remove_worktree);
         copy_effective_action_field!(rename_workspace, keybinds.rename_workspace);
         copy_effective_action_field!(close_workspace, keybinds.close_workspace);
-        copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
         copy_effective_action_field!(goto, keybinds.goto);
         copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
         copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
+        copy_effective_action_field!(navigate_tab_previous, keybinds.navigate.tab_previous);
+        copy_effective_action_field!(navigate_tab_next, keybinds.navigate.tab_next);
         copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
         copy_effective_action_field!(navigate_pane_down, keybinds.navigate.pane_down);
         copy_effective_action_field!(navigate_pane_up, keybinds.navigate.pane_up);
@@ -924,7 +930,7 @@ pub struct ExperimentalConfig {
 impl Default for KeysConfig {
     fn default() -> Self {
         Self {
-            prefix: "esc".into(),
+            prefix: "ctrl+s".into(),
             commands: BindingConfig::one("prefix+space"),
             settings: BindingConfig::one("prefix+s"),
             new_workspace: BindingConfig::one("prefix+shift+n"),
@@ -933,10 +939,11 @@ impl Default for KeysConfig {
             remove_worktree: BindingConfig::empty(),
             rename_workspace: BindingConfig::one("prefix+shift+w"),
             close_workspace: BindingConfig::one("prefix+shift+d"),
-            workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
             navigate_workspace_up: BindingConfig::one("up"),
             navigate_workspace_down: BindingConfig::one("down"),
+            navigate_tab_previous: BindingConfig::one("left"),
+            navigate_tab_next: BindingConfig::one("right"),
             navigate_pane_left: BindingConfig::one("h"),
             navigate_pane_down: BindingConfig::one("j"),
             navigate_pane_up: BindingConfig::one("k"),
@@ -944,21 +951,21 @@ impl Default for KeysConfig {
             detach: BindingConfig::one("prefix+q"),
             reload_config: BindingConfig::one("prefix+shift+r"),
             open_notification_target: BindingConfig::one("prefix+o"),
-            previous_workspace: BindingConfig::empty(),
-            next_workspace: BindingConfig::empty(),
+            previous_workspace: BindingConfig::one("prefix+i"),
+            next_workspace: BindingConfig::one("prefix+e"),
             previous_agent: BindingConfig::empty(),
             next_agent: BindingConfig::empty(),
             focus_agent: BindingConfig::empty(),
             remote_image_paste: "ctrl+v".into(),
-            new_tab: BindingConfig::one("prefix+c"),
+            new_tab: BindingConfig::one("prefix+t"),
             rename_tab: BindingConfig::one("prefix+shift+t"),
-            previous_tab: BindingConfig::one("prefix+p"),
-            next_tab: BindingConfig::one("prefix+n"),
+            previous_tab: BindingConfig::one("prefix+n"),
+            next_tab: BindingConfig::one("prefix+a"),
             switch_tab: BindingConfig::one("prefix+1..9"),
             switch_workspace: BindingConfig::empty(),
             close_tab: BindingConfig::one("prefix+shift+x"),
             rename_pane: BindingConfig::one("prefix+shift+p"),
-            edit_scrollback: BindingConfig::one("prefix+e"),
+            edit_scrollback: BindingConfig::one("prefix+shift+e"),
             copy_mode: BindingConfig::one("prefix+["),
             focus_pane_left: BindingConfig::one("prefix+h"),
             focus_pane_down: BindingConfig::one("prefix+j"),

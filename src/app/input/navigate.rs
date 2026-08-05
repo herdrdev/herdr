@@ -83,6 +83,33 @@ impl App {
         self.selection_autoscroll_deadline = None;
     }
 
+    /// Switches workspace from a navigate-mode movement key. Navigation mode
+    /// stays open so the key can be pressed again.
+    fn focus_relative_workspace_in_navigate_mode(&mut self, delta: isize) {
+        let Some(ws_idx) = self.relative_visible_workspace(delta) else {
+            return;
+        };
+        self.focus_workspace_idx_via_api(ws_idx);
+        self.settle_navigate_mode_movement();
+    }
+
+    /// Switches tab from a navigate-mode movement key, keeping the mode open.
+    fn focus_relative_tab_in_navigate_mode(&mut self, delta: isize) {
+        let Some(tab_idx) = self.relative_tab(delta) else {
+            return;
+        };
+        self.focus_tab_idx_via_api(tab_idx);
+        self.settle_navigate_mode_movement();
+    }
+
+    /// Applies the focus bookkeeping every navigate-mode movement key needs.
+    fn settle_navigate_mode_movement(&mut self) {
+        if self.state.copy_mode.is_some() {
+            self.state.sync_copy_mode_with_focus();
+        }
+        self.selection_autoscroll_deadline = None;
+    }
+
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
         let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
@@ -115,7 +142,7 @@ impl App {
             .workspace_up
             .matches_direct_key(raw_key)
         {
-            self.state.move_selected_workspace_by_visible_delta(-1);
+            self.focus_relative_workspace_in_navigate_mode(-1);
             return;
         }
         if self
@@ -125,7 +152,27 @@ impl App {
             .workspace_down
             .matches_direct_key(raw_key)
         {
-            self.state.move_selected_workspace_by_visible_delta(1);
+            self.focus_relative_workspace_in_navigate_mode(1);
+            return;
+        }
+        if self
+            .state
+            .keybinds
+            .navigate
+            .tab_previous
+            .matches_direct_key(raw_key)
+        {
+            self.focus_relative_tab_in_navigate_mode(-1);
+            return;
+        }
+        if self
+            .state
+            .keybinds
+            .navigate
+            .tab_next
+            .matches_direct_key(raw_key)
+        {
+            self.focus_relative_tab_in_navigate_mode(1);
             return;
         }
 
@@ -227,10 +274,6 @@ impl App {
                     self.state.ensure_agent_panel_entry_visible(idx);
                     leave_navigate_mode(&mut self.state);
                 }
-            }
-            NavigateAction::WorkspacePicker => {
-                self.state.mobile_switcher_scroll = 0;
-                self.state.mode = Mode::Navigate;
             }
             NavigateAction::PreviousWorkspace => {
                 if let Some(ws_idx) = self.relative_visible_workspace(-1) {
@@ -1109,6 +1152,28 @@ pub(crate) fn command_for_key(
 
 #[cfg(test)]
 pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKey) -> bool {
+    if state.keybinds.navigate.workspace_up.matches_direct_key(key) {
+        state.previous_workspace();
+        return true;
+    }
+    if state
+        .keybinds
+        .navigate
+        .workspace_down
+        .matches_direct_key(key)
+    {
+        state.next_workspace();
+        return true;
+    }
+    if state.keybinds.navigate.tab_previous.matches_direct_key(key) {
+        state.previous_tab();
+        return true;
+    }
+    if state.keybinds.navigate.tab_next.matches_direct_key(key) {
+        state.next_tab();
+        return true;
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
@@ -1139,19 +1204,6 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
         }
     }
 
-    if state.keybinds.navigate.workspace_up.matches_direct_key(key) {
-        state.move_selected_workspace_by_visible_delta(-1);
-        return true;
-    }
-    if state
-        .keybinds
-        .navigate
-        .workspace_down
-        .matches_direct_key(key)
-    {
-        state.move_selected_workspace_by_visible_delta(1);
-        return true;
-    }
     if state.keybinds.navigate.pane_left.matches_direct_key(key) {
         state.navigate_pane(NavDirection::Left);
         return true;
@@ -1172,10 +1224,25 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
     false
 }
 
+/// Reports whether a key belongs to the navigate-mode workspace or tab
+/// movement bindings, which switch focus without leaving navigation mode.
+fn navigate_movement_binding_matches(state: &AppState, key: TerminalKey) -> bool {
+    let navigate = &state.keybinds.navigate;
+    navigate.workspace_up.matches_direct_key(key)
+        || navigate.workspace_down.matches_direct_key(key)
+        || navigate.tab_previous.matches_direct_key(key)
+        || navigate.tab_next.matches_direct_key(key)
+}
+
 /// Keys navigation mode answers itself when no binding claims them: sidebar
-/// confirm, pane cycling, and arrow movement. Digits are not among them, so
-/// workspaces are switched through an explicit `switch_workspace` binding.
+/// confirm, pane cycling, and arrow pane movement once the navigate tab
+/// bindings release the arrows. Digits are not among them, so workspaces are
+/// switched through an explicit `switch_workspace` binding.
 fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Option<NavigateAction> {
+    if navigate_movement_binding_matches(state, key) {
+        return None;
+    }
+
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
@@ -1196,15 +1263,6 @@ fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Optio
         }
     }
 
-    if state.keybinds.navigate.workspace_up.matches_direct_key(key)
-        || state
-            .keybinds
-            .navigate
-            .workspace_down
-            .matches_direct_key(key)
-    {
-        return None;
-    }
     if state.keybinds.navigate.pane_left.matches_direct_key(key) {
         return Some(NavigateAction::FocusPaneLeft);
     }
@@ -1265,7 +1323,6 @@ pub(crate) enum NavigateAction {
     SwitchWorkspace(usize),
     SwitchTab(usize),
     FocusAgent(usize),
-    WorkspacePicker,
     PreviousWorkspace,
     NextWorkspace,
     PreviousAgent,
@@ -1400,7 +1457,6 @@ fn non_indexed_action_for_key(
     for (bindings, action) in [
         (&kb.commands, NavigateAction::CommandPalette),
         (&kb.settings, NavigateAction::Settings),
-        (&kb.workspace_picker, NavigateAction::WorkspacePicker),
         (&kb.new_workspace, NavigateAction::NewWorkspace),
         (&kb.new_worktree, NavigateAction::NewWorktree),
         (&kb.open_worktree, NavigateAction::OpenWorktree),
@@ -1572,10 +1628,6 @@ pub(super) fn execute_navigate_action_in_context(
             if state.focus_agent_entry(idx) {
                 leave_navigate_mode(state);
             }
-        }
-        NavigateAction::WorkspacePicker => {
-            state.mobile_switcher_scroll = 0;
-            state.mode = Mode::Navigate;
         }
         NavigateAction::PreviousWorkspace => {
             state.previous_workspace();
@@ -2411,7 +2463,95 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn left_and_right_arrows_remain_permanent_navigate_pane_aliases() {
+    fn left_and_right_arrows_switch_tabs_by_default() {
+        let mut state = state_with_workspaces(&["main"]);
+        let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+        state.mode = Mode::Navigate;
+        state.active = Some(0);
+        state.selected = 0;
+        state.switch_workspace_tab(0, 0);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+        );
+        assert_eq!(state.workspaces[0].active_tab, second_tab);
+        assert_eq!(state.mode, Mode::Navigate);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::empty()),
+        );
+        assert_eq!(state.workspaces[0].active_tab, 0);
+        assert_eq!(state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn up_and_down_arrows_switch_workspaces_and_stay_in_navigate_mode() {
+        let mut state = state_with_workspaces(&["a", "b"]);
+        state.mode = Mode::Navigate;
+        state.active = Some(0);
+        state.selected = 0;
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+        );
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.selected, 1);
+        assert_eq!(state.mode, Mode::Navigate);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::empty()),
+        );
+        assert_eq!(state.active, Some(0));
+        assert_eq!(state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn default_letter_tab_and_workspace_keys_leave_navigate_mode() {
+        let mut state = state_with_workspaces(&["a", "b"]);
+        let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+        state.mode = Mode::Navigate;
+        state.active = Some(0);
+        state.selected = 0;
+        state.switch_workspace_tab(0, 0);
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.workspaces[0].active_tab, second_tab);
+        assert_eq!(state.mode, Mode::Terminal);
+
+        state.mode = Mode::Navigate;
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.workspaces[0].active_tab, 0);
+        assert_eq!(state.mode, Mode::Terminal);
+
+        state.mode = Mode::Navigate;
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.mode, Mode::Terminal);
+
+        state.mode = Mode::Navigate;
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.active, Some(0));
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn left_and_right_arrows_remain_navigate_pane_aliases_without_tab_bindings() {
         let mut state = state_with_workspaces(&["test"]);
         let root = state.workspaces[0].tabs[0].root_pane;
         let right = state.workspaces[0].test_split(Direction::Horizontal);
@@ -2422,6 +2562,8 @@ navigate_pane_down = "ctrl+j"
 [keys]
 navigate_pane_left = "ctrl+h"
 navigate_pane_right = "ctrl+l"
+navigate_tab_previous = ""
+navigate_tab_next = ""
 "#,
         )
         .unwrap();
@@ -2818,13 +2960,32 @@ command = "printf literal > '{}'"
     }
 
     #[test]
-    fn app_navigate_mode_workspace_down_moves_selection() {
+    fn app_navigate_mode_workspace_down_switches_workspace() {
         let mut app = app_with_test_workspaces(&["one", "two"]);
         app.state.mode = Mode::Navigate;
 
         app.handle_navigate_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
 
+        assert_eq!(app.state.active, Some(1));
         assert_eq!(app.state.selected, 1);
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_tab_arrows_switch_tabs_and_stay() {
+        let mut app = app_with_test_workspaces(&["one"]);
+        let second_tab = app.state.workspaces[0].test_add_tab(Some("logs"));
+        app.state.switch_workspace_tab(0, 0);
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Right, KeyModifiers::empty()));
+
+        assert_eq!(app.state.workspaces[0].active_tab, second_tab);
+        assert_eq!(app.state.mode, Mode::Navigate);
+
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Left, KeyModifiers::empty()));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
         assert_eq!(app.state.mode, Mode::Navigate);
     }
 

@@ -15,7 +15,7 @@ A terminal multiplexer sits between your terminal and the programs running insid
 
 The prefix solves this. Press the prefix key, default `esc`, and Herdr enters navigation mode: keys stop going to your terminal and run Herdr commands instead. `prefix+c` means: press `esc`, release, then press `c`. One reserved key instead of dozens.
 
-Navigation mode stays open until you leave it, so you can run several commands from one press. A hint line at the bottom of the screen lists what is bound. `space` opens the command palette, `↑`/`↓` move the workspace selection in the sidebar, `Enter` opens the selected workspace, and most commands that move focus drop you back in the terminal on their own.
+Navigation mode stays open until you leave it, so you can run several commands from one press. A hint line at the bottom of the screen lists what is bound. `space` opens the command palette, `↑`/`↓` switch workspaces, `←`/`→` switch tabs, and most commands that move focus drop you back in the terminal on their own. The four arrows keep navigation mode open, so you can walk through workspaces and tabs with one prefix press.
 
 Press the prefix key again to leave. With the default prefix that means `esc esc`, which also sends a literal `esc` to the focused pane, so vim and other editors stay usable. A key that is not bound does nothing and keeps you in navigation mode. Set `keys.prefix = "ctrl+b"` in `config.toml` for the tmux-style prefix; then `esc` leaves navigation mode without sending anything, and `ctrl+b ctrl+b` sends a literal `ctrl+b`.
 
@@ -75,7 +75,8 @@ Tabs:
 
 | Action | Key |
 | --- | --- |
-| Next / previous tab | `prefix+n` / `prefix+p` |
+| Next / previous tab | `prefix+a` / `prefix+n` |
+| Next / previous tab, staying in navigation mode | `→` / `←` |
 | Jump to tab 1–9 | `prefix+1..9` |
 | Rename tab | `prefix+shift+t` |
 | Close tab | `prefix+shift+x` |
@@ -85,13 +86,14 @@ Workspaces and session:
 | Action | Key |
 | --- | --- |
 | New workspace | `prefix+shift+n` |
+| Next / previous workspace | `prefix+e` / `prefix+i` |
+| Next / previous workspace, staying in navigation mode | `↓` / `↑` |
 | Rename workspace | `prefix+shift+w` |
 | Close workspace | `prefix+shift+d` |
 | Goto picker | `prefix+g` |
-| Workspace navigation surface | `prefix+w` |
 | Toggle sidebar | `prefix+b` |
 
-Digits belong to tabs, so jumping straight to a workspace needs its own binding, for example `switch_workspace = "prefix+shift+1..9"`. Inside navigation mode you can also pick a workspace with `↑`/`↓` and `Enter`.
+Digits belong to tabs, so jumping straight to a workspace needs its own binding, for example `switch_workspace = "prefix+shift+1..9"`.
 
 The full keymap and the binding syntax live in the [keybinding reference](/docs/configuration/#keybindings).
 
@@ -124,8 +126,8 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_tab = ["prefix+p", "ctrl+alt+["]
-next_tab = ["prefix+n", "ctrl+alt+]"]
+previous_tab = ["prefix+n", "ctrl+alt+["]
+next_tab = ["prefix+a", "ctrl+alt+]"]
 new_tab = ["prefix+c", "ctrl+alt+c"]
 split_vertical = ["prefix+v", "ctrl+alt+d"]
 split_horizontal = ["prefix+minus", "ctrl+alt+shift+d"]

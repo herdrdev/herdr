@@ -260,12 +260,6 @@
           "description": "Close the selected workspace."
         },
         {
-          "key": "keys.workspace_picker",
-          "type": "keybinding",
-          "default": "\"prefix+w\"",
-          "description": "Open the workspace navigation surface."
-        },
-        {
           "key": "keys.goto",
           "type": "keybinding",
           "default": "\"prefix+g\"",
@@ -275,19 +269,31 @@
           "key": "keys.navigate_workspace_up",
           "type": "keybinding",
           "default": "\"up\"",
-          "description": "Move workspace selection up in navigate mode."
+          "description": "Switch to the previous workspace in navigate mode, staying in navigate mode."
         },
         {
           "key": "keys.navigate_workspace_down",
           "type": "keybinding",
           "default": "\"down\"",
-          "description": "Move workspace selection down in navigate mode."
+          "description": "Switch to the next workspace in navigate mode, staying in navigate mode."
+        },
+        {
+          "key": "keys.navigate_tab_previous",
+          "type": "keybinding",
+          "default": "\"left\"",
+          "description": "Switch to the previous tab in navigate mode, staying in navigate mode."
+        },
+        {
+          "key": "keys.navigate_tab_next",
+          "type": "keybinding",
+          "default": "\"right\"",
+          "description": "Switch to the next tab in navigate mode, staying in navigate mode."
         },
         {
           "key": "keys.navigate_pane_left",
           "type": "keybinding",
           "default": "\"h\"",
-          "description": "Focus the pane to the left in navigate mode. Left arrow is always an alias."
+          "description": "Focus the pane to the left in navigate mode."
         },
         {
           "key": "keys.navigate_pane_down",
@@ -305,7 +311,7 @@
           "key": "keys.navigate_pane_right",
           "type": "keybinding",
           "default": "\"l\"",
-          "description": "Focus the pane to the right in navigate mode. Right arrow is always an alias."
+          "description": "Focus the pane to the right in navigate mode."
         },
         {
           "key": "keys.detach",
@@ -328,14 +334,14 @@
         {
           "key": "keys.previous_workspace",
           "type": "keybinding",
-          "default": "unset",
-          "description": "Select the previous workspace. Unset by default."
+          "default": "\"prefix+i\"",
+          "description": "Select the previous workspace."
         },
         {
           "key": "keys.next_workspace",
           "type": "keybinding",
-          "default": "unset",
-          "description": "Select the next workspace. Unset by default."
+          "default": "\"prefix+e\"",
+          "description": "Select the next workspace."
         },
         {
           "key": "keys.previous_agent",
@@ -376,13 +382,13 @@
         {
           "key": "keys.previous_tab",
           "type": "keybinding",
-          "default": "\"prefix+p\"",
+          "default": "\"prefix+n\"",
           "description": "Select the previous tab."
         },
         {
           "key": "keys.next_tab",
           "type": "keybinding",
-          "default": "\"prefix+n\"",
+          "default": "\"prefix+a\"",
           "description": "Select the next tab."
         },
         {
@@ -412,7 +418,7 @@
         {
           "key": "keys.edit_scrollback",
           "type": "keybinding",
-          "default": "\"prefix+e\"",
+          "default": "\"prefix+shift+e\"",
           "description": "Open the focused pane scrollback in $EDITOR."
         },
         {

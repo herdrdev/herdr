@@ -19,6 +19,25 @@ fn keybind_label(bindings: &crate::config::ActionKeybinds) -> String {
     bindings.label().unwrap_or_else(|| "unset".to_string())
 }
 
+/// Maps an arrow key label to its symbol so hint lines can stay compact.
+fn arrow_symbol(label: &str) -> Option<&'static str> {
+    match label {
+        "up" => Some("↑"),
+        "down" => Some("↓"),
+        "left" => Some("←"),
+        "right" => Some("→"),
+        _ => None,
+    }
+}
+
+/// Renders a directional key pair as a single glyph pair when both are plain arrows.
+fn arrow_pair_label(first: String, second: String) -> String {
+    match (arrow_symbol(&first), arrow_symbol(&second)) {
+        (Some(first_symbol), Some(second_symbol)) => format!("{first_symbol}{second_symbol}"),
+        _ => format!("{first} / {second}"),
+    }
+}
+
 fn render_bottom_bar(frame: &mut Frame, area: Rect, line: Line<'_>, bg: ratatui::style::Color) {
     frame.render_widget(Clear, area);
     let buf = frame.buffer_mut();
@@ -111,16 +130,17 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
     let split_vertical = prefix_rhs_label(&kb.split_vertical);
     let split_horizontal = prefix_rhs_label(&kb.split_horizontal);
     let close_pane = prefix_rhs_label(&kb.close_pane);
-    let zoom = prefix_rhs_label(&kb.zoom);
-    let resize = prefix_rhs_label(&kb.resize_mode);
     let commands = prefix_rhs_label(&kb.commands);
     let settings = prefix_rhs_label(&kb.settings);
     let goto = prefix_rhs_label(&kb.goto);
     let detach = prefix_rhs_label(&kb.detach);
-    let workspace_nav = format!(
-        "{} / {}",
+    let workspace_nav = arrow_pair_label(
         keybind_label(&kb.navigate.workspace_up),
-        keybind_label(&kb.navigate.workspace_down)
+        keybind_label(&kb.navigate.workspace_down),
+    );
+    let tab_nav = arrow_pair_label(
+        keybind_label(&kb.navigate.tab_previous),
+        keybind_label(&kb.navigate.tab_next),
     );
     let mut spans = vec![
         Span::styled(" NAVIGATE ", mode_style),
@@ -140,20 +160,12 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
     spans.extend([
         Span::styled(workspace_nav, key),
         Span::styled(" ws  ", dim),
+        Span::styled(tab_nav, key),
+        Span::styled(" tab  ", dim),
         Span::styled("⇥", key),
         Span::styled(" pane  ", dim),
         Span::styled("⏎", key),
         Span::styled(" open  ", dim),
-    ]);
-    if kb
-        .switch_tab
-        .iter()
-        .any(|binding| binding.trigger.is_prefix())
-    {
-        spans.push(Span::styled("1..9", key));
-        spans.push(Span::styled(" switch tab  ", dim));
-    }
-    spans.extend([
         Span::styled(goto, key),
         Span::styled(" navigator  ", dim),
         Span::styled(new_tab, key),
@@ -164,10 +176,6 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         Span::styled(" split─  ", dim),
         Span::styled(close_pane, key),
         Span::styled(" close  ", dim),
-        Span::styled(zoom, key),
-        Span::styled(" zoom  ", dim),
-        Span::styled(resize, key),
-        Span::styled(" resize  ", dim),
         Span::styled(settings, key),
         Span::styled(" settings  ", dim),
         Span::styled(detach, key),
@@ -302,4 +310,45 @@ pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
         .highlight_symbol(" ");
     let mut state = ListState::default().with_selected(Some(menu.list.highlighted));
     frame.render_stateful_widget(list, inner, &mut state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ActionKeybinds, Config};
+
+    #[test]
+    fn default_workspace_nav_hint_uses_arrow_symbols() {
+        let keybinds = Config::default().live_keybinds().unwrap().keybinds;
+        assert_eq!(
+            arrow_pair_label(
+                keybind_label(&keybinds.navigate.workspace_up),
+                keybind_label(&keybinds.navigate.workspace_down)
+            ),
+            "↑↓"
+        );
+    }
+
+    #[test]
+    fn default_tab_nav_hint_uses_arrow_symbols() {
+        let keybinds = Config::default().live_keybinds().unwrap().keybinds;
+        assert_eq!(
+            arrow_pair_label(
+                keybind_label(&keybinds.navigate.tab_previous),
+                keybind_label(&keybinds.navigate.tab_next)
+            ),
+            "←→"
+        );
+    }
+
+    #[test]
+    fn custom_workspace_nav_hint_keeps_key_labels() {
+        assert_eq!(
+            arrow_pair_label(
+                keybind_label(&ActionKeybinds::direct("k")),
+                keybind_label(&ActionKeybinds::direct("j"))
+            ),
+            "k / j"
+        );
+    }
 }

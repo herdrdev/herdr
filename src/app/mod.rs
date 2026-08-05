@@ -4945,8 +4945,8 @@ mod tests {
         app.state.mode = Mode::Terminal;
         assert!(!app.state.detach_requested);
 
-        // Send the default prefix key (esc, raw byte 0x1b).
-        let prefix_bytes = vec![0x1b];
+        // Send the default prefix key (ctrl+s, raw byte 0x13).
+        let prefix_bytes = vec![0x13];
         app.route_client_input(prefix_bytes);
 
         assert_eq!(
@@ -4996,7 +4996,7 @@ last_pane = "prefix+tab"
         app.state.switch_workspace_tab(0, first_second_tab);
         app.state.switch_workspace_tab(1, 0);
 
-        app.route_client_input(vec![0x1b]);
+        app.route_client_input(vec![0x13]);
         app.route_client_input(vec![b'\t']);
 
         assert_eq!(app.state.mode, Mode::Terminal);
@@ -5007,7 +5007,7 @@ last_pane = "prefix+tab"
             Some(first_second_root)
         );
 
-        app.route_client_input(vec![0x1b]);
+        app.route_client_input(vec![0x13]);
         app.route_client_input(vec![b'\t']);
 
         assert_eq!(app.state.active, Some(1));
@@ -5049,11 +5049,13 @@ last_pane = "prefix+tab"
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
+        app.state.prefix_code = KeyCode::Esc;
+        app.state.prefix_mods = KeyModifiers::NONE;
 
         app.route_client_input(vec![0x1b]);
         assert_eq!(app.state.mode, Mode::Navigate);
 
-        app.route_client_input(vec![b'i']);
+        app.route_client_input(vec![b'y']);
         assert_eq!(app.state.mode, Mode::Navigate);
 
         app.route_client_input(vec![0x1b]);
@@ -5459,7 +5461,7 @@ last_pane = "prefix+tab"
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.route_client_input(b"\x1b[27u\x1b[27;1:3u".to_vec());
+        app.route_client_input(b"\x1b[115;5u\x1b[115;5:3u".to_vec());
 
         assert_eq!(app.state.mode, Mode::Navigate);
         assert!(rx.try_recv().is_err());

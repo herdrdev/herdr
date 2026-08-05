@@ -52,7 +52,6 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 | 新しいタブ | `prefix+c` |
 | 右 / 下に分割 | `prefix+v` / `prefix+minus` |
 | ペイン間の移動 | `prefix+h/j/k/l` |
-| ワークスペースナビゲーション | `prefix+w` |
 | すべてを動かしたままデタッチ | `prefix+q` |
 
 これで日常の移動のほとんどをカバーできます。それ以外はマウスのままで大丈夫です。
@@ -73,7 +72,8 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 
 | アクション | キー |
 | --- | --- |
-| 次 / 前のタブ | `prefix+n` / `prefix+p` |
+| 次 / 前のタブ | `prefix+a` / `prefix+n` |
+| ナビゲーションモードを抜けずに次 / 前のタブ | `→` / `←` |
 | タブ 1–9 にジャンプ | `prefix+1..9` |
 | タブの名前を変更 | `prefix+shift+t` |
 | タブを閉じる | `prefix+shift+x` |
@@ -83,6 +83,8 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 | アクション | キー |
 | --- | --- |
 | 新しいワークスペース | `prefix+shift+n` |
+| 次 / 前のワークスペース | `prefix+e` / `prefix+i` |
+| ナビゲーションモードを抜けずに次 / 前のワークスペース | `↓` / `↑` |
 | ワークスペースの名前を変更 | `prefix+shift+w` |
 | ワークスペースを閉じる | `prefix+shift+d` |
 | Goto ピッカー | `prefix+g` |
@@ -119,8 +121,8 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_tab = ["prefix+p", "ctrl+alt+["]
-next_tab = ["prefix+n", "ctrl+alt+]"]
+previous_tab = ["prefix+n", "ctrl+alt+["]
+next_tab = ["prefix+a", "ctrl+alt+]"]
 new_tab = ["prefix+c", "ctrl+alt+c"]
 split_vertical = ["prefix+v", "ctrl+alt+d"]
 split_horizontal = ["prefix+minus", "ctrl+alt+shift+d"]
