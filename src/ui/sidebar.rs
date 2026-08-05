@@ -10,7 +10,7 @@ use ratatui::{
 
 use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{state_dot, state_label, state_label_color};
+use super::status::{state_icon, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
@@ -757,6 +757,9 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     let is_navigating = matches!(app.mode, Mode::Navigate);
 
     let p = &app.palette;
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(p.sidebar_bg));
     let sep_style = if is_navigating {
         Style::default().fg(p.accent)
     } else {
@@ -781,7 +784,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             break;
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
+        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
@@ -842,7 +845,8 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             }
             let position = detail_idx + 1;
             let position_style = Style::default().fg(p.overlay0);
-            let (icon, icon_style) = state_dot(detail.state, detail.seen, p);
+            let (icon, icon_style) =
+                state_icon(detail.state, detail.seen, app.status_indicators, p);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(format!("{position:<2}"), position_style),
@@ -959,6 +963,9 @@ pub(super) fn render_sidebar(
     area: Rect,
 ) {
     let p = &app.palette;
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(p.sidebar_bg));
     let is_navigating = matches!(app.mode, Mode::Navigate);
     let sep_style = if is_navigating {
         Style::default().fg(p.accent)
@@ -1275,7 +1282,7 @@ fn render_workspace_list(
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_dot(display_state, display_seen, p);
+        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
         let state_text_style = Style::default()
             .fg(state_label_color(display_state, display_seen, p))
             .add_modifier(Modifier::DIM);
@@ -1488,7 +1495,7 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = state_dot(detail.state, detail.seen, p);
+        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
@@ -1588,6 +1595,37 @@ mod tests {
                     row_text(buffer, row, width)
                 )
             })
+    }
+
+    #[test]
+    fn expanded_and_collapsed_sidebars_use_custom_background() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces.clear();
+        app.active = None;
+        app.palette.sidebar_bg = ratatui::style::Color::Rgb(12, 34, 56);
+        let area = Rect::new(0, 0, 26, 20);
+
+        let mut expanded = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        expanded
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        assert!(expanded
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg == app.palette.sidebar_bg));
+
+        let mut collapsed = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        collapsed
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .unwrap();
+        assert!(collapsed
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg == app.palette.sidebar_bg));
     }
 
     #[test]
@@ -2209,6 +2247,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.workspaces = vec![first, second];
         app.ensure_test_terminals();
         app.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
+        app.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
 
         let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, pane_id, state| {
             let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
@@ -2218,9 +2257,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             terminal.detected_agent = Some(Agent::Claude);
             terminal.state = state;
         };
-        set_state(&mut app, 0, first_pane, AgentState::Working);
+        set_state(&mut app, 0, first_pane, AgentState::Idle);
         set_state(&mut app, 1, second_pane, AgentState::Working);
         set_state(&mut app, 1, urgent_pane, AgentState::Blocked);
+        app.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&first_pane)
+            .unwrap()
+            .seen = false;
 
         assert_eq!(app.workspaces[1].public_pane_number(urgent_pane), Some(2));
         assert_eq!(agent_panel_entries(&app)[0].pane_id, urgent_pane);
@@ -2238,10 +2282,15 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 2)].symbol(), "3");
-        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "●");
+        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "×");
         assert_eq!(
             buffer[(detail_area.x + 2, detail_area.y)].style().fg,
             Some(app.palette.red)
+        );
+        assert_eq!(buffer[(detail_area.x + 2, detail_area.y + 1)].symbol(), "✓");
+        assert_eq!(
+            buffer[(detail_area.x + 2, detail_area.y + 1)].style().fg,
+            Some(app.palette.teal)
         );
     }
 

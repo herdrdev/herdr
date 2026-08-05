@@ -1,38 +1,14 @@
-# Sponsors
+# Past sponsors
 
-herdr is independent, open source, and built full-time.
-Every sponsorship goes directly toward development, stability, and reaching herdr's
-goal of becoming the runtime for coding agents.
+herdr's sponsorship program is closed and no longer accepts new sponsors.
+This file is the permanent record of everyone who backed herdr — thank you.
 
-→ Sponsor: https://github.com/sponsors/ogulcancelik
 → Enterprise / partnership: hey@herdr.dev
-
-## Tiers
-
-| Tier | Amount | Recognition |
-|------|--------|-------------|
-| Backer | $25/mo | Name + link in this file |
-| Gold | $500/mo | Logo in README |
-| Platinum | $2,500/mo | Logo in README and on herdr.dev |
-| Lead Sponsor | $5,000/mo | Top logo — README and herdr.dev hero placement |
-| Enterprise | custom | hey@herdr.dev |
-
-GitHub also allows a custom amount, so a sponsor lands in the tier their amount
-qualifies for.
-
----
-
-## Lead Sponsor
-
-<!-- lead sponsor renders here -->
-
-## Platinum
-
-<!-- platinum sponsors render here -->
 
 ## Gold
 
 - [Terminal Trove](https://terminaltrove.com/)
+- [Joel (Moshi)](https://getmoshi.app/)
 
 ## Backers
 
@@ -46,6 +22,14 @@ qualifies for.
 - [Damir Vandic](https://github.com/dvic)
 - [amianthus](https://github.com/SirTenzin)
 - [Kiren Srinivasan](https://github.com/srinitude)
+- [Burak Emre Kabakcı](https://github.com/buremba)
+- [Dorian Karter](https://github.com/dkarter)
+- [Joshua Ramirez](https://github.com/JoshuaRamirez)
+- [Leland Kwong](https://github.com/leland-kwong)
+- [tn-py](https://github.com/tn-py)
+- [Aakarshit Uppal](https://github.com/aksh1618)
+- [Ata Ayyıldız](https://github.com/satas20)
+- [promptegrity](https://github.com/promptegrity)
 
 ## One-time supporters
 
@@ -67,7 +51,15 @@ qualifies for.
 - [dsfortescue](https://github.com/dsfortescue)
 - [Hank](https://github.com/hank-warren)
 - [Adam Houston](https://github.com/ahstn)
+- [jtuki](https://github.com/jtuki)
+- [Fabian Junkert](https://github.com/fjunk)
+- [Vol Wagner](https://github.com/wagner-val)
+- [Girolamo Marroccoli](https://github.com/micromag84)
+- [muhsackio](https://github.com/muhsackio)
+- [StepDaddEnergy](https://github.com/StepDaddEnergy)
+- [Guillem Garcia](https://github.com/guillemus)
+- [Fattah](https://github.com/abdfattahz)
 
 ---
 
-Thank you to everyone who supports herdr. The herd keeps moving because of you. 🐑
+Thank you to everyone who supported herdr. The herd keeps moving because of you. 🐑

@@ -10,7 +10,7 @@ body:
 
         Contributors who are not maintainers may open focused bug-fix PRs when the title uses `fix: ...` or `fix(scope): ...` and the patch changes no more than 20 files and 1,000 total added or deleted lines. Features and larger changes require maintainer approval first.
 
-        Keep this short. If it does not fit on one screen, it is too long. Write in your own voice.
+        Keep this short. If it does not fit on one screen, it is too long. Reports over 8,000 characters are closed automatically. Write in your own voice.
 
         Use only the sections in this template. Do not add root cause, proposed fix, analysis, implementation plan, or similar sections unless a maintainer asks.
 

@@ -176,8 +176,8 @@ impl RawInputFramer {
         self.byte_framer.has_pending_input()
     }
 
-    pub(crate) fn has_pending_incomplete_sgr_mouse_sequence(&self) -> bool {
-        self.byte_framer.has_pending_incomplete_sgr_mouse_sequence()
+    pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
+        self.byte_framer.has_pending_incomplete_mouse_sequence()
     }
 
     #[cfg(any(windows, test))]
@@ -277,8 +277,9 @@ impl RawInputByteFramer {
         self.buffer.as_slice() == [ESC]
     }
 
-    pub(crate) fn has_pending_incomplete_sgr_mouse_sequence(&self) -> bool {
+    pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
+            || starts_with_incomplete_default_mouse_sequence(&self.buffer)
     }
 
     #[cfg(any(windows, test))]
@@ -586,7 +587,7 @@ pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent])
 }
 
 fn input_flush_timeout_ms(framer: &RawInputFramer) -> i32 {
-    if framer.has_pending_incomplete_sgr_mouse_sequence() {
+    if framer.has_pending_incomplete_mouse_sequence() {
         MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
     } else {
         RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
@@ -784,6 +785,12 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
 
     if buffer[0] == ESC {
         let seq_len = complete_escape_sequence_len(buffer)?;
+        if buffer[..seq_len].starts_with(b"\x1b[M") {
+            let event = parse_default_mouse(&buffer[..seq_len])
+                .map(RawInputEvent::Mouse)
+                .unwrap_or(RawInputEvent::Unsupported);
+            return Some((event, seq_len));
+        }
         let seq = std::str::from_utf8(&buffer[..seq_len]).ok()?;
 
         if let Some((kind, color)) = parse_default_color_response(seq) {
@@ -980,6 +987,13 @@ fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
         }
     }
 
+    if buffer.len() >= 7
+        && buffer.starts_with(b"\x1b\x1b[M")
+        && parse_default_mouse(&buffer[1..7]).is_some()
+    {
+        return Some(1);
+    }
+
     if buffer.starts_with(b"\x1b\x1b") {
         return complete_escape_sequence_len(&buffer[1..]).map(|len| len + 1);
     }
@@ -987,6 +1001,9 @@ fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
     if buffer.starts_with(b"\x1b[") {
         if buffer.starts_with(b"\x1b[<") {
             return find_csi_final(buffer, b"Mm");
+        }
+        if buffer.starts_with(b"\x1b[M") {
+            return (buffer.len() >= 6).then_some(6);
         }
         return find_csi_final(
             buffer,
@@ -1018,6 +1035,10 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
         && buffer[3..]
             .iter()
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
+}
+
+fn starts_with_incomplete_default_mouse_sequence(buffer: &[u8]) -> bool {
+    buffer.starts_with(b"\x1b[M") && buffer.len() < 6
 }
 
 fn starts_with_incomplete_orphaned_sgr_mouse_tail(buffer: &[u8]) -> bool {
@@ -1164,6 +1185,23 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+fn parse_default_mouse(sequence: &[u8]) -> Option<MouseEvent> {
+    let &[ESC, b'[', b'M', encoded_cb, encoded_column, encoded_row] = sequence else {
+        return None;
+    };
+    let cb = encoded_cb.checked_sub(32)?;
+    let column = u16::from(encoded_column).checked_sub(33)?;
+    let row = u16::from(encoded_row).checked_sub(33)?;
+    let (kind, modifiers) = parse_mouse_cb(cb)?;
+
+    Some(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers,
+    })
 }
 
 fn parse_sgr_mouse(sequence: &str) -> Option<MouseEvent> {
@@ -1359,6 +1397,28 @@ mod tests {
         assert_eq!(mouse.column, 19);
         assert_eq!(mouse.row, 9);
         assert_eq!(mouse.modifiers, KeyModifiers::empty());
+    }
+
+    #[test]
+    fn parses_default_mouse_encoding() {
+        let events = parse_raw_input_bytes_sync(b"\x1b[MCN1");
+        let [RawInputEvent::Mouse(mouse)] = events.as_slice() else {
+            panic!("expected one mouse event");
+        };
+        assert_eq!(mouse.kind, MouseEventKind::Moved);
+        assert_eq!((mouse.column, mouse.row), (45, 16));
+        assert_eq!(mouse.modifiers, KeyModifiers::empty());
+    }
+
+    #[test]
+    fn rejected_default_mouse_frame_preserves_trailing_input() {
+        let events = parse_raw_input_bytes_with_ranges(b"\x1b[M\x82AAx");
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0].event, RawInputEvent::Unsupported));
+        assert_eq!((events[0].start, events[0].len), (0, 6));
+        assert!(matches!(events[1].event, RawInputEvent::Key(_)));
+        assert_eq!((events[1].start, events[1].len), (6, 1));
     }
 
     #[test]
@@ -1917,6 +1977,28 @@ mod tests {
     }
 
     #[test]
+    fn lone_escape_then_default_mouse_report_emits_both_events() {
+        let mut framer = RawInputFramer::default();
+
+        assert!(framer.push(b"\x1b").is_empty());
+        let events = framer.push(b"\x1b[MCN1");
+
+        assert_eq!(events.len(), 2);
+        let mut events = events.into_iter();
+        assert_raw_key(events.next().unwrap(), KeyCode::Esc, KeyModifiers::empty());
+        assert!(matches!(
+            events.next().unwrap(),
+            RawInputEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 45,
+                row: 16,
+                ..
+            })
+        ));
+        assert!(framer.flush_timeout().is_empty());
+    }
+
+    #[test]
     fn legacy_doubled_escape_alt_arrow_remains_one_event() {
         let mut framer = RawInputFramer::default();
 
@@ -1950,13 +2032,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_reader_extends_only_incomplete_sgr_mouse_timeout() {
-        let mut mouse = RawInputFramer::default();
-        assert!(mouse.push(b"\x1b[<3").is_empty());
+    fn legacy_reader_extends_incomplete_mouse_timeouts() {
+        let mut sgr_mouse = RawInputFramer::default();
+        assert!(sgr_mouse.push(b"\x1b[<3").is_empty());
         assert_eq!(
-            input_flush_timeout_ms(&mouse),
+            input_flush_timeout_ms(&sgr_mouse),
             MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
         );
+
+        let report = b"\x1b[MCN1";
+        for split in 3..report.len() {
+            let mut default_mouse = RawInputFramer::default();
+            assert!(default_mouse.push(&report[..split]).is_empty());
+            assert_eq!(
+                input_flush_timeout_ms(&default_mouse),
+                MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+            );
+            assert!(matches!(
+                default_mouse.push(&report[split..]).as_slice(),
+                [RawInputEvent::Mouse(_)]
+            ));
+        }
 
         let mut escape = RawInputFramer::default();
         assert!(escape.push(b"\x1b").is_empty());

@@ -59,7 +59,7 @@ Bug reports should answer these questions clearly:
 
 If there is no reproduction yet, start a discussion instead. Search open and closed issues before submitting; add evidence to an existing issue instead of opening a duplicate.
 
-Keep bug reports factual, concise, and within the exact template. If the completed report does not fit roughly on one screen, shorten it before submitting. Report only what you or your agent directly observed: what was done, what happened, what was expected, and what environment was used. Do not add root-cause analysis, proposed fixes, implementation plans, or diagnosis dumps unless a maintainer asks. If you use AI to help write the issue, use it to make the report clearer and shorter, not longer.
+Keep bug reports factual, concise, and within the exact template. Reports over 8,000 characters are closed automatically; if the completed report does not fit roughly on one screen, shorten it before submitting. Report only what you or your agent directly observed: what was done, what happened, what was expected, and what environment was used. Do not add root-cause analysis, proposed fixes, implementation plans, or diagnosis dumps unless a maintainer asks. If you use AI to help write the issue, use it to make the report clearer and shorter, not longer.
 
 If your proposal changes the visual language, interaction model, workflow, persistence, architecture, or product direction, start a discussion instead.
 

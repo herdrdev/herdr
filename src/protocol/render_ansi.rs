@@ -522,7 +522,23 @@ fn repeat_ime_anchor_after_sync() -> bool {
 
 /// Writes all cells in the frame (full redraw).
 fn cell_width(cell: &CellData) -> usize {
+    if is_halfwidth_katakana_voiced_grapheme(&cell.symbol) {
+        return 2;
+    }
     cell.symbol.width()
+}
+
+fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
+    let mut chars = symbol.chars();
+    let Some(base) = chars.next() else {
+        return false;
+    };
+    let Some(mark) = chars.next() else {
+        return false;
+    };
+    chars.next().is_none()
+        && ('\u{ff66}'..='\u{ff9d}').contains(&base)
+        && matches!(mark, '\u{ff9e}' | '\u{ff9f}')
 }
 
 #[derive(Clone, Copy)]
@@ -819,6 +835,7 @@ mod tests {
     use crate::protocol::{CellData, CursorState};
 
     const WIDE_GRAPHEME: &str = "💡";
+    const HALFWIDTH_VOICED_KANA: &str = "ｶ\u{ff9e}";
 
     fn make_cell(symbol: &str, fg: u32, bg: u32, modifier: u16) -> CellData {
         CellData {
@@ -829,6 +846,12 @@ mod tests {
             skip: false,
             hyperlink: None,
         }
+    }
+
+    fn make_skip_cell(symbol: &str, fg: u32, bg: u32, modifier: u16) -> CellData {
+        let mut cell = make_cell(symbol, fg, bg, modifier);
+        cell.skip = true;
+        cell
     }
 
     fn make_frame(width: u16, height: u16, cells: Vec<CellData>) -> FrameData {
@@ -1829,6 +1852,30 @@ mod tests {
     }
 
     #[test]
+    fn full_redraw_skips_trailing_cells_covered_by_halfwidth_voiced_kana() {
+        let frame = FrameData {
+            cells: vec![
+                make_cell(HALFWIDTH_VOICED_KANA, 0, 0, 0),
+                make_skip_cell(" ", 0, 0, 0),
+                make_cell("Z", 0, 0, 0),
+            ],
+            width: 3,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let mut output = Vec::new();
+        blit_frame_to(&mut output, &frame, None);
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(output_str.contains("\x1b[1;1H"));
+        assert!(!output_str.contains("\x1b[1;2H"));
+        assert!(output_str.contains("\x1b[1;3H"));
+    }
+
+    #[test]
     fn diff_redraw_reveals_cells_hidden_by_previous_wide_graphemes() {
         let prev = FrameData {
             cells: vec![
@@ -1899,5 +1946,43 @@ mod tests {
 
         assert!(output_str.contains("\x1b[1;1H"));
         assert!(!output_str.contains("\x1b[1;2H"));
+    }
+
+    #[test]
+    fn diff_redraw_reveals_cells_hidden_by_previous_halfwidth_voiced_kana() {
+        let prev = FrameData {
+            cells: vec![
+                make_cell(HALFWIDTH_VOICED_KANA, 0, 0, 0),
+                make_skip_cell(" ", 0, 0, 0),
+                make_cell("Z", 0, 0, 0),
+            ],
+            width: 3,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let curr = FrameData {
+            cells: vec![
+                make_cell("A", 0, 0, 0),
+                make_cell(" ", 0, 0, 0),
+                make_cell("Z", 0, 0, 0),
+            ],
+            width: 3,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let mut output = Vec::new();
+        blit_frame_to(&mut output, &curr, Some(&prev));
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(output_str.contains("\x1b[1;1H"));
+        assert!(
+            output_str.contains("\x1b[1;2H"),
+            "cells hidden by a previous halfwidth voiced kana must be redrawn when visible"
+        );
     }
 }
