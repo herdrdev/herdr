@@ -734,8 +734,9 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
-fn codex_model_capacity_error_is_blocked() {
-    let screen = "⚠ Selected model is at capacity. Please try a different model.\n\n\
+fn codex_wrapped_model_capacity_error_is_blocked() {
+    let screen = "⚠ Selected model is at capacity. Please\n\
+        \x20\x20try a different model.\n\n\
         › Summarize recent commits\n\n\
         gpt-5.6-sol high · /work · Ready\n";
     let result = osc_explain(Agent::Codex, screen, "project", "");
@@ -746,6 +747,23 @@ fn codex_model_capacity_error_is_blocked() {
         Some("model_capacity_blocked")
     );
     assert!(result.visible_blocker);
+}
+
+#[test]
+fn codex_active_spinner_beats_stale_model_capacity_error() {
+    let screen = "⚠ Selected model is at capacity. Please\n\
+        \x20\x20try a different model.\n\n\
+        › Summarize recent commits\n\n\
+        gpt-5.6-sol high · /work · Working\n";
+    let result = osc_explain(Agent::Codex, screen, "⠋ project", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_working")
+    );
+    assert!(result.visible_working);
+    assert!(!result.visible_blocker);
 }
 
 #[test]

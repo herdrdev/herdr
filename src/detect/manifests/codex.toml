@@ -14,10 +14,10 @@ contains = ["Action Required"]
 [[rules]]
 id = "model_capacity_blocked"
 state = "blocked"
-priority = 1090
-region = "bottom_non_empty_lines(3)"
+priority = 490
+region = "bottom_non_empty_lines(4)"
 visible_blocker = true
-contains = ["Selected model is at capacity. Please try a different model."]
+regex = ['(?m)^⚠ Selected\s+model\s+is\s+at\s+capacity\.\s+Please\s+try\s+a\s+different\s+model\.$']
 
 [[rules]]
 id = "osc_title_working"
