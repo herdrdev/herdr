@@ -5,9 +5,9 @@ import { docsRoute, docsTargetHref } from '../docs-path';
 const route = docsRoute(Astro.url.pathname);
 const locale = route.locale ?? 'root';
 const labels = {
-  root: { accessible: 'Documentation version', latest: 'Latest', next: 'Unreleased' },
-  ja: { accessible: 'ドキュメントのバージョン', latest: '最新', next: '未リリース' },
-  'zh-cn': { accessible: '文档版本', latest: '最新', next: '未发布' },
+  root: { accessible: 'Documentation version', latest: 'Latest', preview: 'Preview' },
+  ja: { accessible: 'ドキュメントのバージョン', latest: '最新', preview: 'プレビュー' },
+  'zh-cn': { accessible: '文档版本', latest: '最新', preview: '预览版' },
 }[locale];
 const scopes = versions.scopes;
 ---
@@ -26,7 +26,7 @@ const scopes = versions.scopes;
         value={docsTargetHref(route, 'preview', scopes)}
         selected={route.target === 'preview'}
       >
-        {labels.next}
+        {labels.preview}
       </option>
       {versions.versions
         .filter((entry) => entry.version !== versions.current || route.target === versions.current)

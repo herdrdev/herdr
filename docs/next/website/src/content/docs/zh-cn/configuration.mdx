@@ -98,14 +98,14 @@ Git 工作区行提供 worktree 操作。`New worktree` 会创建检出：如果
 
 ## 远程连接
 
-远程连接默认使用临时保活设置和连接复用兜底来管理 SSH 连接。
+远程连接默认使用临时保活设置，并在支持时复用连接，以管理 SSH 连接。
 
 ```toml
 [remote]
 manage_ssh_config = true
 ```
 
-启用后，`herdr --remote` 会写入一份私有的临时 SSH 配置：先包含你的 `~/.ssh/config` 和 `/etc/ssh/ssh_config`，再添加兜底的 `ServerAliveInterval` 和 `ServerAliveCountMax` 值。你自己的保活设置优先。Herdr 还会为每次远程连接使用私有的 OpenSSH control socket，以复用首次通过身份验证的连接。设置 `manage_ssh_config = false` 可通过普通 `ssh` 进行远程连接，不使用 Herdr 生成的配置或 control socket。
+启用后，`herdr --remote` 会写入一份私有的临时 SSH 配置：先包含用户和系统 SSH 配置，再添加兜底的 `ServerAliveInterval` 和 `ServerAliveCountMax` 值。你自己的保活设置优先。Linux 和 macOS 客户端还会为每次远程连接使用私有的 OpenSSH control socket，以复用首次通过身份验证的连接；Windows OpenSSH 不使用此复用方式。设置 `manage_ssh_config = false` 可通过普通 `ssh` 进行远程连接，不使用 Herdr 生成的配置或 control socket。
 
 ## 按键绑定
 
@@ -238,6 +238,7 @@ dark_name = "catppuccin"
 
 ```toml
 [theme.custom]
+sidebar_bg = "#181825"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -245,6 +246,8 @@ blue = "#89b4fa"
 red = "#f38ba8"
 yellow = "#f9e2af"
 ```
+
+`sidebar_bg` 可单独设置桌面侧边栏的背景色。省略时，侧边栏继续使用宿主终端背景。
 
 颜色值支持十六进制、命名颜色、`rgb(r,g,b)`，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
 
@@ -366,6 +369,8 @@ position = "bottom-right"
 ```
 
 选择 `herdr` 可使用应用内 toast，选择 `terminal` 可使用适合 SSH 场景的外层终端通知，选择 `system` 可使用本地操作系统通知服务，选择 `off` 可禁用弹出通知。Herdr 会抑制活动标签页的弹出通知。在[配置参考](/docs/config-reference/)中搜索 `ui.toast`，可查看位置、延迟行为和剪贴板反馈设置。
+
+在 macOS 上，`system` 会先尝试 `terminal-notifier`；如果它不可用或执行失败，则回退到 `/usr/bin/osascript`。该回退方式会在通知中心显示为 Script Editor，并且无法激活承载 Herdr 的终端。可运行 `brew install terminal-notifier` 安装 `terminal-notifier`。如果 Herdr 检测到受支持的终端，点击通知时它可以激活该终端应用。也可以选择 `terminal`，让受支持的外层终端负责发送通知。
 
 ## 声音
 

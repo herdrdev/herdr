@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://herdr.dev">herdr.dev</a> · <a href="#install">install</a> · <a href="https://herdr.dev/docs/quick-start/">quick start</a> · <a href="https://herdr.dev/docs/">docs</a> · <a href="#sponsors">sponsors</a>
+  <a href="https://herdr.dev">herdr.dev</a> · <a href="#install">install</a> · <a href="https://herdr.dev/docs/quick-start/">quick start</a> · <a href="https://herdr.dev/docs/">docs</a>
 </p>
 
 <p align="center">
@@ -26,11 +26,12 @@
 
 https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
 
-**agent multiplexer that lives in your terminal.**
+**the runtime your coding agents live on.**
 
-- **every agent at a glance** — blocked, working, done. real terminal views, not a wrapped interpretation.
-- **detach, agents keep running** — reattach from any terminal, or over ssh. sessions survive restarts.
-- **agents can use herdr too** — a pure socket api: agents spawn panes, read output, wait on each other. [agent skill →](https://herdr.dev/docs/agent-skill/)
+- **always running** — herdr is a background server; the terminals live inside it. close the lid, drop the network, restart the machine — agents keep working and sessions come back. reattach from any terminal, or over ssh.
+- **never hunt for the stuck one** — every pane is marked working, blocked, or idle. when an agent stops and needs an answer, herdr says so.
+- **agent-native** — the cli and socket api are the same surface agents drive: spawn panes, prompt each other, wait until another agent is genuinely blocked. [agent skill →](https://herdr.dev/docs/agent-skill/)
+- **runs what you already run** — claude code, codex, cursor, opencode, grok and the rest. herdr doesn't wrap or replace them, it just owns their terminals.
 - **keyboard and mouse, both first-class** — tmux-style prefix keys *and* click, drag, split. pick per moment, not per tool.
 - **plugins** — extend panes and workflows. [browse the marketplace →](https://herdr.dev/plugins/)
 - **one rust binary, no electron** — runs in whatever terminal you already use.
@@ -57,15 +58,13 @@ run your agents, split panes, walk away. `ctrl+b q` detaches, `herdr` reattaches
 
 everything lives at [herdr.dev/docs](https://herdr.dev/docs/): [quick start](https://herdr.dev/docs/quick-start/) · [concepts](https://herdr.dev/docs/concepts/) · [supported agents](https://herdr.dev/docs/agents/) · [keyboard](https://herdr.dev/docs/keyboard/) · [configuration](https://herdr.dev/docs/configuration/) · [session state](https://herdr.dev/docs/session-state/) · [remote](https://herdr.dev/docs/persistence-remote/) · [integrations](https://herdr.dev/docs/integrations/) · [plugins](https://herdr.dev/docs/plugins/) · [socket api](https://herdr.dev/docs/socket-api/)
 
-## sponsors
-
-herdr is built full-time, in the open. sponsoring directly funds development, stability, and the path to a real agent runtime.
-
-### gold
+## thanks
 
 <a href="https://terminaltrove.com/"><img src="assets/sponsors/terminal-trove.png" alt="Terminal Trove" width="200" /></a>
 
-[**→ become a sponsor**](https://github.com/sponsors/ogulcancelik) · enterprise / partnership: hey@herdr.dev · see [SPONSORS.md](./SPONSORS.md) for tiers. thank you 🐑
+[Terminal Trove](https://terminaltrove.com/) and every backer listed in [SPONSORS.md](./SPONSORS.md) — thank you 🐑
+
+enterprise / partnership: hey@herdr.dev
 
 ## agent instructions
 

@@ -282,7 +282,14 @@ impl App {
             None
         };
 
-        runtime.is_some_and(|runtime| runtime.keyboard_protocol().reports_all_keys())
+        runtime.is_some_and(|runtime| {
+            let protocol = runtime.keyboard_protocol();
+            protocol.reports_all_keys()
+                || (protocol.reports_event_types()
+                    && runtime
+                        .input_state()
+                        .is_some_and(|state| state.modify_other_keys))
+        })
     }
 
     fn terminal_input_runtime(
@@ -350,7 +357,7 @@ impl App {
     }
 
     pub(crate) fn release_input_source_headless(&mut self, source_id: crate::app::InputSourceId) {
-        self.pending_url_click_sources.remove(&source_id);
+        // Pending URL clicks survive this call; see clear_input_source.
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key
@@ -360,7 +367,7 @@ impl App {
     }
 
     pub(crate) async fn release_input_source(&mut self, source_id: crate::app::InputSourceId) {
-        self.pending_url_click_sources.remove(&source_id);
+        // Pending URL clicks survive this call; see clear_input_source.
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key
@@ -425,6 +432,7 @@ mod tests {
             80,
             app.state.pane_scrollback_limit_bytes,
             app.state.host_terminal_theme,
+            app.state.host_terminal_appearance,
             crate::pane::PaneShellConfig::new(&app.state.default_shell, app.state.shell_mode),
             app.event_tx.clone(),
             app.render_notify.clone(),
@@ -920,6 +928,61 @@ mod tests {
         assert!(
             input_rx.try_recv().is_err(),
             "handled URL click must not leave an unmatched release for the pane"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn outer_focus_loss_does_not_forward_pending_url_click_release_to_pane() {
+        let line = "see https://github.com/herdrdev/herdr/issues/1761";
+        let col = line.find("github").expect("url host") as u16;
+        let (mut app, info) = app_with_screen_bytes(b"");
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let screen = format!("\x1b[?1049h\x1b[?1000h\x1b[?1006h{line}");
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                screen.as_bytes(),
+                4,
+            );
+        app.state.insert_test_runtime(pane_id, runtime);
+        install_test_link_handler(&mut app);
+        let url_x = info.inner_rect.x + col;
+
+        app.handle_mouse_from_input_source(
+            41,
+            modified_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                url_x,
+                info.inner_rect.y,
+                KeyModifiers::CONTROL,
+            ),
+        );
+        assert_eq!(app.state.plugin_command_logs.len(), 1);
+
+        // Opening the URL raises the browser, so the host terminal loses focus
+        // while the button is still down.
+        app.route_client_events_from(
+            41,
+            vec![crate::raw_input::RawInputEvent::OuterFocusLost],
+            false,
+        );
+
+        app.handle_mouse_from_input_source(
+            41,
+            modified_mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                url_x,
+                info.inner_rect.y,
+                KeyModifiers::empty(),
+            ),
+        );
+
+        assert!(
+            input_rx.try_recv().is_err(),
+            "focus loss must not clear a pending URL click, so its release must stay out of the pane"
         );
     }
 
@@ -1969,5 +2032,43 @@ mod tests {
             .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
             .expect("scroll metrics after PageUp");
         assert_eq!(end_metrics.offset_from_bottom, 0);
+    }
+
+    #[tokio::test]
+    async fn page_up_scrolls_shell_like_decckm_with_bracketed_paste() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        // zsh enables DECCKM via smkx and bracketed paste together; bash/fish do not.
+        let mut bytes = b"\x1b[?1h\x1b[?2004h".to_vec();
+        bytes.extend_from_slice(&numbered_lines_bytes(64));
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                16 * 1024,
+                &bytes,
+                4,
+            );
+        ws.tabs[0].runtimes.insert(pane_id, runtime);
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::empty()));
+
+        assert!(
+            input_rx.try_recv().is_err(),
+            "PageUp should not reach the shell"
+        );
+        assert_eq!(
+            pane_scroll_offset(&app, pane_id),
+            info.inner_rect.height as usize
+        );
     }
 }

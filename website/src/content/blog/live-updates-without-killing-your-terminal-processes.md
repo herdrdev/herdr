@@ -2,7 +2,6 @@
 title: Live updates without killing your terminal processes
 description: Herdr can replace its server during an update while keeping pane processes alive.
 date: 2026-05-27
-ogImage: /assets/og-blog-live-updates.png
 ---
 
 Live handoff shipped in Herdr 0.6.3 as an experimental, opt-in update path. See the [live handoff docs](/docs/session-state/#live-handoff) for the user-facing behavior.

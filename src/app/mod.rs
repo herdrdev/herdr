@@ -616,6 +616,7 @@ impl App {
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_section_split,
             agent_panel_sort,
+            status_indicators: config.ui.status_indicators,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -1446,6 +1447,7 @@ impl App {
                 self.state.tab_bar_position = config.ui.tab_bar_position;
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
+                self.state.status_indicators = config.ui.status_indicators;
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.agent_panel_scroll = 0;
@@ -1768,6 +1770,7 @@ impl App {
                         self.set_host_terminal_appearance(appearance, true);
                     }
                 }
+                crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => {}
                 crate::raw_input::RawInputEvent::Unsupported => {}
             }
             self.sync_prefix_input_source(previous_mode);
@@ -1775,6 +1778,11 @@ impl App {
     }
 
     pub(crate) fn clear_input_source(&mut self, source_id: InputSourceId) {
+        // Call this only when the input source is gone for good. A pending URL
+        // click has to outlive a plain focus change, because opening the URL
+        // raises the browser and costs the host terminal its focus before the
+        // mouse release arrives.
+        self.pending_url_click_sources.remove(&source_id);
         self.release_input_source_headless(source_id);
     }
 
@@ -3435,6 +3443,34 @@ mod tests {
         );
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("delivery = \"terminal\""));
+        assert!(app.state.config_diagnostic.is_none());
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn save_status_indicators_persists_then_applies_live_config() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("save-status-indicators");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "onboarding = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert_eq!(
+            app.state.status_indicators,
+            crate::config::StatusIndicatorStyle::Dots
+        );
+
+        app.save_status_indicators(crate::config::StatusIndicatorStyle::Symbols);
+
+        assert_eq!(
+            app.state.status_indicators,
+            crate::config::StatusIndicatorStyle::Symbols
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("status_indicators = \"symbols\""));
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -5187,6 +5223,62 @@ last_pane = "prefix+tab"
             rx.recv().await.unwrap(),
             bytes::Bytes::from_static(b"\x1bOS")
         );
+    }
+
+    #[tokio::test]
+    async fn host_report_all_supplies_printable_releases_for_event_type_only_panes() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>4;2m\x1b[=3;1u",
+            4,
+        );
+        assert_eq!(
+            runtime.keyboard_protocol(),
+            crate::input::KeyboardProtocol::Kitty { flags: 3 }
+        );
+        assert!(runtime
+            .input_state()
+            .is_some_and(|state| state.modify_other_keys));
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        assert!(app.host_keyboard_report_all_requested());
+
+        app.route_client_input(b"\x1b[106;1:1u\x1b[106;1:2u\x1b[106;1:3u".to_vec());
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            bytes::Bytes::from_static(b"\x1b[106;1:3u")
+        );
+        assert!(rx.try_recv().is_err());
+
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, focused)
+            .unwrap();
+        runtime.test_process_pty_bytes(b"\x1b[>4;0m");
+        assert!(!runtime
+            .input_state()
+            .is_some_and(|state| state.modify_other_keys));
+        assert!(!app.host_keyboard_report_all_requested());
+
+        #[cfg(unix)]
+        {
+            runtime.test_process_pty_bytes(b"\x1b[>4;1m");
+            assert!(!runtime
+                .input_state()
+                .is_some_and(|state| state.modify_other_keys));
+            assert!(!app.host_keyboard_report_all_requested());
+        }
     }
 
     #[tokio::test]

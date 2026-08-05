@@ -13,7 +13,12 @@ pub(super) fn ghostty_key_event_from_terminal_key(
             crate::ghostty::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT
         }
     });
-    event.set_mods(ghostty_mods_from_key_modifiers(key.modifiers));
+    let mut mods = ghostty_mods_from_key_modifiers(key.modifiers);
+    if matches!(key.code, crossterm::event::KeyCode::BackTab) {
+        // Ghostty represents backtab as Tab with Shift rather than a distinct key.
+        mods |= crate::ghostty::MOD_SHIFT;
+    }
+    event.set_mods(mods);
     event.set_key(ghostty_key_from_crossterm_key_code(
         key.code,
         key.shifted_codepoint,

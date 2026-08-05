@@ -1,0 +1,219 @@
+---
+/* The chassis every non-docs page shares: one dark ground, the framed grid,
+   the same nav and footer as the homepage. Pages supply their own <main>.
+   Docs keep Starlight's shell and are themed through src/styles/starlight.css. */
+interface Props {
+  title: string;
+  description: string;
+  canonicalPath: string;
+  ogType?: 'website' | 'article';
+  ogImage?: string;
+  ogImageAlt?: string;
+}
+
+const {
+  title,
+  description,
+  canonicalPath,
+  ogType = 'website',
+  ogImage = '/assets/og-card-v9.png',
+  ogImageAlt = 'Herdr — run them anywhere, leave them running.',
+} = Astro.props;
+
+import { fmt, releaseVersion, siteStats } from '../site-data';
+
+const canonicalUrl = new URL(canonicalPath, 'https://herdr.dev').toString();
+const ogImageUrl = new URL(ogImage, 'https://herdr.dev').toString();
+const year = new Date().getFullYear();
+
+/* Same build-time source the homepage uses, so the nav count and the footer
+   version agree across every page without being written down twice. */
+const { starCount } = await siteStats();
+const version = await releaseVersion();
+const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
+---
+
+<!doctype html>
+<html lang="en" data-palette="catppuccin" data-mode="ink">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#17171a" />
+    <link rel="canonical" href={canonicalUrl} />
+
+    <meta property="og:type" content={ogType} />
+    <meta property="og:site_name" content="Herdr" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogImageAlt} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImageUrl} />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
+
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon.png?v=14" />
+    <link rel="apple-touch-icon" href="/assets/logo.png" />
+    <link rel="preload" href="/assets/jbm.woff2?v=2" as="font" type="font/woff2" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script is:inline>
+      /* Ground selection, shared with the docs — see index.html for the
+         reasoning. Starlight's `starlight-theme` key is the source of truth;
+         `auto` is treated as dark so the default never follows the OS. */
+      window.herdrGround = {
+        read: function () {
+          try {
+            return localStorage.getItem('starlight-theme') === 'light' ? 'paper' : 'ink';
+          } catch (e) {
+            return 'ink';
+          }
+        },
+        apply: function (mode) {
+          var root = document.documentElement;
+          root.setAttribute('data-mode', mode);
+          root.setAttribute('data-palette', mode === 'paper' ? 'solarized-light' : 'catppuccin');
+          return mode;
+        },
+        save: function (mode) {
+          try {
+            localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark');
+          } catch (e) {}
+        },
+      };
+      window.herdrGround.apply(window.herdrGround.read());
+    </script>
+    <link rel="stylesheet" href="/css/style.css?v=59" />
+    <link rel="stylesheet" href="/css/site.css?v=60" />
+  </head>
+  <body class="site">
+    <div class="hd-frame">
+      <nav class="hd-nav">
+        <a class="lock" href="/"><span class="ram"></span><b>herdr</b></a>
+        <div class="sp"></div>
+        <a class="lnk" href="/docs/">Docs</a>
+        <a class="lnk" href="/plugins/">Plugins</a>
+        <a class="lnk" href="/blog/">Blog</a>
+        <a class="ico wide" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub — star count">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
+          <b data-stars>{fmt(starCount)}</b>
+        </a>
+        <a class="ico" href="https://x.com/herdrdev" aria-label="Herdr on X">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" /></svg>
+        </a>
+        <div class="mode">
+          <button type="button" data-ground="ink" aria-pressed="true">ink</button>
+          <button type="button" data-ground="paper" aria-pressed="false">paper</button>
+        </div>
+        <a class="btn" href="/docs/install/">Install</a>
+        <button type="button" class="menu" id="nav-menu" aria-expanded="false" aria-controls="nav-sheet" aria-label="Menu">
+          <span></span><span></span><span></span>
+        </button>
+      </nav>
+
+      <div class="sheet" id="nav-sheet">
+        <a href="/docs/">Docs</a>
+        <a href="/plugins/">Plugins</a>
+        <a href="/blog/">Blog</a>
+        <a href="https://x.com/herdrdev">@herdrdev</a>
+        <div class="sheet-ground">
+          <span>Ground</span>
+          <div class="mode">
+            <button type="button" data-ground="ink" aria-pressed="true">ink</button>
+            <button type="button" data-ground="paper" aria-pressed="false">paper</button>
+          </div>
+        </div>
+      </div>
+
+      <slot />
+
+      <footer class="foot">
+        <span class="ram"></span>
+        <a href="/docs/">docs</a>
+        <a href="/plugins/">plugins</a>
+        <a href="/blog/">blog</a>
+        <span>built in the terminal · {year}</span>
+        <span class="fact">{facts}</span>
+        <span class="out">
+          <a class="ico" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
+          </a>
+          <a class="ico" href="https://x.com/herdrdev" aria-label="Herdr on X">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" /></svg>
+          </a>
+          <a href="mailto:hey@herdr.dev">hey@herdr.dev</a>
+        </span>
+      </footer>
+    </div>
+
+    <script is:inline>
+      (function () {
+        var buttons = document.querySelectorAll('[data-ground]');
+        function paint(mode) {
+          window.herdrGround.apply(mode);
+          buttons.forEach(function (b) {
+            b.setAttribute('aria-pressed', String(b.dataset.ground === mode));
+          });
+        }
+        buttons.forEach(function (b) {
+          b.addEventListener('click', function () {
+            window.herdrGround.save(b.dataset.ground);
+            paint(b.dataset.ground);
+          });
+        });
+        paint(window.herdrGround.read());
+      })();
+
+      /* nav sheet — the links, the account and the ground toggle that don't
+         fit the bar on a phone */
+      (function () {
+        var btn = document.getElementById('nav-menu');
+        var sheet = document.getElementById('nav-sheet');
+        if (!btn || !sheet) return;
+        function set(open) {
+          sheet.classList.toggle('open', open);
+          btn.setAttribute('aria-expanded', String(open));
+        }
+        btn.addEventListener('click', function (event) {
+          event.stopPropagation();
+          set(!sheet.classList.contains('open'));
+        });
+        /* the ground buttons live in the sheet, so a tap inside must not close
+           it — only taps on the page behind do */
+        document.addEventListener('click', function (event) {
+          if (!sheet.contains(event.target)) set(false);
+        });
+        document.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape') set(false);
+        });
+      })();
+
+      /* The nav count is baked at build, which can be a deploy behind. Refresh
+         it from the same snapshot so the number is current on every page. No
+         count-up here — this is chrome, not the argument the homepage makes. */
+      fetch('https://assets.herdr.dev/stats/stats.json', { headers: { accept: 'application/json' } })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (d) {
+          if (!d || !d.stars || typeof d.stars.total !== 'number') return;
+          var text = d.stars.total.toLocaleString('en-US');
+          document.querySelectorAll('[data-stars]').forEach(function (el) {
+            el.textContent = text;
+          });
+        })
+        .catch(function () {});
+    </script>
+  </body>
+</html>

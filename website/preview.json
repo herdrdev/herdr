@@ -1,36 +1,66 @@
 {
   "schema_version": 1,
   "channel": "preview",
-  "base_version": "0.7.5",
-  "build_id": "2026-07-29-44b3adb12552",
-  "commit": "44b3adb125524ea9a55739eee3776f922f2115ad",
-  "built_at": "2026-07-29T13:32:08Z",
-  "protocol": 18,
-  "notes": "Preview build 2026-07-29-44b3adb12552\n\nBuilt from `44b3adb12552` on `master`.\nBase stable: v0.7.5\nCompare: https://github.com/herdrdev/herdr/compare/0f10e1453a7f9fda357352bb65ce17fa26fda447...44b3adb125524ea9a55739eee3776f922f2115ad\n\n### Added\n- Print bundled agent skill and hint next cli steps\n- Switch IME to ASCII in prefix mode on Windows (Korean IME) (#1823)\n- Filter keybind help (#1832)\n- Add grok cli integration for native session restore (#1807)\n- Publish versioned release documentation\n\n### Fixed\n- Preserve parent agent ownership\n- Preserve windows path variables during install\n- Restore system notifications and sound playback (#2019)\n- Preserve navigate mode after pane focus (#1993)\n- Restore python3 commit hook\n- Select windows python command in commit hook (#1994)\n- Count ptmx master fds under devpts layouts (#1984)\n- Preserve linked worktree workspace labels\n- Ignore nested codex session reports (#1927)\n- Resolve relative plugin commands from plugin root\n- Keep focus on the current workspace when another self-closes (#1912)\n- Make native windows checks reliable (#1925)\n- Close workspace when api closes its last tab (#1899)\n- Preserve shift-enter in windows panes (#1909)\n- Delay agent prompt submission\n- Ignore empty clipboard writes\n- Restrict unapproved pull requests to bug fixes\n- Include SKILL.md in the package fileset (#1890)\n- Repaint after transient terminal resizes\n- Preserve prefix mode for modifier events\n- Preserve focus when closing a non-focused workspace (#1877)\n- Support non-us shifted keybindings (#1876)\n- Improve sidebar worktree hierarchy and reordering (#1873)\n- Avoid renders for passive mouse motion (#1872)\n- Add rust-analyzer to development shell\n- Copy retained mouse selections with keyboard shortcuts\n- Run pi worktree ext on background\n- Bundle modern ConPTY on Windows (#1828)\n- Harden hermes lifecycle detection\n- Report truncated pane reads\n- Make known-agent exit process-owned\n- Answer XTWINOPS size queries in panes\n- Prefer branded homepage search image\n- Consume handled url click gestures\n- Preserve kitty graphics during host repaints\n- Inherit host palette in pane queries (#1759)\n- Preserve kitty printable key releases\n- Preserve physical escape on windows\n- Respect OMP config directory override\n- Keep reading while pty input is blocked\n- Fall back to sh for remote path discovery\n\n### Performance\n- Skip rendering hidden pty updates\n- Replace agent spinners with static status marks\n- Avoid full pane renders for spinner animation (#1868)\n- Eliminate repeated workspace git discovery (#1842)\n\n### Maintenance\n- Remove flaky sound timing assertion\n- Remove approved contributor bypass\n- Add simplified chinese readme (#1990)\n- Update sponsor acknowledgements\n- Harden pull request workflow execution\n- Gate pull request review by scope\n- Consolidate project skills\n- Define maintainer and agent contribution workflows\n- Relicense herdr under apache-2.0\n- Centralize new terminal cwd selection\n- Name darwin nix toolchain inputs\n- Simplify macos input source ownership\n- Clarify opencode event state mapping\n- Simplify cursor session reporting\n- Simplify kimi lifecycle reporting\n- Simplify qoder session reporting\n- Replace pane mouse and clipboard internals\n- Add alternate-screen output fallback",
+  "base_version": "0.8.0",
+  "build_id": "2026-08-04-d78e3d3b5126",
+  "commit": "d78e3d3b51266a1ff80ae6858b894e782aac3e9f",
+  "built_at": "2026-08-03T21:56:43Z",
+  "protocol": 19,
+  "notes": "Preview build 2026-08-04-d78e3d3b5126\n\nBuilt from `d78e3d3b5126` on `master`.\nBase stable: v0.8.0\nCompare: https://github.com/herdrdev/herdr/compare/v0.8.0...d78e3d3b51266a1ff80ae6858b894e782aac3e9f\n\n### Fixed\n- Keep collapsed workspace status visible (#2239)\n\n### Maintenance\n- Refine cpu optimization blog post",
   "assets": {
     "linux-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-07-29-44b3adb12552/herdr-linux-x86_64",
-      "sha256": "2d50d64ab849c3d0f5d0d53e0bebd00fa94d5ed120797532c8fcfd1a679ebc19"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-linux-x86_64",
+      "sha256": "338afbfe03f0eb32efc52e30a5effc6c5ee772846bdb5e059f73d04b89b467d6"
     },
     "linux-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-07-29-44b3adb12552/herdr-linux-aarch64",
-      "sha256": "2167fb9127d0a67c1dad368d54e6468fd7c2a3858b832922c7f0c264d012be13"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-linux-aarch64",
+      "sha256": "f79f3ad5b24dd1b6ba49ebee1b26d69ab5dcbeaf15be4fd7f3357ab0d17f6096"
     },
     "macos-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-07-29-44b3adb12552/herdr-macos-x86_64",
-      "sha256": "b9316cdff4802f325f6b77b83ea36cd33deb8da4ef9efa8454423b0ce8de77fc"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-macos-x86_64",
+      "sha256": "384ee2f2a805260d24f3d398ba8169aa68b502452ab1457c5da40a8e4d9c975f"
     },
     "macos-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-07-29-44b3adb12552/herdr-macos-aarch64",
-      "sha256": "99941b4a40e852c8f21694c7ec1e96f85abd4f764d9f667757c65fae6e4b065b"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-macos-aarch64",
+      "sha256": "d02190962293ccf19186e0ea8a162d7f670ef49e61dfc10051bffd7da08a7ee4"
     },
     "windows-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-07-29-44b3adb12552/herdr-windows-x86_64.zip",
-      "sha256": "ead450c21d31ea559289d45e4c60d14bb0a7ff0937668a309e74c6a3f9f6cca1",
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-windows-x86_64.zip",
+      "sha256": "b1d288118848ecd3ef33532a34506edc53a38a416057aee5b7fe1de4188a16fc",
       "format": "zip"
     }
   },
   "builds": {
+    "2026-08-04-d78e3d3b5126": {
+      "base_version": "0.8.0",
+      "commit": "d78e3d3b51266a1ff80ae6858b894e782aac3e9f",
+      "built_at": "2026-08-03T21:56:43Z",
+      "protocol": 19,
+      "tag": "preview-2026-08-04-d78e3d3b5126",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-linux-x86_64",
+          "sha256": "338afbfe03f0eb32efc52e30a5effc6c5ee772846bdb5e059f73d04b89b467d6"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-linux-aarch64",
+          "sha256": "f79f3ad5b24dd1b6ba49ebee1b26d69ab5dcbeaf15be4fd7f3357ab0d17f6096"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-macos-x86_64",
+          "sha256": "384ee2f2a805260d24f3d398ba8169aa68b502452ab1457c5da40a8e4d9c975f"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-macos-aarch64",
+          "sha256": "d02190962293ccf19186e0ea8a162d7f670ef49e61dfc10051bffd7da08a7ee4"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-04-d78e3d3b5126/herdr-windows-x86_64.zip",
+          "sha256": "b1d288118848ecd3ef33532a34506edc53a38a416057aee5b7fe1de4188a16fc",
+          "format": "zip"
+        }
+      }
+    },
     "2026-07-29-44b3adb12552": {
       "base_version": "0.7.5",
       "commit": "44b3adb125524ea9a55739eee3776f922f2115ad",

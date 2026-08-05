@@ -3,7 +3,6 @@ title: Coding agents are becoming runtimes
 description: Coding agent CLIs are becoming developer infrastructure. Project instructions, lifecycle state, hooks, and terminal runtimes need shared contracts.
 date: 2026-06-10
 draft: false
-ogImage: /assets/og-blog-coding-agents-runtimes.png
 ---
 
 Coding agents have crossed an important line.

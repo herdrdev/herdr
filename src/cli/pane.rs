@@ -139,7 +139,7 @@ fn parse_pane_current_args(
 }
 
 fn pane_layout(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args(args) {
+    let pane_id = match parse_optional_current_pane_args_from_env(args) {
         Ok(pane_id) => pane_id,
         Err(message) => {
             eprintln!("{message}");
@@ -154,7 +154,7 @@ fn pane_layout(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_process_info(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args(args) {
+    let pane_id = match parse_optional_current_pane_args_from_env(args) {
         Ok(pane_id) => pane_id,
         Err(message) => {
             eprintln!("{message}");
@@ -169,7 +169,7 @@ fn pane_process_info(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_edges(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args(args) {
+    let pane_id = match parse_optional_current_pane_args_from_env(args) {
         Ok(pane_id) => pane_id,
         Err(message) => {
             eprintln!("{message}");
@@ -222,7 +222,17 @@ fn pane_resize(args: &[String]) -> std::io::Result<i32> {
     super::runtime::pane_resize(params)
 }
 
-fn parse_optional_current_pane_args(args: &[String]) -> Result<Option<String>, String> {
+fn parse_optional_current_pane_args_from_env(args: &[String]) -> Result<Option<String>, String> {
+    let env_pane_id = std::env::var("HERDR_PANE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    parse_optional_current_pane_args(args, env_pane_id.as_deref())
+}
+
+fn parse_optional_current_pane_args(
+    args: &[String],
+    env_pane_id: Option<&str>,
+) -> Result<Option<String>, String> {
     let mut pane_id = None;
     let mut index = 0;
     while index < args.len() {
@@ -235,7 +245,7 @@ fn parse_optional_current_pane_args(args: &[String]) -> Result<Option<String>, S
                 index += 2;
             }
             "--current" => {
-                pane_id = None;
+                pane_id = env_pane_id.map(super::normalize_pane_id);
                 index += 1;
             }
             other => return Err(format!("unknown option: {other}")),
@@ -1735,8 +1745,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_optional_current_pane_args_accepts_current_target() {
+        let pane_id =
+            parse_optional_current_pane_args(&args(&["--current"]), Some("issue-1")).unwrap();
+
+        assert_eq!(pane_id, Some("issue-1".into()));
+    }
+
+    #[test]
+    fn parse_optional_current_pane_args_current_without_env_keeps_focused_fallback() {
+        let pane_id = parse_optional_current_pane_args(&args(&["--current"]), None).unwrap();
+
+        assert_eq!(pane_id, None);
+    }
+
+    #[test]
+    fn parse_optional_current_pane_args_omitted_target_keeps_focused_fallback() {
+        let pane_id = parse_optional_current_pane_args(&args(&[]), Some("issue-1")).unwrap();
+
+        assert_eq!(pane_id, None);
+    }
+
+    #[test]
     fn parse_optional_current_pane_args_accepts_explicit_pane() {
-        let pane_id = parse_optional_current_pane_args(&args(&["--pane", "issue-2"])).unwrap();
+        let pane_id =
+            parse_optional_current_pane_args(&args(&["--pane", "issue-2"]), Some("issue-1"))
+                .unwrap();
 
         assert_eq!(pane_id, Some("issue-2".into()));
     }

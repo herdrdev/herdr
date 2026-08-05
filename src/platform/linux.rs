@@ -12,6 +12,12 @@ use super::{
     LimitedRead, Signal,
 };
 
+pub(crate) use super::unix_common::{
+    create_remote_private_dir, create_remote_ssh_config_dir, create_remote_ssh_config_file,
+    remote_bridge_endpoint_path, remote_private_temp_base, remote_reattach_argument,
+    remote_reattach_program, remote_ssh_config_paths,
+};
+
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
 const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;

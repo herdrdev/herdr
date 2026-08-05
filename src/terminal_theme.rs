@@ -11,6 +11,15 @@ pub enum HostAppearance {
     Light,
 }
 
+impl HostAppearance {
+    pub const fn color_scheme_report(self) -> &'static [u8] {
+        match self {
+            Self::Dark => b"\x1b[?997;1n",
+            Self::Light => b"\x1b[?997;2n",
+        }
+    }
+}
+
 impl RgbColor {
     pub fn inferred_appearance(self) -> HostAppearance {
         let luminance = u32::from(self.r) * 299 + u32::from(self.g) * 587 + u32::from(self.b) * 114;
