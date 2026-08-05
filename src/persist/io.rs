@@ -134,10 +134,21 @@ pub fn clear_history() {
 
 pub fn load() -> Option<SessionSnapshot> {
     let path = session_path();
+    if let Some(snapshot) = try_load_snapshot(&path) {
+        return Some(snapshot);
+    }
+    // The write fallback in `write_fallback` can leave `session.json`
+    // truncated or invalid if the direct write fails partway, and keeps the
+    // complete snapshot in `session.json.tmp` for that case. Recover from it
+    // when the main file is missing or unreadable.
+    try_load_snapshot(&path.with_extension("json.tmp"))
+}
+
+fn try_load_snapshot(path: &Path) -> Option<SessionSnapshot> {
     if !path.exists() {
         return None;
     }
-    let content = match std::fs::read_to_string(&path) {
+    let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) => {
             warn!(err = %err, "failed to read session file");
@@ -165,10 +176,17 @@ pub fn load() -> Option<SessionSnapshot> {
 
 pub fn load_history() -> Option<SessionHistorySnapshot> {
     let path = session_history_path();
+    if let Some(snapshot) = try_load_history(&path) {
+        return Some(snapshot);
+    }
+    try_load_history(&path.with_extension("json.tmp"))
+}
+
+fn try_load_history(path: &Path) -> Option<SessionHistorySnapshot> {
     if !path.exists() {
         return None;
     }
-    let content = match std::fs::read_to_string(&path) {
+    let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) => {
             warn!(err = %err, "failed to read session history file");
@@ -413,5 +431,21 @@ mod tests {
         write_fallback(&target, &tmp_path, "{}").unwrap_err();
 
         assert!(tmp_path.exists());
+    }
+
+    #[test]
+    fn try_load_snapshot_recovers_from_tmp_file_when_main_file_is_invalid() {
+        // Mirrors what `write_fallback` can leave behind: a corrupt main
+        // file next to a complete `.tmp` file.
+        let path = temp_session_path("recover-from-tmp");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not valid json").unwrap();
+        let mut snap = empty_snapshot();
+        snap.selected = 5;
+        save_to_path(&path.with_extension("json.tmp"), &snap).unwrap();
+
+        assert!(try_load_snapshot(&path).is_none());
+        let recovered = try_load_snapshot(&path.with_extension("json.tmp")).unwrap();
+        assert_eq!(recovered.selected, 5);
     }
 }
