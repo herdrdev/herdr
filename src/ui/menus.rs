@@ -87,10 +87,10 @@ pub(super) fn render_copy_mode_overlay(app: &AppState, frame: &mut Frame, area: 
             Span::styled("  enter search  esc cancel", dim),
         ])
     } else {
-        let select = if copy_mode.selection.is_some() {
-            "selecting"
-        } else {
-            "select"
+        let select = match copy_mode.selection {
+            Some(crate::app::state::CopyModeSelection::Block) => "block selecting",
+            Some(_) => "selecting",
+            None => "select",
         };
         let match_status = copy_mode
             .search
@@ -115,6 +115,8 @@ pub(super) fn render_copy_mode_overlay(app: &AppState, frame: &mut Frame, area: 
             Span::styled(format!(" repeat{match_status}  "), dim),
             Span::styled("v/space", key),
             Span::styled(format!(" {select}  "), dim),
+            Span::styled("ctrl+v", key),
+            Span::styled(" block  ", dim),
             Span::styled("y/enter", key),
             Span::styled(" copy  ", dim),
             Span::styled(exit_keys, key),

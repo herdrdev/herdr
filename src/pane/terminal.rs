@@ -2572,8 +2572,11 @@ fn ghostty_extract_selection(
     selection: &crate::selection::Selection,
 ) -> Result<String, crate::ghostty::Error> {
     let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
-    core.terminal
-        .read_text_screen((start_col, start_row), (end_col, end_row), false)
+    core.terminal.read_text_screen(
+        (start_col, start_row),
+        (end_col, end_row),
+        selection.is_rectangle(),
+    )
 }
 
 fn ghostty_screen_row(

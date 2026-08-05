@@ -149,6 +149,10 @@ impl AppState {
         }
 
         match (key.code, key.modifiers) {
+            (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+                self.toggle_copy_mode_block_selection(terminal_runtimes);
+                return;
+            }
             (KeyCode::Char('b'), mods) if mods.contains(KeyModifiers::CONTROL) => {
                 self.scroll_copy_mode_page(terminal_runtimes, -1, false)
             }
@@ -420,6 +424,30 @@ impl AppState {
         ));
         if let Some(copy_mode) = self.copy_mode.as_mut() {
             copy_mode.selection = Some(CopyModeSelection::Character);
+        }
+    }
+
+    fn toggle_copy_mode_block_selection(&mut self, terminal_runtimes: &TerminalRuntimeRegistry) {
+        let selection = self
+            .copy_mode
+            .as_ref()
+            .and_then(|copy_mode| copy_mode.selection);
+        let rectangle = !matches!(selection, Some(CopyModeSelection::Block));
+
+        if selection.is_none() || matches!(selection, Some(CopyModeSelection::Linewise { .. })) {
+            self.begin_copy_mode_selection(terminal_runtimes);
+        }
+
+        let Some(active_selection) = self.selection.as_mut() else {
+            return;
+        };
+        active_selection.set_rectangle(rectangle);
+        if let Some(copy_mode) = self.copy_mode.as_mut() {
+            copy_mode.selection = Some(if rectangle {
+                CopyModeSelection::Block
+            } else {
+                CopyModeSelection::Character
+            });
         }
     }
 
@@ -842,7 +870,7 @@ impl AppState {
             return;
         };
         match selection {
-            CopyModeSelection::Character => {
+            CopyModeSelection::Character | CopyModeSelection::Block => {
                 let screen_col = info.inner_rect.x.saturating_add(copy_mode.cursor_col);
                 let screen_row = info.inner_rect.y.saturating_add(copy_mode.cursor_row);
                 self.update_selection_cursor(
@@ -1770,6 +1798,84 @@ mod tests {
 
         assert_eq!(copy_mode_clipboard_text(&mut app), "beta");
         assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_copies_block_selection() {
+        let (mut app, _) = app_with_copy_screen(b"abcde\r\nfghij\r\nklmno\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 1;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+
+        assert_eq!(copy_mode_clipboard_text(&mut app), "bcd\nghi\nlmn");
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_toggles_block_selection_to_characterwise() {
+        let (mut app, _) = app_with_copy_screen(b"abcde\r\nfghij\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 1;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").selection,
+            Some(CopyModeSelection::Character)
+        );
+        assert!(!app
+            .state
+            .selection
+            .as_ref()
+            .expect("selection")
+            .is_rectangle());
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+        assert_eq!(copy_mode_clipboard_text(&mut app), "bcde\nfgh");
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_toggles_characterwise_selection_to_block() {
+        let (mut app, _) = app_with_copy_screen(b"abcde\r\nfghij\r\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 1;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").selection,
+            Some(CopyModeSelection::Block)
+        );
+        assert!(app
+            .state
+            .selection
+            .as_ref()
+            .expect("selection")
+            .is_rectangle());
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+        assert_eq!(copy_mode_clipboard_text(&mut app), "bc\ngh");
     }
 
     #[tokio::test]

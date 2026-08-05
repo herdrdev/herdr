@@ -41,6 +41,8 @@ pub struct Selection {
     cursor: (u32, u16),
     /// Selection phase.
     phase: Phase,
+    /// Whether the selection spans the same column range on every row.
+    rectangle: bool,
 }
 
 impl Selection {
@@ -58,6 +60,7 @@ impl Selection {
             anchor,
             cursor: anchor,
             phase: Phase::Anchored,
+            rectangle: false,
         }
     }
 
@@ -75,6 +78,7 @@ impl Selection {
             anchor: (row, start_col),
             cursor: (row, end_col),
             phase: Phase::Dragging,
+            rectangle: false,
         }
     }
 
@@ -94,6 +98,7 @@ impl Selection {
             anchor: (anchor_row, anchor_col),
             cursor: (cursor_row, cursor_col),
             phase: Phase::Dragging,
+            rectangle: false,
         }
     }
 
@@ -193,10 +198,21 @@ impl Selection {
         self.phase == Phase::Dragging
     }
 
+    pub(crate) fn set_rectangle(&mut self, rectangle: bool) {
+        self.rectangle = rectangle;
+    }
+
+    pub(crate) fn is_rectangle(&self) -> bool {
+        self.rectangle
+    }
+
     /// Returns (start, end) in reading order (top-left to bottom-right).
     fn ordered(&self) -> ((u32, u16), (u32, u16)) {
         let (ar, ac) = self.anchor;
         let (cr, cc) = self.cursor;
+        if self.rectangle {
+            return ((ar.min(cr), ac.min(cc)), (ar.max(cr), ac.max(cc)));
+        }
         if ar < cr || (ar == cr && ac <= cc) {
             ((ar, ac), (cr, cc))
         } else {
@@ -217,6 +233,9 @@ impl Selection {
         let ((sr, sc), (er, ec)) = self.ordered();
         if row < sr || row > er {
             return false;
+        }
+        if self.rectangle {
+            return col >= sc && col <= ec;
         }
         if sr == er {
             col >= sc && col <= ec
@@ -473,6 +492,27 @@ mod tests {
         assert!(sel.contains(4, 0, None));
         assert!(sel.contains(4, 10, None));
         assert!(!sel.contains(4, 11, None));
+    }
+
+    #[test]
+    fn rectangle_contains_only_the_shared_column_range() {
+        let mut sel = make_sel(4, 5, 2, 10);
+        sel.set_rectangle(true);
+
+        assert_eq!(sel.ordered_cells(), ((2, 5), (4, 10)));
+        assert!(!sel.contains(2, 4, None));
+        assert!(sel.contains(2, 5, None));
+        assert!(sel.contains(3, 7, None));
+        assert!(sel.contains(4, 10, None));
+        assert!(!sel.contains(3, 11, None));
+    }
+
+    #[test]
+    fn rectangle_normalizes_opposing_row_and_column_directions() {
+        let mut sel = make_sel(4, 10, 2, 5);
+        sel.set_rectangle(true);
+
+        assert_eq!(sel.ordered_cells(), ((2, 5), (4, 10)));
     }
 
     #[test]
