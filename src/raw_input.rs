@@ -225,6 +225,12 @@ const HOST_COLOR_QUERY_REPLIES: u16 = 258;
 #[cfg(any(unix, test))]
 const HOST_CELL_SIZE_QUERY_REPLIES: u16 = 1;
 const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
+/// Upper bound on bytes buffered while waiting for a bracketed-paste
+/// terminator (`ESC[201~`). If a host opens a paste with `ESC[200~` but the
+/// terminator never arrives, the framer must not hold the buffer (and its
+/// memory) indefinitely; past this cap the raw bytes are flushed without
+/// paste framing instead of hanging.
+const MAX_BRACKETED_PASTE_HOLD_BYTES: usize = 1024 * 1024;
 
 impl RawInputByteFramer {
     pub(crate) fn for_host_input() -> Self {
@@ -350,6 +356,19 @@ impl RawInputByteFramer {
         if self.buffer.starts_with(BRACKETED_PASTE_START)
             && find_subsequence(&self.buffer, BRACKETED_PASTE_END).is_none()
         {
+            // The terminator may legitimately arrive on a later chunk, so hold
+            // briefly. But bound how long we wait: a host that opens a paste
+            // and never terminates it would otherwise pin this buffer (and its
+            // memory) forever and stall all further input. Past the cap, flush
+            // the raw bytes without paste framing so input keeps flowing.
+            if self.buffer.len() > MAX_BRACKETED_PASTE_HOLD_BYTES {
+                tracing::warn!(
+                    len = self.buffer.len(),
+                    "bracketed paste terminator never arrived and buffer exceeded cap; flushing raw bytes without paste framing"
+                );
+                chunks.push(std::mem::take(&mut self.buffer));
+                return chunks;
+            }
             tracing::trace!(
                 len = self.buffer.len(),
                 "waiting for bracketed paste terminator"
@@ -2253,6 +2272,30 @@ mod tests {
             panic!("expected paste");
         };
         assert_eq!(text, "hello\nworld");
+    }
+
+    #[test]
+    fn oversize_bracketed_paste_without_terminator_is_flushed_raw() {
+        let mut framer = RawInputByteFramer::default();
+
+        let mut payload = BRACKETED_PASTE_START.to_vec();
+        payload.extend(std::iter::repeat(b'x').take(MAX_BRACKETED_PASTE_HOLD_BYTES + 1));
+        // No terminator is ever sent; push holds the whole unterminated paste.
+        assert!(framer.push(&payload).is_empty());
+
+        // Below the cap the framer keeps holding and returns nothing.
+        let mut below = BRACKETED_PASTE_START.to_vec();
+        below.extend(std::iter::repeat(b'x').take(4096));
+        let mut small = RawInputByteFramer::default();
+        assert!(small.push(&below).is_empty());
+        assert!(small.flush_timeout().is_empty());
+        assert!(small.has_pending_input());
+
+        // Past the cap the raw bytes are flushed without paste framing rather
+        // than buffered (and leaking memory) forever.
+        let chunks = framer.flush_timeout();
+        assert_eq!(chunks, vec![payload.clone()]);
+        assert!(!framer.has_pending_input());
     }
 
     #[test]
