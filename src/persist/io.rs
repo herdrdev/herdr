@@ -92,7 +92,7 @@ pub(super) fn save_to_paths(
     if let Some(history) = history {
         save_json_to_path(history_path, history)?;
     } else {
-        clear_path(history_path)?;
+        clear_path_and_tmp(history_path)?;
     }
     Ok(())
 }
@@ -103,6 +103,14 @@ pub(super) fn clear_path(path: &Path) -> std::io::Result<()> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+// Clears `path` and its `.tmp` recovery file. A stale `.tmp` left behind by
+// `write_fallback` must not survive a clear, or a later `load` would recover
+// state the user explicitly cleared.
+fn clear_path_and_tmp(path: &Path) -> std::io::Result<()> {
+    clear_path(path)?;
+    clear_path(&path.with_extension("json.tmp"))
 }
 
 pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>) {
@@ -117,7 +125,7 @@ pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>
 
 pub fn clear() {
     let path = session_path();
-    if let Err(err) = clear_path(&path) {
+    if let Err(err) = clear_path_and_tmp(&path) {
         crate::logging::session_clear_failed(&path, &err.to_string());
         return;
     }
@@ -127,36 +135,53 @@ pub fn clear() {
 
 pub fn clear_history() {
     let path = session_history_path();
-    if let Err(err) = clear_path(&path) {
+    if let Err(err) = clear_path_and_tmp(&path) {
         crate::logging::session_clear_failed(&path, &err.to_string());
     }
 }
 
-pub fn load() -> Option<SessionSnapshot> {
-    let path = session_path();
-    if let Some(snapshot) = try_load_snapshot(&path) {
-        return Some(snapshot);
-    }
-    // The write fallback in `write_fallback` can leave `session.json`
-    // truncated or invalid if the direct write fails partway, and keeps the
-    // complete snapshot in `session.json.tmp` for that case. Recover from it
-    // when the main file is missing or unreadable.
-    try_load_snapshot(&path.with_extension("json.tmp"))
+// Outcome of trying to load a snapshot from a single file.
+enum LoadOutcome<T> {
+    Loaded(T),
+    // The file is valid but from a newer herdr version. It must not be
+    // treated as recoverable: falling back to a `.tmp` file here could
+    // replace a real, valid (if unreadable) snapshot with stale data.
+    UnsupportedVersion,
+    // The file is missing, unreadable, or invalid.
+    Unavailable,
 }
 
-fn try_load_snapshot(path: &Path) -> Option<SessionSnapshot> {
+// Loads from `path`, falling back to its `.tmp` recovery file only when
+// `path` itself is missing or invalid (not when it is merely a newer,
+// unsupported version).
+fn load_with_recovery<T>(path: &Path, try_load: impl Fn(&Path) -> LoadOutcome<T>) -> Option<T> {
+    match try_load(path) {
+        LoadOutcome::Loaded(value) => Some(value),
+        LoadOutcome::UnsupportedVersion => None,
+        LoadOutcome::Unavailable => match try_load(&path.with_extension("json.tmp")) {
+            LoadOutcome::Loaded(value) => Some(value),
+            LoadOutcome::UnsupportedVersion | LoadOutcome::Unavailable => None,
+        },
+    }
+}
+
+pub fn load() -> Option<SessionSnapshot> {
+    load_with_recovery(&session_path(), try_load_snapshot)
+}
+
+fn try_load_snapshot(path: &Path) -> LoadOutcome<SessionSnapshot> {
     if !path.exists() {
-        return None;
+        return LoadOutcome::Unavailable;
     }
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) => {
             warn!(err = %err, "failed to read session file");
-            return None;
+            return LoadOutcome::Unavailable;
         }
     };
     match parse_snapshot(&content) {
-        Ok(snapshot) => Some(snapshot),
+        Ok(snapshot) => LoadOutcome::Loaded(snapshot),
         Err(err) => {
             if let Some(version) = snapshot_file_version(&content) {
                 if version > SNAPSHOT_VERSION {
@@ -165,36 +190,32 @@ fn try_load_snapshot(path: &Path) -> Option<SessionSnapshot> {
                         supported = SNAPSHOT_VERSION,
                         "session file is from a newer herdr version, ignoring"
                     );
-                    return None;
+                    return LoadOutcome::UnsupportedVersion;
                 }
             }
             warn!(err = %err, "failed to parse session file, ignoring");
-            None
+            LoadOutcome::Unavailable
         }
     }
 }
 
 pub fn load_history() -> Option<SessionHistorySnapshot> {
-    let path = session_history_path();
-    if let Some(snapshot) = try_load_history(&path) {
-        return Some(snapshot);
-    }
-    try_load_history(&path.with_extension("json.tmp"))
+    load_with_recovery(&session_history_path(), try_load_history)
 }
 
-fn try_load_history(path: &Path) -> Option<SessionHistorySnapshot> {
+fn try_load_history(path: &Path) -> LoadOutcome<SessionHistorySnapshot> {
     if !path.exists() {
-        return None;
+        return LoadOutcome::Unavailable;
     }
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) => {
             warn!(err = %err, "failed to read session history file");
-            return None;
+            return LoadOutcome::Unavailable;
         }
     };
     match parse_history_snapshot(&content) {
-        Ok(snapshot) => Some(snapshot),
+        Ok(snapshot) => LoadOutcome::Loaded(snapshot),
         Err(err) => {
             if let Some(version) = snapshot_file_version(&content) {
                 if version > SNAPSHOT_VERSION {
@@ -203,11 +224,11 @@ fn try_load_history(path: &Path) -> Option<SessionHistorySnapshot> {
                         supported = SNAPSHOT_VERSION,
                         "session history file is from a newer herdr version, ignoring"
                     );
-                    return None;
+                    return LoadOutcome::UnsupportedVersion;
                 }
             }
             warn!(err = %err, "failed to parse session history file, ignoring");
-            None
+            LoadOutcome::Unavailable
         }
     }
 }
@@ -434,18 +455,88 @@ mod tests {
     }
 
     #[test]
-    fn try_load_snapshot_recovers_from_tmp_file_when_main_file_is_invalid() {
+    fn load_with_recovery_prefers_a_valid_main_file() {
+        let path = temp_session_path("recovery-prefers-main");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut main = empty_snapshot();
+        main.selected = 1;
+        save_to_path(&path, &main).unwrap();
+        let mut stale_tmp = empty_snapshot();
+        stale_tmp.selected = 99;
+        save_to_path(&path.with_extension("json.tmp"), &stale_tmp).unwrap();
+
+        let loaded = load_with_recovery(&path, try_load_snapshot).unwrap();
+
+        assert_eq!(loaded.selected, 1);
+    }
+
+    #[test]
+    fn load_with_recovery_recovers_from_tmp_file_when_main_file_is_invalid() {
         // Mirrors what `write_fallback` can leave behind: a corrupt main
         // file next to a complete `.tmp` file.
-        let path = temp_session_path("recover-from-tmp");
+        let path = temp_session_path("recovery-recovers-from-tmp");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "not valid json").unwrap();
         let mut snap = empty_snapshot();
         snap.selected = 5;
         save_to_path(&path.with_extension("json.tmp"), &snap).unwrap();
 
-        assert!(try_load_snapshot(&path).is_none());
-        let recovered = try_load_snapshot(&path.with_extension("json.tmp")).unwrap();
+        let recovered = load_with_recovery(&path, try_load_snapshot).unwrap();
+
         assert_eq!(recovered.selected, 5);
+    }
+
+    #[test]
+    fn load_with_recovery_does_not_recover_a_newer_unsupported_main_file() {
+        // A main file from a newer herdr version is valid, just not
+        // understood yet. It must not be treated as a recoverable failure,
+        // or a stale `.tmp` could silently replace real (if unreadable)
+        // data.
+        let path = temp_session_path("recovery-skips-unsupported-version");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version": {}, "workspaces": []}}"#,
+                SNAPSHOT_VERSION + 1
+            ),
+        )
+        .unwrap();
+        let mut stale_tmp = empty_snapshot();
+        stale_tmp.selected = 5;
+        save_to_path(&path.with_extension("json.tmp"), &stale_tmp).unwrap();
+
+        assert!(load_with_recovery(&path, try_load_snapshot).is_none());
+    }
+
+    #[test]
+    fn load_history_with_recovery_recovers_from_tmp_file_when_main_file_is_invalid() {
+        let (path, _) = temp_session_paths("history-recovers-from-tmp");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not valid json").unwrap();
+        save_json_to_path(
+            &path.with_extension("json.tmp"),
+            &history_snapshot("secret"),
+        )
+        .unwrap();
+
+        let recovered = load_with_recovery(&path, try_load_history).unwrap();
+
+        assert!(recovered.workspaces[0].tabs[0].panes[&0]
+            .ansi
+            .contains("secret"));
+    }
+
+    #[test]
+    fn clear_path_and_tmp_removes_both_files() {
+        let path = temp_session_path("clear-with-tmp");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        save_to_path(&path, &empty_snapshot()).unwrap();
+        std::fs::write(path.with_extension("json.tmp"), "{}").unwrap();
+
+        clear_path_and_tmp(&path).unwrap();
+
+        assert!(!path.exists());
+        assert!(!path.with_extension("json.tmp").exists());
     }
 }
