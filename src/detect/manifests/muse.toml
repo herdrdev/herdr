@@ -1,0 +1,80 @@
+id = "muse"
+version = "2026.08.05.1"
+min_engine_version = 2
+updated_at = "2026-08-05T00:00:00Z"
+aliases = ["muse-code", "muse_code"]
+
+# Muse — Muse Spark by Meta (https://dev.meta.ai)
+# Binary: muse (installed via https://dev.meta.ai/install.sh -> ~/.local/bin/muse)
+# Launcher: https://api.meta.ai/muse-launcher.sh
+# Detection is screen-manifest based (no lifecycle hook authority yet).
+# Rules derived from conservative patterns similar to codex/cursor; refine with
+# `herdr agent read <pane> --source detection --format text/ansi` and
+# `herdr agent explain <pane> --json` per AGENTS.md.
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+visible_blocker = true
+contains = ["Action Required"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+visible_working = true
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "permission_prompt_blocked"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["allow this command?"] },
+  { contains = ["approve"] },
+  { contains = ["[y/n]"] },
+  { contains = ["yes (y)"] },
+]
+
+[[rules]]
+id = "question_prompt_blocked"
+state = "blocked"
+priority = 850
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["press enter to confirm or esc to cancel"] },
+  { contains = ["enter to submit"] },
+  { contains = ["esc to cancel"] },
+]
+
+[[rules]]
+id = "working_indicator"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["ctrl+c to interrupt"] },
+  { line_regex = ['(?i)working'] },
+  { regex = ['[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'] },
+]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 100
+region = "osc_title"
+visible_idle = true
+regex = ['\\S']
+not = [
+  { regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)'] },
+  { contains = ["Action Required"] },
+]
