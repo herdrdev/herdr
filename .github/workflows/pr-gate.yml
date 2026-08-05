@@ -2,7 +2,7 @@ name: PR Gate
 
 on:
   pull_request_target:
-    types: [opened, closed, reopened, synchronize]
+    types: [opened, closed, reopened]
 
 concurrency:
   group: pr-gate-${{ github.event.pull_request.number }}
@@ -120,12 +120,16 @@ jobs:
 
             async function removeReviewLabel() {
               if (!(await currentLabels()).has(REVIEW_LABEL)) return;
-              await github.rest.issues.removeLabelForIssue({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullNumber,
-                name: REVIEW_LABEL,
-              });
+              try {
+                await github.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullNumber,
+                  name: REVIEW_LABEL,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
             }
 
             async function upsertGateComment(message) {
