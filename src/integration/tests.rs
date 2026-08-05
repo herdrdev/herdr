@@ -2376,6 +2376,64 @@ fn install_hermes_writes_plugin_and_enables_it() {
 }
 
 #[test]
+fn install_hermes_writes_plugin_and_enables_it_for_profiles() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let hermes_dir = home.join(".hermes");
+    let profiles_dir = hermes_dir.join("profiles");
+    let default_profile = profiles_dir.join("default");
+    let work_profile = profiles_dir.join("work");
+    fs::create_dir_all(&default_profile).unwrap();
+    fs::create_dir_all(&work_profile).unwrap();
+    fs::write(hermes_dir.join("config.yaml"), "model:\n  provider: auto\n").unwrap();
+    fs::write(
+        default_profile.join("config.yaml"),
+        "plugins:\n  - existing\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_hermes().unwrap();
+    let default_plugin_dir = default_profile
+        .join("plugins")
+        .join(HERMES_PLUGIN_INSTALL_NAME);
+    let work_plugin_dir = work_profile
+        .join("plugins")
+        .join(HERMES_PLUGIN_INSTALL_NAME);
+    let default_config = fs::read_to_string(default_profile.join("config.yaml")).unwrap();
+    let work_config = fs::read_to_string(work_profile.join("config.yaml")).unwrap();
+
+    assert_eq!(
+        installed.profile_plugin_dirs,
+        vec![default_plugin_dir.clone(), work_plugin_dir.clone()]
+    );
+    assert_eq!(
+        installed.profile_config_paths,
+        vec![
+            default_profile.join("config.yaml"),
+            work_profile.join("config.yaml")
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(default_plugin_dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME)).unwrap(),
+        HERMES_PLUGIN_INIT_ASSET
+    );
+    assert_eq!(
+        fs::read_to_string(work_plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME)).unwrap(),
+        HERMES_PLUGIN_MANIFEST_ASSET
+    );
+    assert_eq!(
+        default_config,
+        "plugins:\n  - herdr-agent-state\n  - existing\n"
+    );
+    assert!(work_config.contains("plugins:\n  enabled:\n    - herdr-agent-state"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_hermes_is_idempotent_for_enabled_entry() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -2505,6 +2563,61 @@ fn uninstall_hermes_removes_plugin_and_enabled_entry() {
     assert!(!plugin_dir.exists());
     assert!(config.contains("    - other-plugin"));
     assert!(!config.contains("herdr-agent-state"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_hermes_removes_plugin_and_enabled_entry_for_profiles() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let hermes_dir = home.join(".hermes");
+    let profiles_dir = hermes_dir.join("profiles");
+    let default_profile = profiles_dir.join("default");
+    let work_profile = profiles_dir.join("work");
+    let default_plugin_dir = default_profile
+        .join("plugins")
+        .join(HERMES_PLUGIN_INSTALL_NAME);
+    let work_plugin_dir = work_profile
+        .join("plugins")
+        .join(HERMES_PLUGIN_INSTALL_NAME);
+    fs::create_dir_all(&default_plugin_dir).unwrap();
+    fs::create_dir_all(&work_plugin_dir).unwrap();
+    fs::create_dir_all(hermes_dir.join("plugins").join(HERMES_PLUGIN_INSTALL_NAME)).unwrap();
+    fs::write(
+        hermes_dir.join("config.yaml"),
+        "plugins:\n  enabled:\n    - herdr-agent-state\n",
+    )
+    .unwrap();
+    fs::write(
+        default_profile.join("config.yaml"),
+        "plugins:\n  - other-plugin\n  - herdr-agent-state\n",
+    )
+    .unwrap();
+    fs::write(
+        work_profile.join("config.yaml"),
+        "plugins:\n  enabled:\n    - herdr-agent-state\n    - existing\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let result = uninstall_hermes().unwrap();
+    let default_config = fs::read_to_string(default_profile.join("config.yaml")).unwrap();
+    let work_config = fs::read_to_string(work_profile.join("config.yaml")).unwrap();
+
+    assert_eq!(
+        result.profile_plugin_dirs,
+        vec![default_plugin_dir.clone(), work_plugin_dir.clone()]
+    );
+    assert_eq!(result.removed_profile_plugin_dirs, 2);
+    assert_eq!(result.updated_profile_configs, 2);
+    assert!(!default_plugin_dir.exists());
+    assert!(!work_plugin_dir.exists());
+    assert_eq!(default_config, "plugins:\n  - other-plugin\n");
+    assert!(work_config.contains("    - existing"));
+    assert!(!work_config.contains("herdr-agent-state"));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);

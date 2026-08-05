@@ -158,7 +158,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
         }
         crate::api::schema::IntegrationTarget::Hermes => {
             let installed = install_hermes()?;
-            vec![
+            let mut messages = vec![
                 format!(
                     "installed hermes integration plugin to {}",
                     installed.plugin_dir.display()
@@ -167,7 +167,18 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                     "enabled hermes plugin in {}",
                     installed.config_path.display()
                 ),
-            ]
+            ];
+            if !installed.profile_plugin_dirs.is_empty() {
+                messages.push(format!(
+                    "installed hermes integration plugin to {} profile(s)",
+                    installed.profile_plugin_dirs.len()
+                ));
+                messages.push(format!(
+                    "enabled hermes plugin in {} profile config(s)",
+                    installed.profile_config_paths.len()
+                ));
+            }
+            messages
         }
         crate::api::schema::IntegrationTarget::Qodercli => {
             let installed = install_qodercli()?;
@@ -500,6 +511,18 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no hermes plugin entry found in {}",
                     result.config_path.display()
+                ));
+            }
+            if !result.profile_plugin_dirs.is_empty() {
+                messages.push(format!(
+                    "removed hermes integration plugin from {} of {} profile(s)",
+                    result.removed_profile_plugin_dirs,
+                    result.profile_plugin_dirs.len()
+                ));
+                messages.push(format!(
+                    "disabled hermes plugin in {} of {} profile config(s)",
+                    result.updated_profile_configs,
+                    result.profile_config_paths.len()
                 ));
             }
             messages

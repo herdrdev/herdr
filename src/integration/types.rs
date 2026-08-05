@@ -59,6 +59,8 @@ pub(crate) struct OmpInstallPaths {
 pub(crate) struct HermesInstallPaths {
     pub plugin_dir: PathBuf,
     pub config_path: PathBuf,
+    pub profile_plugin_dirs: Vec<PathBuf>,
+    pub profile_config_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -240,6 +242,10 @@ pub(crate) struct HermesUninstallResult {
     pub config_path: PathBuf,
     pub removed_plugin_dir: bool,
     pub updated_config: bool,
+    pub profile_plugin_dirs: Vec<PathBuf>,
+    pub profile_config_paths: Vec<PathBuf>,
+    pub removed_profile_plugin_dirs: usize,
+    pub updated_profile_configs: usize,
 }
 
 #[derive(Debug)]
