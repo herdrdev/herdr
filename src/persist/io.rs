@@ -55,14 +55,24 @@ fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io:
     std::fs::write(&tmp_path, &json)?;
     if let Err(err) = std::fs::rename(&tmp_path, &target) {
         if is_cross_filesystem_rename_error(err.kind()) {
-            let result = std::fs::write(&target, &json);
-            let _ = std::fs::remove_file(&tmp_path);
-            return result;
+            return write_fallback(&target, &tmp_path, &json);
         }
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
     Ok(())
+}
+
+// Writes directly to `target` when `rename` cannot be used. The temp file at
+// `tmp_path` still holds a complete copy of `json`, so it is only removed
+// once the direct write has actually landed; if the direct write fails
+// partway through, the temp file remains as a recovery copy.
+fn write_fallback(target: &Path, tmp_path: &Path, json: &str) -> std::io::Result<()> {
+    let result = std::fs::write(target, json);
+    if result.is_ok() {
+        let _ = std::fs::remove_file(tmp_path);
+    }
+    result
 }
 
 fn is_cross_filesystem_rename_error(kind: std::io::ErrorKind) -> bool {
@@ -365,9 +375,9 @@ mod tests {
 
     #[test]
     fn save_to_path_propagates_unrelated_rename_errors() {
-        // Renaming the temp file onto an existing directory fails with
-        // `NotADirectory`, which is not a cross-filesystem error. Herdr must
-        // still report the error and clean up the temp file.
+        // Renaming the temp file onto an existing directory fails with an
+        // unrelated rename error (the exact kind varies by platform). Herdr
+        // must still report the error and clean up the temp file.
         let target = temp_session_path("rename-onto-directory");
         std::fs::create_dir_all(&target).unwrap();
 
@@ -375,5 +385,33 @@ mod tests {
 
         assert!(!is_cross_filesystem_rename_error(err.kind()));
         assert!(!target.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn write_fallback_removes_tmp_file_on_success() {
+        let target = temp_session_path("fallback-success");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let tmp_path = target.with_extension("json.tmp");
+        std::fs::write(&tmp_path, "{}").unwrap();
+
+        write_fallback(&target, &tmp_path, "{}").unwrap();
+
+        assert!(target.exists());
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn write_fallback_keeps_tmp_file_as_recovery_copy_on_failure() {
+        // `target`'s parent directory does not exist, so the direct write
+        // fails. The temp file must survive so the last known-good snapshot
+        // is not lost.
+        let target = temp_session_path("fallback-failure");
+        let tmp_path = temp_session_path("fallback-failure-tmp");
+        std::fs::create_dir_all(tmp_path.parent().unwrap()).unwrap();
+        std::fs::write(&tmp_path, "{}").unwrap();
+
+        write_fallback(&target, &tmp_path, "{}").unwrap_err();
+
+        assert!(tmp_path.exists());
     }
 }
