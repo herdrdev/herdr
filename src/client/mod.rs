@@ -414,6 +414,7 @@ fn setup_terminal_with_capabilities(
     Ok(TerminalGuard {
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
+        reset_keyboard_enhancement_flags: enable_client_protocols,
         #[cfg(windows)]
         restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
     })
@@ -427,6 +428,9 @@ fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> boo
 struct TerminalGuard {
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    /// Only set when setup pushed a keyboard enhancement stack entry. Direct
+    /// attach never pushes, so it must not pop on teardown either.
+    reset_keyboard_enhancement_flags: bool,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
 }
@@ -569,6 +573,7 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
 fn restore_terminal_state(
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    reset_keyboard_enhancement_flags: bool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) {
     let _ = clear_received_kitty_graphics(&mut io::stdout());
@@ -579,7 +584,9 @@ fn restore_terminal_state(
         let _ = io::stdout().flush();
     }
 
-    let _ = pop_keyboard_enhancement_flags();
+    if reset_keyboard_enhancement_flags {
+        let _ = pop_keyboard_enhancement_flags();
+    }
 
     let _ = execute!(
         io::stdout(),
@@ -650,6 +657,7 @@ impl Drop for TerminalGuard {
         restore_terminal_state(
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
+            self.reset_keyboard_enhancement_flags,
             #[cfg(windows)]
             self.restore_windows_input_mode,
         );
@@ -1204,6 +1212,7 @@ fn run_client_with_mode(
     // Install a panic hook to restore the terminal on panic (same as monolithic).
     let panic_resets_modify_other_keys = terminal_guard.reset_modify_other_keys;
     let panic_resets_host_color_scheme_reports = terminal_guard.reset_host_color_scheme_reports;
+    let panic_resets_keyboard_enhancement_flags = terminal_guard.reset_keyboard_enhancement_flags;
     #[cfg(windows)]
     let panic_restore_windows_input_mode = terminal_guard.restore_windows_input_mode;
     let original_hook = std::panic::take_hook();
@@ -1211,6 +1220,7 @@ fn run_client_with_mode(
         restore_terminal_state(
             panic_resets_modify_other_keys,
             panic_resets_host_color_scheme_reports,
+            panic_resets_keyboard_enhancement_flags,
             #[cfg(windows)]
             panic_restore_windows_input_mode,
         );

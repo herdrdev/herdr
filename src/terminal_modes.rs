@@ -24,7 +24,11 @@ pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
     if report_all_keys {
         flags |= crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
     }
-    write!(writer, "\x1b[={}u", flags.bits())?;
+    // Mode 1 (set the given flags, reset the rest) is the protocol default, but
+    // it has to be written explicitly: iTerm2 matches the mode parameter against
+    // 1, 2, and 3 with no default arm, so an omitted mode leaves the sequence a
+    // no-op there and the host never follows the focused pane's key reporting.
+    write!(writer, "\x1b[={};1u", flags.bits())?;
     writer.flush()
 }
 
@@ -47,7 +51,7 @@ mod tests {
         set_host_kitty_keyboard_report_all(&mut output, true).unwrap();
         set_host_kitty_keyboard_report_all(&mut output, false).unwrap();
 
-        assert_eq!(output, b"\x1b[=15u\x1b[=7u");
+        assert_eq!(output, b"\x1b[=15;1u\x1b[=7;1u");
     }
 
     #[test]
