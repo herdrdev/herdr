@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod clipboard_image;
+
 use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
@@ -20,9 +22,14 @@ use windows_sys::{
             NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
+        Security::SECURITY_ATTRIBUTES,
+        Storage::FileSystem::CreateDirectoryW,
         System::{
             Console::GetConsoleWindow,
-            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+                RegisterClipboardFormatW, SetClipboardData,
+            },
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
@@ -35,10 +42,10 @@ use windows_sys::{
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
-                GlobalAlloc, GlobalLock, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
+                GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
                 MEMORY_BASIC_INFORMATION,
             },
-            Ole::CF_UNICODETEXT,
+            Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
                 GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
                 QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
@@ -82,6 +89,111 @@ static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRu
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
+    super::RemoteSshConfigPaths {
+        user_config: std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .map(|home| home.join(".ssh").join("config")),
+        system_config: std::env::var_os("PROGRAMDATA")
+            .map(PathBuf::from)
+            .map(|dir| dir.join("ssh").join("ssh_config")),
+        multiplexing: false,
+    }
+}
+
+pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
+    let base = remote_private_temp_base();
+    std::fs::create_dir_all(&base)?;
+    for attempt in 0..100 {
+        let dir = base.join(format!("ssh-{}-{attempt}", std::process::id()));
+        match create_remote_private_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to create private herdr ssh config directory",
+    ))
+}
+
+pub(crate) fn create_remote_ssh_config_file(
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    use interprocess::os::windows::security_descriptor::{
+        AsSecurityDescriptorExt as _, SecurityDescriptor,
+    };
+    use widestring::U16CString;
+
+    let sddl = U16CString::from_str("D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;OW)")
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+    let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
+    let mut security_attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+        lpSecurityDescriptor: null_mut(),
+        bInheritHandle: 0,
+    };
+    security_descriptor.write_to_security_attributes(&mut security_attributes);
+    let path = extended_length_path(path)?;
+    if unsafe { CreateDirectoryW(path.as_ptr(), &security_attributes) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let path = std::path::absolute(path)?;
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let mut extended = if wide.starts_with(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16])
+        || wide.starts_with(&[b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16])
+    {
+        wide
+    } else if wide.starts_with(&[b'\\' as u16, b'\\' as u16]) {
+        "\\\\?\\UNC\\"
+            .encode_utf16()
+            .chain(wide.into_iter().skip(2))
+            .collect()
+    } else {
+        "\\\\?\\".encode_utf16().chain(wide).collect()
+    };
+    extended.push(0);
+    Ok(extended)
+}
+
+pub(crate) fn remote_private_temp_base() -> PathBuf {
+    crate::config::state_dir().join("remote")
+}
+
+pub(crate) fn remote_bridge_endpoint_path(_readable_name: &str, short_name: &str) -> PathBuf {
+    remote_private_temp_base().join(short_name)
+}
+
+pub(crate) fn remote_reattach_program(program: &str) -> String {
+    let path = std::env::current_exe()
+        .ok()
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| PathBuf::from(program));
+    format!(
+        "& {}",
+        remote_reattach_argument(&path.display().to_string())
+    )
+}
+
+pub(crate) fn remote_reattach_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
 
 /// Encode native or targeted semantic Win32 input for a compatible ConPTY destination.
 pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
@@ -1242,10 +1354,74 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     }
 }
 
-// Windows does not wire clipboard-image bridging into semantic input yet.
-#[cfg_attr(windows, allow(dead_code))]
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
+    for attempt in 0..10 {
+        if unsafe { OpenClipboard(null_mut()) } != 0 {
+            let _clipboard = ClipboardGuard;
+            if let Some(bytes) = read_registered_png_clipboard() {
+                return Some(ClipboardImage {
+                    bytes,
+                    extension: "png",
+                });
+            }
+            for format in [CF_DIBV5 as u32, CF_DIB as u32] {
+                if let Some(bytes) =
+                    clipboard_global_bytes(format, clipboard_image::MAX_CLIPBOARD_ALLOCATION)
+                {
+                    if let Some(bytes) = clipboard_image::dib_to_png(&bytes) {
+                        return Some(ClipboardImage {
+                            bytes,
+                            extension: "png",
+                        });
+                    }
+                }
+            }
+            return None;
+        }
+        if attempt < 9 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     None
+}
+
+fn read_registered_png_clipboard() -> Option<Vec<u8>> {
+    static PNG_FORMAT: LazyLock<u32> = LazyLock::new(|| {
+        let name = wide_null("PNG");
+        unsafe { RegisterClipboardFormatW(name.as_ptr()) }
+    });
+    if *PNG_FORMAT == 0 {
+        return None;
+    }
+    let bytes = clipboard_global_bytes(
+        *PNG_FORMAT,
+        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD + 64 * 1024,
+    )?;
+    clipboard_image::validated_png(&bytes)
+}
+
+fn clipboard_global_bytes(format: u32, max_bytes: usize) -> Option<Vec<u8>> {
+    let handle = unsafe { GetClipboardData(format) };
+    if handle.is_null() {
+        return None;
+    }
+    let data = unsafe { GlobalLock(handle) };
+    if data.is_null() {
+        return None;
+    }
+    let size = unsafe { GlobalSize(handle) };
+    if size == 0 || size > max_bytes {
+        unsafe {
+            GlobalUnlock(handle);
+        }
+        return None;
+    }
+    let mut bytes = vec![0_u8; size];
+    unsafe {
+        copy_nonoverlapping(data.cast::<u8>(), bytes.as_mut_ptr(), size);
+        GlobalUnlock(handle);
+    }
+    Some(bytes)
 }
 
 pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
@@ -1786,6 +1962,21 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn private_remote_directory_supports_long_paths() {
+        let base = std::env::temp_dir().join(format!(
+            "herdr-private-remote-dir-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&base).expect("create test base");
+        let private = base.join("x".repeat(240));
+
+        super::create_remote_private_dir(&private).expect("create private long-path directory");
+        fs::write(private.join("probe"), b"ok").expect("write inherited private file");
+
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
 
     #[test]
     fn windows_conpty_native_encoder_uses_canonical_phase_and_repeat_count() {

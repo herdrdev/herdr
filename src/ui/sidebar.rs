@@ -757,6 +757,9 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     let is_navigating = matches!(app.mode, Mode::Navigate);
 
     let p = &app.palette;
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(p.sidebar_bg));
     let sep_style = if is_navigating {
         Style::default().fg(p.accent)
     } else {
@@ -960,6 +963,9 @@ pub(super) fn render_sidebar(
     area: Rect,
 ) {
     let p = &app.palette;
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(p.sidebar_bg));
     let is_navigating = matches!(app.mode, Mode::Navigate);
     let sep_style = if is_navigating {
         Style::default().fg(p.accent)
@@ -1589,6 +1595,37 @@ mod tests {
                     row_text(buffer, row, width)
                 )
             })
+    }
+
+    #[test]
+    fn expanded_and_collapsed_sidebars_use_custom_background() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces.clear();
+        app.active = None;
+        app.palette.sidebar_bg = ratatui::style::Color::Rgb(12, 34, 56);
+        let area = Rect::new(0, 0, 26, 20);
+
+        let mut expanded = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        expanded
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        assert!(expanded
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg == app.palette.sidebar_bg));
+
+        let mut collapsed = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        collapsed
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .unwrap();
+        assert!(collapsed
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .all(|cell| cell.bg == app.palette.sidebar_bg));
     }
 
     #[test]
