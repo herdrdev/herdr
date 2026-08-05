@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::warn;
 
@@ -51,13 +52,43 @@ fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io:
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(snapshot)?;
-    let tmp_path = target.with_extension("json.tmp");
+    let tmp_path = unique_tmp_path(&target);
     std::fs::write(&tmp_path, &json)?;
     if let Err(err) = std::fs::rename(&tmp_path, &target) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
     Ok(())
+}
+
+/// Monotonic per-process counter so successive temp names never collide.
+static TMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Builds a process-unique temporary file path beside `target`. The previous
+/// fixed `.json.tmp` suffix collided when another herdr process (or a stalled
+/// first save) wrote to the same name, and — because `save_to_paths` writes
+/// `session.json` and `session-history.json` in two separate renames — a crash
+/// between them could leave a stale/foreign tmp that a live save then
+/// clobbered. Including the PID, a per-process counter, and a high-resolution
+/// timestamp keeps the name unique, and the tmp stays on the same filesystem
+/// as `target` so the subsequent rename remains atomic.
+fn unique_tmp_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "session.json".to_string());
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let seq = TMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(
+        ".{file_name}.{}.{}.{}.tmp",
+        std::process::id(),
+        seq,
+        nanos
+    ))
 }
 
 pub(super) fn save_to_paths(
@@ -336,5 +367,43 @@ mod tests {
             .file_type()
             .is_symlink());
         assert!(target.exists());
+    }
+
+    #[test]
+    fn unique_tmp_path_is_unique_per_call() {
+        let target = Path::new("/tmp/herdr-session-tests/session.json");
+        let a = unique_tmp_path(target);
+        let b = unique_tmp_path(target);
+        // Two consecutive calls must never collide (the old fixed .json.tmp
+        // name could).
+        assert_ne!(a, b);
+        // Both sit beside the target so rename stays on the same filesystem.
+        assert_eq!(a.parent(), target.parent());
+        assert_eq!(b.parent(), target.parent());
+        assert!(a.to_string_lossy().ends_with(".tmp"));
+    }
+
+    #[test]
+    fn save_to_paths_leaves_no_tmp_files_behind() {
+        let (session_path, history_path) = temp_session_paths("no-tmp-left");
+
+        save_to_paths(
+            &session_path,
+            &history_path,
+            &empty_snapshot(),
+            Some(&history_snapshot("no-tmp-secret")),
+        )
+        .unwrap();
+
+        assert!(session_path.exists());
+        assert!(history_path.exists());
+        let dir = session_path.parent().unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftovers.is_empty(), "tmp files leaked: {leftovers:?}");
     }
 }
