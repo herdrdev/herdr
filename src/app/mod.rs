@@ -5226,6 +5226,62 @@ last_pane = "prefix+tab"
     }
 
     #[tokio::test]
+    async fn host_report_all_supplies_printable_releases_for_event_type_only_panes() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>4;2m\x1b[=3;1u",
+            4,
+        );
+        assert_eq!(
+            runtime.keyboard_protocol(),
+            crate::input::KeyboardProtocol::Kitty { flags: 3 }
+        );
+        assert!(runtime
+            .input_state()
+            .is_some_and(|state| state.modify_other_keys));
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        assert!(app.host_keyboard_report_all_requested());
+
+        app.route_client_input(b"\x1b[106;1:1u\x1b[106;1:2u\x1b[106;1:3u".to_vec());
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            bytes::Bytes::from_static(b"\x1b[106;1:3u")
+        );
+        assert!(rx.try_recv().is_err());
+
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, focused)
+            .unwrap();
+        runtime.test_process_pty_bytes(b"\x1b[>4;0m");
+        assert!(!runtime
+            .input_state()
+            .is_some_and(|state| state.modify_other_keys));
+        assert!(!app.host_keyboard_report_all_requested());
+
+        #[cfg(unix)]
+        {
+            runtime.test_process_pty_bytes(b"\x1b[>4;1m");
+            assert!(!runtime
+                .input_state()
+                .is_some_and(|state| state.modify_other_keys));
+            assert!(!app.host_keyboard_report_all_requested());
+        }
+    }
+
+    #[tokio::test]
     async fn host_report_all_follows_terminal_protocol_and_command_modes() {
         let mut app = test_app();
         let mut workspace = Workspace::test_new("test");

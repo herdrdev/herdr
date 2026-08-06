@@ -1830,6 +1830,11 @@ pub(crate) fn is_package_manager_managed_exe_path(path: &Path) -> bool {
         || is_nix_store_exe_path_following_links(path)
 }
 
+#[cfg(not(unix))]
+pub(crate) fn is_package_manager_managed_exe_path(_path: &Path) -> bool {
+    false
+}
+
 fn is_homebrew_managed_exe_path_following_links(path: &Path) -> bool {
     if is_homebrew_managed_exe_path(path) {
         return true;

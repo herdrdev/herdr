@@ -282,7 +282,14 @@ impl App {
             None
         };
 
-        runtime.is_some_and(|runtime| runtime.keyboard_protocol().reports_all_keys())
+        runtime.is_some_and(|runtime| {
+            let protocol = runtime.keyboard_protocol();
+            protocol.reports_all_keys()
+                || (protocol.reports_event_types()
+                    && runtime
+                        .input_state()
+                        .is_some_and(|state| state.modify_other_keys))
+        })
     }
 
     fn terminal_input_runtime(
