@@ -1,0 +1,89 @@
+id = "codewhale"
+version = "2026.08.06.1"
+min_engine_version = 2
+updated_at = "2026-08-06T00:00:00Z"
+
+# Codewhale drives the window title (OSC 0) with a whale emoji + activity
+# verb while working (`🐳 working…`, `🐳 reasoning…`, `🐳 using tool…`,
+# `🐳 verifying…`), `🐳 waiting on you…` when it needs a user decision,
+# `✓ done` after a completed turn, and `Codewhale` at rest. It also emits
+# OSC 9;4 taskbar progress (state 1 busy, state 0 clear). The screen keeps
+# a bottom composer with a `❯` prompt; the working strip above it shows a
+# braille spinner and `Esc to interrupt`. Approval requests render an inline
+# bottom band with `Do you want to proceed?` and numbered allow/deny options.
+
+[[rules]]
+id = "osc_title_waiting_blocked"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+visible_blocker = true
+contains = ["waiting on you"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+visible_working = true
+regex = ['^(🐳|🐋) ']
+
+[[rules]]
+id = "approval_modal"
+state = "blocked"
+priority = 1000
+region = "whole_recent"
+visible_blocker = true
+contains = ["do you want to proceed?"]
+any = [
+  { contains = ["allow once"] },
+  { contains = ["allow for this session"] },
+  { contains = ["always allow this exact rule"] },
+  { contains = ["deny this call"] },
+  { contains = ["abort the turn"] },
+]
+
+[[rules]]
+id = "working_strip_screen"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['^▌?[\x{2800}-\x{28FF}] ']
+contains = ["esc to interrupt"]
+
+[[rules]]
+id = "osc_progress_working"
+state = "working"
+priority = 800
+region = "osc_progress"
+visible_working = true
+regex = ['^4;1']
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 500
+region = "osc_title"
+visible_idle = true
+regex = ['^(Codewhale|✓ done)$']
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 450
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+line_regex = ['^❯ ']
+not = [
+  { contains = ["esc to interrupt"] },
+  { line_regex = ['^▌?[\x{2800}-\x{28FF}] '] },
+]
+
+[[rules]]
+id = "osc_progress_idle"
+state = "idle"
+priority = 400
+region = "osc_progress"
+visible_idle = true
+regex = ['^4;0']

@@ -360,6 +360,88 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
 }
 
 #[test]
+fn codewhale_manifest_detects_idle_working_and_blocked_states() {
+    // Idle: composer prompt box with the `❯` marker, no working strip above.
+    let idle = explain(
+        Agent::Codewhale,
+        "────────────────────────────────────────────────────────────────────\n❯ Write a task or use /.\n────────────────────────────────────────────────────────────────────",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+
+    // Working: braille spinner rows above the composer, with the Esc-to-
+    // interrupt strip. Captured live from a codewhale session under herdr.
+    let working = explain(
+        Agent::Codewhale,
+        "⣤ ▶ run running · Ctrl+B → /jobs\n▌⣤ using tool · ×1 · Esc to interrupt · $0.06\n────────────────────────────────────────────\n❯ Coordinate parallel tasks...\n────────────────────────────────────────────",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+    assert_eq!(
+        working.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("working_strip_screen")
+    );
+
+    // Blocked: inline approval band with proceed question and numbered
+    // allow/deny options.
+    let blocked = explain(
+        Agent::Codewhale,
+        "  Do you want to proceed?\n  [1] Allow once\n  [2] Allow for this session (this kind)\n  [3] Always allow this exact rule in this repo\n  [4] Deny this call\n  [5] Abort the turn\n  ·  Pg↑/↓ review ·  Ctrl+O details ·  Esc abort\n────────────────────────────────────────────",
+    );
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+    assert_eq!(
+        blocked.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("approval_modal")
+    );
+}
+
+#[test]
+fn codewhale_osc_title_whale_prefix_is_working() {
+    // Codewhale sets the title to a whale + activity verb while working.
+    let result = osc_explain(Agent::Codewhale, "", "🐳 using tool…", "");
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn codewhale_osc_title_waiting_on_you_is_blocked() {
+    // ShellPhase::Waiting / Approval sets the title verb to "waiting on you…".
+    let result = osc_explain(Agent::Codewhale, "", "🐳 waiting on you…", "");
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_waiting_blocked")
+    );
+    assert!(result.visible_blocker);
+}
+
+#[test]
+fn codewhale_osc_title_rest_is_idle() {
+    // Reset title is the bare app name; completion shows the check marker.
+    for title in ["Codewhale", "✓ done"] {
+        let result = osc_explain(Agent::Codewhale, "", title, "");
+        assert_eq!(result.state, AgentState::Idle, "title {title}");
+        assert!(result.visible_idle);
+    }
+}
+
+#[test]
+fn codewhale_osc_progress_busy_is_working_and_clear_is_idle() {
+    let busy = osc_explain(Agent::Codewhale, "", "", "4;1");
+    assert_eq!(busy.state, AgentState::Working);
+    assert!(busy.visible_working);
+
+    let clear = osc_explain(Agent::Codewhale, "", "", "4;0");
+    assert_eq!(clear.state, AgentState::Idle);
+    assert!(clear.visible_idle);
+}
+
+#[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
         r#"

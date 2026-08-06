@@ -41,7 +41,7 @@ review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 利用可能なシェルペインとは、対話シェルのプロンプトに戻っており、フォアグラウンドをシェル自身が所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていないペインです。`agent start` の前にプロンプトへ戻してください。
 
-`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`maki` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
+`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`maki`、`codewhale` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
 
 `agent start` は、同じターミナルで期待したエージェントを検出し、対話入力の準備ができたと Herdr が判断してから返ります。起動待機はデフォルトで 30 秒です。`--timeout` は 3000 より大きく 300000 以下のミリ秒で指定します。
 
