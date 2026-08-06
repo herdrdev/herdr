@@ -705,7 +705,7 @@
         {
           "key": "ui.status_indicators",
           "type": "enum",
-          "default": "\"dots\"",
+          "default": "\"symbols\"",
           "description": "Choose compact color dots or distinct static symbols for agent states.",
           "values": [
             "dots",
