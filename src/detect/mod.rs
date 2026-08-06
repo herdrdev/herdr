@@ -207,6 +207,96 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
+/// The connection details for an SSH-family foreground transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTransport {
+    /// The `[user@]host` token from the SSH invocation.
+    pub dest: String,
+    /// The value supplied to `-p`, if present.
+    pub port: Option<String>,
+    /// The value supplied to `-F`, if present.
+    pub config_path: Option<String>,
+    /// The value supplied to `-i`, if present.
+    pub identity_file: Option<String>,
+}
+
+/// Detect an SSH-family client as the foreground process-group leader.
+pub fn remote_transport_in_job(job: &crate::platform::ForegroundJob) -> Option<RemoteTransport> {
+    let leader = job
+        .processes
+        .iter()
+        .find(|process| process.pid == job.process_group_id)?;
+    let executable = leader.argv0.as_deref().unwrap_or(&leader.name);
+    let executable_name = path_basename(executable).to_lowercase();
+    let executable = executable_name
+        .strip_suffix(".exe")
+        .unwrap_or(executable_name.as_str());
+    if !matches!(executable, "ssh" | "autossh") {
+        return None;
+    }
+    parse_ssh_invocation(leader.argv.as_deref()?)
+}
+
+fn parse_ssh_invocation(argv: &[String]) -> Option<RemoteTransport> {
+    const OPTIONS_WITH_ARGUMENTS: &str = "BbcDEFIiJLlmOopQRSWw";
+    let mut port = None;
+    let mut config_path = None;
+    let mut identity_file = None;
+    let mut options_ended = false;
+    let mut index = 1;
+
+    while let Some(argument) = argv.get(index) {
+        index += 1;
+        if options_ended {
+            return Some(RemoteTransport {
+                dest: argument.clone(),
+                port,
+                config_path,
+                identity_file,
+            });
+        }
+        if argument == "--" {
+            options_ended = true;
+            continue;
+        }
+        if !argument.starts_with('-') || argument == "-" {
+            return Some(RemoteTransport {
+                dest: argument.clone(),
+                port,
+                config_path,
+                identity_file,
+            });
+        }
+
+        let option_bytes = argument.as_bytes();
+        let mut option_offset = 1;
+        while option_offset < option_bytes.len() {
+            let option = option_bytes[option_offset] as char;
+            option_offset += 1;
+            if !OPTIONS_WITH_ARGUMENTS.contains(option) {
+                continue;
+            }
+
+            let value = if option_offset < option_bytes.len() {
+                argument[option_offset..].to_string()
+            } else {
+                argv.get(index)?.clone()
+            };
+            if option_offset == option_bytes.len() {
+                index += 1;
+            }
+            match option {
+                'p' => port = Some(value),
+                'F' => config_path = Some(value),
+                'i' => identity_file = Some(value),
+                _ => {}
+            }
+            break;
+        }
+    }
+    None
+}
+
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
     if let Some(process) = job
         .processes
@@ -810,6 +900,86 @@ mod tests {
         assert_eq!(identify_agent("CLAUDE"), Some(Agent::Claude));
         assert_eq!(identify_agent("Codex"), Some(Agent::Codex));
         assert_eq!(identify_agent("Devin"), Some(Agent::Devin));
+    }
+
+    #[test]
+    fn remote_transport_in_job_parses_ssh_invocations() {
+        let expected = |dest: &str,
+                        port: Option<&str>,
+                        config_path: Option<&str>,
+                        identity_file: Option<&str>| {
+            Some(RemoteTransport {
+                dest: dest.to_string(),
+                port: port.map(str::to_string),
+                config_path: config_path.map(str::to_string),
+                identity_file: identity_file.map(str::to_string),
+            })
+        };
+        let cases = [
+            (
+                &["autossh", "host"][..],
+                "autossh",
+                expected("host", None, None, None),
+            ),
+            (
+                &["SSH.EXE", "host"][..],
+                "SSH.EXE",
+                expected("host", None, None, None),
+            ),
+            (
+                &["ssh", "--", "-host"][..],
+                "ssh",
+                expected("-host", None, None, None),
+            ),
+            (
+                &["ssh", "-p", "2222", "u@h"][..],
+                "ssh",
+                expected("u@h", Some("2222"), None, None),
+            ),
+            (
+                &["ssh", "-tt", "host"][..],
+                "ssh",
+                expected("host", None, None, None),
+            ),
+            (
+                &["ssh", "-vAL", "8080:x:80", "host"][..],
+                "ssh",
+                expected("host", None, None, None),
+            ),
+            (
+                &["ssh", "-p2222", "-Fconfig", "-ikey", "host"][..],
+                "ssh",
+                expected("host", Some("2222"), Some("config"), Some("key")),
+            ),
+            (
+                &["ssh", "-oProxyCommand=none", "host"][..],
+                "ssh",
+                expected("host", None, None, None),
+            ),
+            (&["ssh"][..], "ssh", None),
+            (&["mosh", "host"][..], "mosh", None),
+        ];
+
+        for (argv, name, expected) in cases {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 42,
+                processes: vec![foreground_process(42, name, argv)],
+            };
+            assert_eq!(remote_transport_in_job(&job), expected);
+        }
+    }
+
+    #[test]
+    fn remote_transport_in_job_ignores_non_leader_ssh_processes() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![
+                foreground_process(42, "codex", &["codex"]),
+                foreground_process(43, "ssh", &["ssh", "host"]),
+            ],
+        };
+
+        assert_eq!(remote_transport_in_job(&job), None);
     }
 
     #[test]

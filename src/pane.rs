@@ -40,6 +40,9 @@ use self::agent_detection::{
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
 };
+// Consumed only by the unix detection loops that emit remote prompt events.
+#[cfg(unix)]
+use self::agent_detection::remote_shell_prompt_ready;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{
     TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalTextMatch,
@@ -492,6 +495,9 @@ struct ProcessProbeResult {
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
     process_name: Option<String>,
+    // Read only by the unix detection loops that emit RemoteTransportChanged.
+    #[cfg_attr(windows, allow(dead_code))]
+    remote_transport: Option<crate::detect::RemoteTransport>,
 }
 
 fn agent_hint_for_foreground_job_members(
@@ -537,6 +543,7 @@ fn process_probe_result(
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
         process_name: Some(process_name),
+        remote_transport: None,
     }
 }
 
@@ -568,6 +575,15 @@ fn probe_foreground_process_from_jobs(
         if let Some((agent, process_name)) = crate::detect::identify_agent_in_job(job) {
             return process_probe_result(job, pid, agent, process_name);
         }
+        if let Some(remote_transport) = crate::detect::remote_transport_in_job(job) {
+            return ProcessProbeResult {
+                process_group_id: Some(job.process_group_id),
+                foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
+                agent: None,
+                process_name: None,
+                remote_transport: Some(remote_transport),
+            };
+        }
     }
 
     let foreground_job = foreground_job();
@@ -593,11 +609,16 @@ fn probe_foreground_process_from_jobs(
         }
 
         let identified = crate::detect::identify_agent_in_job(job);
+        let remote_transport = identified
+            .is_none()
+            .then(|| crate::detect::remote_transport_in_job(job))
+            .flatten();
         return ProcessProbeResult {
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
             agent: identified.as_ref().map(|(agent, _)| *agent),
             process_name: identified.map(|(_, process_name)| process_name),
+            remote_transport,
         };
     }
 
@@ -606,6 +627,7 @@ fn probe_foreground_process_from_jobs(
         foreground_is_pane_shell: false,
         agent: None,
         process_name: None,
+        remote_transport: None,
     }
 }
 
@@ -645,6 +667,9 @@ fn spawn_basic_detection_task(
         let mut last_visible_working = false;
         let mut last_visible_signal_refresh = None;
         let mut last_process_check = std::time::Instant::now();
+        let mut last_remote_transport: Option<crate::detect::RemoteTransport> = None;
+        let mut remote_transport_since: Option<std::time::Instant> = None;
+        let mut last_prompt_emit: Option<std::time::Instant> = None;
         let mut last_foreground_pgid = None;
         let mut has_process_probe = false;
         let mut acquisition_started_at = None;
@@ -683,6 +708,9 @@ fn spawn_basic_detection_task(
                     last_detection_text.clear();
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
+                    last_remote_transport = None;
+                    remote_transport_since = None;
+                    last_prompt_emit = None;
                     pending_idle.clear();
                 }
             }
@@ -729,6 +757,29 @@ fn spawn_basic_detection_task(
                 let had_process_probe = has_process_probe;
                 has_process_probe = true;
                 let probe = probe_foreground_process(pid, foreground_pgid);
+                let effective_remote_transport = if crate::config::remote_agent_reporting_enabled()
+                {
+                    probe.remote_transport.clone()
+                } else {
+                    None
+                };
+                if effective_remote_transport != last_remote_transport {
+                    if let Err(err) = state_events
+                        .send(AppEvent::RemoteTransportChanged {
+                            pane_id,
+                            transport: effective_remote_transport.clone(),
+                        })
+                        .await
+                    {
+                        warn!(
+                            pane = pane_id.raw(),
+                            err = %err,
+                            "failed to deliver RemoteTransportChanged event"
+                        );
+                    }
+                    remote_transport_since = effective_remote_transport.as_ref().map(|_| now);
+                    last_remote_transport = effective_remote_transport;
+                }
                 let process_group_id = probe.process_group_id;
                 let tracked_process_group_id =
                     process_group_for_change_tracking(foreground_pgid, process_group_id);
@@ -862,6 +913,37 @@ fn spawn_basic_detection_task(
                 &mut acquisition_started_at,
                 &mut last_content_change_at,
             );
+            if last_remote_transport.is_some()
+                && crate::config::remote_agent_reporting_enabled()
+                && remote_transport_since.is_some_and(|since| {
+                    now.duration_since(since) >= std::time::Duration::from_millis(1200)
+                })
+                && last_content_change_at.is_some_and(|last_change| {
+                    now.duration_since(last_change) >= std::time::Duration::from_millis(600)
+                })
+                && remote_shell_prompt_ready(
+                    &content,
+                    terminal.cursor_state(),
+                    terminal
+                        .scroll_metrics()
+                        .is_some_and(|metrics| metrics.offset_from_bottom > 0),
+                )
+                && last_prompt_emit.is_none_or(|last_emit| {
+                    now.duration_since(last_emit) >= std::time::Duration::from_secs(30)
+                })
+            {
+                if let Err(err) = state_events
+                    .send(AppEvent::RemoteTransportPromptReady { pane_id })
+                    .await
+                {
+                    warn!(
+                        pane = pane_id.raw(),
+                        err = %err,
+                        "failed to deliver RemoteTransportPromptReady event"
+                    );
+                }
+                last_prompt_emit = Some(now);
+            }
 
             let osc_title = terminal.agent_osc_title();
             let osc_progress = terminal.agent_osc_progress();
@@ -2101,6 +2183,14 @@ impl PaneRuntime {
                 let mut state = AgentState::Idle;
                 let mut last_visible_idle = initial_state.detected_agent.is_some();
                 let mut last_process_check = Instant::now();
+                #[cfg(unix)]
+                let mut last_remote_transport: Option<
+                    crate::detect::RemoteTransport,
+                > = None;
+                #[cfg(unix)]
+                let mut remote_transport_since: Option<Instant> = None;
+                #[cfg(unix)]
+                let mut last_prompt_emit: Option<Instant> = None;
                 let mut last_foreground_pgid = None;
                 let mut has_process_probe = false;
                 let mut acquisition_started_at = None;
@@ -2153,6 +2243,12 @@ impl PaneRuntime {
                             last_detection_text.clear();
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
+                            #[cfg(unix)]
+                            {
+                                last_remote_transport = None;
+                                remote_transport_since = None;
+                                last_prompt_emit = None;
+                            }
                             pending_idle.clear();
                         }
                     }
@@ -2200,6 +2296,33 @@ impl PaneRuntime {
                         has_process_probe = true;
                         if pid > 0 {
                             let probe = probe_foreground_process(pid, foreground_pgid);
+                            #[cfg(unix)]
+                            {
+                                let effective_remote_transport =
+                                    if crate::config::remote_agent_reporting_enabled() {
+                                        probe.remote_transport.clone()
+                                    } else {
+                                        None
+                                    };
+                                if effective_remote_transport != last_remote_transport {
+                                    if let Err(err) = state_events
+                                        .send(AppEvent::RemoteTransportChanged {
+                                            pane_id,
+                                            transport: effective_remote_transport.clone(),
+                                        })
+                                        .await
+                                    {
+                                        warn!(
+                                            pane = pane_id.raw(),
+                                            err = %err,
+                                            "failed to deliver RemoteTransportChanged event"
+                                        );
+                                    }
+                                    remote_transport_since =
+                                        effective_remote_transport.as_ref().map(|_| now);
+                                    last_remote_transport = effective_remote_transport;
+                                }
+                            }
                             let process_name = probe.process_name;
                             let process_group_id = probe.process_group_id;
                             let tracked_process_group_id = process_group_for_change_tracking(
@@ -2371,6 +2494,38 @@ impl PaneRuntime {
                         &mut acquisition_started_at,
                         &mut last_content_change_at,
                     );
+                    #[cfg(unix)]
+                    if last_remote_transport.is_some()
+                        && crate::config::remote_agent_reporting_enabled()
+                        && remote_transport_since.is_some_and(|since| {
+                            now.duration_since(since) >= Duration::from_millis(1200)
+                        })
+                        && last_content_change_at.is_some_and(|last_change| {
+                            now.duration_since(last_change) >= Duration::from_millis(600)
+                        })
+                        && remote_shell_prompt_ready(
+                            &content,
+                            terminal.cursor_state(),
+                            terminal
+                                .scroll_metrics()
+                                .is_some_and(|metrics| metrics.offset_from_bottom > 0),
+                        )
+                        && last_prompt_emit.is_none_or(|last_emit| {
+                            now.duration_since(last_emit) >= Duration::from_secs(30)
+                        })
+                    {
+                        if let Err(err) = state_events
+                            .send(AppEvent::RemoteTransportPromptReady { pane_id })
+                            .await
+                        {
+                            warn!(
+                                pane = pane_id.raw(),
+                                err = %err,
+                                "failed to deliver RemoteTransportPromptReady event"
+                            );
+                        }
+                        last_prompt_emit = Some(now);
+                    }
 
                     let osc_title = terminal.agent_osc_title();
                     let osc_progress = terminal.agent_osc_progress();

@@ -180,6 +180,10 @@ pub fn active_api_socket_path() -> PathBuf {
     api_socket_path_for(active_name().as_deref())
 }
 
+pub fn remote_report_socket_path() -> PathBuf {
+    data_dir_for(active_name().as_deref()).join("agent-report.sock")
+}
+
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
 }

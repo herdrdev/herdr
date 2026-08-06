@@ -466,6 +466,10 @@ impl App {
             agent_session: terminal_agent_session_info(terminal),
             scroll,
             revision: terminal.revision,
+            remote_target: terminal
+                .remote_transport
+                .as_ref()
+                .map(|transport| transport.dest.clone()),
         })
     }
 

@@ -37,7 +37,7 @@ fn ssh_check_command(target: &str) -> String {
     format!("ssh {}", shell_quote(target))
 }
 
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     if !value.is_empty()
         && value.chars().all(|ch| {
             ch.is_ascii_alphanumeric()

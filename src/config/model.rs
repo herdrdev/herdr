@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::{
+    collections::BTreeSet,
+    num::NonZeroUsize,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -907,14 +911,32 @@ pub struct RemoteConfig {
     /// Add keepalive fallbacks and private connection reuse for `herdr --remote`.
     /// Set false to run plain ssh unchanged. Default: true.
     pub manage_ssh_config: bool,
+    /// When a pane runs ssh, expose a report-only agent endpoint over the
+    /// connection and export herdr env on the remote shell so remote agents
+    /// appear in the sidebar. Default: false.
+    pub agent_reporting: bool,
 }
 
 impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             manage_ssh_config: true,
+            agent_reporting: false,
         }
     }
+}
+
+static REMOTE_AGENT_REPORTING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Process-global view of `[remote] agent_reporting`, refreshed on every
+/// config load so pane detection tasks read it without threading config
+/// through spawn constructors.
+pub(crate) fn remote_agent_reporting_enabled() -> bool {
+    REMOTE_AGENT_REPORTING_ENABLED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_remote_agent_reporting_enabled(enabled: bool) {
+    REMOTE_AGENT_REPORTING_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -1019,6 +1019,7 @@ pub enum SettingsSection {
     Toast,
     PaneLabels,
     Integrations,
+    Remote,
 }
 
 impl SettingsSection {
@@ -1029,6 +1030,7 @@ impl SettingsSection {
         Self::Toast,
         Self::PaneLabels,
         Self::Integrations,
+        Self::Remote,
     ];
 
     pub fn label(self) -> &'static str {
@@ -1039,6 +1041,7 @@ impl SettingsSection {
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
             Self::Integrations => "integrations",
+            Self::Remote => "remote",
         }
     }
 }
@@ -1548,6 +1551,10 @@ pub struct AppState {
     #[allow(dead_code)] // kept for backward compat; palette.accent is the source of truth
     pub accent: Color,
     pub sound: SoundConfig,
+    pub remote_agent_reporting: bool,
+    /// Owns SSH reverse-forward children for remote agent reporting; lazy,
+    /// spawns no worker thread until the first ssh claim.
+    pub remote_forwards: crate::app::remote_forward::RemoteForwardManager,
     pub local_sound_playback: bool,
     pub toast_config: ToastConfig,
     pub keybinds: Keybinds,
@@ -1613,6 +1620,10 @@ impl AppState {
         self.sound.enabled
     }
 
+    pub fn remote_agent_reporting(&self) -> bool {
+        self.remote_agent_reporting
+    }
+
     pub fn toast_delivery(&self) -> ToastDelivery {
         self.toast_config.delivery
     }
@@ -1649,7 +1660,10 @@ impl AppState {
     }
 
     pub(crate) fn settings_section_has_badge(&self, section: SettingsSection) -> bool {
-        section == SettingsSection::Integrations && self.integration_updates_available()
+        match section {
+            SettingsSection::Integrations => self.integration_updates_available(),
+            _ => false,
+        }
     }
 
     pub(crate) fn focused_pane_requests_mouse_capture_from(
@@ -1910,6 +1924,8 @@ impl AppState {
                 enabled: false,
                 ..SoundConfig::default()
             },
+            remote_agent_reporting: false,
+            remote_forwards: crate::app::remote_forward::RemoteForwardManager::for_test(),
             local_sound_playback: false,
             toast_config: ToastConfig::default(),
             keybinds: Keybinds::default(),

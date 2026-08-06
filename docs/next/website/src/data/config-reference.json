@@ -1078,6 +1078,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Add keepalive fallbacks and private connection reuse for `herdr --remote`. Set false to run plain ssh unchanged."
+        },
+        {
+          "key": "remote.agent_reporting",
+          "type": "boolean",
+          "default": "false",
+          "description": "When a pane runs ssh, expose a report-only agent endpoint over the connection and export herdr env on the remote shell so remote agents appear in the sidebar."
         }
       ]
     },

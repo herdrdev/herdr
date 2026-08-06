@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use bytes::Bytes;
 
 use crate::api::schema::{
@@ -1467,6 +1469,53 @@ impl App {
 
         encode_success(id, ResponseResult::Ok {})
     }
+    fn try_send_pane_bytes(
+        &self,
+        ws_idx: usize,
+        pane_id: PaneId,
+        bytes: Bytes,
+    ) -> Option<Result<(), tokio::sync::mpsc::error::TrySendError<Bytes>>> {
+        let runtime = self.lookup_runtime_sender(ws_idx, pane_id)?;
+        Some(runtime.try_send_bytes(bytes))
+    }
+
+    pub(super) fn maybe_inject_remote_env(&mut self, pane_id: PaneId) {
+        if !crate::config::remote_agent_reporting_enabled() {
+            return;
+        }
+        let Some((ws_idx, _)) = self.find_pane(pane_id) else {
+            return;
+        };
+        let Some(transport) = self.state.remote_transport_for_pane(pane_id) else {
+            return;
+        };
+        let Some(remote_socket_path) = self
+            .state
+            .remote_forwards
+            .remote_socket_path_for(&transport)
+        else {
+            return;
+        };
+        let Some(line) =
+            self.state
+                .remote_env_injection_line(pane_id, &remote_socket_path, Instant::now())
+        else {
+            return;
+        };
+        let Some(send_result) =
+            self.try_send_pane_bytes(ws_idx, pane_id, Bytes::from(line.into_bytes()))
+        else {
+            return;
+        };
+        match send_result {
+            Ok(()) => self.state.mark_remote_env_injected(pane_id, Instant::now()),
+            Err(err) => tracing::warn!(
+                pane = pane_id.raw(),
+                err = %err,
+                "failed to inject remote environment"
+            ),
+        }
+    }
 
     pub(super) fn handle_pane_send_text(
         &mut self,
@@ -1476,10 +1525,11 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
+        let Some(send_result) = self.try_send_pane_bytes(ws_idx, pane_id, Bytes::from(params.text))
+        else {
             return pane_not_found(id, &params.pane_id);
         };
-        if let Err(err) = runtime.try_send_bytes(Bytes::from(params.text)) {
+        if let Err(err) = send_result {
             return encode_error(id, "pane_send_failed", err.to_string());
         }
 

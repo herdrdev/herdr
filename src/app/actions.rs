@@ -1790,6 +1790,44 @@ pub(crate) struct PaneZoomOutcome {
 }
 
 impl AppState {
+    /// Toggle-off path for `[remote] agent_reporting`: every pane currently
+    /// marked as an SSH session reverts as if the session had ended — the
+    /// remote-reported authority releases and live transport state clears.
+    /// Detection loops never re-probe a stable ssh foreground on their own,
+    /// so this runs eagerly from the config-apply path.
+    pub(crate) fn release_all_remote_transports(&mut self) -> Vec<PaneStateUpdate> {
+        let pane_ids: Vec<PaneId> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.keys().copied().collect::<Vec<PaneId>>())
+            .collect();
+        let mut updates = Vec::new();
+        for pane_id in pane_ids {
+            let is_remote = self
+                .workspaces
+                .iter()
+                .find_map(|workspace| workspace.pane_state(pane_id))
+                .and_then(|pane| self.terminals.get(&pane.attached_terminal_id))
+                .is_some_and(|terminal| terminal.remote_transport.is_some());
+            if !is_remote {
+                continue;
+            }
+            // Release before clearing the transport, matching the
+            // RemoteTransportChanged None-transition: full-lifecycle
+            // authorities are only releasable while still marked remote.
+            updates.extend(self.update_terminal_state(pane_id, |terminal| {
+                terminal.remote_env_injected_at = None;
+                terminal.release_remote_hook_authority()
+            }));
+            updates.extend(self.update_terminal_state(pane_id, |terminal| {
+                terminal
+                    .set_remote_transport(None)
+                    .then_some(TerminalStateMutation::default())
+            }));
+        }
+        updates
+    }
+
     #[cfg(test)]
     pub fn navigate_pane(&mut self, direction: NavDirection) {
         let Some(ws_idx) = self.active else {
@@ -2665,6 +2703,72 @@ fn is_trailing_token_wrapper(ch: char) -> bool {
 // ---------------------------------------------------------------------------
 
 impl AppState {
+    pub(crate) fn remote_transport_for_pane(
+        &self,
+        pane_id: PaneId,
+    ) -> Option<crate::detect::RemoteTransport> {
+        let terminal_id = self.workspaces.iter().find_map(|workspace| {
+            workspace
+                .pane_state(pane_id)
+                .map(|pane| pane.attached_terminal_id.clone())
+        })?;
+        self.terminals
+            .get(&terminal_id)?
+            .remote_transport()
+            .cloned()
+    }
+
+    pub(crate) fn remote_env_injection_line(
+        &self,
+        pane_id: PaneId,
+        remote_socket_path: &str,
+        now: Instant,
+    ) -> Option<String> {
+        let workspace = self
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.pane_state(pane_id).is_some())?;
+        let pane = workspace.pane_state(pane_id)?;
+        let terminal = self.terminals.get(&pane.attached_terminal_id)?;
+        if terminal.remote_transport().is_none() || terminal.hook_authority_remote {
+            return None;
+        }
+        if terminal.remote_env_injected_at.is_some_and(|injected_at| {
+            now.saturating_duration_since(injected_at) < std::time::Duration::from_secs(30)
+        }) {
+            return None;
+        }
+        let pane_number = workspace.public_pane_number(pane_id)?;
+        let public_pane_id =
+            crate::workspace::public_pane_id_for_number(&workspace.id, pane_number);
+
+        // The leading space dodges shell history when the remote shell sets
+        // histignorespace. Plain bytes, without bracketed-paste markers, let
+        // readline execute the line.
+        // POSIX export covers sh/bash/zsh/ash and fish's compatibility builtin;
+        // csh/tcsh rejects the line harmlessly.
+        Some(format!(
+            " export HERDR_ENV=1 HERDR_PANE_ID={} HERDR_SOCKET_PATH={}\n",
+            crate::remote::shell_quote(&public_pane_id),
+            crate::remote::shell_quote(remote_socket_path),
+        ))
+    }
+
+    pub(crate) fn mark_remote_env_injected(&mut self, pane_id: PaneId, now: Instant) {
+        let Some(terminal_id) = self.workspaces.iter().find_map(|workspace| {
+            workspace
+                .pane_state(pane_id)
+                .map(|pane| pane.attached_terminal_id.clone())
+        }) else {
+            return;
+        };
+        if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+            terminal.remote_env_injected_at = Some(now);
+        }
+    }
+}
+
+impl AppState {
     pub fn apply_workspace_git_statuses(
         &mut self,
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
@@ -2795,6 +2899,45 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::RemoteTransportChanged { pane_id, transport } => {
+                let pane_exists = self
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.pane_state(pane_id).is_some());
+                let ssh_session_ended = transport.is_none();
+                let transport_for_forward = transport.clone();
+                let mut updates: Vec<PaneStateUpdate> = Vec::new();
+                if ssh_session_ended {
+                    // Release the remote-reported authority BEFORE dropping
+                    // the transport: full-lifecycle authorities are only
+                    // effective (and thus releasable) while the pane is still
+                    // marked remote. A hook authority reported over the
+                    // forward belongs to a process on the remote host whose
+                    // report stream is now dead — release it so the pane
+                    // leaves the agents section. Collateral: a local agent
+                    // backgrounded with ctrl+z while the user ssh's reports
+                    // "while remote" and is released here; it re-registers on
+                    // its next lifecycle event or foreground return.
+                    let release_update = self.update_terminal_state(pane_id, |terminal| {
+                        terminal.remote_env_injected_at = None;
+                        terminal.release_remote_hook_authority()
+                    });
+                    updates.extend(release_update);
+                }
+                updates.extend(self.update_terminal_state(pane_id, |terminal| {
+                    terminal
+                        .set_remote_transport(transport)
+                        .then_some(TerminalStateMutation::default())
+                }));
+                if pane_exists {
+                    match transport_for_forward {
+                        Some(transport) => self.remote_forwards.claim(pane_id, transport),
+                        None => self.remote_forwards.release(pane_id),
+                    }
+                }
+                updates
+            }
+            AppEvent::RemoteTransportPromptReady { .. } => Vec::new(),
             AppEvent::HookStateReported {
                 pane_id,
                 source,
@@ -3298,6 +3441,8 @@ impl AppState {
     }
 
     fn handle_pane_died(&mut self, pane_id: PaneId) {
+        // PaneDied is the common cleanup event for explicit closes and PTY exits.
+        self.remote_forwards.release(pane_id);
         self.pending_agent_notifications.remove(&pane_id);
         self.remove_plugin_pane_records([pane_id]);
         let ws_idx = self
@@ -3399,6 +3544,92 @@ mod tests {
             state.mode = Mode::Terminal;
         }
         state
+    }
+
+    fn app_with_remote_pane() -> (AppState, PaneId) {
+        let mut state = app_with_workspaces(&["remote"]);
+        let pane_id = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0]
+            .pane_state(pane_id)
+            .expect("test pane exists")
+            .attached_terminal_id
+            .clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal exists")
+            .set_remote_transport(Some(crate::detect::RemoteTransport {
+                dest: "host".into(),
+                port: None,
+                config_path: None,
+                identity_file: None,
+            }));
+        (state, pane_id)
+    }
+
+    #[test]
+    fn remote_env_injection_line_quotes_socket_path() {
+        let (state, pane_id) = app_with_remote_pane();
+        let now = std::time::Instant::now();
+        let workspace = &state.workspaces[0];
+        let pane_number = workspace.public_pane_number(pane_id).unwrap();
+        let public_pane_id =
+            crate::workspace::public_pane_id_for_number(&workspace.id, pane_number);
+        let socket_path = "/home/remote user/.herdr/agent-report.sock";
+
+        assert_eq!(
+            state
+                .remote_transport_for_pane(pane_id)
+                .map(|transport| transport.dest),
+            Some("host".to_string())
+        );
+        assert_eq!(
+            state.remote_env_injection_line(pane_id, socket_path, now),
+            Some(format!(
+                " export HERDR_ENV=1 HERDR_PANE_ID={} HERDR_SOCKET_PATH={}\n",
+                crate::remote::shell_quote(&public_pane_id),
+                crate::remote::shell_quote(socket_path),
+            ))
+        );
+    }
+
+    #[test]
+    fn remote_env_injection_line_rejects_all_ineligible_states() {
+        let now = std::time::Instant::now();
+        let socket_path = "/tmp/agent-report.sock";
+
+        let no_transport = app_with_workspaces(&["local"]);
+        let local_pane = no_transport.workspaces[0].tabs[0].root_pane;
+        assert!(no_transport
+            .remote_env_injection_line(local_pane, socket_path, now)
+            .is_none());
+
+        let (mut remote, remote_pane) = app_with_remote_pane();
+        let terminal_id = remote.workspaces[0]
+            .pane_state(remote_pane)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        {
+            let terminal = remote.terminals.get_mut(&terminal_id).unwrap();
+            terminal.hook_authority_remote = true;
+        }
+        assert!(remote
+            .remote_env_injection_line(remote_pane, socket_path, now)
+            .is_none());
+
+        {
+            let terminal = remote.terminals.get_mut(&terminal_id).unwrap();
+            terminal.hook_authority_remote = false;
+            terminal.remote_env_injected_at = Some(now - std::time::Duration::from_secs(1));
+        }
+        assert!(remote
+            .remote_env_injection_line(remote_pane, socket_path, now)
+            .is_none());
+
+        assert!(remote
+            .remote_env_injection_line(PaneId::from_raw(0), socket_path, now)
+            .is_none());
     }
 
     fn insert_test_pane_graphics_layer(state: &mut AppState, pane_id: PaneId) {
@@ -5174,6 +5405,215 @@ mod tests {
         assert!(state.pending_agent_notifications.is_empty());
         assert!(state.drain_due_agent_notifications(deadline).is_empty());
         assert!(state.toast.is_none());
+    }
+
+    #[test]
+    fn remote_hook_authority_is_released_when_ssh_session_ends() {
+        let mut state = app_with_workspaces(&["ws"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "custom:hermes".into(),
+            agent_label: "hermes".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        assert!(
+            !state
+                .terminals
+                .get(&terminal_id)
+                .unwrap()
+                .hook_authority_remote
+        );
+
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: Some(crate::detect::RemoteTransport {
+                dest: "host".into(),
+                port: None,
+                config_path: None,
+                identity_file: None,
+            }),
+        });
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "custom:hermes".into(),
+            agent_label: "hermes".into(),
+            state: AgentState::Idle,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.hook_authority_remote);
+        assert!(terminal.hook_authority.is_some());
+
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: None,
+        });
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(!terminal.hook_authority_remote);
+        assert!(terminal.hook_authority.is_none());
+        assert!(terminal.remote_env_injected_at.is_none());
+        assert_eq!(terminal.effective_agent_label(), None);
+    }
+
+    #[test]
+    fn local_hook_authority_survives_ssh_session_end() {
+        let mut state = app_with_workspaces(&["ws"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+
+        // Authority reported before any SSH session is local, and an SSH
+        // session ending must not release it.
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "custom:hermes".into(),
+            agent_label: "hermes".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: None,
+        });
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.hook_authority.is_some());
+        assert!(!terminal.hook_authority_remote);
+        assert_eq!(terminal.effective_agent_label(), Some("hermes"));
+    }
+
+    #[test]
+    fn full_lifecycle_remote_report_is_effective_and_released_on_ssh_exit() {
+        let mut state = app_with_workspaces(&["ws"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+
+        // Without a transport, a process-less full-lifecycle report is
+        // ignored (no local process evidence anchors it).
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:omp".into(),
+            agent_label: "omp".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        assert!(state
+            .terminals
+            .get(&terminal_id)
+            .unwrap()
+            .hook_authority
+            .is_none());
+
+        // Over an SSH session the report proxy is the evidence: the authority
+        // is accepted and effective with no locally detected process.
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: Some(crate::detect::RemoteTransport {
+                dest: "host".into(),
+                port: None,
+                config_path: None,
+                identity_file: None,
+            }),
+        });
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:omp".into(),
+            agent_label: "omp".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.hook_authority_remote);
+        assert_eq!(terminal.effective_agent_label(), Some("omp"));
+        assert_eq!(terminal.state, AgentState::Working);
+
+        // SSH exit releases it even though the effectiveness gate depends on
+        // the transport; release must run before the transport clears.
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: None,
+        });
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.hook_authority.is_none());
+        assert!(!terminal.hook_authority_remote);
+        assert_eq!(terminal.effective_agent_label(), None);
+    }
+
+    #[test]
+    fn release_all_remote_transports_clears_remote_state() {
+        let mut state = app_with_workspaces(&["ws"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+
+        state.handle_app_event(AppEvent::RemoteTransportChanged {
+            pane_id,
+            transport: Some(crate::detect::RemoteTransport {
+                dest: "host".into(),
+                port: None,
+                config_path: None,
+                identity_file: None,
+            }),
+        });
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:omp".into(),
+            agent_label: "omp".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: None,
+            session_ref: None,
+        });
+        assert_eq!(
+            state
+                .terminals
+                .get(&terminal_id)
+                .unwrap()
+                .effective_agent_label(),
+            Some("omp")
+        );
+
+        let updates = state.release_all_remote_transports();
+        assert!(!updates.is_empty());
+        let terminal = state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.remote_transport.is_none());
+        assert!(terminal.hook_authority.is_none());
+        assert!(!terminal.hook_authority_remote);
+        assert_eq!(terminal.effective_agent_label(), None);
+
+        // Idempotent: nothing remote left to release.
+        assert!(state.release_all_remote_transports().is_empty());
     }
 
     #[test]

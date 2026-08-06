@@ -165,6 +165,17 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
         SettingsSection::Integrations => {
             render_settings_integrations(app, frame, content_area);
         }
+        SettingsSection::Remote => {
+            render_settings_toggle(
+                frame,
+                content_area,
+                p,
+                "remote agent reporting",
+                "when a pane runs ssh, expose an agent-report endpoint over the connection and export herdr env on the remote shell",
+                app.remote_agent_reporting(),
+                app.settings.list.selected,
+            );
+        }
     }
 
     if let Some(footer_area) = stack.footer {
@@ -224,6 +235,7 @@ pub(crate) fn settings_show_primary_action(app: &AppState) -> bool {
             .integration_recommendations
             .iter()
             .any(crate::integration::IntegrationRecommendation::needs_install),
+        crate::app::state::SettingsSection::Remote => false,
         _ => true,
     }
 }

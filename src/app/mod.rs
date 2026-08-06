@@ -17,6 +17,7 @@ mod git_refresh;
 mod ids;
 mod input;
 mod popup;
+pub(crate) mod remote_forward;
 mod runtime;
 mod runtime_mutations;
 mod session;
@@ -651,6 +652,8 @@ impl App {
             pane_scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
             accent: crate::config::parse_color(&config.ui.accent),
             sound: config.ui.sound.clone(),
+            remote_agent_reporting: config.remote.agent_reporting,
+            remote_forwards: crate::app::remote_forward::RemoteForwardManager::new(),
             local_sound_playback: true,
             toast_config: config.ui.toast.clone(),
             keybinds: config.keybinds(),
@@ -1376,9 +1379,31 @@ impl App {
         invalid_sections: &[String],
         notify_success: bool,
     ) -> crate::config::ConfigReloadReport {
+        let was_remote_agent_reporting = crate::config::remote_agent_reporting_enabled();
         let mut diagnostics = load_diagnostics.to_vec();
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+
+        // Process-global so pane detection tasks observe the toggle without
+        // config threading; updated on every load, even when sections fail.
+        crate::config::set_remote_agent_reporting_enabled(config.remote.agent_reporting);
+        if was_remote_agent_reporting && !config.remote.agent_reporting {
+            // Detection loops never re-probe a stable ssh foreground on their
+            // own, so toggle-off clears remote state eagerly instead of
+            // waiting for the next foreground change.
+            let updates = self.state.release_all_remote_transports();
+            for update in &updates {
+                self.emit_pane_state_update(update);
+            }
+            self.sync_full_lifecycle_authority_detection_pauses();
+            self.state.remote_forwards.shutdown();
+        }
+        if !was_remote_agent_reporting && config.remote.agent_reporting {
+            // Force re-probes so ssh foregrounds claim their forwards and
+            // prompts re-emit without waiting for a foreground change.
+            self.reset_all_agent_detection_runtimes();
+        }
+        self.state.remote_agent_reporting = config.remote.agent_reporting;
 
         if !invalid_section("keys") {
             match config.live_keybinds_with_diagnostics() {
