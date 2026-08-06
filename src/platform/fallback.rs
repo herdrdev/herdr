@@ -3,6 +3,85 @@ use std::process::Command;
 
 use super::{ClipboardImage, ForegroundJob, Signal};
 
+pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
+    super::RemoteSshConfigPaths {
+        user_config: std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".ssh").join("config")),
+        system_config: None,
+        multiplexing: false,
+    }
+}
+
+pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
+    for attempt in 0..100 {
+        let dir = std::env::temp_dir().join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
+        match create_remote_private_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to create private herdr ssh config directory",
+    ))
+}
+
+pub(crate) fn create_remote_ssh_config_file(
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+pub(crate) fn remote_private_temp_base() -> PathBuf {
+    std::env::temp_dir()
+}
+
+pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, _short_name: &str) -> PathBuf {
+    std::env::temp_dir().join(readable_name)
+}
+
+pub(crate) fn remote_reattach_program(program: &str) -> String {
+    shell_quote(program)
+}
+
+pub(crate) fn remote_reattach_argument(value: &str) -> String {
+    shell_quote(value)
+}
+
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '@' | '%' | '_' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
+                )
+        })
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 /// Unsupported platform stub.
 pub fn raise_server_nofile_limit() {}
 

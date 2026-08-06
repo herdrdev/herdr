@@ -98,14 +98,14 @@ worktree チェックアウトの削除は明示的に行います。グルー�
 
 ## リモートアタッチ
 
-リモートアタッチは、デフォルトで一時的なキープアライブと接続再利用のフォールバックを使って SSH 接続を管理します。
+リモートアタッチは、デフォルトで一時的なキープアライブと、対応する環境では接続再利用を使って SSH 接続を管理します。
 
 ```toml
 [remote]
 manage_ssh_config = true
 ```
 
-有効な場合、`herdr --remote` は最初に `~/.ssh/config` と `/etc/ssh/ssh_config` を取り込み、その後にフォールバックの `ServerAliveInterval` と `ServerAliveCountMax` の値を加えた、プライベートな一時 SSH 設定を書き込みます。ユーザー自身のキープアライブ設定が優先されます。Herdr は、最初に認証した接続を再利用するため、アタッチごとにプライベートな OpenSSH コントロールソケットも使います。Herdr が生成した設定やコントロールソケットを使わず、通常の `ssh` でリモートアタッチを実行するには `manage_ssh_config = false` を設定してください。
+有効な場合、`herdr --remote` は最初にユーザーとシステムの SSH 設定を取り込み、その後にフォールバックの `ServerAliveInterval` と `ServerAliveCountMax` の値を加えた、プライベートな一時 SSH 設定を書き込みます。ユーザー自身のキープアライブ設定が優先されます。Linux と macOS クライアントは、最初に認証した接続を再利用するため、アタッチごとにプライベートな OpenSSH コントロールソケットも使います。Windows OpenSSH ではこの接続再利用を使いません。Herdr が生成した設定やコントロールソケットを使わず、通常の `ssh` でリモートアタッチを実行するには `manage_ssh_config = false` を設定してください。
 
 ## キーバインド
 
@@ -238,6 +238,7 @@ dark_name = "catppuccin"
 
 ```toml
 [theme.custom]
+sidebar_bg = "#181825"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -245,6 +246,8 @@ blue = "#89b4fa"
 red = "#f38ba8"
 yellow = "#f9e2af"
 ```
+
+`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。
 
 色の値には、hex、名前付きの色、`rgb(r,g,b)`、または `reset`、`default`、`none`、`transparent` のようなリセットエイリアスが使えます。
 

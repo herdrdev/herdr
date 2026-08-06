@@ -98,14 +98,14 @@ Deleting a worktree checkout is explicit. Use `Delete worktree checkout...` on a
 
 ## Remote attach
 
-Remote attach manages its SSH connection with a temporary keepalive and connection-reuse fallback by default.
+Remote attach manages its SSH connection with temporary keepalives and, where supported, connection reuse by default.
 
 ```toml
 [remote]
 manage_ssh_config = true
 ```
 
-When enabled, `herdr --remote` writes a private temporary SSH config that includes your `~/.ssh/config` and `/etc/ssh/ssh_config` first, then adds fallback `ServerAliveInterval` and `ServerAliveCountMax` values. Your own keepalive settings win. Herdr also uses a private per-attach OpenSSH control socket to reuse the first authenticated connection. Set `manage_ssh_config = false` to run remote attach through plain `ssh` without Herdr's generated config or control socket.
+When enabled, `herdr --remote` writes a private temporary SSH config that includes your user and system SSH configs first, then adds fallback `ServerAliveInterval` and `ServerAliveCountMax` values. Your own keepalive settings win. Linux and macOS clients also use a private per-attach OpenSSH control socket to reuse the first authenticated connection; Windows OpenSSH does not. Set `manage_ssh_config = false` to run remote attach through plain `ssh` without Herdr's generated config or control socket.
 
 ## Keybindings
 
@@ -242,6 +242,7 @@ You can override individual colors:
 
 ```toml
 [theme.custom]
+sidebar_bg = "#181825"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -249,6 +250,8 @@ blue = "#89b4fa"
 red = "#f38ba8"
 yellow = "#f9e2af"
 ```
+
+`sidebar_bg` optionally gives the desktop sidebar its own background. When omitted, the sidebar keeps the host terminal background.
 
 Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `reset`, `default`, `none`, and `transparent`.
 
