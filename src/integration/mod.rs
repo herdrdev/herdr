@@ -158,7 +158,7 @@ const DROID_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 9] = [
 ];
 const OPENCODE_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const OPENCODE_PLUGIN_ASSET: &str = include_str!("assets/opencode/herdr-agent-state.js");
-const OPENCODE_INTEGRATION_VERSION: u32 = 9;
+const OPENCODE_INTEGRATION_VERSION: u32 = 10;
 const KILO_PLUGIN_INSTALL_NAME: &str = "herdr-agent-state.js";
 const KILO_PLUGIN_ASSET: &str = include_str!("assets/kilo/herdr-agent-state.js");
 const KILO_INTEGRATION_VERSION: u32 = 4;

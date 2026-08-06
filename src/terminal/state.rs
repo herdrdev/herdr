@@ -1284,7 +1284,7 @@ impl TerminalState {
                 Some("startup" | "clear" | "resume" | "compact")
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
-                | ("herdr:opencode", "opencode", Some("new"))
+                | ("herdr:opencode", "opencode", Some("new" | "resume"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | (
                     "herdr:omp",
@@ -4456,6 +4456,88 @@ mod tests {
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
             Some("opencode-new")
+        );
+    }
+
+    #[test]
+    fn opencode_resume_session_reanchors_full_lifecycle_authority() {
+        let mut terminal = test_terminal();
+        let old_session = crate::agent_resume::AgentSessionRef::id("opencode-newer").unwrap();
+        let selected_session =
+            crate::agent_resume::AgentSessionRef::id("opencode-selected-older").unwrap();
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::OpenCode,
+            "herdr:opencode",
+            "opencode",
+            old_session.clone(),
+        );
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                AgentState::Idle,
+                None,
+                Some(old_session.clone()),
+                Some(20),
+            )
+            .expect("initial session should own lifecycle state");
+
+        let resumed = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                Some(selected_session.clone()),
+                Some(21),
+                Some("resume".into()),
+            )
+            .expect("selected session should replace the previous session");
+
+        assert!(resumed.session_ref_changed);
+        assert!(terminal.hook_authority.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&selected_session)
+        );
+
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                AgentState::Working,
+                None,
+                Some(selected_session.clone()),
+                Some(22),
+            )
+            .expect("selected session should regain lifecycle authority");
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref()),
+            Some(&selected_session)
+        );
+
+        let late_old_session = terminal.set_hook_authority_with_session_ref(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Idle,
+            None,
+            Some(old_session),
+            Some(23),
+        );
+        assert!(late_old_session.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref()),
+            Some(&selected_session)
         );
     }
 
