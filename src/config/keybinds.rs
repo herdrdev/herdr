@@ -1124,6 +1124,8 @@ pub fn format_key_combo(binding: KeyCombo) -> String {
         KeyCode::Right => "right".to_string(),
         KeyCode::Up => "up".to_string(),
         KeyCode::Down => "down".to_string(),
+        KeyCode::PageUp => "pageup".to_string(),
+        KeyCode::PageDown => "pagedown".to_string(),
         KeyCode::F(n) => format!("f{n}"),
         _ => format!("{:?}", code).to_lowercase(),
     };
@@ -1234,6 +1236,8 @@ pub(crate) fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         "right" => KeyCode::Right,
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
+        "pageup" | "page_up" | "page-up" | "pgup" => KeyCode::PageUp,
+        "pagedown" | "page_down" | "page-down" | "pgdn" => KeyCode::PageDown,
         "minus" => KeyCode::Char('-'),
         "comma" => KeyCode::Char(','),
         "period" => KeyCode::Char('.'),
@@ -1503,6 +1507,39 @@ prefix = "ö"
             (KeyCode::Char('ö'), KeyModifiers::empty())
         );
         assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn parse_page_key_combos_and_round_trip_labels() {
+        for (raw, expected) in [
+            ("pageup", KeyCode::PageUp),
+            ("page_up", KeyCode::PageUp),
+            ("page-up", KeyCode::PageUp),
+            ("pgup", KeyCode::PageUp),
+            ("pagedown", KeyCode::PageDown),
+            ("page_down", KeyCode::PageDown),
+            ("page-down", KeyCode::PageDown),
+            ("pgdn", KeyCode::PageDown),
+        ] {
+            assert_eq!(
+                parse_key_combo(raw),
+                Some((expected, KeyModifiers::empty())),
+                "{raw} should parse"
+            );
+        }
+
+        assert_eq!(
+            parse_key_combo("shift+pageup"),
+            Some((KeyCode::PageUp, KeyModifiers::SHIFT))
+        );
+        assert_eq!(
+            format_key_combo((KeyCode::PageUp, KeyModifiers::empty())),
+            "pageup"
+        );
+        assert_eq!(
+            format_key_combo((KeyCode::PageDown, KeyModifiers::CONTROL)),
+            "ctrl+pagedown"
+        );
     }
 
     #[test]
