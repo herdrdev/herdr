@@ -1,0 +1,53 @@
+id = "command-code"
+version = "2026.08.05.1"
+min_engine_version = 2
+updated_at = "2026-08-05T00:00:00Z"
+aliases = ["commandcode", "command code", "cmdc"]
+
+[[rules]]
+id = "workspace_trust_prompt"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+visible_blocker = true
+contains = ["Do you trust the files in this folder?", "Yes, proceed", "No, exit"]
+
+[[rules]]
+id = "question_chrome"
+state = "blocked"
+priority = 960
+region = "whole_recent"
+visible_blocker = true
+contains = ["Arrow keys to navigate", "Esc to cancel"]
+
+[[rules]]
+id = "question_quick_select"
+state = "blocked"
+priority = 950
+region = "whole_recent"
+visible_blocker = true
+contains = ["quick select", "Esc to cancel"]
+
+[[rules]]
+id = "status_row_working"
+state = "working"
+priority = 850
+region = "whole_recent"
+visible_working = true
+line_regex = ['^[·○◇☆✧⌘ ]+(?:Thinking…|Running \(|Executing: )']
+
+[[rules]]
+id = "esc_interrupt_working"
+state = "working"
+priority = 800
+region = "whole_recent"
+visible_working = true
+contains = ["esc to interrupt"]
+
+[[rules]]
+id = "live_prompt"
+state = "idle"
+priority = 700
+region = "whole_recent"
+visible_idle = true
+contains = ["Ask your question...", "for shortcuts"]

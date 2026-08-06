@@ -603,6 +603,7 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
         let agents = [
             Agent::Pi,
             Agent::Claude,
+            Agent::CommandCode,
             Agent::Codex,
             Agent::Gemini,
             Agent::Cursor,

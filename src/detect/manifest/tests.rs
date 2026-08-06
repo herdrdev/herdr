@@ -301,6 +301,41 @@ fn all_bundled_manifests_parse_and_validate() {
 }
 
 #[test]
+fn command_code_manifest_detects_idle_working_and_blocked_states() {
+    let idle = explain(
+        Agent::CommandCode,
+        "─────────────────────────────────────────────────────\nAsk your question...\n⌘ command code · 1 for shortcuts",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+
+    let working = explain(
+        Agent::CommandCode,
+        "Refactoring the parser module\n· ○ Thinking…",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+
+    let working_elapsed = explain(Agent::CommandCode, "· ◇ Running (12s) · esc to interrupt");
+    assert_eq!(working_elapsed.state, AgentState::Working);
+    assert!(working_elapsed.visible_working);
+
+    let trust_prompt = explain(
+        Agent::CommandCode,
+        "Do you trust the files in this folder?\n1 Yes, proceed\n2 No, exit",
+    );
+    assert_eq!(trust_prompt.state, AgentState::Blocked);
+    assert!(trust_prompt.visible_blocker);
+
+    let question = explain(
+        Agent::CommandCode,
+        "Apply these changes to the workspace?\nArrow keys to navigate · Enter to select · Esc to cancel",
+    );
+    assert_eq!(question.state, AgentState::Blocked);
+    assert!(question.visible_blocker);
+}
+
+#[test]
 fn devin_manifest_detects_idle_working_and_blocked_states() {
     let idle = explain(
         Agent::Devin,

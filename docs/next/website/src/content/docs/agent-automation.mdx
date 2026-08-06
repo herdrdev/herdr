@@ -41,7 +41,7 @@ Agent commands accept either a unique live name or the pane ID that currently ho
 
 An available shell pane is at its interactive shell prompt: the shell itself owns the foreground, with no foreground command, editor, or agent running. Return the pane to its prompt before calling `agent start`.
 
-`--kind` selects a supported agent and its canonical executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, and `maki`. Arguments after `--` are passed unchanged to that executable.
+`--kind` selects a supported agent and its canonical executable. Supported kinds are `pi`, `claude`, `command-code`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, and `maki`. Arguments after `--` are passed unchanged to that executable.
 
 `agent start` returns only after Herdr detects the expected agent in the same terminal and marks it ready for interactive input. Startup waits for 30 seconds by default; `--timeout` must be greater than 3000 and no more than 300000 milliseconds.
 

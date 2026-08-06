@@ -43,6 +43,7 @@ pub struct AgentDetection {
 pub enum Agent {
     Pi,
     Claude,
+    CommandCode,
     Codex,
     Gemini,
     Cursor,
@@ -65,9 +66,10 @@ pub enum Agent {
 }
 
 impl Agent {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Pi,
         Self::Claude,
+        Self::CommandCode,
         Self::Codex,
         Self::Gemini,
         Self::Cursor,
@@ -89,9 +91,10 @@ impl Agent {
         Self::Maki,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 19] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
         Self::Pi,
         Self::Claude,
+        Self::CommandCode,
         Self::Codex,
         Self::Gemini,
         Self::Cursor,
@@ -116,6 +119,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
     match agent {
         Agent::Pi => "pi",
         Agent::Claude => "claude",
+        Agent::CommandCode => "command-code",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
         Agent::Cursor => "cursor",
@@ -142,6 +146,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
     match agent {
         Agent::Pi => "pi",
         Agent::Claude => "claude",
+        Agent::CommandCode => "command-code",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
         Agent::Cursor => "cursor-agent",
@@ -178,6 +183,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
     match name {
         "pi" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
+        "command-code" | "commandcode" | "command code" | "cmdc" => Some(Agent::CommandCode),
         "codex" => Some(Agent::Codex),
         "gemini" => Some(Agent::Gemini),
         "cursor" | "cursor-agent" => Some(Agent::Cursor),
@@ -197,6 +203,12 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "maki" => Some(Agent::Maki),
+        // Command Code is claimed here only by its explicit aliases. Its live
+        // comm/cmdline is rewritten to a generated session title
+        // ("⌘ <session> · <dir>"; the live comm is the truncated copy, e.g.
+        // "⌘ Command Cod"), so a bare glyph-prefixed or generic "cmd" name is
+        // never enough to claim the agent. Those cases are handled with
+        // corroborating argv evidence in `command_code_title_name`.
         _ => None,
     }
 }
@@ -339,6 +351,14 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
         return effective.to_string();
     }
 
+    if identify_agent(&process.name).is_some() {
+        return process.name.clone();
+    }
+
+    if let Some(agent_name) = command_code_title_name(process) {
+        return agent_name;
+    }
+
     if let Some(wrapped_agent) = argv0_agent_name(process.argv.as_deref())
         .or_else(|| cmdline_argv0_agent_name(process.cmdline.as_deref().unwrap_or_default()))
     {
@@ -346,6 +366,33 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
     }
 
     effective.to_string()
+}
+
+/// Command Code rewrites its comm and argv[0]/cmdline with a generated session
+/// title ("⌘ <session> · <dir>"; the live comm is the truncated copy, e.g.
+/// "⌘ Command Cod"). A glyph-prefixed comm alone is not enough to claim the
+/// agent — any process could carry those characters — so the title is only
+/// accepted when the same process's argv corroborates Command Code's title
+/// format: the comm must be a strict prefix of the full title in argv[0], and
+/// the title must use the " · " session/dir separator or embed the product
+/// name. This fails closed for unrelated `⌘`/`□`-prefixed processes.
+fn command_code_title_name(process: &crate::platform::ForegroundProcess) -> Option<String> {
+    let comm = &process.name;
+    if !comm.starts_with('⌘') && !comm.starts_with('□') {
+        return None;
+    }
+
+    let title = process.argv.as_deref()?.first()?;
+    if !title.starts_with('⌘') && !title.starts_with('□') {
+        return None;
+    }
+    if title.len() <= comm.len() || !title.starts_with(comm.as_str()) {
+        return None;
+    }
+
+    let is_command_code_title =
+        title.contains(" · ") || title.to_lowercase().contains("command code");
+    is_command_code_title.then(|| agent_label(Agent::CommandCode).to_string())
 }
 
 fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) -> Option<String> {
@@ -545,6 +592,16 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
             return Some(agent_label(Agent::Pi).to_string());
         }
     }
+
+    // Command Code ships a node CLI at node_modules/command-code/dist/index.mjs
+    // (npm global installs, npx, and the Windows node.exe entrypoint).
+    for window in components.windows(4) {
+        if window == ["node_modules", "command-code", "dist", "index.mjs"]
+            || window == ["node_modules", "command-code", "dist", "index"]
+        {
+            return Some(agent_label(Agent::CommandCode).to_string());
+        }
+    }
     None
 }
 
@@ -690,6 +747,30 @@ mod tests {
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+        assert_eq!(identify_agent("command-code"), Some(Agent::CommandCode));
+        assert_eq!(identify_agent("commandcode"), Some(Agent::CommandCode));
+        assert_eq!(identify_agent("command code"), Some(Agent::CommandCode));
+        assert_eq!(identify_agent("cmdc"), Some(Agent::CommandCode));
+    }
+
+    #[test]
+    fn glyph_prefixed_names_are_never_command_code_without_evidence() {
+        // A bare `⌘`/`□`-prefixed process name must not claim Command Code:
+        // without corroborating argv/cmdline the label is ambiguous. Named
+        // sessions like "⌘ Refactor parser" are detected later, in
+        // `command_code_title_name`, where argv evidence is required.
+        assert_eq!(identify_agent("⌘ Command Cod"), None);
+        assert_eq!(identify_agent("⌘ Refactor parser"), None);
+        assert_eq!(identify_agent("□ Command Cod"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plain_cmd_process_is_not_command_code_without_evidence() {
+        // `cmd` is ambiguous on Unix: it is not the Windows shell there, but
+        // any Unix tool may be named cmd. Command Code is only claimed when
+        // argv corroborates its package path or generated session title.
+        assert_eq!(identify_agent("cmd"), None);
     }
 
     #[test]
@@ -716,6 +797,9 @@ mod tests {
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(parse_agent_label("command-code"), Some(Agent::CommandCode));
+        assert_eq!(parse_agent_label("cmdc"), Some(Agent::CommandCode));
+        assert_eq!(parse_agent_label("⌘ Refactor parser"), None);
     }
 
     #[test]
@@ -732,6 +816,7 @@ mod tests {
         let expected = [
             (Agent::Pi, "pi"),
             (Agent::Claude, "claude"),
+            (Agent::CommandCode, "command-code"),
             (Agent::Codex, "codex"),
             (Agent::Gemini, "gemini"),
             (Agent::Cursor, "cursor-agent"),
@@ -1018,6 +1103,128 @@ mod tests {
                     crate::pane::WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
                 ],
             )],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_command_code_package() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\command-code\\dist\\index.mjs",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::CommandCode, "command-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_command_code_mutated_title() {
+        // Command Code overwrites comm with the generated title; live comm is
+        // the 15-byte truncation "⌘ Command Cod". argv[0] corroborates the
+        // title format (" · " separator + product name), so the agent is
+        // claimed with the canonical label.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "⌘ Command Cod",
+                &["⌘ Command Code · /home/user/project"],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::CommandCode, "command-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_command_code_named_session_title() {
+        // Named sessions keep identity: comm "⌘ Refactor par" is a prefix of
+        // the full title in argv[0], which uses the " · " separator.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "⌘ Refactor par",
+                &["⌘ Refactor parser · /home/user/project"],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::CommandCode, "command-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_command_code_white_square_title() {
+        // Command Code also uses the white-square glyph as a title prefix in
+        // some builds; the same evidence rules apply.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "□ Command Cod",
+                &["□ Command Code · /home/user/project"],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::CommandCode, "command-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn glyph_titled_process_without_command_code_format_is_ignored() {
+        // comm "⌘ Some Tool" is a prefix of argv[0], but the title lacks
+        // Command Code's " · " separator and product name, so it is not claimed.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "⌘ Some Tool",
+                &["⌘ Some Tool is running here"],
+            )],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn glyph_titled_process_whose_comm_is_not_a_title_prefix_is_ignored() {
+        // comm claims the default Command Code truncation but argv[0] holds a
+        // different title, so there is no truncation evidence.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "⌘ Command Cod",
+                &["⌘ Refactor parser · /home/user/project"],
+            )],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn glyph_titled_process_with_plain_cmdline_is_ignored() {
+        // A `⌘` comm whose argv[0] is not a glyph title cannot be Command Code.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(123, "⌘ Task", &["node", "server.js"])],
         };
 
         assert_eq!(identify_agent_in_job(&job), None);

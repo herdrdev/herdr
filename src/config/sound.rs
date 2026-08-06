@@ -121,6 +121,7 @@ impl AgentSoundOverrides {
         match agent {
             Some(Agent::Pi) => self.pi,
             Some(Agent::Claude) => self.claude,
+            Some(Agent::CommandCode) => AgentSoundSetting::Default,
             Some(Agent::Codex) => self.codex,
             Some(Agent::Gemini) => self.gemini,
             Some(Agent::Cursor) => self.cursor,
