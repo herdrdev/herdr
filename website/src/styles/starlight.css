@@ -16,47 +16,65 @@
   --sl-sidebar-width: 18.5rem;
 }
 
+/* Docs share the site's ground and mauve. Prose stays in a reading sans
+   rather than the marketing mono — docs is a tool, not a statement.
+
+   The ramp is the marketing scale, not a separate one: the same near-neutral
+   ground and the same text triad, so the two surfaces cannot drift apart on
+   the next palette change. Chroma is drained for the reason it was drained
+   there — saturated blue at low luminance softens the edges of light text,
+   and a side-by-side read easier without it. Surfaces are luminance-matched
+   to what they replace; text is taken straight from the marketing scale,
+   which lands every step at or above its old contrast except gray-3, and
+   that one stays clear of AA. Contrast on the ground: white 14.7, gray-1
+   11.9, gray-2 9.3, gray-3 5.3, gray-4 4.2, accent 8.8. */
 :root,
 :root[data-theme="dark"] {
-  --sl-color-accent-low: #26314f;
-  --sl-color-accent: #7aa2f7;
-  --sl-color-accent-high: #a9c2ff;
-  --sl-color-white: #d5dcff;
-  --sl-color-gray-1: #c0caf5;
-  --sl-color-gray-2: #a9b1d6;
-  --sl-color-gray-3: #737aa2;
-  --sl-color-gray-4: #565f89;
-  --sl-color-gray-5: #414868;
-  --sl-color-gray-6: #2f3549;
-  --sl-color-gray-7: #24283b;
-  --sl-color-black: #1a1b26;
-  --sl-color-bg: #1a1b26;
-  --sl-color-bg-nav: #202331;
-  --sl-color-bg-sidebar: #202331;
-  --sl-color-bg-inline-code: #24283b;
-  --sl-color-hairline: #2f3549;
-  --sl-color-hairline-light: #414868;
+  --sl-color-accent-low: #3f364b;
+  --sl-color-accent: #cba6f7;
+  --sl-color-accent-high: #ddc4fb;
+  --sl-color-white: #eae8ee;
+  --sl-color-gray-1: #d5d1dd;
+  --sl-color-gray-2: #bdb9c9;
+  --sl-color-gray-3: #8e8a98;
+  --sl-color-gray-4: #7c7887;
+  --sl-color-gray-5: #4a4851;
+  --sl-color-gray-6: #35353d;
+  --sl-color-gray-7: #26262b;
+  --sl-color-black: #17171a;
+  --sl-color-bg: #17171a;
+  --sl-color-bg-nav: #1e1e22;
+  --sl-color-bg-sidebar: #1e1e22;
+  --sl-color-bg-inline-code: #26262b;
+  --sl-color-hairline: #26262b;
+  --sl-color-hairline-light: #35353d;
 }
 
+/* the brand display face, same pairing as the marketing pages:
+   Archivo for the branded headings, mono for everything code-adjacent */
+:root { --sl-font-display: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+/* paper — the same ground the marketing pages use, with the mauve dropped to
+   a value that holds on a light background */
 :root[data-theme="light"] {
-  --sl-color-accent-low: #c4c8da;
-  --sl-color-accent: #2e7de9;
-  --sl-color-accent-high: #1f2f66;
-  --sl-color-white: #1f2f66;
-  --sl-color-gray-1: #3760bf;
-  --sl-color-gray-2: #68709a;
-  --sl-color-gray-3: #8990b3;
-  --sl-color-gray-4: #a8aecb;
-  --sl-color-gray-5: #b6bbd1;
-  --sl-color-gray-6: #c4c8da;
-  --sl-color-gray-7: #d8d9e0;
-  --sl-color-black: #e1e2e7;
-  --sl-color-bg: #e1e2e7;
-  --sl-color-bg-nav: #d8d9e0;
-  --sl-color-bg-sidebar: #d8d9e0;
-  --sl-color-bg-inline-code: #c4c8da;
-  --sl-color-hairline: #b6bbd1;
-  --sl-color-hairline-light: #a8aecb;
+  --sl-color-accent-low: #ded3f2;
+  --sl-color-accent: #8839ef;
+  --sl-color-accent-high: #5b2ba3;
+  --sl-color-white: #15140f;
+  --sl-color-gray-1: #26241d;
+  --sl-color-gray-2: #55534a;
+  --sl-color-gray-3: #6f6c60;
+  --sl-color-gray-4: #86826f;
+  --sl-color-gray-5: #a8a493;
+  --sl-color-gray-6: #cbc5b6;
+  --sl-color-gray-7: #e2ded4;
+  --sl-color-black: #efece5;
+  --sl-color-bg: #efece5;
+  --sl-color-bg-nav: #e7e3da;
+  --sl-color-bg-sidebar: #e7e3da;
+  --sl-color-bg-inline-code: #ddd8cc;
+  --sl-color-hairline: #e2ded4;
+  --sl-color-hairline-light: #cbc5b6;
 }
 
 .site-title {
@@ -103,16 +121,17 @@
 .hero h1 {
   letter-spacing: -0.03em;
   line-height: 1.1;
-  font-weight: 400;
+  font-weight: 900;
   font-size: clamp(2rem, 5vw, 3.2rem);
-  font-family: var(--sl-font-mono);
+  font-family: var(--sl-font-display);
+  letter-spacing: -0.045em;
 }
 
 .sl-markdown-content h2 {
   margin-top: 2.4rem;
-  letter-spacing: -0.02em;
-  font-family: var(--sl-font-mono);
-  font-weight: 400;
+  letter-spacing: -0.03em;
+  font-family: var(--sl-font-display);
+  font-weight: 800;
 }
 
 .sl-markdown-content h3 {
@@ -161,6 +180,38 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 0.18em;
   color: var(--sl-color-accent);
+}
+
+.sl-markdown-content .heading-link-copy-feedback {
+  position: absolute;
+  z-index: 10;
+  bottom: calc(100% + 0.4rem);
+  inset-inline-start: 50%;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 3px;
+  background: var(--sl-color-bg-nav);
+  color: var(--sl-color-white);
+  font-family: var(--sl-font);
+  font-size: var(--sl-text-xs);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: heading-link-copied 1.4s ease both;
+}
+
+@keyframes heading-link-copied {
+  0% { opacity: 0; transform: translate(-50%, 0.25rem); }
+  15%, 75% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -0.15rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-markdown-content .heading-link-copy-feedback {
+    animation: none;
+  }
 }
 
 .sl-markdown-content code:not(:where(.not-content *)) {

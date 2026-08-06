@@ -1,18 +1,16 @@
 ---
 import { getCollection, render } from 'astro:content';
-import MarketingLayout from '../../components/MarketingLayout.astro';
+import SiteLayout from '../../components/SiteLayout.astro';
 import AuthorCard from '../../components/AuthorCard.astro';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
+  /* dev only, see blog/index.astro */
   return posts
-    .filter((post) => !post.data.draft)
+    .filter((post) => import.meta.env.DEV || !post.data.draft)
     .map((post) => {
       const slug = post.id.replace(/\.(md|mdx)$/i, '');
-      return {
-        params: { slug },
-        props: { post, slug },
-      };
+      return { params: { slug }, props: { post, slug } };
     });
 }
 
@@ -21,7 +19,7 @@ const { Content, headings } = await render(post);
 const sectionHeadings = headings.filter((heading) => heading.depth === 2);
 ---
 
-<MarketingLayout
+<SiteLayout
   title={`${post.data.title} — Herdr blog`}
   description={post.data.description}
   canonicalPath={`/blog/${slug}/`}
@@ -29,9 +27,33 @@ const sectionHeadings = headings.filter((heading) => heading.depth === 2);
   ogImage={post.data.ogImage}
   ogImageAlt={post.data.ogImage ? post.data.title : undefined}
 >
-  <main class="content-shell">
-    <div class="article-layout section">
-      <aside class="article-toc" aria-label="Article sections">
+  {/* a post with no h2s renders no sidebar, so the grid must stop reserving
+      a column for it */}
+  <div class:list={['article', sectionHeadings.length === 0 && 'article-solo']}>
+    <article class="article-body">
+      <p class="article-meta">
+        <a href="/blog/">← Blog</a>
+        <time datetime={post.data.date.toISOString()}>
+          {post.data.date.toLocaleDateString('en', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })}
+        </time>
+      </p>
+      <h1>{post.data.title}</h1>
+      {post.data.lede && post.data.description && (
+        <p class="article-lede">{post.data.description}</p>
+      )}
+      <hr class="article-rule" />
+      <div class="prose">
+        <Content />
+      </div>
+      <AuthorCard />
+    </article>
+
+    {sectionHeadings.length > 0 && (
+      <aside class="toc" aria-label="Article sections">
         <p>Sections</p>
         <nav>
           {sectionHeadings.map((heading) => (
@@ -39,30 +61,11 @@ const sectionHeadings = headings.filter((heading) => heading.depth === 2);
           ))}
         </nav>
       </aside>
-
-      <article class="article-shell">
-        <header class="article-header">
-          <p class="post-meta">
-            <a href="/blog/">Blog</a>
-            <time datetime={post.data.date.toISOString()}>{post.data.date.toLocaleDateString('en', {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}</time>
-          </p>
-          <h1>{post.data.title}</h1>
-          <p>{post.data.description}</p>
-        </header>
-        <div class="article-prose">
-          <Content />
-        </div>
-        <AuthorCard />
-      </article>
-    </div>
-  </main>
+    )}
+  </div>
 
   <script>
-    const headings = Array.from(document.querySelectorAll('.article-prose h2[id]'));
+    const headings = Array.from(document.querySelectorAll('.prose h2[id]'));
     const links = new Map(
       Array.from(document.querySelectorAll('[data-heading-link]')).map((link) => [
         link.getAttribute('data-heading-link'),
@@ -89,4 +92,4 @@ const sectionHeadings = headings.filter((heading) => heading.depth === 2);
       for (const heading of headings) observer.observe(heading);
     }
   </script>
-</MarketingLayout>
+</SiteLayout>

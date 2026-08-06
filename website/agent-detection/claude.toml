@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.07.13.1"
+version = "2026.08.04.1"
 min_engine_version = 2
-updated_at = "2026-07-13T00:00:00Z"
+updated_at = "2026-08-04T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -44,13 +44,16 @@ state = "blocked"
 priority = 980
 region = "after_last_horizontal_rule"
 visible_blocker = true
-contains = ["enter to select", "esc to cancel"]
+contains = ["esc to cancel"]
 any = [
-  { contains = ["tab/arrow keys to navigate"] },
-  { contains = ["arrow keys to navigate"] },
-  { contains = ["arrows to navigate"] },
-  { contains = ["↑/↓ to navigate"] },
-  { contains = ["↑↓ to navigate"] },
+  { contains = ["enter to confirm"] },
+  { contains = ["enter to select"], any = [
+    { contains = ["tab/arrow keys to navigate"] },
+    { contains = ["arrow keys to navigate"] },
+    { contains = ["arrows to navigate"] },
+    { contains = ["↑/↓ to navigate"] },
+    { contains = ["↑↓ to navigate"] },
+  ] },
 ]
 
 [[rules]]

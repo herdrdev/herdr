@@ -54,6 +54,10 @@ export default defineConfig({
   redirects: {
     '/ja': '/ja/docs/',
     '/zh-cn': '/zh-cn/docs/',
+    /* /stats/ was public and is linked from elsewhere; the numbers it carried
+       now live in the hero strip and the nav count. One key only — Astro
+       normalizes the trailing slash and treats both spellings as one route. */
+    '/stats': '/',
   },
   integrations: [
     sitemap({
@@ -90,6 +94,20 @@ export default defineConfig({
       },
       customCss: ['./src/styles/starlight.css'],
       head: [
+        // the brand display face; Starlight owns its own <head>, so the
+        // marketing pages' font link doesn't reach docs
+        { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
+        {
+          tag: 'link',
+          attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'stylesheet',
+            href: 'https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&display=swap',
+          },
+        },
         {
           // First-visit locale redirect: honors browser language order, then
           // remembers the last locale the reader actually used.
@@ -122,7 +140,7 @@ export default defineConfig({
         },
         {
           tag: 'meta',
-          attrs: { property: 'og:image', content: 'https://herdr.dev/assets/og-card-v8.png' },
+          attrs: { property: 'og:image', content: 'https://herdr.dev/assets/og-card-v9.png' },
         },
         { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
         { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
@@ -130,18 +148,18 @@ export default defineConfig({
           tag: 'meta',
           attrs: {
             property: 'og:image:alt',
-            content: 'Herdr documentation — One terminal. The whole herd.',
+            content: 'Herdr documentation — run them anywhere, leave them running.',
           },
         },
         {
           tag: 'meta',
-          attrs: { name: 'twitter:image', content: 'https://herdr.dev/assets/og-card-v8.png' },
+          attrs: { name: 'twitter:image', content: 'https://herdr.dev/assets/og-card-v9.png' },
         },
         {
           tag: 'meta',
           attrs: {
             name: 'twitter:image:alt',
-            content: 'Herdr documentation — One terminal. The whole herd.',
+            content: 'Herdr documentation — run them anywhere, leave them running.',
           },
         },
       ],
@@ -199,7 +217,7 @@ export default defineConfig({
           translations: { ja: 'ヘルプ', 'zh-CN': '帮助' },
           items: [
             { label: 'Troubleshooting', translations: { ja: 'トラブルシューティング', 'zh-CN': '故障排除' }, slug: 'docs/troubleshooting' },
-            { label: 'Next docs', translations: { ja: '次期版ドキュメント', 'zh-CN': '下一版文档' }, slug: 'docs/preview' },
+            { label: 'Preview docs', translations: { ja: 'プレビュー版ドキュメント', 'zh-CN': '预览版文档' }, slug: 'docs/preview' },
           ],
         },
       ],

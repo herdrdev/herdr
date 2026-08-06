@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use super::claude_settings::{
+    install as install_claude_settings, uninstall as uninstall_claude_settings,
+};
 use super::command::{hook_command, shell_single_quote};
 use super::config_edit::{
     build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
@@ -123,43 +126,17 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     make_executable(&hook_path)?;
 
     let settings_path = dir.join("settings.json");
-    let mut settings = if settings_path.is_file() {
-        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
-            io::Error::other(format!(
-                "failed to parse {}: {err}",
-                settings_path.display()
-            ))
-        })?
+    let existing_settings = if settings_path.is_file() {
+        fs::read_to_string(&settings_path)?
     } else {
-        json!({})
+        "{}".to_string()
     };
-
-    let hooks = ensure_hooks_object(
-        &mut settings,
-        &settings_path,
-        "claude settings",
-        "claude settings hooks",
-    )?;
-    remove_hook_commands(hooks, "PostToolUse", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "PostToolUseFailure", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "SubagentStop", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "PermissionRequest", &hook_path, Some("blocked"))?;
-    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("idle"))?;
-    remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
-    remove_hook_commands(hooks, "SessionEnd", &hook_path, Some("release"))?;
-    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
-    ensure_command_hook(
-        hooks,
-        "SessionStart",
-        hook_command(&hook_path, Some("session")),
-        10,
-        Some("*"),
-    )?;
+    let updated_settings = install_claude_settings(&existing_settings, &settings_path, &hook_path)?;
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    if updated_settings != existing_settings {
+        fs::write(&settings_path, updated_settings)?;
+    }
 
     Ok(ClaudeInstallPaths {
         hook_path,
@@ -563,43 +540,12 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
     let mut updated_settings = false;
 
     if settings_path.is_file() {
-        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "failed to parse {}: {err}",
-                    settings_path.display()
-                ))
-            })?;
-
-        if let Some(hooks) = hooks_object_if_present(
-            &mut settings,
-            &settings_path,
-            "claude settings",
-            "claude settings hooks",
-        )? {
-            updated_settings |=
-                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("idle"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "PermissionRequest", &hook_path, Some("blocked"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "PostToolUse", &hook_path, Some("working"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "PostToolUseFailure", &hook_path, Some("working"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "SubagentStop", &hook_path, Some("working"))?;
-            updated_settings |= remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
-            updated_settings |=
-                remove_hook_commands(hooks, "SessionEnd", &hook_path, Some("release"))?;
-        }
-
+        let existing_settings = fs::read_to_string(&settings_path)?;
+        let new_settings =
+            uninstall_claude_settings(&existing_settings, &settings_path, &hook_path)?;
+        updated_settings = new_settings != existing_settings;
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            fs::write(&settings_path, new_settings)?;
         }
     }
 

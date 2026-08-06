@@ -13,6 +13,9 @@ export const collections = {
       description: z.string(),
       date: z.coerce.date(),
       draft: z.boolean().default(false),
+      /* description is always used for meta and OG; set false when it should
+         not also print as a subtitle under the title */
+      lede: z.boolean().default(true),
       ogImage: z.string().optional(),
     }),
   }),
