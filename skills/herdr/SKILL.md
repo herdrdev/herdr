@@ -119,6 +119,16 @@ herdr agent start reviewer --kind codex --pane <returned-pane-id> -- <agent-args
 
 `agent start` returns only after Herdr detects the expected agent in the same pane and considers it ready for interactive input. It defaults to a 30-second startup timeout.
 
+A freshly launched agent may pause on a first-run prompt before it accepts input. In an untrusted directory, Codex asks "Do you trust the contents of this directory?" and waits for Enter; other agents may show onboarding or login screens. If the agent is not yet promptable, read the pane and answer the prompt:
+
+```bash
+herdr agent read <name> --source recent-unwrapped --lines 60
+herdr agent send-keys <name> enter
+```
+
+Answer "Yes, continue" for the directory trust check only when the user has asked for work in that directory; otherwise stop and ask. After answering a first-run prompt, confirm the agent is idle before sending work.
+
+
 Submit work through the agent surface:
 
 ```bash
