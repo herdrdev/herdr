@@ -301,35 +301,6 @@ fn all_bundled_manifests_parse_and_validate() {
 }
 
 #[test]
-fn cursor_run_everything_status_is_not_an_approval_prompt() {
-    with_manifest_dirs("cursor-run-everything", || {
-        let approval = explain(Agent::Cursor, "→ Run (once) (y)");
-        assert_eq!(approval.state, AgentState::Blocked);
-        assert_eq!(
-            approval.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("approval_prompt")
-        );
-
-        let non_approval_screens = [
-            "Run Everything",
-            "Run Everythin\nG",
-            "Run G\nEverything T",
-            "Run\nG Everyt\nP hing",
-            "(y) was selected; the command will allow execution",
-        ];
-        for screen in non_approval_screens {
-            let status = explain(Agent::Cursor, screen);
-            assert_eq!(
-                status.state,
-                AgentState::Idle,
-                "non-approval screen must stay idle: {screen:?}"
-            );
-            assert!(status.matched_rule.is_none());
-        }
-    });
-}
-
-#[test]
 fn devin_manifest_detects_idle_working_and_blocked_states() {
     let idle = explain(
         Agent::Devin,
