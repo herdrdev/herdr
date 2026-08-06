@@ -62,6 +62,28 @@ Workspaces and session:
 
 The full keymap and the binding syntax live in the [keybinding reference](/docs/configuration/#keybindings).
 
+## Scrolling the pane scrollback
+
+`PageUp` and `PageDown` scroll the focused pane's scrollback by one screen. Unlike most
+Herdr shortcuts these are direct bindings, so they need no prefix. They yield to the pane
+when it owns page keys — inside `less`, `vim`, or any full-screen app, the keys page that
+app's content instead.
+
+Both are rebindable as `keys.scroll_page_up` and `keys.scroll_page_down`, and there are two
+further actions, `keys.scroll_half_page_up` and `keys.scroll_half_page_down`, that are unset
+by default. A binding that carries a modifier always scrolls the scrollback and never yields
+to the pane.
+
+```toml
+[keys]
+scroll_page_up = "shift+pageup"
+scroll_half_page_up = "alt+u"
+scroll_half_page_down = "alt+d"
+
+[ui]
+page_scroll_lines = 20   # unset means one pane viewport
+```
+
 ## Copy mode
 
 Press `prefix+[` to enter copy mode for the focused pane. Use `h/j/k/l`, tmux-style `w/b/e`, `{`/`}`, `PageUp`/`PageDown`, `ctrl+b`/`ctrl+f`, and `ctrl+u`/`ctrl+d` to move. Press `/` or `?` for forward or backward literal search, then `n` or `N` to repeat in the same or opposite direction. Search is case-insensitive unless the query contains an uppercase letter. Use `v` or Space to start a selection, `y` or Enter to copy it, and `q` or Esc to leave without copying. Esc clears an active selection or search before exiting. Copy mode does not pause the pane process: output remains live, follows at the bottom, and stays pinned when you navigate into history. The configured prefix keeps its normal meaning in copy mode; with the default prefix, `ctrl+b` enters prefix mode instead of paging up, so use a different prefix if you want `ctrl+b` for copy-mode page-up. Mouse drag-select copies without entering copy mode at all.

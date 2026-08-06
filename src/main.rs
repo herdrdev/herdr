@@ -213,6 +213,15 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resize_mode = "prefix+r"
 # toggle_sidebar = "prefix+b"
 
+# Scroll the focused pane scrollback. These are direct bindings, not prefix bindings.
+# Unmodified page bindings still yield to full-screen pane apps such as less and vim,
+# so those keep paging their own content. Half-page scrolling is unset by default.
+# See ui.page_scroll_lines to change the distance.
+# scroll_page_up = "pageup"
+# scroll_page_down = "pagedown"
+# scroll_half_page_up = ""
+# scroll_half_page_down = ""
+
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
 # navigate_workspace_up = "up"
@@ -291,6 +300,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 
 # Pane scrollback lines to scroll per mouse wheel notch.
 # mouse_scroll_lines = 3
+
+# Pane scrollback lines to scroll per keys.scroll_page_* binding.
+# Unset means one pane viewport; half-page bindings move half this many lines.
+# page_scroll_lines = 20
 
 # Ask for confirmation before closing a workspace
 # confirm_close = true

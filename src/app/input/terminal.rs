@@ -27,6 +27,17 @@ fn is_modifier_only_key(code: &KeyCode) -> bool {
     matches!(code, KeyCode::Modifier(_))
 }
 
+fn is_page_scroll_action(action: super::navigate::NavigateAction) -> bool {
+    use super::navigate::NavigateAction;
+    matches!(
+        action,
+        NavigateAction::ScrollPageUp
+            | NavigateAction::ScrollPageDown
+            | NavigateAction::ScrollHalfPageUp
+            | NavigateAction::ScrollHalfPageDown
+    )
+}
+
 impl App {
     #[cfg(test)]
     pub(crate) fn handle_terminal_key_headless(
@@ -74,22 +85,33 @@ impl App {
         self.selection_autoscroll_deadline = None;
         self.state.update_dismissed = true;
 
+        // Page-scroll bindings are deferred: deciding whether they scroll the host
+        // scrollback or belong to the pane needs the pane runtime, which is only
+        // resolved further down. Every other direct binding runs immediately.
+        let mut deferred_scroll_action = None;
         if let Some(action) =
             super::terminal_direct_non_indexed_navigation_action(&self.state, &key)
         {
-            debug!(
-                code = ?key_event.code,
-                modifiers = ?key_event.modifiers,
-                kind = ?key_event.kind,
-                action = ?action,
-                "intercepted terminal direct keybinding before forwarding to pane"
-            );
-            if action == super::navigate::NavigateAction::EditScrollback {
-                self.launch_focused_scrollback_editor();
+            if is_page_scroll_action(action) {
+                deferred_scroll_action = Some(action);
             } else {
-                self.execute_tui_navigate_action(action, super::navigate::ActionContext::Direct);
+                debug!(
+                    code = ?key_event.code,
+                    modifiers = ?key_event.modifiers,
+                    kind = ?key_event.kind,
+                    action = ?action,
+                    "intercepted terminal direct keybinding before forwarding to pane"
+                );
+                if action == super::navigate::NavigateAction::EditScrollback {
+                    self.launch_focused_scrollback_editor();
+                } else {
+                    self.execute_tui_navigate_action(
+                        action,
+                        super::navigate::ActionContext::Direct,
+                    );
+                }
+                return None;
             }
-            return None;
         }
 
         if let Some(binding) = super::navigate::command_for_key(
@@ -143,47 +165,36 @@ impl App {
             self.state
                 .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)?;
 
-        // Intercept plain PageUp/PageDown presses for pane scrollback only
-        // when the focused pane looks like a shell transcript. Normal-screen
-        // pagers such as `less -X` keep the primary screen but enter
-        // application cursor mode while they own special keys.
-        // Modified page keys are pane shortcuts, and release events should not
-        // produce a second host-scroll action.
-        // Only intercept when we know the pane state; if input_state is unknown,
-        // fail-open and forward the key to the pane.
-        if matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown)
-            && key_event.modifiers.is_empty()
-        {
-            if let Some(input_state) = rt.input_state() {
-                if input_state.plain_page_keys_use_host_scrollback() {
-                    if key_event.kind == crossterm::event::KeyEventKind::Release {
-                        return None;
-                    }
-                    if matches!(
-                        key_event.kind,
-                        crossterm::event::KeyEventKind::Press
-                            | crossterm::event::KeyEventKind::Repeat
-                    ) {
-                        let lines = self
-                            .state
-                            .pane_info_by_id(pane_id)
-                            .map(|info| info.inner_rect.height as usize)
-                            .unwrap_or(10)
-                            .max(1);
-                        if key_event.code == KeyCode::PageUp {
-                            self.state
-                                .scroll_pane_up(&self.terminal_runtimes, pane_id, lines);
-                        } else {
-                            self.state
-                                .scroll_pane_down(&self.terminal_runtimes, pane_id, lines);
-                        }
-                        debug!(
-                            code = ?key_event.code,
-                            lines,
-                            "intercepted page key for pane scrollback"
-                        );
-                        return None;
-                    }
+        // Run a deferred page-scroll binding against the host scrollback, but yield
+        // to the pane when the binding is unmodified and the focused pane looks like
+        // it owns page keys. Normal-screen pagers such as `less -X` keep the primary
+        // screen but enter application cursor mode while they own special keys.
+        // A modified binding is one the user chose deliberately, so it always scrolls.
+        // Only host-scroll an unmodified binding when we know the pane state; if
+        // input_state is unknown, fail-open and forward the key to the pane.
+        if let Some(action) = deferred_scroll_action {
+            let pane_owns_page_keys = key_event.modifiers.is_empty()
+                && !rt
+                    .input_state()
+                    .is_some_and(|state| state.plain_page_keys_use_host_scrollback());
+            if !pane_owns_page_keys {
+                // Release events must not produce a second host-scroll action.
+                if key_event.kind == crossterm::event::KeyEventKind::Release {
+                    return None;
+                }
+                if matches!(
+                    key_event.kind,
+                    crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+                ) {
+                    self.state
+                        .scroll_pane_page(&self.terminal_runtimes, pane_id, action);
+                    debug!(
+                        code = ?key_event.code,
+                        modifiers = ?key_event.modifiers,
+                        action = ?action,
+                        "intercepted page scroll keybinding for pane scrollback"
+                    );
+                    return None;
                 }
             }
         }
@@ -1699,6 +1710,85 @@ mod tests {
             pane_scroll_offset(&app, pane_id),
             pane_info.inner_rect.height as usize
         );
+    }
+
+    #[tokio::test]
+    async fn custom_page_scroll_binding_scrolls_plain_shell_pane() {
+        let (mut app, pane_id, pane_info) = app_with_plain_scrollback(64);
+        app.state.keybinds.scroll_page_up = crate::config::ActionKeybinds::direct("shift+pageup");
+
+        // The default binding was displaced, so plain PageUp no longer host-scrolls.
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::empty()));
+        assert_eq!(pane_scroll_offset(&app, pane_id), 0);
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::SHIFT));
+        assert_eq!(
+            pane_scroll_offset(&app, pane_id),
+            pane_info.inner_rect.height as usize
+        );
+    }
+
+    #[tokio::test]
+    async fn modified_page_scroll_binding_does_not_yield_to_mouse_reporting_pane() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos[0].clone();
+        let mut bytes = b"\x1b[?1002h".to_vec();
+        bytes.extend_from_slice(&numbered_lines_bytes(64));
+        ws.tabs[0].runtimes.insert(
+            pane_id,
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                16 * 1024,
+                &bytes,
+            ),
+        );
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+        app.state.keybinds.scroll_page_up = crate::config::ActionKeybinds::direct("shift+pageup");
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::SHIFT));
+
+        // A modified binding is a deliberate user choice, so it scrolls even though
+        // the pane would otherwise own plain page keys.
+        assert_eq!(
+            pane_scroll_offset(&app, pane_id),
+            info.inner_rect.height as usize
+        );
+    }
+
+    #[tokio::test]
+    async fn half_page_binding_scrolls_half_a_viewport() {
+        let (mut app, pane_id, pane_info) = app_with_plain_scrollback(64);
+        app.state.keybinds.scroll_half_page_up = crate::config::ActionKeybinds::direct("alt+u");
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::Char('u'), KeyModifiers::ALT));
+
+        assert_eq!(
+            pane_scroll_offset(&app, pane_id),
+            (pane_info.inner_rect.height / 2) as usize
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_page_scroll_lines_override_viewport_height() {
+        let (mut app, pane_id, pane_info) = app_with_plain_scrollback(256);
+        app.state.page_scroll_lines = Some(5);
+        assert_ne!(pane_info.inner_rect.height as usize, 5);
+
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::PageUp, KeyModifiers::empty()));
+        assert_eq!(pane_scroll_offset(&app, pane_id), 5);
+
+        app.state.keybinds.scroll_half_page_up = crate::config::ActionKeybinds::direct("alt+u");
+        app.handle_terminal_key_headless(TerminalKey::new(KeyCode::Char('u'), KeyModifiers::ALT));
+        assert_eq!(pane_scroll_offset(&app, pane_id), 7);
     }
 
     #[tokio::test]

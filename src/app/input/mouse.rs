@@ -1520,6 +1520,49 @@ impl AppState {
         }
     }
 
+    /// Lines a page-scroll keybinding moves in `pane_id`.
+    ///
+    /// Falls back to the pane viewport height when `ui.page_scroll_lines` is unset,
+    /// and to 10 lines when the pane geometry is not known yet.
+    pub(crate) fn page_scroll_lines_for_pane(
+        &self,
+        pane_id: crate::layout::PaneId,
+        half: bool,
+    ) -> usize {
+        let full = self.page_scroll_lines.unwrap_or_else(|| {
+            self.pane_info_by_id(pane_id)
+                .map(|info| info.inner_rect.height as usize)
+                .unwrap_or(10)
+        });
+        let lines = if half { full / 2 } else { full };
+        lines.max(1)
+    }
+
+    /// Scroll `pane_id` by one page or half page in the direction of `action`.
+    ///
+    /// No-op for actions that are not page-scroll actions.
+    pub(crate) fn scroll_pane_page(
+        &self,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+        pane_id: crate::layout::PaneId,
+        action: super::navigate::NavigateAction,
+    ) {
+        use super::navigate::NavigateAction;
+        let (up, half) = match action {
+            NavigateAction::ScrollPageUp => (true, false),
+            NavigateAction::ScrollPageDown => (false, false),
+            NavigateAction::ScrollHalfPageUp => (true, true),
+            NavigateAction::ScrollHalfPageDown => (false, true),
+            _ => return,
+        };
+        let lines = self.page_scroll_lines_for_pane(pane_id, half);
+        if up {
+            self.scroll_pane_up(terminal_runtimes, pane_id, lines);
+        } else {
+            self.scroll_pane_down(terminal_runtimes, pane_id, lines);
+        }
+    }
+
     pub(crate) fn pane_scroll_metrics(
         &self,
         terminal_runtimes: &TerminalRuntimeRegistry,

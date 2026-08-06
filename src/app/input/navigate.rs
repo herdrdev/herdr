@@ -387,6 +387,21 @@ impl App {
                 self.state.sidebar_collapsed = !self.state.sidebar_collapsed;
                 leave_navigate_mode(&mut self.state);
             }
+            NavigateAction::ScrollPageUp
+            | NavigateAction::ScrollPageDown
+            | NavigateAction::ScrollHalfPageUp
+            | NavigateAction::ScrollHalfPageDown => {
+                if let Some(pane_id) = self
+                    .state
+                    .active
+                    .and_then(|ws_idx| self.state.workspaces.get(ws_idx))
+                    .and_then(|ws| ws.focused_pane_id())
+                {
+                    self.state
+                        .scroll_pane_page(&self.terminal_runtimes, pane_id, action);
+                }
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::CyclePaneNext => {
                 self.cycle_pane_via_api(false);
                 leave_navigate_mode(&mut self.state);
@@ -1367,6 +1382,10 @@ pub(crate) enum NavigateAction {
     Zoom,
     EnterResizeMode,
     ToggleSidebar,
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollHalfPageUp,
+    ScrollHalfPageDown,
     CyclePaneNext,
     CyclePanePrevious,
     LastPane,
@@ -1511,6 +1530,13 @@ fn non_indexed_action_for_key(
         (&kb.zoom, NavigateAction::Zoom),
         (&kb.resize_mode, NavigateAction::EnterResizeMode),
         (&kb.toggle_sidebar, NavigateAction::ToggleSidebar),
+        (&kb.scroll_page_up, NavigateAction::ScrollPageUp),
+        (&kb.scroll_page_down, NavigateAction::ScrollPageDown),
+        (&kb.scroll_half_page_up, NavigateAction::ScrollHalfPageUp),
+        (
+            &kb.scroll_half_page_down,
+            NavigateAction::ScrollHalfPageDown,
+        ),
         (&kb.reload_config, NavigateAction::ReloadConfig),
         (
             &kb.open_notification_target,
@@ -1743,6 +1769,19 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::EnterResizeMode => state.mode = Mode::Resize,
         NavigateAction::ToggleSidebar => {
             state.sidebar_collapsed = !state.sidebar_collapsed;
+            leave_navigate_mode(state);
+        }
+        NavigateAction::ScrollPageUp
+        | NavigateAction::ScrollPageDown
+        | NavigateAction::ScrollHalfPageUp
+        | NavigateAction::ScrollHalfPageDown => {
+            if let Some(pane_id) = state
+                .active
+                .and_then(|ws_idx| state.workspaces.get(ws_idx))
+                .and_then(|ws| ws.focused_pane_id())
+            {
+                state.scroll_pane_page(terminal_runtimes, pane_id, action);
+            }
             leave_navigate_mode(state);
         }
         NavigateAction::CyclePaneNext => {

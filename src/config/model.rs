@@ -440,6 +440,14 @@ pub struct KeysConfig {
     pub resize_mode: BindingConfig,
     /// Toggle sidebar collapse. Default: "prefix+b"
     pub toggle_sidebar: BindingConfig,
+    /// Scroll the focused pane scrollback up one page. Default: "pageup"
+    pub scroll_page_up: BindingConfig,
+    /// Scroll the focused pane scrollback down one page. Default: "pagedown"
+    pub scroll_page_down: BindingConfig,
+    /// Scroll the focused pane scrollback up half a page. Unset by default.
+    pub scroll_half_page_up: BindingConfig,
+    /// Scroll the focused pane scrollback down half a page. Unset by default.
+    pub scroll_half_page_down: BindingConfig,
     /// Optional indexed shortcuts expanded over number keys 1-9.
     pub indexed: IndexedKeysConfig,
     /// Prefix-mode custom command bindings.
@@ -559,6 +567,14 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     toggle_sidebar: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    scroll_page_up: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scroll_page_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scroll_half_page_up: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scroll_half_page_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     indexed: Option<IndexedKeysConfig>,
     #[serde(skip_serializing)]
     command: Option<Vec<CommandKeybindConfig>>,
@@ -634,6 +650,10 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(zoom);
         apply_field!(resize_mode);
         apply_field!(toggle_sidebar);
+        apply_field!(scroll_page_up);
+        apply_field!(scroll_page_down);
+        apply_field!(scroll_half_page_up);
+        apply_field!(scroll_half_page_down);
         apply_field!(indexed);
         apply_field!(command);
 
@@ -732,6 +752,10 @@ impl KeysConfig {
         copy_effective_action_field!(zoom, keybinds.zoom);
         copy_effective_action_field!(resize_mode, keybinds.resize_mode);
         copy_effective_action_field!(toggle_sidebar, keybinds.toggle_sidebar);
+        copy_effective_action_field!(scroll_page_up, keybinds.scroll_page_up);
+        copy_effective_action_field!(scroll_page_down, keybinds.scroll_page_down);
+        copy_effective_action_field!(scroll_half_page_up, keybinds.scroll_half_page_up);
+        copy_effective_action_field!(scroll_half_page_down, keybinds.scroll_half_page_down);
         copy_user_field!(indexed);
 
         profile
@@ -830,6 +854,8 @@ pub struct UiConfig {
     pub redraw_on_focus_gained: bool,
     /// Lines to scroll per mouse wheel notch. Default: 3.
     pub mouse_scroll_lines: Option<NonZeroUsize>,
+    /// Lines to scroll per page-scroll keybinding. Defaults to the pane viewport height.
+    pub page_scroll_lines: Option<NonZeroUsize>,
     /// Ask for confirmation before closing a workspace. Default: true.
     pub confirm_close: bool,
     /// Ask for a tab name before creating a new tab. Default: true.
@@ -1018,6 +1044,10 @@ impl Default for KeysConfig {
             zoom: BindingConfig::one("prefix+z"),
             resize_mode: BindingConfig::one("prefix+r"),
             toggle_sidebar: BindingConfig::one("prefix+b"),
+            scroll_page_up: BindingConfig::one("pageup"),
+            scroll_page_down: BindingConfig::one("pagedown"),
+            scroll_half_page_up: BindingConfig::empty(),
+            scroll_half_page_down: BindingConfig::empty(),
             indexed: IndexedKeysConfig::default(),
             command: Vec::new(),
             user_fields: BTreeSet::new(),
@@ -1048,6 +1078,7 @@ impl Default for UiConfig {
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
             redraw_on_focus_gained: true,
             mouse_scroll_lines: None,
+            page_scroll_lines: None,
             confirm_close: true,
             prompt_new_tab_name: true,
             prompt_new_workspace_name: false,
@@ -1073,6 +1104,11 @@ impl UiConfig {
         self.mouse_scroll_lines
             .map(NonZeroUsize::get)
             .unwrap_or(DEFAULT_MOUSE_SCROLL_LINES)
+    }
+
+    /// Configured page-scroll distance, or `None` to use the pane viewport height.
+    pub fn page_scroll_lines(&self) -> Option<usize> {
+        self.page_scroll_lines.map(NonZeroUsize::get)
     }
 
     pub fn right_click_passthrough_modifiers(&self) -> Option<KeyModifiers> {
@@ -1630,6 +1666,27 @@ mouse_scroll_lines = 1
         let toml = r#"
 [ui]
 mouse_scroll_lines = 0
+"#;
+        assert!(toml::from_str::<Config>(toml).is_err());
+    }
+
+    #[test]
+    fn page_scroll_lines_defaults_to_unset_and_parses() {
+        assert_eq!(Config::default().ui.page_scroll_lines(), None);
+
+        let toml = r#"
+[ui]
+page_scroll_lines = 20
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ui.page_scroll_lines(), Some(20));
+    }
+
+    #[test]
+    fn page_scroll_lines_rejects_zero() {
+        let toml = r#"
+[ui]
+page_scroll_lines = 0
 "#;
         assert!(toml::from_str::<Config>(toml).is_err());
     }

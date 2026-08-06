@@ -351,6 +351,10 @@ pub struct Keybinds {
     pub zoom: ActionKeybinds,
     pub resize_mode: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
+    pub scroll_page_up: ActionKeybinds,
+    pub scroll_page_down: ActionKeybinds,
+    pub scroll_half_page_up: ActionKeybinds,
+    pub scroll_half_page_down: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
 }
 
@@ -513,6 +517,10 @@ impl Config {
             zoom: empty_action!(),
             resize_mode: empty_action!(),
             toggle_sidebar: empty_action!(),
+            scroll_page_up: empty_action!(),
+            scroll_page_down: empty_action!(),
+            scroll_half_page_up: empty_action!(),
+            scroll_half_page_down: empty_action!(),
             custom_commands: Vec::new(),
         };
 
@@ -654,6 +662,14 @@ impl Config {
             apply_action!(keybinds.zoom, zoom, source);
             apply_action!(keybinds.resize_mode, resize_mode, source);
             apply_action!(keybinds.toggle_sidebar, toggle_sidebar, source);
+            apply_action!(keybinds.scroll_page_up, scroll_page_up, source);
+            apply_action!(keybinds.scroll_page_down, scroll_page_down, source);
+            apply_action!(keybinds.scroll_half_page_up, scroll_half_page_up, source);
+            apply_action!(
+                keybinds.scroll_half_page_down,
+                scroll_half_page_down,
+                source
+            );
 
             if source == field_source!(indexed) {
                 append_legacy_indexed_bindings(
@@ -1540,6 +1556,72 @@ prefix = "ö"
             format_key_combo((KeyCode::PageDown, KeyModifiers::CONTROL)),
             "ctrl+pagedown"
         );
+    }
+
+    #[test]
+    fn default_page_scroll_bindings_are_direct_and_half_page_is_unset() {
+        let kb = Config::default().keybinds();
+        assert_eq!(
+            binding_triggers(&kb.scroll_page_up),
+            vec![BindingTrigger::Direct((
+                KeyCode::PageUp,
+                KeyModifiers::empty()
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.scroll_page_down),
+            vec![BindingTrigger::Direct((
+                KeyCode::PageDown,
+                KeyModifiers::empty()
+            ))]
+        );
+        assert!(kb.scroll_half_page_up.bindings.is_empty());
+        assert!(kb.scroll_half_page_down.bindings.is_empty());
+        assert!(Config::default().collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn user_page_scroll_bindings_displace_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+scroll_page_up = "shift+pageup"
+scroll_half_page_up = "alt+u"
+scroll_half_page_down = "alt+d"
+"#,
+        )
+        .unwrap();
+        let kb = config.keybinds();
+        assert_eq!(
+            binding_triggers(&kb.scroll_page_up),
+            vec![BindingTrigger::Direct((
+                KeyCode::PageUp,
+                KeyModifiers::SHIFT
+            ))]
+        );
+        // The default pagedown binding is untouched by an override of its sibling.
+        assert_eq!(
+            binding_triggers(&kb.scroll_page_down),
+            vec![BindingTrigger::Direct((
+                KeyCode::PageDown,
+                KeyModifiers::empty()
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.scroll_half_page_up),
+            vec![BindingTrigger::Direct((
+                KeyCode::Char('u'),
+                KeyModifiers::ALT
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.scroll_half_page_down),
+            vec![BindingTrigger::Direct((
+                KeyCode::Char('d'),
+                KeyModifiers::ALT
+            ))]
+        );
+        assert!(config.collect_diagnostics().is_empty());
     }
 
     #[test]

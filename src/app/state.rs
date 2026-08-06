@@ -1516,6 +1516,8 @@ pub struct AppState {
     pub right_click_passthrough: Option<RightClickPassthroughGesture>,
     pub redraw_on_focus_gained: bool,
     pub mouse_scroll_lines: usize,
+    /// `None` means "one pane viewport".
+    pub page_scroll_lines: Option<usize>,
     pub confirm_close: bool,
     pub prompt_new_tab_name: bool,
     pub prompt_new_workspace_name: bool,
@@ -1885,6 +1887,7 @@ impl AppState {
             right_click_passthrough: None,
             redraw_on_focus_gained: true,
             mouse_scroll_lines: crate::config::DEFAULT_MOUSE_SCROLL_LINES,
+            page_scroll_lines: None,
             confirm_close: true,
             prompt_new_tab_name: true,
             prompt_new_workspace_name: false,

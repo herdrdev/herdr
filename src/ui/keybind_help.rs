@@ -156,6 +156,16 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
             "cycle pane previous",
         ),
         help_entry(keybind_label(&kb.last_pane), "last pane"),
+        help_entry(keybind_label(&kb.scroll_page_up), "scroll page up"),
+        help_entry(keybind_label(&kb.scroll_page_down), "scroll page down"),
+        help_entry(
+            keybind_label(&kb.scroll_half_page_up),
+            "scroll half page up",
+        ),
+        help_entry(
+            keybind_label(&kb.scroll_half_page_down),
+            "scroll half page down",
+        ),
     ];
     groups.push(("panes", panes));
 

@@ -530,6 +530,30 @@
           "description": "Toggle sidebar collapse."
         },
         {
+          "key": "keys.scroll_page_up",
+          "type": "keybinding",
+          "default": "\"pageup\"",
+          "description": "Scroll the focused pane scrollback up one page."
+        },
+        {
+          "key": "keys.scroll_page_down",
+          "type": "keybinding",
+          "default": "\"pagedown\"",
+          "description": "Scroll the focused pane scrollback down one page."
+        },
+        {
+          "key": "keys.scroll_half_page_up",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Scroll the focused pane scrollback up half a page. Unset by default."
+        },
+        {
+          "key": "keys.scroll_half_page_down",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Scroll the focused pane scrollback down half a page. Unset by default."
+        },
+        {
           "key": "keys.indexed.tabs",
           "type": "string",
           "default": "unset",
@@ -633,6 +657,12 @@
           "type": "integer",
           "default": "3",
           "description": "Lines to scroll per mouse wheel notch."
+        },
+        {
+          "key": "ui.page_scroll_lines",
+          "type": "integer",
+          "default": "pane viewport height",
+          "description": "Lines to scroll per page-scroll keybinding. Defaults to the pane viewport height."
         },
         {
           "key": "ui.confirm_close",

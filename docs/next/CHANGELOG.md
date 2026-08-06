@@ -6,6 +6,7 @@
 - `theme.custom.sidebar_bg` can now give the desktop sidebar its own background without changing built-in theme defaults.
 - Settings and `ui.status_indicators = "symbols"` can now use distinct static shapes for blocked, working, done, idle, and unknown agent states. (#2260)
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
+- Pane scrollback paging is now rebindable through `keys.scroll_page_up` and `keys.scroll_page_down`, with new unbound `keys.scroll_half_page_up` and `keys.scroll_half_page_down` actions and a `ui.page_scroll_lines` distance override. `pageup` and `pagedown` are now valid keybinding names.
 
 ### Fixed
 - Configs containing the retired Herdr-written `ui.agent_panel_scope` setting no longer report it as an unknown key after upgrades. (#2292)
