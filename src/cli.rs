@@ -1142,42 +1142,27 @@ mod tests {
     }
 
     #[test]
-    fn expand_equals_args_splits_long_option_values() {
-        let args = vec![
-            "w1:p1".to_string(),
-            "--source=recent".to_string(),
-            "--lines=5".to_string(),
-            "--raw".to_string(),
-        ];
-        assert_eq!(
-            super::expand_equals_args(&args, &["--source", "--lines", "--format"]),
-            vec!["w1:p1", "--source", "recent", "--lines", "5", "--raw"]
-        );
-    }
-
-    #[test]
-    fn expand_equals_args_leaves_other_tokens_alone() {
+    fn expand_equals_args_splits_value_options_only() {
+        // Known value options split; values may contain `=`. Boolean and
+        // unknown options keep the attached form so parsers still reject them.
         let args = vec![
             "--match=a=b".to_string(),
             "name=value".to_string(),
-            "--flag".to_string(),
-        ];
-        assert_eq!(
-            super::expand_equals_args(&args, &["--match"]),
-            vec!["--match", "a=b", "name=value", "--flag"]
-        );
-    }
-
-    #[test]
-    fn expand_equals_args_keeps_values_on_boolean_and_unknown_options() {
-        let args = vec![
             "--raw=value".to_string(),
-            "--ansi=value".to_string(),
             "--bogus=value".to_string(),
+            "--timeout=5000".to_string(),
         ];
         assert_eq!(
-            super::expand_equals_args(&args, &["--source", "--lines", "--format"]),
-            vec!["--raw=value", "--ansi=value", "--bogus=value"]
+            super::expand_equals_args(&args, &["--match", "--timeout"]),
+            vec![
+                "--match",
+                "a=b",
+                "name=value",
+                "--raw=value",
+                "--bogus=value",
+                "--timeout",
+                "5000",
+            ]
         );
     }
 }
