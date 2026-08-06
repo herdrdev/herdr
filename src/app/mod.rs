@@ -15,6 +15,7 @@ mod creation;
 mod git_refresh;
 mod ids;
 mod input;
+pub(crate) mod palette;
 mod popup;
 mod runtime;
 mod runtime_mutations;
@@ -1649,11 +1650,18 @@ impl App {
                                 {
                                     self.pressed_terminal_keys.remove(&pressed_key_id);
                                 }
-                            } else if (self.state.popup_pane.is_some()
-                                || self.state.mode == Mode::Terminal)
-                                && !self.suppressed_repeat_keys.contains(&pressed_key_id)
+                            } else if self.state.popup_pane.is_some()
+                                || self.state.mode == Mode::Terminal
                             {
-                                let _ = self.handle_terminal_key_headless_from(source_id, key);
+                                if !self.suppressed_repeat_keys.contains(&pressed_key_id) {
+                                    let _ = self.handle_terminal_key_headless_from(source_id, key);
+                                }
+                            } else {
+                                // Legacy terminals repeat a held key as another Press, so
+                                // overlays and navigation already auto-repeat there. Kitty
+                                // protocol hosts send Repeat instead; route it the same way
+                                // so holding a key behaves identically on both.
+                                self.handle_non_terminal_key_headless(key);
                             }
                         }
                         crossterm::event::KeyEventKind::Release => {
@@ -1774,7 +1782,7 @@ impl App {
                 self.handle_context_menu_key_via_api(key_event);
             }
             Mode::KeybindHelp => {
-                input::handle_keybind_help_key(&mut self.state, key);
+                self.handle_keybind_help_key(key);
             }
             Mode::GlobalMenu => {
                 input::handle_global_menu_key(&mut self.state, key_event);
@@ -1971,7 +1979,6 @@ mod tests {
             Mode::ConfirmRemoveWorktree,
             Mode::ContextMenu,
             Mode::GlobalMenu,
-            Mode::KeybindHelp,
         ] {
             assert!(mode.wants_ascii_input(), "{mode:?} should want ASCII");
         }
@@ -1987,6 +1994,8 @@ mod tests {
             Mode::Onboarding,
             Mode::ReleaseNotes,
             Mode::ProductAnnouncement,
+            // The command palette is a search box, so it keeps the IME.
+            Mode::KeybindHelp,
         ] {
             assert!(!mode.wants_ascii_input(), "{mode:?} should keep the IME");
         }
@@ -2077,7 +2086,10 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        // ctrl+b (the default prefix key) enters prefix mode → switch intent.
+        app.state.prefix_code = KeyCode::Char('b');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
+
+        // The prefix key enters prefix mode → switch intent.
         app.handle_raw_input_event(raw_key(
             KeyCode::Char('b'),
             KeyModifiers::CONTROL,
@@ -4937,8 +4949,8 @@ mod tests {
         app.state.mode = Mode::Terminal;
         assert!(!app.state.detach_requested);
 
-        // Send Ctrl+B (prefix key, raw byte 0x02).
-        let prefix_bytes = vec![0x02];
+        // Send the default prefix key (esc, raw byte 0x1b).
+        let prefix_bytes = vec![0x1b];
         app.route_client_input(prefix_bytes);
 
         assert_eq!(
@@ -4988,7 +5000,8 @@ last_pane = "prefix+tab"
         app.state.switch_workspace_tab(0, first_second_tab);
         app.state.switch_workspace_tab(1, 0);
 
-        app.route_client_input(vec![0x02, b'\t']);
+        app.route_client_input(vec![0x1b]);
+        app.route_client_input(vec![b'\t']);
 
         assert_eq!(app.state.mode, Mode::Terminal);
         assert_eq!(app.state.active, Some(0));
@@ -4998,7 +5011,8 @@ last_pane = "prefix+tab"
             Some(first_second_root)
         );
 
-        app.route_client_input(vec![0x02, b'\t']);
+        app.route_client_input(vec![0x1b]);
+        app.route_client_input(vec![b'\t']);
 
         assert_eq!(app.state.active, Some(1));
         assert_eq!(app.state.workspaces[1].focused_pane_id(), Some(second_root));
@@ -5024,6 +5038,30 @@ last_pane = "prefix+tab"
         app.route_client_input(vec![0x0c]);
         assert_eq!(app.state.mode, Mode::Terminal);
         assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from(vec![0x0c]));
+    }
+
+    #[tokio::test]
+    async fn esc_prefix_replays_unbound_pairs_to_the_focused_pane() {
+        // With esc as the prefix, `esc i` in an editor must still reach the pane
+        // instead of being swallowed as an unknown prefix command.
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel(80, 24);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        app.route_client_input(vec![0x1b]);
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        app.route_client_input(vec![b'i']);
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from(vec![0x1b]));
+        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from(vec![b'i']));
     }
 
     #[tokio::test]
@@ -5421,7 +5459,7 @@ last_pane = "prefix+tab"
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.route_client_input(b"\x1b[98;5u\x1b[98;5:3u".to_vec());
+        app.route_client_input(b"\x1b[27u\x1b[27;1:3u".to_vec());
 
         assert_eq!(app.state.mode, Mode::Prefix);
         assert!(rx.try_recv().is_err());
@@ -5647,6 +5685,65 @@ last_pane = "prefix+tab"
                 .map(|create| create.branch.as_str()),
             Some("feature/linear-302")
         );
+    }
+
+    #[test]
+    fn held_key_repeats_drive_overlay_navigation() {
+        // Legacy terminals resend Press while a key is held; kitty-protocol hosts
+        // send Repeat instead. Overlays must scroll the same way on both.
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        input::modal::open_keybind_help(&mut app.state);
+
+        app.route_client_events(
+            vec![
+                raw_key(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Press),
+                raw_key(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Repeat),
+                raw_key(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Repeat),
+            ],
+            true,
+        );
+
+        assert_eq!(app.state.mode, Mode::KeybindHelp);
+        assert_eq!(app.state.keybind_help.selected, 3);
+
+        app.route_client_events(
+            vec![raw_key(
+                KeyCode::Up,
+                KeyModifiers::NONE,
+                KeyEventKind::Repeat,
+            )],
+            true,
+        );
+        assert_eq!(app.state.keybind_help.selected, 2);
+    }
+
+    #[tokio::test]
+    async fn held_key_repeats_still_do_not_leak_into_a_pane_after_leaving_an_overlay() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel(80, 24);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        input::modal::open_keybind_help(&mut app.state);
+
+        // Esc closes the palette; the repeats of that same held key must not
+        // reach the pane that is focused afterwards.
+        app.route_client_events(
+            vec![
+                raw_key(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Press),
+                raw_key(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Repeat),
+            ],
+            true,
+        );
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

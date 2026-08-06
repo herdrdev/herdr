@@ -16,7 +16,7 @@ pub use self::{
     keybinds::{
         format_key_combo, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, Keybinds, LiveKeybindConfig,
+        IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
@@ -34,6 +34,8 @@ pub use self::{
 
 pub(crate) use self::io::upsert_top_level_bool;
 pub(crate) use self::keybinds::parse_key_combo;
+#[cfg(test)]
+pub(crate) use self::keybinds::test_parse_binding_label;
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;

@@ -10,7 +10,7 @@ use crate::app::{
 };
 
 use super::{
-    modal::{keybind_help_back, leave_modal, modal_action_from_buttons, ModalAction},
+    modal::{leave_modal, modal_action_from_buttons, ModalAction},
     ScrollbarClickTarget,
 };
 
@@ -197,7 +197,7 @@ impl App {
                         .state
                         .keybind_help_close_button_at(mouse.column, mouse.row) =>
                 {
-                    keybind_help_back(&mut self.state);
+                    leave_modal(&mut self.state);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(target) = self
@@ -215,15 +215,17 @@ impl App {
                                     .set_keybind_help_offset_from_bottom(offset_from_bottom);
                             }
                         }
-                    } else {
-                        let rect = self.state.keybind_help_popup_rect();
-                        let inside = mouse.column >= rect.x
-                            && mouse.column < rect.x + rect.width
-                            && mouse.row >= rect.y
-                            && mouse.row < rect.y + rect.height;
-                        if !inside {
-                            leave_modal(&mut self.state);
-                        }
+                    } else if let Some(row) =
+                        self.state.keybind_help_row_at(mouse.column, mouse.row)
+                    {
+                        self.state.keybind_help.selected = row;
+                        self.state.keybind_help.capture = None;
+                    } else if !rect_contains(
+                        self.state.keybind_help_popup_rect(),
+                        mouse.column,
+                        mouse.row,
+                    ) {
+                        leave_modal(&mut self.state);
                     }
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
@@ -640,18 +642,32 @@ impl AppState {
         Some(crate::ui::modal_stack_areas(inner, 2, 1, 0, 1).content)
     }
 
+    pub(crate) fn keybind_help_viewport_rows(&self) -> usize {
+        self.keybind_help_body_rect()
+            .map(|body| body.height.max(1) as usize)
+            .unwrap_or(1)
+    }
+
+    /// Command row under the pointer, if any.
+    fn keybind_help_row_at(&self, col: u16, row: u16) -> Option<usize> {
+        let body = self.keybind_help_body_rect()?;
+        if !rect_contains(body, col, row) {
+            return None;
+        }
+        let commands = self.palette_filtered_commands();
+        let lines = crate::app::palette::palette_display_lines(&commands);
+        let offset = (row - body.y) as usize;
+        lines.get(self.keybind_help.scroll + offset)?.row()
+    }
+
     fn keybind_help_scroll_metrics(&self) -> Option<crate::pane::ScrollMetrics> {
         let body = self.keybind_help_body_rect()?;
         let viewport_rows = body.height.max(1) as usize;
-        let wrap_width = body.width.max(1) as usize;
-        let total_rows = crate::ui::keybind_help_lines(self)
-            .into_iter()
-            .map(|(width, _)| width.max(1).div_ceil(wrap_width))
-            .sum::<usize>();
+        let commands = self.palette_filtered_commands();
+        let total_rows = crate::app::palette::palette_display_lines(&commands).len();
         let max_offset_from_bottom = total_rows.saturating_sub(viewport_rows);
         Some(crate::pane::ScrollMetrics {
-            offset_from_bottom: max_offset_from_bottom
-                .saturating_sub(self.keybind_help.scroll as usize),
+            offset_from_bottom: max_offset_from_bottom.saturating_sub(self.keybind_help.scroll),
             max_offset_from_bottom,
             viewport_rows,
         })
@@ -689,21 +705,23 @@ impl AppState {
         ))
     }
 
-    pub(crate) fn keybind_help_max_scroll(&self) -> u16 {
+    pub(crate) fn keybind_help_max_scroll(&self) -> usize {
         self.keybind_help_scroll_metrics()
-            .map(|metrics| metrics.max_offset_from_bottom as u16)
+            .map(|metrics| metrics.max_offset_from_bottom)
             .unwrap_or(0)
     }
 
     fn set_keybind_help_offset_from_bottom(&mut self, offset_from_bottom: usize) {
-        let max_scroll = self.keybind_help_max_scroll() as usize;
-        self.keybind_help.scroll = max_scroll.saturating_sub(offset_from_bottom) as u16;
+        let max_scroll = self.keybind_help_max_scroll();
+        self.keybind_help.scroll = max_scroll.saturating_sub(offset_from_bottom);
+        self.align_palette_selection_to_scroll();
     }
 
-    pub(super) fn scroll_keybind_help(&mut self, delta: i16) {
-        let max_scroll = self.keybind_help_max_scroll();
-        let current = self.keybind_help.scroll as i16;
-        self.keybind_help.scroll = current.saturating_add(delta).clamp(0, max_scroll as i16) as u16;
+    pub(super) fn scroll_keybind_help(&mut self, delta: isize) {
+        let max_scroll = self.keybind_help_max_scroll() as isize;
+        let current = self.keybind_help.scroll as isize;
+        self.keybind_help.scroll = current.saturating_add(delta).clamp(0, max_scroll) as usize;
+        self.align_palette_selection_to_scroll();
     }
 }
 
@@ -739,10 +757,9 @@ mod tests {
     }
 
     #[test]
-    fn clicking_keybind_help_back_button_leaves_help_open() {
+    fn clicking_command_palette_close_button_closes_it() {
         let mut app = app_for_mouse_test();
         app.state.mode = Mode::KeybindHelp;
-        app.state.keybind_help.search_focused = true;
         app.state.keybind_help.query = "work".into();
 
         let rect = app.state.keybind_help_popup_rect();
@@ -752,17 +769,15 @@ mod tests {
             rect.width.saturating_sub(2),
             rect.height.saturating_sub(2),
         );
-        let back =
+        let close =
             crate::ui::release_notes_close_button_rect(Rect::new(inner.x, inner.y, inner.width, 1));
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            back.x,
-            back.y,
+            close.x,
+            close.y,
         ));
 
-        assert_eq!(app.state.mode, Mode::KeybindHelp);
-        assert!(!app.state.keybind_help.search_focused);
-        assert!(app.state.keybind_help.query.is_empty());
+        assert_ne!(app.state.mode, Mode::KeybindHelp);
     }
 
     #[test]

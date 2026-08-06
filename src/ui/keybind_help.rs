@@ -1,255 +1,34 @@
-use std::borrow::Cow;
-
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
 use super::release_notes::release_notes_close_button_rect;
 use super::scrollbar::{release_notes_scrollbar_rect, render_scrollbar};
+use super::text::truncate_end;
 use super::widgets::{
     modal_stack_areas, panel_contrast_fg, render_action_button, render_modal_header,
     render_modal_shell,
 };
+use crate::app::palette::{palette_commands, palette_display_lines, PaletteCommand, PaletteLine};
 use crate::app::AppState;
 
-pub(super) type HelpEntry = (String, Cow<'static, str>);
-pub(super) type HelpGroup = (&'static str, Vec<HelpEntry>);
+const SHORTCUT_COLUMN_MAX: usize = 24;
+const CAPTURE_PROMPT: &str = "press shortcut…";
 
-fn help_entry(key: impl Into<String>, label: &'static str) -> HelpEntry {
-    (key.into(), Cow::Borrowed(label))
-}
-
-fn keybind_label(bindings: &crate::config::ActionKeybinds) -> String {
-    bindings.label().unwrap_or_else(|| "unset".to_string())
-}
-
-fn indexed_label(bindings: &[crate::config::IndexedKeybind]) -> String {
-    if bindings.is_empty() {
-        return "unset".to_string();
-    }
-
-    let mut parts = Vec::new();
-    let mut index = 0;
-    while index < bindings.len() {
-        if let Some(prefix) = indexed_range_prefix(&bindings[index..]) {
-            parts.push(format!("{prefix}1..9"));
-            index += 9;
-        } else {
-            parts.push(bindings[index].label.clone());
-            index += 1;
-        }
-    }
-
-    parts.join(" / ")
-}
-
-fn indexed_range_prefix(bindings: &[crate::config::IndexedKeybind]) -> Option<&str> {
-    let run = bindings.get(..9)?;
-    let prefix = run[0].label.strip_suffix('1')?;
-    for (offset, binding) in run.iter().enumerate() {
-        let digit = char::from(b'1' + offset as u8);
-        if binding.label.strip_suffix(digit) != Some(prefix) {
-            return None;
-        }
-    }
-    Some(prefix)
-}
-
-pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
-    let kb = &app.keybinds;
-    let mut groups = Vec::new();
-
-    groups.push((
-        "global",
-        vec![
-            help_entry(
-                crate::config::format_key_combo((app.prefix_code, app.prefix_mods)),
-                "prefix mode",
-            ),
-            help_entry(keybind_label(&kb.help), "keybinds"),
-            help_entry(keybind_label(&kb.settings), "settings"),
-            help_entry(keybind_label(&kb.detach), "detach"),
-            help_entry(keybind_label(&kb.reload_config), "reload config"),
-            help_entry(
-                keybind_label(&kb.open_notification_target),
-                "open notification target",
-            ),
-        ],
-    ));
-
-    groups.push((
-        "navigation",
-        vec![
-            help_entry("esc", "back"),
-            help_entry(
-                format!(
-                    "{} / {}",
-                    keybind_label(&kb.navigate.workspace_up),
-                    keybind_label(&kb.navigate.workspace_down)
-                ),
-                "workspace list",
-            ),
-            help_entry(
-                format!(
-                    "{} / {} / {} / {} / left / right",
-                    keybind_label(&kb.navigate.pane_left),
-                    keybind_label(&kb.navigate.pane_down),
-                    keybind_label(&kb.navigate.pane_up),
-                    keybind_label(&kb.navigate.pane_right)
-                ),
-                "move focus",
-            ),
-            help_entry("tab / shift+tab", "cycle pane"),
-            help_entry("enter", "open workspace"),
-            help_entry("1..9", "switch workspace"),
-        ],
-    ));
-
-    let workspace_tab = vec![
-        help_entry(keybind_label(&kb.workspace_picker), "workspace navigation"),
-        help_entry(keybind_label(&kb.goto), "session navigator"),
-        help_entry(keybind_label(&kb.new_workspace), "new workspace"),
-        help_entry(keybind_label(&kb.new_worktree), "new worktree"),
-        help_entry(keybind_label(&kb.open_worktree), "open worktree"),
-        help_entry(
-            keybind_label(&kb.remove_worktree),
-            "delete worktree checkout",
-        ),
-        help_entry(keybind_label(&kb.rename_workspace), "rename workspace"),
-        help_entry(keybind_label(&kb.close_workspace), "close workspace"),
-        help_entry(keybind_label(&kb.previous_workspace), "previous workspace"),
-        help_entry(keybind_label(&kb.next_workspace), "next workspace"),
-        help_entry(indexed_label(&kb.switch_workspace), "switch workspace 1-9"),
-        help_entry(keybind_label(&kb.previous_agent), "previous agent"),
-        help_entry(keybind_label(&kb.next_agent), "next agent"),
-        help_entry(indexed_label(&kb.focus_agent), "focus agent 1-9"),
-        help_entry(keybind_label(&kb.new_tab), "new tab"),
-        help_entry(keybind_label(&kb.rename_tab), "rename tab"),
-        help_entry(keybind_label(&kb.previous_tab), "previous tab"),
-        help_entry(keybind_label(&kb.next_tab), "next tab"),
-        help_entry(indexed_label(&kb.switch_tab), "switch tab 1-9"),
-        help_entry(keybind_label(&kb.close_tab), "close tab"),
-    ];
-    groups.push(("workspaces / tabs", workspace_tab));
-
-    let panes = vec![
-        help_entry(keybind_label(&kb.split_vertical), "split vertical"),
-        help_entry(keybind_label(&kb.split_horizontal), "split horizontal"),
-        help_entry(keybind_label(&kb.close_pane), "close pane"),
-        help_entry(keybind_label(&kb.rename_pane), "rename pane"),
-        help_entry(keybind_label(&kb.edit_scrollback), "edit scrollback"),
-        help_entry(keybind_label(&kb.copy_mode), "copy mode"),
-        help_entry(keybind_label(&kb.zoom), "zoom pane"),
-        help_entry(keybind_label(&kb.resize_mode), "resize mode"),
-        help_entry(keybind_label(&kb.toggle_sidebar), "toggle sidebar"),
-        help_entry(keybind_label(&kb.focus_pane_left), "focus pane left"),
-        help_entry(keybind_label(&kb.focus_pane_down), "focus pane down"),
-        help_entry(keybind_label(&kb.focus_pane_up), "focus pane up"),
-        help_entry(keybind_label(&kb.focus_pane_right), "focus pane right"),
-        help_entry(keybind_label(&kb.cycle_pane_next), "cycle pane next"),
-        help_entry(
-            keybind_label(&kb.cycle_pane_previous),
-            "cycle pane previous",
-        ),
-        help_entry(keybind_label(&kb.last_pane), "last pane"),
-    ];
-    groups.push(("panes", panes));
-
-    if !kb.custom_commands.is_empty() {
-        groups.push((
-            "custom",
-            kb.custom_commands
-                .iter()
-                .map(|binding| {
-                    (
-                        binding.label.clone(),
-                        binding
-                            .description
-                            .clone()
-                            .map(Cow::Owned)
-                            .unwrap_or(Cow::Borrowed("custom command")),
-                    )
-                })
-                .collect(),
-        ));
-    }
-
-    groups
-}
-
-fn filter_keybind_help_groups(groups: Vec<HelpGroup>, query: &str) -> Vec<HelpGroup> {
-    if query.is_empty() {
-        return groups;
-    }
-
-    let query = query.to_lowercase();
-    groups
-        .into_iter()
-        .filter_map(|(group, entries)| {
-            let entries = entries
-                .into_iter()
-                .filter(|(key, label)| {
-                    key.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
-                })
-                .collect::<Vec<_>>();
-            (!entries.is_empty()).then_some((group, entries))
-        })
-        .collect()
-}
-
-pub(crate) fn keybind_help_lines(app: &AppState) -> Vec<(usize, Line<'static>)> {
-    let heading_style = Style::default()
-        .fg(app.palette.accent)
-        .add_modifier(Modifier::BOLD);
-    let key_style = Style::default()
-        .fg(app.palette.mauve)
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(app.palette.text);
-
-    let groups = filter_keybind_help_groups(keybind_help_groups(app), &app.keybind_help.query);
-    let key_width = groups
+/// Width of the shortcut column, measured across the unfiltered catalog so the
+/// column does not jump around while the query changes.
+fn shortcut_column_width(app: &AppState) -> usize {
+    palette_commands(app)
         .iter()
-        .flat_map(|(_, entries)| entries.iter().map(|(key, _)| key.chars().count()))
+        .map(|command| command.shortcut.chars().count())
         .max()
-        .unwrap_or(8);
-
-    let mut lines = Vec::new();
-
-    if groups.is_empty() {
-        let message = " no matching keybinds";
-        return vec![(
-            message.chars().count(),
-            Line::from(Span::styled(
-                message,
-                Style::default().fg(app.palette.overlay1),
-            )),
-        )];
-    }
-
-    for (group, entries) in groups {
-        lines.push((
-            group.len() + 1,
-            Line::from(vec![Span::styled(format!(" {group}"), heading_style)]),
-        ));
-        for (key, label) in entries {
-            let padded_key = format!(" {:<width$} ", key, width = key_width);
-            let width = padded_key.chars().count() + label.chars().count();
-            lines.push((
-                width,
-                Line::from(vec![
-                    Span::styled(padded_key, key_style),
-                    Span::styled(label.into_owned(), label_style),
-                ]),
-            ));
-        }
-        lines.push((0, Line::raw("")));
-    }
-
-    lines
+        .unwrap_or(8)
+        .max(CAPTURE_PROMPT.chars().count())
+        .min(SHORTCUT_COLUMN_MAX)
 }
 
 pub(super) fn render_keybind_help_overlay(app: &AppState, frame: &mut Frame) {
@@ -266,54 +45,30 @@ pub(super) fn render_keybind_help_overlay(app: &AppState, frame: &mut Frame) {
     let header_rows =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas::<2>(stack.header);
 
-    render_modal_header(frame, header_rows[0], "keybinds", &app.palette);
+    render_modal_header(frame, header_rows[0], "commands", &app.palette);
     render_action_button(
         frame,
         release_notes_close_button_rect(header_rows[0]),
         Some("esc"),
-        if app.keybind_help.search_focused {
-            "back"
-        } else {
-            "close"
-        },
+        "close",
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.accent)
             .add_modifier(Modifier::BOLD),
     );
-    let search_line = if app.keybind_help.search_focused {
-        Line::from(vec![
-            Span::styled(
-                " / ",
-                Style::default()
-                    .fg(app.palette.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                app.keybind_help.query.as_str(),
-                Style::default()
-                    .fg(app.palette.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    } else {
-        Line::from(Span::styled(
-            " press / to filter by command or shortcut",
-            Style::default().fg(app.palette.overlay0),
-        ))
-    };
-    frame.render_widget(Paragraph::new(search_line), header_rows[1]);
+    render_search(app, frame, header_rows[1]);
 
+    let commands = app.palette_filtered_commands();
+    let lines = palette_display_lines(&commands);
     let body_area = stack.content;
     let metrics = crate::pane::ScrollMetrics {
-        offset_from_bottom: app
-            .keybind_help_max_scroll()
-            .saturating_sub(app.keybind_help.scroll) as usize,
-        max_offset_from_bottom: app.keybind_help_max_scroll() as usize,
+        offset_from_bottom: app.keybind_help_max_scroll()
+            - app.keybind_help.scroll.min(app.keybind_help_max_scroll()),
+        max_offset_from_bottom: app.keybind_help_max_scroll(),
         viewport_rows: body_area.height.max(1) as usize,
     };
     let track = release_notes_scrollbar_rect(body_area, metrics);
-    let text_area = track
+    let list_area = track
         .map(|_| {
             Rect::new(
                 body_area.x,
@@ -324,15 +79,18 @@ pub(super) fn render_keybind_help_overlay(app: &AppState, frame: &mut Frame) {
         })
         .unwrap_or(body_area);
 
-    let body = Paragraph::new(
-        keybind_help_lines(app)
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect::<Vec<_>>(),
-    )
-    .wrap(Wrap { trim: false })
-    .scroll((app.keybind_help.scroll, 0));
-    frame.render_widget(body, text_area);
+    if commands.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " no commands match this search",
+                Style::default().fg(app.palette.overlay1),
+            ))),
+            list_area,
+        );
+    } else {
+        render_rows(app, &commands, &lines, frame, list_area);
+    }
+
     if let Some(track) = track {
         render_scrollbar(
             frame,
@@ -344,77 +102,404 @@ pub(super) fn render_keybind_help_overlay(app: &AppState, frame: &mut Frame) {
         );
     }
 
-    let footer = if app.keybind_help.search_focused {
-        Line::from(vec![
-            Span::styled(" filter ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("type/backspace", Style::default().fg(app.palette.text)),
-            Span::styled(" · ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("clear ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("ctrl+u", Style::default().fg(app.palette.text)),
-            Span::styled(" · ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("scroll ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("↑↓/pgup/pgdn", Style::default().fg(app.palette.text)),
-            Span::styled(" · ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("back ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("esc", Style::default().fg(app.palette.text)),
-        ])
+    render_footer(app, frame, stack.footer.unwrap_or_default());
+}
+
+fn render_search(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+    let mut spans = vec![Span::styled(
+        " › ",
+        Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+    )];
+    if app.keybind_help.query.is_empty() {
+        spans.push(Span::styled(
+            "search commands (regex)",
+            Style::default().fg(p.overlay0),
+        ));
     } else {
-        Line::from(vec![
-            Span::styled(" search ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("/", Style::default().fg(app.palette.text)),
-            Span::styled(" · ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("scroll ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("j/k/↑↓/pgup/pgdn", Style::default().fg(app.palette.text)),
-            Span::styled(" · ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("close ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("esc/enter", Style::default().fg(app.palette.text)),
-        ])
+        spans.push(Span::styled(
+            app.keybind_help.query.clone(),
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if app.keybind_help.capture.is_none() {
+        spans.push(Span::styled(
+            "█",
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_rows(
+    app: &AppState,
+    commands: &[PaletteCommand],
+    lines: &[PaletteLine],
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let start = app.keybind_help.scroll.min(lines.len());
+    let end = lines.len().min(start.saturating_add(area.height as usize));
+    let key_width = shortcut_column_width(app);
+
+    for (visible_idx, line) in lines[start..end].iter().enumerate() {
+        let rect = Rect::new(area.x, area.y + visible_idx as u16, area.width, 1);
+        match line {
+            PaletteLine::Heading(group) => {
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!(" {group}"),
+                        Style::default()
+                            .fg(app.palette.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ))),
+                    rect,
+                );
+            }
+            PaletteLine::Row(idx) => {
+                let Some(command) = commands.get(*idx) else {
+                    continue;
+                };
+                render_row(
+                    app,
+                    frame,
+                    rect,
+                    command,
+                    key_width,
+                    *idx == app.keybind_help.selected,
+                );
+            }
+        }
+    }
+}
+
+fn render_row(
+    app: &AppState,
+    frame: &mut Frame,
+    rect: Rect,
+    command: &PaletteCommand,
+    key_width: usize,
+    selected: bool,
+) {
+    let p = &app.palette;
+    frame.render_widget(Clear, rect);
+    let base_style = if selected {
+        Style::default().bg(p.accent).fg(panel_contrast_fg(p))
+    } else {
+        Style::default().bg(p.panel_bg).fg(p.text)
     };
-    frame.render_widget(Paragraph::new(footer), stack.footer.unwrap_or_default());
+
+    let capture = app
+        .keybind_help
+        .capture
+        .as_ref()
+        .filter(|_| selected)
+        .filter(|capture| Some(capture.config_key) == command.config_key);
+
+    let (shortcut, shortcut_style) = match capture {
+        Some(capture) => {
+            let text = match &capture.pending_conflict {
+                Some(pending) => pending.binding.clone(),
+                None => CAPTURE_PROMPT.to_string(),
+            };
+            (
+                text,
+                Style::default()
+                    .fg(panel_contrast_fg(p))
+                    .bg(p.mauve)
+                    .add_modifier(Modifier::BOLD),
+            )
+        }
+        None if !command.is_bound() => (
+            command.shortcut.clone(),
+            if selected {
+                base_style
+            } else {
+                Style::default().fg(p.overlay0).bg(p.panel_bg)
+            },
+        ),
+        None => (
+            command.shortcut.clone(),
+            if selected {
+                base_style.add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(p.mauve)
+                    .bg(p.panel_bg)
+                    .add_modifier(Modifier::BOLD)
+            },
+        ),
+    };
+
+    let shortcut = truncate_end(&shortcut, key_width);
+    let pad = key_width.saturating_sub(shortcut.chars().count());
+    let label_budget = rect
+        .width
+        .saturating_sub(key_width as u16)
+        .saturating_sub(4) as usize;
+    let label_style = if selected {
+        base_style.add_modifier(Modifier::BOLD)
+    } else if command.is_executable() {
+        Style::default().fg(p.text).bg(p.panel_bg)
+    } else {
+        Style::default().fg(p.subtext0).bg(p.panel_bg)
+    };
+
+    let spans = vec![
+        Span::styled(if selected { " ❯ " } else { "   " }.to_string(), base_style),
+        Span::styled(shortcut, shortcut_style),
+        Span::styled(" ".repeat(pad + 1), base_style),
+        Span::styled(
+            truncate_end(command.label.as_ref(), label_budget),
+            label_style,
+        ),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style), rect);
+}
+
+fn render_footer(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+    let dim = Style::default().fg(p.overlay0);
+    let key = Style::default().fg(p.text);
+
+    let line = match app.keybind_help.capture.as_ref() {
+        Some(capture) => match &capture.pending_conflict {
+            Some(pending) => Line::from(vec![
+                Span::styled(
+                    format!(" {} ", pending.binding),
+                    Style::default().fg(p.peach),
+                ),
+                Span::styled("is bound to ", dim),
+                Span::styled(pending.owner_label.clone(), key),
+                Span::styled(" · press again to reassign · ", dim),
+                Span::styled("esc", key),
+                Span::styled(" cancel", dim),
+            ]),
+            None => Line::from(vec![
+                Span::styled(format!(" shortcut for {} ", capture.command_label), dim),
+                Span::styled("· plain keys bind as prefix+key · ", dim),
+                Span::styled("esc", key),
+                Span::styled(" cancel", dim),
+            ]),
+        },
+        None => match app.keybind_help.notice.as_ref() {
+            Some(notice) => Line::from(vec![Span::styled(
+                format!(" {notice}"),
+                Style::default().fg(p.accent),
+            )]),
+            None => Line::from(vec![
+                Span::styled(" select ", dim),
+                Span::styled("↑↓", key),
+                Span::styled(" · run ", dim),
+                Span::styled("⏎", key),
+                Span::styled(" · shortcut ", dim),
+                Span::styled("ctrl+s", key),
+                Span::styled(" · clear ", dim),
+                Span::styled("ctrl+x", key),
+                Span::styled(" · close ", dim),
+                Span::styled("esc", key),
+            ]),
+        },
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::palette::{filter_palette_commands, PaletteAction};
+    use ratatui::{backend::TestBackend, Terminal};
 
-    fn groups() -> Vec<HelpGroup> {
-        vec![
-            (
-                "workspaces / tabs",
-                vec![
-                    help_entry("w", "workspace navigation"),
-                    help_entry("c", "new tab"),
-                ],
-            ),
-            (
-                "panes",
-                vec![
-                    help_entry("v", "split vertical"),
-                    help_entry("x", "close pane"),
-                ],
-            ),
-        ]
+    fn rendered_palette(app: &AppState, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+        terminal
+            .draw(|frame| render_keybind_help_overlay(app, frame))
+            .expect("draw palette");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
     }
 
     #[test]
-    fn keybind_help_filter_matches_labels_case_insensitively() {
-        let filtered = filter_keybind_help_groups(groups(), "WoRk");
+    fn palette_renders_search_rows_and_footer() {
+        let mut app = AppState::test_new();
+        app.view.terminal_area = Rect::new(0, 0, 100, 30);
+        app.keybind_help.query = "split".to_string();
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].0, "workspaces / tabs");
-        assert_eq!(filtered[0].1.len(), 1);
-        assert_eq!(filtered[0].1[0].1, "workspace navigation");
+        let rendered = rendered_palette(&app, 100, 30);
+
+        assert!(rendered.contains("commands"));
+        assert!(rendered.contains("split vertical"));
+        assert!(rendered.contains("prefix+v"));
+        assert!(rendered.contains("panes"));
+        assert!(rendered.contains("ctrl+s"));
+        assert!(rendered.contains("esc"));
+        // Filtered out by the query.
+        assert!(!rendered.contains("new tab"));
     }
 
     #[test]
-    fn keybind_help_filter_matches_shortcuts_without_matching_group_headings() {
-        let filtered = filter_keybind_help_groups(groups(), "x");
+    fn palette_renders_capture_prompt_and_conflict_on_the_selected_row() {
+        let mut app = AppState::test_new();
+        app.view.terminal_area = Rect::new(0, 0, 100, 30);
+        app.keybind_help.query = "^open worktree$".to_string();
+        app.keybind_help.capture = Some(crate::app::state::ShortcutCapture {
+            config_key: "open_worktree",
+            command_label: "open worktree".to_string(),
+            pending_conflict: None,
+        });
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].0, "panes");
-        assert_eq!(filtered[0].1.len(), 1);
-        assert_eq!(filtered[0].1[0].1, "close pane");
+        let rendered = rendered_palette(&app, 100, 30);
+        assert!(rendered.contains(CAPTURE_PROMPT));
+        assert!(rendered.contains("plain keys bind as prefix+key"));
 
-        assert!(filter_keybind_help_groups(groups(), "panes").is_empty());
+        app.keybind_help.capture = Some(crate::app::state::ShortcutCapture {
+            config_key: "open_worktree",
+            command_label: "open worktree".to_string(),
+            pending_conflict: Some(crate::app::state::PendingShortcutConflict {
+                binding: "prefix+v".to_string(),
+                owner_config_key: "split_vertical",
+                owner_label: "split vertical".to_string(),
+            }),
+        });
+
+        let rendered = rendered_palette(&app, 100, 30);
+        assert!(rendered.contains("is bound to"));
+        assert!(rendered.contains("press again to reassign"));
+    }
+
+    #[test]
+    fn palette_renders_an_empty_state_for_a_query_with_no_matches() {
+        let mut app = AppState::test_new();
+        app.view.terminal_area = Rect::new(0, 0, 100, 30);
+        app.keybind_help.query = "zzzz-no-such-command".to_string();
+
+        let rendered = rendered_palette(&app, 100, 30);
+
+        assert!(rendered.contains("no commands match this search"));
+    }
+
+    #[test]
+    fn shortcut_column_fits_the_capture_prompt() {
+        let app = AppState::test_new();
+        assert!(shortcut_column_width(&app) >= CAPTURE_PROMPT.chars().count());
+        assert!(shortcut_column_width(&app) <= SHORTCUT_COLUMN_MAX);
+    }
+
+    #[test]
+    fn palette_lists_unset_optional_commands() {
+        let app = AppState::test_new();
+        let commands = palette_commands(&app);
+
+        for label in [
+            "previous workspace",
+            "next workspace",
+            "previous agent",
+            "next agent",
+            "focus agent 1-9",
+            "switch workspace 1-9",
+        ] {
+            let command = commands
+                .iter()
+                .find(|command| command.label == label)
+                .unwrap_or_else(|| panic!("missing {label}"));
+            assert!(!command.is_bound(), "{label} should be unset by default");
+        }
+
+        for (label, shortcut) in [
+            ("focus pane left", "prefix+h"),
+            ("focus pane down", "prefix+j"),
+            ("focus pane up", "prefix+k"),
+            ("focus pane right", "prefix+l"),
+        ] {
+            let command = commands
+                .iter()
+                .find(|command| command.label == label)
+                .unwrap_or_else(|| panic!("missing {label}"));
+            assert_eq!(command.shortcut, shortcut);
+        }
+    }
+
+    #[test]
+    fn palette_lists_custom_command_descriptions() {
+        let mut app = AppState::test_new();
+        app.keybinds.custom_commands = vec![
+            crate::config::CustomCommandKeybind {
+                bindings: crate::config::ActionKeybinds::prefix("alt+g"),
+                label: "prefix+alt+g".to_string(),
+                command: "lazygit".to_string(),
+                action: crate::config::CustomCommandAction::Pane,
+                description: Some("open lazygit".to_string()),
+                width: None,
+                height: None,
+            },
+            crate::config::CustomCommandKeybind {
+                bindings: crate::config::ActionKeybinds::prefix("alt+h"),
+                label: "prefix+alt+h".to_string(),
+                command: "echo hello".to_string(),
+                action: crate::config::CustomCommandAction::Shell,
+                description: None,
+                width: None,
+                height: None,
+            },
+        ];
+
+        let commands = palette_commands(&app);
+        let custom: Vec<_> = commands
+            .iter()
+            .filter(|command| command.group == "custom")
+            .collect();
+
+        assert_eq!(custom.len(), 2);
+        assert_eq!(custom[0].label, "open lazygit");
+        assert_eq!(custom[0].shortcut, "prefix+alt+g");
+        assert_eq!(custom[0].action, PaletteAction::Custom(0));
+        assert_eq!(custom[1].label, "custom command");
+        assert!(custom[1].config_key.is_none());
+    }
+
+    #[test]
+    fn palette_compacts_multiple_indexed_ranges() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[keys]
+switch_tab = ["prefix+1..9", "alt+1..9"]
+switch_workspace = "ctrl+1..9"
+"#,
+        )
+        .expect("config parses");
+
+        let mut app = AppState::test_new();
+        app.keybinds = config.keybinds();
+        let commands = palette_commands(&app);
+
+        let shortcut_for = |label: &str| {
+            commands
+                .iter()
+                .find(|command| command.label == label)
+                .map(|command| command.shortcut.clone())
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+
+        assert_eq!(shortcut_for("switch tab 1-9"), "prefix+1..9 / alt+1..9");
+        assert_eq!(shortcut_for("switch workspace 1-9"), "ctrl+1..9");
+    }
+
+    #[test]
+    fn palette_search_matches_command_names_and_shortcuts() {
+        let app = AppState::test_new();
+        let by_name = filter_palette_commands(palette_commands(&app), "split");
+        assert!(by_name
+            .iter()
+            .all(|command| command.label.contains("split")));
+        assert_eq!(by_name.len(), 2);
+
+        let by_shortcut = filter_palette_commands(palette_commands(&app), "^prefix\\+c$");
+        assert_eq!(by_shortcut.len(), 1);
+        assert_eq!(by_shortcut[0].label, "new tab");
     }
 }

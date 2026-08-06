@@ -309,7 +309,7 @@ pub struct LoadedConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeysConfig {
-    /// Prefix key to enter prefix mode (e.g. "ctrl+b", "f12", "esc").
+    /// Prefix key to enter prefix mode (e.g. "esc", "ctrl+b", "f12"). Default: "esc".
     pub prefix: String,
     /// Open keybinding help. Default: "prefix+?"
     pub help: BindingConfig,
@@ -924,7 +924,7 @@ pub struct ExperimentalConfig {
 impl Default for KeysConfig {
     fn default() -> Self {
         Self {
-            prefix: "ctrl+b".into(),
+            prefix: "esc".into(),
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
             new_workspace: BindingConfig::one("prefix+shift+n"),
