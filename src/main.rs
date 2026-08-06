@@ -58,7 +58,6 @@ mod agent_resume;
 mod api;
 mod app;
 mod build_info;
-#[cfg(not(windows))]
 mod checksum;
 mod cli;
 mod client;
@@ -128,6 +127,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Override individual color tokens on top of the base theme.
 # Accepts: hex (#rrggbb), named colors, rgb(r,g,b), or panel_bg = "reset"
 # [theme.custom]
+# sidebar_bg = "#181825"
 # panel_bg = "reset"
 # accent = "#f5c2e7"
 # red = "#ff6188"
@@ -325,6 +325,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
+
+# Agent status indicators: "dots" preserves the compact color marks; "symbols" uses
+# distinct static glyphs for blocked, working, done, idle, and unknown states.
+# status_indicators = "dots"
 
 # Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
 # terminal_title, and terminal_title_stripped.

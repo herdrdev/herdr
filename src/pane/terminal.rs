@@ -1794,6 +1794,13 @@ impl GhosttyPaneTerminal {
         key: crate::input::TerminalKey,
         protocol: crate::input::KeyboardProtocol,
     ) -> Vec<u8> {
+        if matches!(protocol, crate::input::KeyboardProtocol::Legacy)
+            && key.code == crossterm::event::KeyCode::Tab
+            && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+        {
+            return crate::input::encode_terminal_key(key, protocol);
+        }
+
         if ghostty_prefers_herdr_text_encoding(&key) {
             return crate::input::encode_terminal_key(key, protocol);
         }
@@ -2018,6 +2025,9 @@ impl GhosttyPaneTerminal {
             .and_then(|c| ghostty_default_fg(c.foreground, host_theme, initial_default_foreground));
         let resolved_fg = colors.map(|c| ghostty_color(c.foreground));
         let resolved_bg = colors.map(|c| ghostty_color(c.background));
+        let palette_overrides = colors
+            .zip(terminal.default_palette().ok())
+            .and_then(|(colors, default)| PaletteOverrides::new(&colors.palette, &default));
         let hide_kitty_placeholders = crate::kitty_graphics::is_enabled();
 
         let mut row_iterator = match crate::ghostty::RowIterator::new() {
@@ -2052,6 +2062,7 @@ impl GhosttyPaneTerminal {
                         default_bg,
                         resolved_fg,
                         resolved_bg,
+                        palette_overrides.as_ref(),
                     );
                     let symbol = match ghostty_buffer_symbol_into(
                         &cells,
@@ -2277,6 +2288,9 @@ fn ghostty_collect_dirty_patch(
         .and_then(|c| ghostty_default_fg(c.foreground, host_theme, initial_default_foreground));
     let resolved_fg = colors.map(|c| ghostty_color(c.foreground));
     let resolved_bg = colors.map(|c| ghostty_color(c.background));
+    let palette_overrides = colors
+        .zip(terminal.default_palette().ok())
+        .and_then(|(colors, default)| PaletteOverrides::new(&colors.palette, &default));
     let hide_kitty_placeholders = crate::kitty_graphics::is_enabled();
 
     let Ok(mut row_iterator) = crate::ghostty::RowIterator::new() else {
@@ -2321,6 +2335,7 @@ fn ghostty_collect_dirty_patch(
                     default_bg,
                     resolved_fg,
                     resolved_bg,
+                    palette_overrides.as_ref(),
                 );
                 let symbol = match ghostty_buffer_symbol_into(
                     &cells,
@@ -2737,8 +2752,24 @@ pub(super) fn ghostty_normalize_buffer_symbol(
     if wide == crate::ghostty::CellWide::Narrow && actual_width == 2 {
         return symbol.to_string();
     }
+    if wide == crate::ghostty::CellWide::Wide && is_halfwidth_katakana_voiced_grapheme(symbol) {
+        return symbol.to_string();
+    }
 
     ghostty_blank_symbol_for_width(wide).to_string()
+}
+
+fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
+    let mut chars = symbol.chars();
+    let Some(base) = chars.next() else {
+        return false;
+    };
+    let Some(mark) = chars.next() else {
+        return false;
+    };
+    chars.next().is_none()
+        && ('\u{ff66}'..='\u{ff9d}').contains(&base)
+        && matches!(mark, '\u{ff9e}' | '\u{ff9f}')
 }
 
 fn ghostty_buffer_symbol_into<'a>(
@@ -2772,6 +2803,8 @@ fn ghostty_buffer_symbol_into<'a>(
     let actual_width = symbol_scratch.width();
     if actual_width != expected_width
         && !(wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
+        && !(wide == crate::ghostty::CellWide::Wide
+            && is_halfwidth_katakana_voiced_grapheme(symbol_scratch))
     {
         symbol_scratch.clear();
         symbol_scratch.push_str(ghostty_blank_symbol_for_width(wide));
@@ -2804,11 +2837,7 @@ fn blank_cell_data(default_fg: Option<Color>, default_bg: Option<Color>) -> Cell
 
 fn cell_data_from_style(symbol: String, style: Style) -> CellData {
     CellData {
-        symbol: if symbol.is_empty() {
-            " ".to_string()
-        } else {
-            symbol
-        },
+        symbol,
         fg: crate::protocol::color_to_u32(style.fg.unwrap_or(Color::Reset)),
         bg: crate::protocol::color_to_u32(style.bg.unwrap_or(Color::Reset)),
         modifier: crate::protocol::modifier_to_u16(style.add_modifier),
@@ -2835,11 +2864,12 @@ fn ghostty_cell_style(
     default_bg: Option<Color>,
     resolved_fg: Option<Color>,
     resolved_bg: Option<Color>,
+    palette_overrides: Option<&PaletteOverrides>,
 ) -> Style {
     let mut fg = basic
         .style
         .fg_color
-        .map(ghostty_cell_color)
+        .map(|color| ghostty_cell_color(color, palette_overrides))
         .or_else(|| cells.fg_color().ok().flatten().map(ghostty_color))
         .or(default_fg);
     let mut bg = cells
@@ -2847,7 +2877,7 @@ fn ghostty_cell_style(
         .ok()
         .flatten()
         .or(basic.style.bg_color)
-        .map(ghostty_cell_color)
+        .map(|color| ghostty_cell_color(color, palette_overrides))
         .or_else(|| cells.bg_color().ok().flatten().map(ghostty_color))
         .or(default_bg);
     if basic.style.invisible {
@@ -2869,7 +2899,11 @@ fn ghostty_cell_style(
     }
 
     let mut style = ghostty_default_style(fg, bg);
-    if let Some(underline_color) = basic.style.underline_color.map(ghostty_cell_color) {
+    if let Some(underline_color) = basic
+        .style
+        .underline_color
+        .map(|color| ghostty_cell_color(color, palette_overrides))
+    {
         style = style.underline_color(underline_color);
     }
     let mut modifiers = Modifier::empty();
@@ -3102,9 +3136,44 @@ fn terminal_theme_color(color: crate::ghostty::RgbColor) -> crate::terminal_them
     }
 }
 
-fn ghostty_cell_color(color: crate::ghostty::CellColor) -> Color {
+// Palette entries the program redefined with OSC 4. Forwarding a palette index to the
+// host makes it resolve against the host's own palette, discarding the redefinition.
+// Only overridden entries become RGB; the rest stay indexed and keep following the
+// host theme. None when nothing was redefined, which is the common case.
+struct PaletteOverrides([Option<crate::ghostty::RgbColor>; 256]);
+
+impl PaletteOverrides {
+    fn new(
+        active: &[crate::ghostty::RgbColor; 256],
+        default: &[crate::ghostty::RgbColor; 256],
+    ) -> Option<Self> {
+        let mut overrides = [None; 256];
+        let mut any = false;
+        for (index, (active, default)) in active.iter().zip(default.iter()).enumerate() {
+            if active != default {
+                overrides[index] = Some(*active);
+                any = true;
+            }
+        }
+        any.then_some(Self(overrides))
+    }
+
+    fn get(&self, index: u8) -> Option<crate::ghostty::RgbColor> {
+        self.0[usize::from(index)]
+    }
+}
+
+fn ghostty_cell_color(
+    color: crate::ghostty::CellColor,
+    palette_overrides: Option<&PaletteOverrides>,
+) -> Color {
     match color {
-        crate::ghostty::CellColor::Palette(index) => Color::Indexed(index),
+        crate::ghostty::CellColor::Palette(index) => {
+            match palette_overrides.and_then(|overrides| overrides.get(index)) {
+                Some(color) => ghostty_color(color),
+                None => Color::Indexed(index),
+            }
+        }
         crate::ghostty::CellColor::Rgb(color) => ghostty_color(color),
     }
 }
@@ -3181,6 +3250,54 @@ mod tests {
             wide: crate::ghostty::CellWide::Narrow,
             graphemes: text.chars().map(u32::from).collect(),
         }
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> crate::ghostty::RgbColor {
+        crate::ghostty::RgbColor { r, g, b }
+    }
+
+    #[test]
+    fn palette_overrides_are_none_without_an_osc4_write() {
+        let default = [rgb(1, 2, 3); 256];
+        assert!(PaletteOverrides::new(&default, &default).is_none());
+    }
+
+    #[test]
+    fn redefined_palette_entries_render_as_rgb_and_others_stay_indexed() {
+        let default = [rgb(1, 2, 3); 256];
+        let mut active = default;
+        active[18] = rgb(169, 177, 214);
+        let overrides = PaletteOverrides::new(&active, &default).expect("index 18 differs");
+
+        assert_eq!(
+            ghostty_cell_color(crate::ghostty::CellColor::Palette(18), Some(&overrides)),
+            Color::Rgb(169, 177, 214)
+        );
+        // Untouched entries keep being forwarded, so they still follow the host theme.
+        assert_eq!(
+            ghostty_cell_color(crate::ghostty::CellColor::Palette(19), Some(&overrides)),
+            Color::Indexed(19)
+        );
+        // ...and so does everything when the program never wrote a palette at all.
+        assert_eq!(
+            ghostty_cell_color(crate::ghostty::CellColor::Palette(18), None),
+            Color::Indexed(18)
+        );
+    }
+
+    #[test]
+    fn direct_rgb_cells_are_unaffected_by_palette_overrides() {
+        let default = [rgb(1, 2, 3); 256];
+        let mut active = default;
+        active[18] = rgb(169, 177, 214);
+        let overrides = PaletteOverrides::new(&active, &default).expect("index 18 differs");
+        assert_eq!(
+            ghostty_cell_color(
+                crate::ghostty::CellColor::Rgb(rgb(122, 162, 247)),
+                Some(&overrides)
+            ),
+            Color::Rgb(122, 162, 247)
+        );
     }
 
     fn wide_text_cells(text: &str) -> [crate::ghostty::ScreenTextCell; 2] {
@@ -4072,6 +4189,30 @@ mod tests {
     }
 
     #[test]
+    fn ghostty_ctrl_tab_matches_the_pane_keyboard_protocol() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let legacy = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let key = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+
+        assert_eq!(
+            legacy.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy),
+            b"\t"
+        );
+
+        let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        terminal.write(b"\x1b[>3u");
+        let kitty = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        assert_eq!(
+            kitty.encode_terminal_key(key, crate::input::KeyboardProtocol::Kitty { flags: 3 }),
+            b"\x1b[9;5u"
+        );
+    }
+
+    #[test]
     fn ghostty_enter_backspace_release_in_legacy_pane_emits_nothing() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
@@ -4617,6 +4758,14 @@ mod tests {
             ghostty_normalize_buffer_symbol("xx", crate::ghostty::CellWide::SpacerHead),
             " "
         );
+        assert_eq!(
+            ghostty_normalize_buffer_symbol("ｶ\u{ff9e}", crate::ghostty::CellWide::Wide),
+            "ｶ\u{ff9e}"
+        );
+        assert_eq!(
+            ghostty_normalize_buffer_symbol("ﾊ\u{ff9f}", crate::ghostty::CellWide::Wide),
+            "ﾊ\u{ff9f}"
+        );
     }
 
     fn render_cells_to_symbols(
@@ -4683,6 +4832,72 @@ mod tests {
                     && symbol == "👨\u{200d}👩\u{200d}👧"),
             "expected a wide cell containing the full ZWJ grapheme, got {cells:?}"
         );
+    }
+
+    #[test]
+    fn halfwidth_katakana_voiced_marks_render() {
+        let mut terminal = crate::ghostty::Terminal::new(40, 1, 0).unwrap();
+        terminal.write("ｱｲｳｴｵ ｶﾞｷﾞｸﾞｹﾞｺﾞ ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ".as_bytes());
+
+        let cells = render_cells_to_symbols(&mut terminal);
+        let rendered: String = cells.iter().map(|(_, symbol)| symbol.as_str()).collect();
+
+        assert!(
+            rendered.contains("ｱｲｳｴｵ ｶﾞｷﾞｸﾞｹﾞｺﾞ ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ"),
+            "expected halfwidth katakana with voiced marks to survive, got {cells:?}"
+        );
+    }
+
+    #[test]
+    fn render_keeps_halfwidth_katakana_voiced_tail_empty() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(20, 1, 0).unwrap();
+        terminal.write("ｶﾞZ".as_bytes());
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+        let backend = ratatui::backend::TestBackend::new(20, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| pane.render(frame, Rect::new(0, 0, 20, 1), false))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(buffer[(0, 0)].symbol(), "ｶ\u{ff9e}");
+        assert_eq!(
+            buffer[(1, 0)].symbol(),
+            "",
+            "wide spacer tail must stay empty so the host terminal does not overwrite the voiced kana"
+        );
+        assert_eq!(buffer[(2, 0)].symbol(), "Z");
+    }
+
+    #[test]
+    fn dirty_patch_keeps_halfwidth_katakana_voiced_tail_empty() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 1, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let backend = ratatui::backend::TestBackend::new(20, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| pane.render(frame, Rect::new(0, 0, 20, 1), false))
+            .unwrap();
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.terminal.write("ｶﾞZ".as_bytes());
+        }
+
+        let patch = match pane.collect_dirty_patch(20, 1) {
+            TerminalDirtyPatchOutcome::Patch(patch) => patch,
+            other => panic!("expected dirty patch, got {other:?}"),
+        };
+        let row = &patch.rows[0].1;
+
+        assert_eq!(row[0].symbol, "ｶ\u{ff9e}");
+        assert_eq!(
+            row[1].symbol, "",
+            "wide spacer tail must stay empty in retained terminal patches"
+        );
+        assert_eq!(row[2].symbol, "Z");
     }
 
     #[test]

@@ -282,7 +282,14 @@ impl App {
             None
         };
 
-        runtime.is_some_and(|runtime| runtime.keyboard_protocol().reports_all_keys())
+        runtime.is_some_and(|runtime| {
+            let protocol = runtime.keyboard_protocol();
+            protocol.reports_all_keys()
+                || (protocol.reports_event_types()
+                    && runtime
+                        .input_state()
+                        .is_some_and(|state| state.modify_other_keys))
+        })
     }
 
     fn terminal_input_runtime(
@@ -350,7 +357,7 @@ impl App {
     }
 
     pub(crate) fn release_input_source_headless(&mut self, source_id: crate::app::InputSourceId) {
-        self.pending_url_click_sources.remove(&source_id);
+        // Pending URL clicks survive this call; see clear_input_source.
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key
@@ -360,7 +367,7 @@ impl App {
     }
 
     pub(crate) async fn release_input_source(&mut self, source_id: crate::app::InputSourceId) {
-        self.pending_url_click_sources.remove(&source_id);
+        // Pending URL clicks survive this call; see clear_input_source.
         for pressed in self.take_pressed_keys_for_source(source_id) {
             let release = pressed
                 .key
@@ -921,6 +928,61 @@ mod tests {
         assert!(
             input_rx.try_recv().is_err(),
             "handled URL click must not leave an unmatched release for the pane"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn outer_focus_loss_does_not_forward_pending_url_click_release_to_pane() {
+        let line = "see https://github.com/herdrdev/herdr/issues/1761";
+        let col = line.find("github").expect("url host") as u16;
+        let (mut app, info) = app_with_screen_bytes(b"");
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let screen = format!("\x1b[?1049h\x1b[?1000h\x1b[?1006h{line}");
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                screen.as_bytes(),
+                4,
+            );
+        app.state.insert_test_runtime(pane_id, runtime);
+        install_test_link_handler(&mut app);
+        let url_x = info.inner_rect.x + col;
+
+        app.handle_mouse_from_input_source(
+            41,
+            modified_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                url_x,
+                info.inner_rect.y,
+                KeyModifiers::CONTROL,
+            ),
+        );
+        assert_eq!(app.state.plugin_command_logs.len(), 1);
+
+        // Opening the URL raises the browser, so the host terminal loses focus
+        // while the button is still down.
+        app.route_client_events_from(
+            41,
+            vec![crate::raw_input::RawInputEvent::OuterFocusLost],
+            false,
+        );
+
+        app.handle_mouse_from_input_source(
+            41,
+            modified_mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                url_x,
+                info.inner_rect.y,
+                KeyModifiers::empty(),
+            ),
+        );
+
+        assert!(
+            input_rx.try_recv().is_err(),
+            "focus loss must not clear a pending URL click, so its release must stay out of the pane"
         );
     }
 
