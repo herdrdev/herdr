@@ -209,13 +209,13 @@
           "key": "keys.prefix",
           "type": "string",
           "default": "\"esc\"",
-          "description": "Prefix key to enter prefix mode (e.g. \"esc\", \"ctrl+b\", \"f12\"). Default: \"esc\"."
+          "description": "Prefix key to enter navigation mode (e.g. \"esc\", \"ctrl+b\", \"f12\"). Default: \"esc\"."
         },
         {
-          "key": "keys.help",
+          "key": "keys.commands",
           "type": "keybinding",
-          "default": "\"prefix+?\"",
-          "description": "Open keybinding help."
+          "default": "\"prefix+space\"",
+          "description": "Open the command palette."
         },
         {
           "key": "keys.settings",
@@ -260,12 +260,6 @@
           "description": "Close the selected workspace."
         },
         {
-          "key": "keys.workspace_picker",
-          "type": "keybinding",
-          "default": "\"prefix+w\"",
-          "description": "Open the workspace navigation surface."
-        },
-        {
           "key": "keys.goto",
           "type": "keybinding",
           "default": "\"prefix+g\"",
@@ -275,19 +269,31 @@
           "key": "keys.navigate_workspace_up",
           "type": "keybinding",
           "default": "\"up\"",
-          "description": "Move workspace selection up in navigate mode."
+          "description": "Switch to the previous workspace in navigate mode, staying in navigate mode."
         },
         {
           "key": "keys.navigate_workspace_down",
           "type": "keybinding",
           "default": "\"down\"",
-          "description": "Move workspace selection down in navigate mode."
+          "description": "Switch to the next workspace in navigate mode, staying in navigate mode."
+        },
+        {
+          "key": "keys.navigate_tab_previous",
+          "type": "keybinding",
+          "default": "\"left\"",
+          "description": "Switch to the previous tab in navigate mode, staying in navigate mode."
+        },
+        {
+          "key": "keys.navigate_tab_next",
+          "type": "keybinding",
+          "default": "\"right\"",
+          "description": "Switch to the next tab in navigate mode, staying in navigate mode."
         },
         {
           "key": "keys.navigate_pane_left",
           "type": "keybinding",
           "default": "\"h\"",
-          "description": "Focus the pane to the left in navigate mode. Left arrow is always an alias."
+          "description": "Focus the pane to the left in navigate mode."
         },
         {
           "key": "keys.navigate_pane_down",
@@ -305,7 +311,7 @@
           "key": "keys.navigate_pane_right",
           "type": "keybinding",
           "default": "\"l\"",
-          "description": "Focus the pane to the right in navigate mode. Right arrow is always an alias."
+          "description": "Focus the pane to the right in navigate mode."
         },
         {
           "key": "keys.detach",
@@ -328,14 +334,14 @@
         {
           "key": "keys.previous_workspace",
           "type": "keybinding",
-          "default": "unset",
-          "description": "Select the previous workspace. Unset by default."
+          "default": "\"prefix+i\"",
+          "description": "Select the previous workspace."
         },
         {
           "key": "keys.next_workspace",
           "type": "keybinding",
-          "default": "unset",
-          "description": "Select the next workspace. Unset by default."
+          "default": "\"prefix+e\"",
+          "description": "Select the next workspace."
         },
         {
           "key": "keys.previous_agent",
@@ -376,13 +382,13 @@
         {
           "key": "keys.previous_tab",
           "type": "keybinding",
-          "default": "\"prefix+p\"",
+          "default": "\"prefix+n\"",
           "description": "Select the previous tab."
         },
         {
           "key": "keys.next_tab",
           "type": "keybinding",
-          "default": "\"prefix+n\"",
+          "default": "\"prefix+a\"",
           "description": "Select the next tab."
         },
         {
@@ -395,7 +401,7 @@
           "key": "keys.switch_workspace",
           "type": "keybinding",
           "default": "unset",
-          "description": "Switch to workspace 1-9 from prefix mode. Unset by default."
+          "description": "Switch to workspace 1-9 from navigation mode. Unset by default."
         },
         {
           "key": "keys.close_tab",
@@ -412,7 +418,7 @@
         {
           "key": "keys.edit_scrollback",
           "type": "keybinding",
-          "default": "\"prefix+e\"",
+          "default": "\"prefix+shift+e\"",
           "description": "Open the focused pane scrollback in $EDITOR."
         },
         {
@@ -1113,7 +1119,7 @@
           "key": "experimental.switch_ascii_input_source_in_prefix",
           "type": "boolean",
           "default": "false",
-          "description": "While prefix mode is active, temporarily switch the host input source to an ASCII-capable mode so prefix commands are read as ASCII even when an IME is active, then restore the previous input source when prefix mode exits. On macOS this selects the ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Windows support is currently limited to the Korean IME; with an IME for any other language, the input source is left unchanged. macOS and Windows only; a no-op elsewhere and a best-effort no-op if the switch fails."
+          "description": "While navigation mode is active, temporarily switch the host input source to an ASCII-capable mode so navigation commands are read as ASCII even when an IME is active, then restore the previous input source when navigation mode exits. On macOS this selects the ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Windows support is currently limited to the Korean IME; with an IME for any other language, the input source is left unchanged. macOS and Windows only; a no-op elsewhere and a best-effort no-op if the switch fails."
         }
       ]
     }

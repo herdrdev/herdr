@@ -1098,7 +1098,7 @@ new_tab = "ctrl+notakey"
             .next_tab
             .bindings
             .iter()
-            .any(|binding| binding.label == "prefix+n"));
+            .any(|binding| binding.label == "prefix+a"));
     }
 
     #[test]

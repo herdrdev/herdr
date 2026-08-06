@@ -113,7 +113,7 @@ fn render_search(app: &AppState, frame: &mut Frame, area: Rect) {
     )];
     if app.keybind_help.query.is_empty() {
         spans.push(Span::styled(
-            "search commands (regex)",
+            "type to search commands",
             Style::default().fg(p.overlay0),
         ));
     } else {
@@ -121,12 +121,12 @@ fn render_search(app: &AppState, frame: &mut Frame, area: Rect) {
             app.keybind_help.query.clone(),
             Style::default().fg(p.text).add_modifier(Modifier::BOLD),
         ));
-    }
-    if app.keybind_help.capture.is_none() {
-        spans.push(Span::styled(
-            "█",
-            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-        ));
+        if app.keybind_help.capture.is_none() {
+            spans.push(Span::styled(
+                "█",
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            ));
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -396,8 +396,6 @@ mod tests {
         let commands = palette_commands(&app);
 
         for label in [
-            "previous workspace",
-            "next workspace",
             "previous agent",
             "next agent",
             "focus agent 1-9",
@@ -411,6 +409,8 @@ mod tests {
         }
 
         for (label, shortcut) in [
+            ("previous workspace", "prefix+i"),
+            ("next workspace", "prefix+e"),
             ("focus pane left", "prefix+h"),
             ("focus pane down", "prefix+j"),
             ("focus pane up", "prefix+k"),
@@ -498,7 +498,7 @@ switch_workspace = "ctrl+1..9"
             .all(|command| command.label.contains("split")));
         assert_eq!(by_name.len(), 2);
 
-        let by_shortcut = filter_palette_commands(palette_commands(&app), "^prefix\\+c$");
+        let by_shortcut = filter_palette_commands(palette_commands(&app), "^prefix\\+t$");
         assert_eq!(by_shortcut.len(), 1);
         assert_eq!(by_shortcut[0].label, "new tab");
     }

@@ -120,8 +120,8 @@ Herdr には tmux に似たプレフィックスモードがあります。デ�
 prefix = "esc"
 goto = "prefix+g"
 new_tab = "prefix+c"
-next_tab = "prefix+n"
-previous_tab = "prefix+p"
+next_tab = "prefix+a"
+previous_tab = "prefix+n"
 focus_pane_left = "prefix+h"
 navigate_workspace_down = "j"
 navigate_pane_down = "ctrl+j"
@@ -134,12 +134,12 @@ split_horizontal = "prefix+minus"
 
 ```toml
 [keys]
-next_tab = ["prefix+n", "ctrl+alt+]"]
+next_tab = ["prefix+a", "ctrl+alt+]"]
 ```
 
 任意のアクションはデフォルトでは未設定です。プレフィックスモードの挙動には `prefix+` でバインドし、意図的に直接ショートカットにする場合は明示的な修飾キーコードを使ってください。
 
-キー文字列には、通常のキー、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` のような修飾キーの組み合わせ、`enter`、`tab`、`esc`、`left`、`right`、`up`、`down` のような特殊キーが使えます。`minus`、`comma`、`ampersand`、`plus`、`backtick` のような名前付き記号も使えます。`n` のような通常の印字可能キーの直接バインドは入力を妨げるため危険です。意図的に直接バインドするのでなければ `prefix+n` を使ってください。`navigate_workspace_*` と `navigate_pane_*` のフィールドはナビゲートモード専用で、`j` や `k` のような通常のキーを使えます。これらには `prefix+`、`esc`、`enter`、`tab`、`shift+tab`、`left`、`right`、修飾なしの `1` から `9` は使えません。左右の矢印キーは、左ペインと右ペインへのナビゲーションの恒久的なエイリアスです。これらのナビゲートモードショートカットは、`focus_pane_down = "prefix+j"` のような一般アクションのバインドから独立しています。両方に同じキーが使われている場合、ナビゲートモードが開いている間はナビゲートモードのショートカットが優先されます。Alt、Cmd/Super、修飾キー付き記号は、ターミナルと tmux の設定に依存します。
+キー文字列には、通常のキー、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` のような修飾キーの組み合わせ、`enter`、`tab`、`esc`、`left`、`right`、`up`、`down` のような特殊キーが使えます。`minus`、`comma`、`ampersand`、`plus`、`backtick` のような名前付き記号も使えます。`n` のような通常の印字可能キーの直接バインドは入力を妨げるため危険です。意図的に直接バインドするのでなければ `prefix+n` を使ってください。`navigate_workspace_*`、`navigate_tab_*`、`navigate_pane_*` のフィールドはナビゲートモード専用で、`j` や `k` のような通常のキーを使えます。これらには `prefix+`、`esc`、`enter`、`tab`、`shift+tab`、修飾なしの `1` から `9` は使えません。上下キーはワークスペースを、左右キーはタブを切り替えます。いずれもナビゲーションモードを抜けないので、続けて押せます。`navigate_tab_previous` と `navigate_tab_next` が未割り当ての場合、左右キーは左ペインと右ペインへのナビゲーションにフォールバックします。これらのナビゲートモードショートカットは、`focus_pane_down = "prefix+j"` のような一般アクションのバインドから独立しています。両方に同じキーが使われている場合、ナビゲートモードが開いている間はナビゲートモードのショートカットが優先されます。Alt、Cmd/Super、修飾キー付き記号は、ターミナルと tmux の設定に依存します。
 
 古いカスタムキーバインドを使っていて新しいデフォルトが欲しい場合は、`herdr config reset-keys` を実行してください。Herdr は `config.toml` をバックアップし、`[keys]` と `[[keys.command]]` を削除し、再起動または `herdr server reload-config` の後に組み込みの v2 デフォルトを使います。
 

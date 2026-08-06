@@ -159,8 +159,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # manifest_check = true
 
 [keys]
-# Prefix key to enter prefix mode (default: "esc")
-# Examples: "esc", "ctrl+b", "f12", "-"
+# Prefix key to enter navigation mode (default: "ctrl+s")
+# Examples: "ctrl+s", "esc", "ctrl+b", "f12", "-"
 # Press the prefix key twice to send it to the focused pane.
 # Action bindings use explicit syntax: "prefix+n" requires the prefix;
 # "ctrl+alt+n" is a direct terminal-mode shortcut.
@@ -168,15 +168,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Named punctuation such as minus, comma, ampersand, plus, and backtick is also accepted.
 # Most reliable direct bindings are ctrl+letter, function keys, and explicit modified chords.
 # alt+..., cmd/super, and punctuation-with-modifiers may depend on your terminal/tmux setup.
-# prefix = "esc"
+# prefix = "ctrl+s"
 
-# Prefix-mode actions
-# help = "prefix+?"
+# Navigation-mode actions
+# commands = "prefix+space"
 # settings = "prefix+s"
 # detach = "prefix+q"
 # reload_config = "prefix+shift+r"
 # open_notification_target = "prefix+o"
-# workspace_picker = "prefix+w"
 # goto = "prefix+g"
 # new_workspace = "prefix+shift+n"
 # new_worktree = "prefix+shift+g"
@@ -184,21 +183,21 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # remove_worktree = ""  # optional, unset by default; opens confirmation
 # rename_workspace = "prefix+shift+w"
 # close_workspace = "prefix+shift+d"
-# previous_workspace = "" # optional, unset by default
-# next_workspace = ""     # optional, unset by default
+# previous_workspace = "prefix+i"
+# next_workspace = "prefix+e"
 # previous_agent = ""     # optional, unset by default
 # next_agent = ""         # optional, unset by default
 # focus_agent = ""        # optional indexed binding, e.g. "prefix+alt+1..9"
 # remote_image_paste = "ctrl+v" # only active in herdr --remote; empty disables raw-key image paste
-# new_tab = "prefix+c"
+# new_tab = "prefix+t"
 # rename_tab = "prefix+shift+t"
-# previous_tab = "prefix+p"
-# next_tab = "prefix+n"
+# previous_tab = "prefix+n"
+# next_tab = "prefix+a"
 # switch_tab = "prefix+1..9"
 # switch_workspace = ""   # optional indexed binding, e.g. "prefix+shift+1..9"
 # close_tab = "prefix+shift+x"
 # rename_pane = "prefix+shift+p"
-# edit_scrollback = "prefix+e"
+# edit_scrollback = "prefix+shift+e"
 # focus_pane_left = "prefix+h"
 # focus_pane_down = "prefix+j"
 # focus_pane_up = "prefix+k"
@@ -213,14 +212,17 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resize_mode = "prefix+r"
 # toggle_sidebar = "prefix+b"
 
-# Navigate-mode movement. These local shortcuts win while navigate mode is open.
+# Navigate-mode movement. These local shortcuts win while navigate mode is open
+# and keep it open, so they can be pressed repeatedly.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
 # navigate_workspace_up = "up"
 # navigate_workspace_down = "down"
-# navigate_pane_left = "h"      # left arrow always focuses the pane to the left
+# navigate_tab_previous = "left"
+# navigate_tab_next = "right"
+# navigate_pane_left = "h"
 # navigate_pane_down = "j"
 # navigate_pane_up = "k"
-# navigate_pane_right = "l"     # right arrow always focuses the pane to the right
+# navigate_pane_right = "l"
 
 # Custom commands use the same binding syntax.
 # type = "shell" runs detached in the background.
@@ -397,9 +399,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # kitty_graphics = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
-# While prefix mode is active, temporarily switch the host input source to
-# an ASCII-capable mode so prefix commands register even when an IME is
-# active, then restore the previous input source when prefix mode exits. On
+# While navigation mode is active, temporarily switch the host input source to
+# an ASCII-capable mode so navigation commands register even when an IME is
+# active, then restore the previous input source when navigation mode exits. On
 # macOS this selects the ASCII-capable keyboard layout; on Windows it toggles
 # a Korean IME between Hangul and English (other IME languages are left
 # unchanged). macOS and Windows only; best-effort. Default: false.

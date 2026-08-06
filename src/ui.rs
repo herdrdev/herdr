@@ -29,7 +29,7 @@ use self::dialogs::{
 use self::keybind_help::render_keybind_help_overlay;
 use self::menus::{
     render_context_menu, render_copy_mode_overlay, render_global_launcher_menu,
-    render_navigate_overlay, render_prefix_overlay, render_resize_overlay,
+    render_navigate_overlay, render_resize_overlay,
 };
 use self::mobile::{
     compute_mobile_header_hit_areas, is_mobile_width, mobile_switcher_max_scroll_for_height,
@@ -417,7 +417,6 @@ pub fn render_with_runtime_registry(
             render_mobile_panel(app, terminal_runtimes, frame, frame.area())
         }
         Mode::Navigate => render_navigate_overlay(app, frame, terminal_area),
-        Mode::Prefix => render_prefix_overlay(app, frame, terminal_area),
         Mode::Copy => render_copy_mode_overlay(app, frame, terminal_area),
         Mode::Resize => render_resize_overlay(app, frame, terminal_area),
         Mode::ConfirmClose => {
@@ -1332,16 +1331,16 @@ mod tests {
     }
 
     #[test]
-    fn prefix_mode_renders_prefix_indicator() {
+    fn navigate_mode_renders_navigate_indicator() {
         let mut app = crate::app::state::AppState::test_new();
-        app.mode = Mode::Prefix;
+        app.mode = Mode::Navigate;
         app.view.terminal_area = ratatui::layout::Rect::new(0, 0, 60, 4);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 4))
             .expect("test terminal");
 
         terminal
-            .draw(|frame| render_prefix_overlay(&app, frame, app.view.terminal_area))
-            .expect("draw prefix overlay");
+            .draw(|frame| render_navigate_overlay(&app, frame, app.view.terminal_area))
+            .expect("draw navigate overlay");
 
         let rendered = terminal
             .backend()
@@ -1350,6 +1349,6 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("PREFIX"));
+        assert!(rendered.contains("NAVIGATE"));
     }
 }

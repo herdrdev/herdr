@@ -12,8 +12,6 @@ use super::widgets::{
 };
 use crate::app::AppState;
 
-const ONBOARDING_PREFIX_LABEL: &str = "esc";
-
 pub(super) fn render_onboarding_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     super::dim_background(frame, area);
     render_onboarding_welcome(app, frame, area);
@@ -69,26 +67,27 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
         content_rows[0],
     );
 
+    let prefix_label = crate::config::format_key_combo((app.prefix_code, app.prefix_mods));
     let key_line = Line::from(vec![
         Span::styled("  ", Style::default()),
         Span::styled(
-            ONBOARDING_PREFIX_LABEL,
+            prefix_label,
             Style::default()
                 .fg(app.palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " enters prefix mode · ",
+            " enters navigation mode · ",
             Style::default().fg(app.palette.overlay1),
         ),
         Span::styled(
-            "?",
+            "space",
             Style::default()
                 .fg(app.palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " shows keybinds and settings",
+            " opens the command palette",
             Style::default().fg(app.palette.overlay1),
         ),
     ]);

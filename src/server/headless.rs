@@ -4860,7 +4860,7 @@ mod tests {
             r#"
 [keys]
 prefix = "ctrl+a"
-new_tab = "prefix+t"
+new_tab = "prefix+y"
 "#,
         )
         .unwrap();
@@ -4890,7 +4890,7 @@ new_tab = "prefix+t"
             .new_tab
             .bindings
             .iter()
-            .any(|binding| binding.label == "prefix+t"));
+            .any(|binding| binding.label == "prefix+y"));
 
         assert!(server.handle_server_event(ServerEvent::ClientConnected {
             client_id: 2,
@@ -4903,7 +4903,14 @@ new_tab = "prefix+t"
             direct_attach_requested: false,
             writer: writer_b,
         }));
-        assert_eq!(server.app.state.prefix_code, crossterm::event::KeyCode::Esc);
+        assert_eq!(
+            server.app.state.prefix_code,
+            crossterm::event::KeyCode::Char('s')
+        );
+        assert_eq!(
+            server.app.state.prefix_mods,
+            crossterm::event::KeyModifiers::CONTROL
+        );
         assert!(server
             .app
             .state
@@ -4911,7 +4918,7 @@ new_tab = "prefix+t"
             .new_tab
             .bindings
             .iter()
-            .any(|binding| binding.label == "prefix+c"));
+            .any(|binding| binding.label == "prefix+t"));
     }
 
     #[test]
@@ -5091,7 +5098,14 @@ next_tab = ""
             direct_attach_requested: false,
             writer: writer_b,
         }));
-        assert_eq!(server.app.state.prefix_code, crossterm::event::KeyCode::Esc);
+        assert_eq!(
+            server.app.state.prefix_code,
+            crossterm::event::KeyCode::Char('s')
+        );
+        assert_eq!(
+            server.app.state.prefix_mods,
+            crossterm::event::KeyModifiers::CONTROL
+        );
         assert!(!server
             .app
             .state
@@ -8179,7 +8193,7 @@ next_tab = ""
             ),
         );
 
-        server.app.state.mode = crate::app::Mode::Prefix;
+        server.app.state.mode = crate::app::Mode::Navigate;
         server.stream_host_keyboard_enhancement_flags();
         assert!(matches!(
             read_server_message(

@@ -795,7 +795,6 @@ pub enum Mode {
     ReleaseNotes,
     ProductAnnouncement,
     Navigate,
-    Prefix,
     Copy,
     Terminal,
     RenameWorkspace,
@@ -819,11 +818,11 @@ impl Mode {
     }
 
     /// Whether keys in this mode are commands/navigation (an ASCII input source is wanted) rather
-    /// than free text. This is an explicit **allowlist** of the prefix command/navigation realm:
+    /// than free text. This is an explicit **allowlist** of the navigation command realm:
     /// any mode NOT listed defaults to leaving the user's IME alone (the safe default), so adding a
     /// new text-entry or overlay mode can never silently force ASCII. Used by
     /// `sync_prefix_input_source` (gated by `switch_ascii_input_source_in_prefix`) so multi-level
-    /// prefix commands keep ASCII until they return to the terminal.
+    /// navigation commands keep ASCII until they return to the terminal.
     ///
     /// Known limitation: the search box in `Navigator` is also held on ASCII, since this
     /// `Mode`-level predicate can't see `search_focused` (non-ASCII filtering there would need a
@@ -831,8 +830,7 @@ impl Mode {
     pub(crate) fn wants_ascii_input(self) -> bool {
         matches!(
             self,
-            Mode::Prefix
-                | Mode::Navigate
+            Mode::Navigate
                 | Mode::Navigator
                 | Mode::Copy
                 | Mode::Resize
@@ -1709,6 +1707,12 @@ impl AppState {
         crate::config::terminal_key_matches_combo(key, (self.prefix_code, self.prefix_mods))
     }
 
+    /// Enters navigation mode, the command realm the prefix key opens.
+    pub(crate) fn enter_navigate_mode(&mut self) {
+        self.mobile_switcher_scroll = 0;
+        self.mode = Mode::Navigate;
+    }
+
     pub fn estimate_pane_size(&self) -> (u16, u16) {
         if let Some(info) = self.view.pane_infos.first() {
             (info.rect.height, info.rect.width)
@@ -1893,8 +1897,8 @@ impl AppState {
             pending_agent_notifications: std::collections::HashMap::new(),
             copy_feedback: None,
             outer_terminal_focus: None,
-            prefix_code: KeyCode::Esc,
-            prefix_mods: KeyModifiers::NONE,
+            prefix_code: KeyCode::Char('s'),
+            prefix_mods: KeyModifiers::CONTROL,
             default_sidebar_width: 26,
             sidebar_width: 26,
             sidebar_min_width: 18,

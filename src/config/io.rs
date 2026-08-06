@@ -18,6 +18,11 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "worktrees",
 ];
 
+/// Keys Herdr used to support and now ignores on purpose. They stay out of the
+/// unknown-key diagnostics so an existing config.toml keeps loading quietly
+/// after the action behind the key is removed.
+const IGNORED_CONFIG_KEYS: &[&str] = &["keys.workspace_picker"];
+
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
         "herdr-dev"
@@ -479,12 +484,9 @@ fn unknown_config_key_diagnostics(
     paths.dedup();
     paths
         .into_iter()
-        .map(|path| {
-            format!(
-                "unknown config key {}; ignoring key",
-                format_config_key_path(&path)
-            )
-        })
+        .map(|path| format_config_key_path(&path))
+        .filter(|path| !IGNORED_CONFIG_KEYS.contains(&path.as_str()))
+        .map(|path| format!("unknown config key {path}; ignoring key"))
         .collect()
 }
 
@@ -951,6 +953,28 @@ claude = [["terminal_title"]]
             .bindings
             .iter()
             .any(|binding| binding.label == "prefix+z"));
+    }
+
+    #[test]
+    fn load_live_config_stays_quiet_about_retired_keys() {
+        let loaded = load_live_config_from_str(
+            r#"
+[keys]
+workspace_picker = "prefix+w"
+new_tab = "prefix+t"
+"#,
+        )
+        .unwrap();
+
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert!(loaded.invalid_sections.is_empty());
+        assert!(loaded
+            .config
+            .keybinds()
+            .new_tab
+            .bindings
+            .iter()
+            .any(|binding| binding.label == "prefix+t"));
     }
 
     #[test]

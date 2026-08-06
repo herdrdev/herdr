@@ -52,7 +52,6 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 | 新建标签页 | `prefix+c` |
 | 向右 / 向下分割 | `prefix+v` / `prefix+minus` |
 | 在窗格间移动 | `prefix+h/j/k/l` |
-| 工作区导航 | `prefix+w` |
 | 分离并让一切继续运行 | `prefix+q` |
 
 这些覆盖了日常的大部分移动操作。其余的都可以继续用鼠标。
@@ -73,7 +72,8 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 | 动作 | 按键 |
 | --- | --- |
-| 下一个 / 上一个标签页 | `prefix+n` / `prefix+p` |
+| 下一个 / 上一个标签页 | `prefix+a` / `prefix+n` |
+| 不退出导航模式切换下一个 / 上一个标签页 | `→` / `←` |
 | 跳转到标签页 1–9 | `prefix+1..9` |
 | 重命名标签页 | `prefix+shift+t` |
 | 关闭标签页 | `prefix+shift+x` |
@@ -83,6 +83,8 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 | 动作 | 按键 |
 | --- | --- |
 | 新建工作区 | `prefix+shift+n` |
+| 下一个 / 上一个工作区 | `prefix+e` / `prefix+i` |
+| 不退出导航模式切换下一个 / 上一个工作区 | `↓` / `↑` |
 | 重命名工作区 | `prefix+shift+w` |
 | 关闭工作区 | `prefix+shift+d` |
 | Goto 选择器 | `prefix+g` |
@@ -119,8 +121,8 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_tab = ["prefix+p", "ctrl+alt+["]
-next_tab = ["prefix+n", "ctrl+alt+]"]
+previous_tab = ["prefix+n", "ctrl+alt+["]
+next_tab = ["prefix+a", "ctrl+alt+]"]
 new_tab = ["prefix+c", "ctrl+alt+c"]
 split_vertical = ["prefix+v", "ctrl+alt+d"]
 split_horizontal = ["prefix+minus", "ctrl+alt+shift+d"]

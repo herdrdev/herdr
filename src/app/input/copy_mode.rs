@@ -19,7 +19,7 @@ impl App {
         // Esc keeps its copy-mode meaning (clear search, clear selection, exit)
         // even when it is also the prefix key.
         if self.state.is_prefix_key(key) && key.code != KeyCode::Esc {
-            self.state.mode = Mode::Prefix;
+            self.state.enter_navigate_mode();
             return;
         }
         self.state
@@ -761,10 +761,7 @@ impl AppState {
         if self.copy_mode.is_none() {
             return;
         }
-        if !matches!(
-            self.mode,
-            Mode::Copy | Mode::Terminal | Mode::Navigate | Mode::Prefix
-        ) {
+        if !matches!(self.mode, Mode::Copy | Mode::Terminal | Mode::Navigate) {
             return;
         }
         if self.copy_mode_pane_is_focused() {
@@ -1202,7 +1199,7 @@ mod tests {
         ))
         .await;
 
-        assert_eq!(app.state.mode, Mode::Prefix);
+        assert_eq!(app.state.mode, Mode::Navigate);
         assert_eq!(copy_mode_offset_from_bottom(&app, pane_id), 0);
         assert!(app.state.copy_mode.is_some());
     }
