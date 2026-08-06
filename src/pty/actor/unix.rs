@@ -464,21 +464,8 @@ impl PtyIoActorRunner {
                 ACTOR_IDLE_POLL_MS,
             ) {
                 Ok(readiness) => {
-                    if readiness.wake_ready {
-                        if let Err(err) = fd::drain_wake_fd(self.wake_read_fd.as_raw_fd()) {
-                            debug!(pane = self.pane_id, err = %err, "PTY actor wake drain failed");
-                            break;
-                        }
-                        continue;
-                    }
-                    if self.state == ActorState::Running
-                        && readiness.pty_read_ready
-                        && !self.read_once()
-                    {
+                    if !self.handle_poll_readiness(readiness) {
                         break;
-                    }
-                    if readiness.pty_write_ready && !self.pending_writes.is_empty() {
-                        self.flush_pending_writes_once();
                     }
                 }
                 Err(err) => {
@@ -492,6 +479,22 @@ impl PtyIoActorRunner {
             on_reader_exit();
         }
         debug!(pane = self.pane_id, "PTY actor exiting");
+    }
+
+    fn handle_poll_readiness(&mut self, readiness: fd::PtyWakeReadiness) -> bool {
+        if readiness.wake_ready {
+            if let Err(err) = fd::drain_wake_fd(self.wake_read_fd.as_raw_fd()) {
+                debug!(pane = self.pane_id, err = %err, "PTY actor wake drain failed");
+                return false;
+            }
+        }
+        if self.state == ActorState::Running && readiness.pty_read_ready && !self.read_once() {
+            return false;
+        }
+        if readiness.pty_write_ready && !self.pending_writes.is_empty() {
+            self.flush_pending_writes_once();
+        }
+        true
     }
 
     fn drain_commands(&mut self) -> bool {
@@ -862,7 +865,7 @@ mod tests {
         (handle, peer, read_rx)
     }
 
-    fn actor_runner_for_unit_test() -> (PtyIoActorRunner, UnixStream) {
+    fn actor_runner_for_unit_test() -> (PtyIoActorRunner, UnixStream, fd::WakeWriter) {
         let (actor_socket, peer) = UnixStream::pair().expect("socket pair");
         actor_socket
             .set_nonblocking(true)
@@ -871,6 +874,7 @@ mod tests {
         let (_data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
         let (_control_tx, control_rx) = std_mpsc::channel();
         let wake_pipe = fd::create_wake_pipe().expect("wake pipe");
+        let wake = wake_pipe.writer;
         let runner = PtyIoActorRunner {
             pane_id: 1,
             file: std::fs::File::from(owned),
@@ -886,16 +890,57 @@ mod tests {
             on_reader_exit: None,
             poll_observer: None,
         };
-        (runner, peer)
+        (runner, peer, wake)
     }
 
     #[test]
     fn actor_ignores_empty_user_input_write() {
-        let (mut runner, _peer) = actor_runner_for_unit_test();
+        let (mut runner, _peer, _wake) = actor_runner_for_unit_test();
 
         assert!(!runner.handle_data_command(PtyIoDataCommand::WriteUserInput(Bytes::new())));
 
         assert!(runner.pending_writes.is_empty());
+    }
+
+    #[test]
+    fn actor_processes_pty_io_when_wake_is_also_ready() {
+        let (mut runner, mut peer, wake) = actor_runner_for_unit_test();
+        peer.set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("peer timeout");
+        let (read_tx, read_rx) = std_mpsc::channel();
+        runner.on_read = Box::new(move |bytes| {
+            read_tx
+                .send(Bytes::copy_from_slice(bytes))
+                .expect("read callback receiver alive");
+            PtyReadResult::empty()
+        });
+
+        peer.write_all(b"simultaneous-output")
+            .expect("peer writes output");
+        runner.enqueue_write(Bytes::from_static(b"simultaneous-input"));
+        wake.wake().expect("wake actor");
+        let readiness = fd::poll_pty_and_wake(
+            runner.file.as_raw_fd(),
+            runner.wake_read_fd.as_raw_fd(),
+            true,
+            true,
+            100,
+        )
+        .expect("poll succeeds");
+        assert!(readiness.wake_ready);
+        assert!(readiness.pty_read_ready);
+        assert!(readiness.pty_write_ready);
+
+        assert!(runner.handle_poll_readiness(readiness));
+        assert_eq!(
+            read_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("PTY read"),
+            Bytes::from_static(b"simultaneous-output")
+        );
+        let mut input = [0; 18];
+        peer.read_exact(&mut input).expect("peer receives input");
+        assert_eq!(&input, b"simultaneous-input");
     }
 
     #[test]
