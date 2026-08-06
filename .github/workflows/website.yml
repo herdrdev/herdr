@@ -42,7 +42,7 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Validate published snapshots
+      - name: Validate published documentation
         run: |
           node website/scripts/docs-versions.mjs check
           node website/scripts/docs-preview.mjs check

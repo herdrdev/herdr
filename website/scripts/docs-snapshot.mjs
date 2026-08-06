@@ -73,7 +73,7 @@ export async function compareGitTree(git, ref, sourceRoot, snapshotRoot) {
     assertRelativePath(relativePath, entry.path);
     expected.set(relativePath, entry);
   }
-  const actualPaths = await listSnapshotPaths(snapshotRoot);
+  const actualPaths = await listDocumentationPaths(snapshotRoot);
   const expectedPaths = [...expected.keys()].sort();
   if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
     throw new Error(`${snapshotRoot} file list differs from ${ref}:${sourceRoot}`);
@@ -89,7 +89,7 @@ export async function compareGitTree(git, ref, sourceRoot, snapshotRoot) {
   }
 }
 
-async function listSnapshotPaths(root) {
+export async function listDocumentationPaths(root) {
   const paths = [];
   async function walk(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {

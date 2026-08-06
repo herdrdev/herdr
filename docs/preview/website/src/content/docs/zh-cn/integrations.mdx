@@ -1,11 +1,11 @@
 ---
 title: 集成
-description: 为 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Cursor Agent CLI 和 MastraCode 安装 Herdr 集成。
+description: 为 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Cursor Agent CLI、MastraCode、Antigravity CLI 和 Grok CLI 安装 Herdr 集成。
 ---
 
 Herdr 自动检测受支持的智能体。官方集成可以额外提供用于恢复的原生会话身份、生命周期状态上报,或两者兼有。
 
-当你想要 Claude Code/Codex/Copilot/Devin 式钩子的智能体原生会话恢复、Pi/OMP/Kimi/OpenCode/Kilo/Hermes/MastraCode 式钩子或插件的直接生命周期上报,或两者都要时,使用集成。完整的状态权威模型见[智能体](/zh-cn/docs/agents/)。
+当你想要智能体原生会话恢复、直接生命周期上报,或两者都要时,使用集成。完整的状态权威模型见[智能体](/zh-cn/docs/agents/)。
 
 ## 安装集成
 
@@ -26,6 +26,8 @@ herdr integration install hermes
 herdr integration install mastracode
 herdr integration install qodercli
 herdr integration install cursor
+herdr integration install antigravity-cli
+herdr integration install grok
 ```
 
 ## 卸载集成
@@ -45,6 +47,8 @@ herdr integration uninstall hermes
 herdr integration uninstall mastracode
 herdr integration uninstall qodercli
 herdr integration uninstall cursor
+herdr integration uninstall antigravity-cli
+herdr integration uninstall grok
 ```
 
 ## Herdr 如何使用集成
@@ -53,14 +57,14 @@ Herdr 以两种不同方式使用集成:
 
 | 集成类型 | 智能体 | 效果 |
 | --- | --- | --- |
-| 生命周期权威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、MastraCode | 已安装且在为该窗格主动上报时,由钩子或插件事件决定 `idle`、`working` 和 `blocked`。对同一个生命周期权威,Herdr 不再使用屏幕清单兜底。 |
-| 会话身份 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI | 集成上报用于恢复的原生会话引用。状态仍来自 Herdr 的屏幕清单检测。 |
+| 生命周期权威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | 已安装且在为该窗格主动上报时,由钩子或插件事件决定 `idle`、`working` 和 `blocked`。对同一个生命周期权威,Herdr 不再使用屏幕清单兜底。 |
+| 会话身份 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | 集成上报用于恢复的原生会话引用。状态仍来自 Herdr 的屏幕清单检测。 |
 
 自定义 socket 集成在定义了原生终端 UI 中不可见的状态时,也可以上报状态。
 
-一些集成会上报智能体的原生会话引用。除非被 `[session] resume_agents_on_restore = false` 禁用,Herdr 会在服务器重启后使用官方会话引用恢复 Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI 和 MastraCode 的窗格。
+一些集成会上报智能体的原生会话引用。除非被 `[session] resume_agents_on_restore = false` 禁用,Herdr 会在服务器重启后使用官方会话引用恢复 Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode 和 Antigravity CLI 的窗格。
 
-原生会话恢复需要最新的 Herdr 集成: Pi 集成版本 `2`、OMP 版本 `3`、Claude Code 版本 `6`、Codex 版本 `5`、GitHub Copilot CLI 版本 `2`、Devin CLI 版本 `2`、Droid 版本 `2`、Kimi Code CLI 版本 `3`、Qoder CLI 版本 `2`、Cursor Agent CLI 版本 `1`、OpenCode 版本 `5`、Kilo Code CLI 版本 `1`、Hermes Agent 版本 `2`、MastraCode 版本 `1`。用 `herdr integration status` 查看已安装版本。
+原生会话恢复需要最新的 Herdr 集成: Pi 集成版本 `2`、OMP 版本 `3`、Claude Code 版本 `6`、Codex 版本 `5`、GitHub Copilot CLI 版本 `2`、Devin CLI 版本 `2`、Droid 版本 `2`、Kimi Code CLI 版本 `3`、Qoder CLI 版本 `2`、Cursor Agent CLI 版本 `1`、Grok CLI 版本 `1`、OpenCode 版本 `5`、Kilo Code CLI 版本 `1`、Hermes Agent 版本 `2`、MastraCode 版本 `1`、Antigravity CLI 版本 `1`。用 `herdr integration status` 查看已安装版本。
 
 ## Pi
 
@@ -210,7 +214,7 @@ herdr integration install hermes
 
 Herdr 写入 `~/.hermes/plugins/herdr-agent-state/`,并在 `~/.hermes/config.yaml` 中启用 `herdr-agent-state`。Hermes 配置目录必须已经存在。安装后请重启 Hermes 以加载插件。卸载会删除插件目录,并从 `plugins.enabled` 中移除 `herdr-agent-state`。
 
-该插件在 Hermes 运行于 Herdr 窗格内时上报生命周期、工具、审批状态和会话 id。Herdr 可以用上报的会话 id 通过 `hermes --resume <id>` 恢复该窗格。插件未安装时,屏幕清单检测仍然可用。
+该插件在 Hermes 运行于 Herdr 窗格内时上报可恢复的会话 id。Herdr 使用屏幕清单检测 `working`、`idle` 和 `blocked`,并可用上报的会话 id 通过 `hermes --resume <id>` 恢复该窗格。
 
 ## Qoder CLI
 
@@ -255,6 +259,34 @@ herdr integration install mastracode
 Herdr 使用 `~/.mastracode`。安装会写入 `hooks/herdr-agent-state.sh`,并把 Herdr 命令条目添加到 `hooks.json`;目录不存在时会创建。卸载会删除匹配的钩子条目和钩子脚本。
 
 Herdr 用 `mastracode --thread <id>` 恢复保存的 MastraCode 线程。
+
+## Antigravity CLI
+
+安装 Antigravity CLI 钩子:
+
+```bash
+herdr integration install antigravity-cli
+```
+
+Herdr 默认使用 `~/.gemini/config/`,设置了 `ANTIGRAVITY_CLI_CONFIG_DIR` 时使用后者。这是 Antigravity CLI 读取全局自定义配置的目录,并且必须已经存在。安装会写入 `hooks/herdr-agent-state.sh`（Windows 上为 `herdr-agent-state.ps1`）,并向 `hooks.json` 添加由 Herdr 管理的 `herdr` 块。Antigravity CLI 按钩子名称管理 `hooks.json`,因此安装只会重写该块,不会改动其他命名钩子。卸载会移除 `herdr` 块并删除钩子脚本。
+
+该集成仅上报会话。它会上报窗格当前运行的对话,但不上报智能体状态,因此 Herdr 仍根据 Antigravity CLI 在屏幕上绘制的内容判断 `working`、`idle` 和 `blocked`。
+
+钩子在 `PreInvocation` 时运行,所以 Herdr 会在发送第一个提示词后获知对话。此后,Herdr 服务器重启时可以用 `agy --conversation <id>` 恢复窗格。
+
+## Grok CLI
+
+安装 Grok CLI 钩子:
+
+```bash
+herdr integration install grok
+```
+
+该钩子在 Grok CLI 运行于 Herdr 窗格内时,通过 Grok 的 `SessionStart` 钩子上报会话身份。Grok 的状态来自 Herdr 的屏幕清单检测。
+
+Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的所有 `hooks/*.json` 文件,因此安装会写入独立的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并同时写入 `hooks/herdr-agent-state.sh`;它不会修改其他钩子文件。卸载只会删除这两个由 Herdr 管理的文件。
+
+Grok 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `grok --resume <id>` 恢复窗格。
 
 ## 自定义状态标签
 

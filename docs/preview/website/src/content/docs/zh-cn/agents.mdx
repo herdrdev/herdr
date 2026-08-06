@@ -14,11 +14,11 @@ Herdr 为同时运行多个编程智能体而生。每个智能体都待在一�
 | 智能体 | 状态权威 | 集成角色 |
 | --- | --- | --- |
 | Pi | 安装后为生命周期钩子;否则为屏幕清单 | 状态与会话 |
-| OMP | 安装后为生命周期钩子 | 状态 |
+| OMP | 安装后为生命周期钩子 | 状态与会话 |
 | GitHub Copilot CLI | 屏幕清单 | 会话 |
 | Devin CLI | 屏幕清单 | 会话 |
 | Kimi Code CLI | 安装后为生命周期钩子;否则为屏幕清单 | 状态与会话 |
-| Hermes Agent | 安装后为生命周期钩子;否则为屏幕清单 | 状态与会话 |
+| Hermes Agent | 屏幕清单 | 会话 |
 | Qoder CLI | 屏幕清单 | 会话 |
 | Droid | 屏幕清单 | 会话 |
 | OpenCode | 安装后为生命周期插件;否则为屏幕清单 | 状态与会话 |
@@ -28,8 +28,8 @@ Herdr 为同时运行多个编程智能体而生。每个智能体都待在一�
 | Codex | 屏幕清单 | 会话 |
 | Cursor Agent CLI | 屏幕清单 | 会话 |
 | Amp | 屏幕清单 | 无 |
-| Grok CLI | 屏幕清单 | 无 |
-| Antigravity CLI | 屏幕清单 | 无 |
+| Grok CLI | 屏幕清单 | 会话 |
+| Antigravity CLI | 屏幕清单 | 会话 |
 | Kiro CLI | 屏幕清单 | 无 |
 | Maki | 屏幕清单 | 无 |
 
@@ -45,11 +45,13 @@ Herdr 首先检测每个窗格的前台进程。之后,每个窗格有且只有�
 
 屏幕快照来自窗格缓冲区最近的底部,而不是滚动后的视口。即使你在 Herdr 里向上翻页,检测仍然跟随底部的实时智能体 UI。
 
-Claude Code、Codex、GitHub Copilot CLI、Droid、Qoder CLI 和 Cursor Agent CLI 的集成有意不作为生命周期权威。它们为恢复提供原生会话身份,但它们的钩子并不覆盖整个生命周期,可能漏掉权限审批结果、Esc 中断或其他状态转换。对这些智能体,Herdr 仍然使用屏幕清单检测。
+上表中标为“会话”的集成有意不作为生命周期权威。它们为恢复提供原生会话身份,但它们的钩子并不覆盖整个生命周期,可能漏掉权限审批结果、Esc 中断或其他状态转换。对这些智能体,Herdr 仍然使用屏幕清单检测。
 
 ## 虚拟机与沙箱包装器
 
 在 Linux 和 macOS 上,宿主可见的包装器可能会向 Herdr 隐藏真实的智能体进程。在包装器命令上设置 `HERDR_AGENT=<agent>`,告诉 Herdr 应使用哪个已有智能体的屏幕清单。例如,在 Linux 上运行 `HERDR_AGENT=claude fence -- claude`,或在 macOS 上运行 `HERDR_AGENT=claude nono run --profile claude-code -- claude`。这个提示的作用范围只限于该前台进程;仅在 VM 或容器内部设置时 Herdr 无法看到它,而且除非所有继承的前台进程都应被视为该智能体,否则不要全局 export。
+
+某些受限的 Linux 运行环境不会公开终端前台进程组。原生检测不可用时,以 `HERDR_PROCESS_DETECTION=child-groups` 启动 Herdr 服务器,即可选择启用直接子进程组推断。原生检测仍然优先,默认的 `native` 模式不会执行此推断。这个选择加入模式属于尽力而为,较新的后台任务可能会被误判为前台任务。该变量由服务器读取且需要重启;请在远程服务器环境中设置,而不是在连接客户端上设置。
 
 ## blocked 状态
 

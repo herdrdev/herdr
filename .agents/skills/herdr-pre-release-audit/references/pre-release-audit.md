@@ -61,7 +61,7 @@ Process:
    - Preserve the existing changelog style and sections: `Added`, `Changed`, `Fixed`, `Removed`, and `Breaking Changes` when applicable.
 
 7. Audit next-release public docs.
-   - Treat root `README.md` and the current stable docs source as the latest released public docs. While `docs/versions/manifest.json` has `stable_source: legacy`, that source is `website/src/content/docs/`; afterward it is the current immutable snapshot under `docs/versions/<current>/website/src/content/docs/`.
+   - Treat root `README.md` and the version selected by `docs/versions/manifest.json` under `docs/versions/<current>/website/src/content/docs/` as the latest released public docs. Published version docs may contain factual corrections made after the release tag.
    - Treat `docs/next/README.md` as the next-release root README and `docs/next/website/src/content/docs/` as the complete unpublished website-doc draft.
    - Treat `docs/preview/website/` as bot-owned output for the active preview release. Never edit it during release review and never use it as the stable release source.
    - Compare meaningful user-facing changes in the range against next-release docs first.

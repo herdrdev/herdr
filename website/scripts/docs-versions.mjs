@@ -2,11 +2,11 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  compareGitTree,
   createGit,
   extractGitTree,
   gitPathExists,
   gitTreesEqual,
+  listDocumentationPaths,
   resolveCommit,
 } from './docs-snapshot.mjs';
 
@@ -167,38 +167,26 @@ export async function checkVersions() {
     if (!['website/src/content/docs', 'docs/next/website/src/content/docs'].includes(entry.source)) {
       throw new Error(`docs version ${entry.version} has unsupported source ${entry.source}`);
     }
-    const sourceRoot = entry.source;
-    const snapshotRoot = resolve(versionsDir, entry.version, 'website/src/content/docs');
-    await compareGitTree(git, entry.tag, sourceRoot, snapshotRoot);
 
-    const referenceSource = sourceRoot.includes('docs/next/')
-      ? 'docs/next/website/src/data/config-reference.json'
-      : 'website/src/data/config-reference.json';
-    const referenceSnapshot = resolve(
-      versionsDir,
-      entry.version,
-      'website/src/data/config-reference.json',
+    const versionRoot = resolve(versionsDir, entry.version, 'website');
+    const documentationPaths = await listDocumentationPaths(
+      resolve(versionRoot, 'src/content/docs'),
     );
-    if (gitPathExists(git, entry.tag, referenceSource)) {
-      const actualReference = await readFile(referenceSnapshot);
-      const taggedReference = git(['show', `${entry.tag}:${referenceSource}`], { binary: true });
-      if (!actualReference.equals(taggedReference)) {
-        throw new Error(`${entry.version} config reference differs from ${entry.tag}:${referenceSource}`);
-      }
-    } else {
-      try {
-        await readFile(referenceSnapshot);
-        throw new Error(`${entry.version} has an unexpected config reference snapshot`);
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-      }
+    if (!documentationPaths.includes('index.md') && !documentationPaths.includes('index.mdx')) {
+      throw new Error(`docs version ${entry.version} has no root index`);
+    }
+
+    try {
+      JSON.parse(await readFile(resolve(versionRoot, 'src/data/config-reference.json'), 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
     }
   }
 
   if (!seen.has(manifest.current)) {
     throw new Error(`current docs version ${manifest.current} has no snapshot`);
   }
-  process.stdout.write(`validated ${manifest.versions.length} documentation snapshots\n`);
+  process.stdout.write(`validated ${manifest.versions.length} documentation versions\n`);
 }
 
 export async function publishVersion(tag) {
@@ -217,8 +205,7 @@ export async function publishVersion(tag) {
     if (!existing?.commit || existing.commit !== release.commit) {
       throw new Error(`published documentation ${release.version} has mismatched commit provenance`);
     }
-    await compareGitTree(git, release.commit, existing.source, resolve(versionsDir, release.version, 'website/src/content/docs'));
-    process.stdout.write(`documentation snapshot ${release.tag} is already published\n`);
+    process.stdout.write(`documentation ${release.tag} is already published\n`);
     return;
   }
   if (manifest.current && compareVersions(release.version, manifest.current) < 0) {
@@ -229,13 +216,7 @@ export async function publishVersion(tag) {
       if (existing.commit && existing.commit !== release.commit) {
         throw new Error(`version ${release.version} has mismatched commit provenance`);
       }
-      await compareGitTree(
-        git,
-        release.commit,
-        existing.source,
-        resolve(versionsDir, release.version, 'website/src/content/docs'),
-      );
-      process.stdout.write(`documentation snapshot ${release.tag} is already archived\n`);
+      process.stdout.write(`documentation ${release.tag} is already archived\n`);
       return;
     }
     const archived = await snapshotTag(tag, 'docs/next/website/src/content/docs');
@@ -251,7 +232,7 @@ export async function publishVersion(tag) {
     return;
   }
   if (existing) {
-    throw new Error(`version ${release.version} already has a documentation snapshot`);
+    throw new Error(`version ${release.version} already has published documentation`);
   }
 
   const metadata = await snapshotTag(tag, 'docs/next/website/src/content/docs');

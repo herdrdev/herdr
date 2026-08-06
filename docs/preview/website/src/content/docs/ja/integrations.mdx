@@ -1,11 +1,11 @@
 ---
 title: インテグレーション
-description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Cursor Agent CLI、MastraCode 向けの Herdr インテグレーションをインストールします。
+description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI 向けの Herdr インテグレーションをインストールします。
 ---
 
 Herdr は対応エージェントを自動的に検出します。公式インテグレーションは、復元のためのネイティブセッション識別、ライフサイクル状態の報告、またはその両方を追加できます。
 
-Claude Code/Codex/Copilot/Devin 系のフックによるエージェントネイティブのセッション復元、Pi/OMP/Kimi/OpenCode/Kilo/Hermes/MastraCode 系のフックまたはプラグインによる直接のライフサイクル報告、あるいはその両方が欲しいときにインテグレーションを使ってください。状態権威モデルの全体像は[エージェント](/ja/docs/agents/)を参照してください。
+エージェントネイティブのセッション復元、直接のライフサイクル報告、またはその両方が欲しいときにインテグレーションを使ってください。状態権威モデルの全体像は[エージェント](/ja/docs/agents/)を参照してください。
 
 ## インテグレーションをインストールする
 
@@ -26,6 +26,8 @@ herdr integration install hermes
 herdr integration install mastracode
 herdr integration install qodercli
 herdr integration install cursor
+herdr integration install antigravity-cli
+herdr integration install grok
 ```
 
 ## インテグレーションをアンインストールする
@@ -45,6 +47,8 @@ herdr integration uninstall hermes
 herdr integration uninstall mastracode
 herdr integration uninstall qodercli
 herdr integration uninstall cursor
+herdr integration uninstall antigravity-cli
+herdr integration uninstall grok
 ```
 
 ## Herdr がインテグレーションをどう使うか
@@ -53,14 +57,14 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 
 | インテグレーションの種類 | エージェント | 効果 |
 | --- | --- | --- |
-| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
-| セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
+| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
+| セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
 
 カスタムソケットインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。
 
-一部のインテグレーションは、エージェントのネイティブセッション参照を報告します。Herdr は公式のセッション参照を使って、`[session] resume_agents_on_restore = false` で無効化されていない限り、Herdr サーバーの再起動後に Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode のペインを resume します。
+一部のインテグレーションは、エージェントのネイティブセッション参照を報告します。Herdr は公式のセッション参照を使って、`[session] resume_agents_on_restore = false` で無効化されていない限り、Herdr サーバーの再起動後に Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode、Antigravity CLI のペインを resume します。
 
-エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Cursor Agent CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `2`、MastraCode は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
+エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Cursor Agent CLI は `1`、Grok CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `2`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
 
 ## Pi
 
@@ -210,7 +214,7 @@ herdr integration install hermes
 
 Herdr は `~/.hermes/plugins/herdr-agent-state/` を書き込み、`~/.hermes/config.yaml` で `herdr-agent-state` を有効にします。Hermes の設定ディレクトリはあらかじめ存在している必要があります。プラグインを読み込ませるため、インストール後に Hermes を再起動してください。アンインストールはプラグインディレクトリを削除し、`plugins.enabled` から `herdr-agent-state` を削除します。
 
-このプラグインは、Hermes が Herdr のペイン内で動いている間、ライフサイクル、ツール、承認状態、セッション id を報告します。Herdr は報告されたセッション id を使って `hermes --resume <id>` でペインを resume できます。プラグインがインストールされていないときは、スクリーンマニフェスト検出が引き続き利用できます。
+このプラグインは、Hermes が Herdr のペイン内で動いている間、resume 可能なセッション id を報告します。Herdr は `working`、`idle`、`blocked` にスクリーンマニフェスト検出を使い、報告されたセッション id で `hermes --resume <id>` としてペインを resume できます。
 
 ## Qoder CLI
 
@@ -255,6 +259,34 @@ herdr integration install mastracode
 Herdr は `~/.mastracode` を使います。インストールは `hooks/herdr-agent-state.sh` を書き込み、`hooks.json` に Herdr のコマンドエントリを追加します。ディレクトリがなければ作成します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
 
 Herdr は保存された MastraCode スレッドを `mastracode --thread <id>` で resume します。
+
+## Antigravity CLI
+
+Antigravity CLI フックをインストールします:
+
+```bash
+herdr integration install antigravity-cli
+```
+
+Herdr はデフォルトで `~/.gemini/config/` を使い、`ANTIGRAVITY_CLI_CONFIG_DIR` が設定されていればそちらを使います。これは Antigravity CLI がグローバルカスタマイズを読み込むディレクトリで、あらかじめ存在している必要があります。インストールは `hooks/herdr-agent-state.sh`（Windows では `herdr-agent-state.ps1`）を書き込み、`hooks.json` に Herdr 所有の `herdr` ブロックを追加します。Antigravity CLI は `hooks.json` をフック名で管理するため、インストールはそのブロックだけを書き換え、ほかの名前付きフックには触れません。アンインストールは `herdr` ブロックとフックスクリプトを削除します。
+
+このインテグレーションはセッション専用です。ペインで実行中の会話を報告しますが、エージェント状態は報告しません。そのため、Herdr は Antigravity CLI の画面表示から `working`、`idle`、`blocked` を引き続き判定します。
+
+フックは `PreInvocation` で実行されるため、最初のプロンプト送信後に Herdr が会話を認識します。それ以降、Herdr サーバーの再起動後に `agy --conversation <id>` でペインを resume できます。
+
+## Grok CLI
+
+Grok CLI フックをインストールします:
+
+```bash
+herdr integration install grok
+```
+
+このフックは、Grok CLI が Herdr のペイン内で動いている間、Grok の `SessionStart` フックを通じてセッション識別を報告します。Grok の状態は Herdr のスクリーンマニフェスト検出から得られます。
+
+Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh` を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
+
+Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
 
 ## カスタムステータスラベル
 

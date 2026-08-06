@@ -12,7 +12,7 @@ use super::widgets::{
 };
 use crate::{
     app::{state::Palette, AppState},
-    config::ToastDelivery,
+    config::{StatusIndicatorStyle, ToastDelivery},
 };
 
 pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 76;
@@ -105,6 +105,22 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     match app.settings.section {
         SettingsSection::Theme => {
             render_settings_theme(app, frame, content_area);
+        }
+        SettingsSection::Indicators => {
+            render_modal_choice_list(
+                frame,
+                content_area,
+                "agent status indicators",
+                "choose color dots or distinct symbols for each state",
+                &[
+                    ("color dots  ● ● ● ○ ·", StatusIndicatorStyle::Dots),
+                    ("distinct symbols  × ◐ ✓ ○ ·", StatusIndicatorStyle::Symbols),
+                ],
+                app.status_indicators,
+                app.settings.list.selected,
+                p,
+                1,
+            );
         }
         SettingsSection::Sound => {
             render_settings_toggle(

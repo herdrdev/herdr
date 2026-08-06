@@ -81,13 +81,13 @@ herdr agent rename w1:p2 reviewer
 
 在 CLI 中,`pane read` 和 `agent read` 都直接打印终端文本。默认输出去除 ANSI 转义的 UTF-8 文本;来源包含样式时,使用 `--format ansi` 或 `--ansi` 保留终端转义。`detection` 来源始终是纯文本。对 recent 类来源,`--lines N` 会在可选的取消折行之前选择最后 N 个已渲染终端行;省略时默认读取 80 行。对 `visible` 和 `detection`,省略 `--lines` 会返回完整快照,指定时保留按换行分隔的最后 N 行。socket API 在 `.result.read.text` 返回文本。
 
-## 已知注意事项:备用屏幕输出
+## 备用屏幕历史读取
 
-Claude Code 和 OpenCode 等全屏智能体可能会在终端的备用屏幕中绘制。备用屏幕中的行不会进入 Herdr 的主机回滚缓冲区。`--lines` 只能请求窗格当前屏幕和主机回滚缓冲区中现有的更多行,不能生成缺失的历史。如果增大 `--lines` 后仍没有返回更多回复文本,该窗格很可能正在使用备用屏幕,且那些回复行已不再保留。字体较大或窗格较小时更容易遇到此限制。
+Claude Code 和 OpenCode 等全屏智能体会把对话历史绘制在终端的备用屏幕中,而不是写入 Herdr 的主机回滚缓冲区。当已识别的智能体处于 idle、对话位于底部,且 `--lines` 请求的行数超过可见屏幕时,`recent` 或 `recent-unwrapped` 文本读取会自动使用智能体的鼠标滚动界面。Herdr 会收集相互重叠的页面,并在完成读取前把视口恢复到底部。当窗格中包含该智能体时,`pane read` 也会自动采用相同行为,无需额外选项。
 
-可以要求智能体简洁回复、扩大窗格或使用较小字体,也可以使用智能体自身的记录和滚动控件。在智能体内部滚动后,使用 `--source visible` 读取它当前绘制的页面。
+其他读取仍保持被动。对于 `visible`、`detection` 或 ANSI 读取、输出等待和订阅、已被手动滚动的智能体、直接附加的窗格,以及不报告鼠标滚轮输入的应用,Herdr 不会移动应用视口。当显式的 `agent read --lines N` 需要备用屏幕历史时,如果智能体处于 working、blocked 或 unknown,命令会返回 `agent_not_idle`;请等待 idle 后重试,或使用 `--source visible`。其他 recent 读取仍像以前一样返回可用的屏幕和主机回滚内容。
 
-在这次读取失败后,可以让智能体把完整回复以 Markdown 格式写入临时目录,只回复文件路径,然后直接读取该文件。仅将此方法用作后备方案;不要在初始提示中要求文件输出。
+如果仍无法取得完整回复,可以让智能体把回复以 Markdown 格式写入临时目录,只回复文件路径,然后直接读取该文件。
 
 成功的 `agent start`、`agent prompt` 和 `agent wait` 会在 `.result.agent` 返回当前智能体。`pane wait-output` 返回 `.result.pane_id`、`.result.matched_line` 以及位于 `.result.read` 的匹配快照。
 

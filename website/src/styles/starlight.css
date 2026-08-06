@@ -182,6 +182,38 @@
   color: var(--sl-color-accent);
 }
 
+.sl-markdown-content .heading-link-copy-feedback {
+  position: absolute;
+  z-index: 10;
+  bottom: calc(100% + 0.4rem);
+  inset-inline-start: 50%;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 3px;
+  background: var(--sl-color-bg-nav);
+  color: var(--sl-color-white);
+  font-family: var(--sl-font);
+  font-size: var(--sl-text-xs);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: heading-link-copied 1.4s ease both;
+}
+
+@keyframes heading-link-copied {
+  0% { opacity: 0; transform: translate(-50%, 0.25rem); }
+  15%, 75% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -0.15rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-markdown-content .heading-link-copy-feedback {
+    animation: none;
+  }
+}
+
 .sl-markdown-content code:not(:where(.not-content *)) {
   border: 1px solid var(--sl-color-hairline);
   border-radius: 2px;

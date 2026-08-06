@@ -68,7 +68,7 @@ integration-assets-test:
 
 # Run plugin marketplace Worker tests
 plugin-marketplace-test:
-    cd workers/plugin-marketplace && bun test
+    cd workers/plugin-marketplace && bun install --frozen-lockfile && bun test
 
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:

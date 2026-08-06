@@ -48,7 +48,7 @@ assertIncludes(preview, 'name="robots" content="noindex, nofollow"');
 assertIncludes(archived, `data-pagefind-filter="version[content]" content="${versions.current}"`);
 assertIncludes(archived, 'name="robots" content="noindex, nofollow"');
 if (archived.includes(`This page documents Herdr ${versions.current}`)) {
-  throw new Error('the current immutable snapshot must not be labeled as outdated');
+  throw new Error('the current documentation version must not be labeled as outdated');
 }
 const versionSelect = stable.match(/<select[^>]*aria-label="Documentation version"[^>]*>([\s\S]*?)<\/select>/)?.[1];
 if (!versionSelect) throw new Error('stable docs are missing the version selector');
@@ -68,7 +68,7 @@ if (previous) {
 const sitemap = await readFile(resolve(distDir, 'sitemap-0.xml'), 'utf8');
 assertIncludes(sitemap, 'https://herdr.dev/docs/');
 if (nonCanonicalDocsUrl.test(sitemap)) {
-  throw new Error('preview or immutable documentation URLs must not appear in the sitemap');
+  throw new Error('preview or versioned documentation URLs must not appear in the sitemap');
 }
 
 const build = await inspectFiles(distDir);

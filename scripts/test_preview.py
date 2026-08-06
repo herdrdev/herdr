@@ -211,7 +211,7 @@ file: ../../../public/assets/logo.svg
         self.assertIn("[Install](/docs/0.7.4/install/)", output)
         self.assertIn("file: ../../../../../public/assets/logo.svg", output)
         self.assertIn("from '../../../../components/ConfigReference.astro'", output)
-        self.assertIn("blob/v0.7.4/docs/next/website/src/content/docs/index.mdx", output)
+        self.assertIn("blob/master/docs/versions/0.7.4/website/src/content/docs/index.mdx", output)
         self.assertIn("blob/v0.7.4/SKILL.md", output)
 
 

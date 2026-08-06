@@ -44,7 +44,6 @@ if (process.argv[2] === '--rewrite-preview-doc-fixture') {
     rewriteVersionDocContent(Buffer.concat(chunks).toString('utf8'), {
       version: process.argv[3] ?? '0.7.5',
       tag: `v${process.argv[3] ?? '0.7.5'}`,
-      sourceRoot: 'docs/next/website/src/content/docs',
       relativePath: 'index.mdx',
     }),
   );
@@ -118,8 +117,8 @@ async function prepareDocs({ draft }) {
       stableDocsDir,
       (content, relativePath) =>
         rewriteStableDocContent(content, {
+          version: currentEntry.version,
           tag: currentEntry.tag,
-          sourceRoot: currentEntry.source,
           relativePath,
         }),
     );
@@ -162,7 +161,6 @@ async function prepareDocs({ draft }) {
       rewriteVersionDocContent(content, {
         version,
         tag: entry.tag,
-        sourceRoot: entry.source,
         relativePath,
       }),
     );
@@ -269,24 +267,22 @@ export function rewritePreviewDocContent(
   return insertPreviewNotice(withSourceLink, relativePath, { buildId, commit });
 }
 
-export function rewriteStableDocContent(content, { tag, sourceRoot, relativePath }) {
+export function rewriteStableDocContent(content, { version, tag, relativePath }) {
   const taggedContent = rewriteRepositoryLinks(content, tag);
-  return setGeneratedEditUrl(
-    taggedContent,
-    `https://github.com/herdrdev/herdr/blob/${tag}/${sourceRoot}/${relativePath}`,
-  );
+  return setGeneratedEditUrl(taggedContent, versionedDocSourceUrl(version, relativePath));
 }
 
-export function rewriteVersionDocContent(content, { version, tag, sourceRoot, relativePath }) {
+export function rewriteVersionDocContent(content, { version, tag, relativePath }) {
   const taggedContent = rewriteRepositoryLinks(
     content.replaceAll('/docs/', `/docs/${version}/`),
     tag,
   );
   const rewritten = rewriteRelativeDocPaths(taggedContent, 2);
-  return setGeneratedEditUrl(
-    rewritten,
-    `https://github.com/herdrdev/herdr/blob/${tag}/${sourceRoot}/${relativePath}`,
-  );
+  return setGeneratedEditUrl(rewritten, versionedDocSourceUrl(version, relativePath));
+}
+
+function versionedDocSourceUrl(version, relativePath) {
+  return `https://github.com/herdrdev/herdr/blob/master/docs/versions/${version}/website/src/content/docs/${relativePath}`;
 }
 
 function rewriteRepositoryLinks(content, ref) {

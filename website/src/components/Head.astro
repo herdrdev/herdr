@@ -8,3 +8,60 @@ const version = docsVersion(Astro.url.pathname);
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
 <meta data-pagefind-filter="version[content]" content={version} />
 {version !== 'stable' && <meta name="robots" content="noindex, nofollow" />}
+
+<script>
+  const labels = (() => {
+    const lang = document.documentElement.lang.toLowerCase();
+    if (lang.startsWith('ja')) return { copy: 'リンクをコピー', copied: 'コピーしました' };
+    if (lang.startsWith('zh')) return { copy: '复制链接', copied: '已复制' };
+    return { copy: 'Copy link', copied: 'Copied' };
+  })();
+
+  function labelHeadingLinks(root: ParentNode = document) {
+    for (const link of root.querySelectorAll<HTMLAnchorElement>('.sl-anchor-link')) {
+      link.title = labels.copy;
+      const section = link.querySelector('.sr-only')?.textContent;
+      if (section) link.setAttribute('aria-label', `${labels.copy}: ${section}`);
+    }
+  }
+
+  labelHeadingLinks();
+  document.addEventListener('astro:page-load', () => labelHeadingLinks());
+  document.addEventListener('click', async (event) => {
+    if (
+      event instanceof MouseEvent &&
+      (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+    ) {
+      return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const link = target.closest('.sl-anchor-link');
+    if (!(link instanceof HTMLAnchorElement) || !navigator.clipboard?.writeText) return;
+
+    try {
+      await navigator.clipboard.writeText(link.href);
+    } catch {
+      return;
+    }
+
+    link.querySelector('.heading-link-copy-feedback')?.remove();
+    const feedback = document.createElement('span');
+    feedback.className = 'heading-link-copy-feedback';
+    feedback.setAttribute('aria-hidden', 'true');
+    feedback.textContent = labels.copied;
+    link.append(feedback);
+    window.setTimeout(() => feedback.remove(), 1400);
+
+    let status = document.querySelector<HTMLElement>('[data-heading-link-copy-status]');
+    if (!status) {
+      status = document.createElement('span');
+      status.className = 'sr-only';
+      status.setAttribute('role', 'status');
+      status.dataset.headingLinkCopyStatus = '';
+      document.body.append(status);
+    }
+    status.textContent = labels.copied;
+  });
+</script>

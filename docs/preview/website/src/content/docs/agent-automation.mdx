@@ -81,13 +81,13 @@ Pane input addresses the terminal regardless of its current occupant. Agent inpu
 
 At the CLI, both `pane read` and `agent read` print terminal text directly. The default is UTF-8 text with ANSI escapes stripped; use `--format ansi` or `--ansi` to preserve terminal escapes where the source exposes them. The `detection` source is always plain text. For recent sources, `--lines N` selects the last N rendered terminal rows before optional unwrapping; without it, reads default to 80 rows. For `visible` and `detection`, omitting `--lines` returns the full snapshot, while specifying it keeps the last N newline-delimited lines. The socket API returns the text at `.result.read.text`.
 
-## Known caveat: alternate-screen output
+## Alternate-screen history reads
 
-Full-screen agents such as Claude Code and OpenCode may render in the terminal's alternate screen. Alternate-screen rows do not enter Herdr's host scrollback. `--lines` can only request more rows from the pane's available screen and host scrollback; it cannot create missing history. If increasing `--lines` returns no additional response text, the pane is probably using the alternate screen and those response rows are no longer retained. A larger font or smaller pane makes this more likely.
+Full-screen agents such as Claude Code and OpenCode render transcript history in the terminal's alternate screen instead of Herdr's host scrollback. For an idle, recognized agent at the bottom of its transcript, text reads from `recent` or `recent-unwrapped` automatically use the agent's mouse-scroll interface when `--lines` requests more than the visible screen. Herdr collects overlapping pages and returns the viewport to the bottom before completing the read. The same behavior applies to `pane read` when the pane contains that agent; it requires no additional option.
 
-Ask the agent for concise responses, enlarge the pane or use a smaller font, or use the agent's own transcript and scrolling controls. After scrolling inside the agent, use `--source visible` to read the page it currently renders.
+Other reads remain passive. Herdr does not move the application viewport for `visible`, `detection`, or ANSI reads, output waits and subscriptions, a manually scrolled agent, a direct attachment, or an application that does not report mouse-wheel input. An explicit `agent read --lines N` that needs alternate-screen history returns `agent_not_idle` while the agent is working, blocked, or unknown; wait for idle and retry, or use `--source visible`. Other recent reads return the available screen and host scrollback as before.
 
-After that failed read, ask the agent to write its complete response as Markdown in a temporary directory and reply only with the file path, then read the file directly. Use this only as a fallback; do not request file output in the initial prompt.
+If a full response is still unavailable, ask the agent to write it as Markdown in a temporary directory and reply only with the file path, then read the file directly.
 
 Successful `agent start`, `agent prompt`, and `agent wait` commands return the current agent at `.result.agent`. `pane wait-output` returns `.result.pane_id`, `.result.matched_line`, and the matched snapshot at `.result.read`.
 
