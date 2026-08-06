@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 // remains only for session-only/custom hook paths and fallback detection.
 // Process-exit updates clear matching hook authority before recomputing state.
 
-use crate::detect::{Agent, AgentState};
+use crate::detect::{Agent, AgentState, RemoteTransport};
 use crate::terminal::TerminalId;
 
 #[path = "metadata.rs"]
@@ -124,6 +124,14 @@ pub struct TerminalState {
     fallback_visible_blocker: bool,
     fallback_observed_at: Option<Instant>,
     pub hook_authority: Option<HookAuthority>,
+    pub remote_transport: Option<RemoteTransport>,
+    /// True when the current hook authority arrived while this pane was an
+    /// SSH session, i.e. the reporting agent runs on the remote host. Live
+    /// process state; never persisted.
+    pub hook_authority_remote: bool,
+    /// When the env-injection line was last typed into the remote shell.
+    /// Live process state; never persisted.
+    pub remote_env_injected_at: Option<Instant>,
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
@@ -157,6 +165,9 @@ impl TerminalState {
             fallback_visible_blocker: false,
             fallback_observed_at: None,
             hook_authority: None,
+            remote_transport: None,
+            hook_authority_remote: false,
+            remote_env_injected_at: None,
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
@@ -185,6 +196,18 @@ impl TerminalState {
         self.terminal_title
             .as_deref()
             .and_then(super::stripped_terminal_title)
+    }
+
+    pub fn set_remote_transport(&mut self, transport: Option<RemoteTransport>) -> bool {
+        if self.remote_transport == transport {
+            return false;
+        }
+        self.remote_transport = transport;
+        true
+    }
+
+    pub fn remote_transport(&self) -> Option<&RemoteTransport> {
+        self.remote_transport.as_ref()
     }
 
     pub(crate) fn set_terminal_title(&mut self, title: Option<String>) -> TerminalTitleChange {
@@ -462,6 +485,7 @@ impl TerminalState {
             if let Some(source) = cleared_hook_source {
                 self.hook_report_sequences.remove(&source);
                 self.hook_authority = None;
+                self.hook_authority_remote = false;
             }
             if !newer_custom_authority
                 && self
@@ -535,6 +559,7 @@ impl TerminalState {
                 FullLifecycleHookSuppressionReason::HookClear,
             );
             self.hook_authority = None;
+            self.hook_authority_remote = false;
             self.persisted_agent_session = durable_session;
         }
         if agent_released {
@@ -689,6 +714,9 @@ impl TerminalState {
             }
         }
         self.persisted_agent_session = None;
+        // Provenance: an authority assigned while the pane is an SSH session
+        // belongs to a remote host's process and is released if ssh exits.
+        let reported_while_remote = self.remote_transport.is_some();
         self.hook_authority = Some(HookAuthority {
             source,
             agent_label,
@@ -697,6 +725,7 @@ impl TerminalState {
             reported_at: now,
             session_ref,
         });
+        self.hook_authority_remote = reported_while_remote;
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -832,6 +861,15 @@ impl TerminalState {
         reported_at: Instant,
     ) -> FullLifecycleHookReportRoute {
         if !crate::detect::full_lifecycle_hook_authority(source, agent_label) {
+            return FullLifecycleHookReportRoute::Accept {
+                reanchor_sequence: false,
+            };
+        }
+        // While the pane is an SSH session, full-lifecycle reports arrive
+        // through the remote report proxy, which only forwards for panes with
+        // a live transport — the forward itself is the process evidence, so
+        // local process/session anchoring does not apply.
+        if self.remote_transport.is_some() {
             return FullLifecycleHookReportRoute::Accept {
                 reanchor_sequence: false,
             };
@@ -1121,6 +1159,7 @@ impl TerminalState {
             });
             if let Some(pending) = pending {
                 self.hook_report_sequences.insert(source, pending.seq);
+                self.hook_authority_remote = self.remote_transport.is_some();
                 self.hook_authority = Some(pending.authority);
             }
         }
@@ -1481,11 +1520,13 @@ impl TerminalState {
                 replaced_hook_session,
             );
             self.hook_authority = None;
+            self.hook_authority_remote = false;
         } else if foreground_takeover_allowed {
             self.suppress_current_full_lifecycle_hook_authority(
                 FullLifecycleHookSuppressionReason::HookClear,
             );
             self.hook_authority = None;
+            self.hook_authority_remote = false;
         }
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
         self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
@@ -1610,6 +1651,7 @@ impl TerminalState {
             FullLifecycleHookSuppressionReason::HookClear,
         );
         self.hook_authority = None;
+        self.hook_authority_remote = false;
         self.persisted_agent_session = None;
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -1672,6 +1714,7 @@ impl TerminalState {
             self.clear_agent_name();
         }
         self.hook_authority = None;
+        self.hook_authority_remote = false;
         if !preserve_foreign_persisted_session {
             self.persisted_agent_session = None;
         }
@@ -1689,8 +1732,30 @@ impl TerminalState {
         })
     }
 
+    /// Release a hook authority that was reported through this pane's SSH
+    /// reverse forward, because the SSH session ended and the report stream
+    /// is dead. This is a local lifecycle event, not a hook report, so it
+    /// bypasses per-source sequence ordering; the release itself reuses the
+    /// hook-release mutation so downstream behavior matches agent exit.
+    pub fn release_remote_hook_authority(&mut self) -> Option<TerminalStateMutation> {
+        if !self.hook_authority_remote {
+            return None;
+        }
+        self.hook_authority_remote = false;
+        let (source, agent_label) = match self.hook_authority.as_ref() {
+            Some(authority) => (authority.source.clone(), authority.agent_label.clone()),
+            None => return None,
+        };
+        self.hook_report_sequences.remove(&source);
+        self.release_agent_with_mutation(&source, &agent_label, None)
+    }
+
     fn hook_authority_is_effective(&self, authority: &HookAuthority) -> bool {
         !crate::detect::full_lifecycle_hook_authority(&authority.source, &authority.agent_label)
+            // A full-lifecycle authority accepted over the SSH report proxy is
+            // effective without a locally detected process; the remote process
+            // can never appear in local process tables.
+            || self.remote_transport.is_some()
             || crate::detect::parse_agent_label(&authority.agent_label).is_none_or(|agent| {
                 self.detected_agent == Some(agent) && self.recent_agent_process_exit.is_none()
             })
@@ -1934,6 +1999,7 @@ impl TerminalState {
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.hook_authority = None;
+        self.hook_authority_remote = false;
         self.persisted_agent_session = None;
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();

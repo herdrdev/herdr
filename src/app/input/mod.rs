@@ -403,6 +403,9 @@ impl App {
                             self.save_status_indicators(style)
                         }
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
+                        SettingsAction::SaveRemoteAgentReporting(enabled) => {
+                            self.save_remote_agent_reporting(enabled)
+                        }
                         SettingsAction::SaveToastDelivery(delivery) => {
                             self.save_toast_delivery(delivery)
                         }

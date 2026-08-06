@@ -808,6 +808,12 @@
             "pane_id": {
               "type": "string"
             },
+            "remote_target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "revision": {
               "format": "uint64",
               "minimum": 0,
@@ -7379,6 +7385,12 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "remote_target": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "revision": {
               "format": "uint64",

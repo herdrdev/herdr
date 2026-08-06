@@ -296,6 +296,8 @@ pub struct HeadlessServer {
     // Kept on every platform so dropping HeadlessServer owns API server shutdown.
     #[cfg_attr(windows, allow(dead_code))]
     api_server: Option<api::ServerHandle>,
+    #[cfg_attr(windows, allow(dead_code))]
+    remote_report_server: Option<api::RemoteReportHandle>,
     #[cfg(unix)]
     client_listener: LocalListener,
     client_socket_path: PathBuf,
@@ -467,6 +469,7 @@ impl HeadlessServer {
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
+        remote_report_server: Option<api::RemoteReportHandle>,
     ) -> io::Result<Self> {
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -497,6 +500,7 @@ impl HeadlessServer {
             #[cfg(unix)]
             api_tx,
             api_server,
+            remote_report_server,
             #[cfg(unix)]
             client_listener: listener,
             client_socket_path: client_path,
@@ -1298,6 +1302,8 @@ impl HeadlessServer {
         } else {
             let _ = std::fs::remove_file(crate::api::socket_path());
         }
+        self.remote_report_server.take();
+
         let _ = remove_socket_file_if_owned(&self.client_socket_path, &self.client_socket_identity);
         if let Err(err) = crate::server::handoff::wait_ready(&mut stream) {
             crate::server::handoff::cleanup_failed_import_child(&mut import_child);
@@ -1378,7 +1384,9 @@ impl HeadlessServer {
             .api_tx
             .clone()
             .ok_or_else(|| io::Error::other("cannot restore api socket without api sender"))?;
-        let api_server = api::start_server(api_tx, self.app.event_hub.clone())?;
+        self.remote_report_server.take();
+        let api_server = api::start_server(api_tx.clone(), self.app.event_hub.clone())?;
+        let remote_report_server = api::start_remote_report_listener(api_tx)?;
 
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -1387,6 +1395,7 @@ impl HeadlessServer {
         let client_socket_identity = socket_file_identity(&client_path)?;
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
 
+        self.remote_report_server = Some(remote_report_server);
         self.api_server = Some(api_server);
         self.client_listener = listener;
         self.client_socket_path = client_path;
@@ -4683,6 +4692,7 @@ pub fn run_server() -> io::Result<()> {
     }
 
     let loaded_config = config::Config::load();
+    config::set_remote_agent_reporting_enabled(loaded_config.config.remote.agent_reporting);
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
 
@@ -4696,6 +4706,7 @@ pub fn run_server() -> io::Result<()> {
         }
         Err(err) => return Err(err),
     };
+    let _remote_report_server = api::start_remote_report_listener(api_tx.clone())?;
 
     let no_session = false; // Server always does session persistence.
 
@@ -4730,6 +4741,7 @@ pub fn run_server() -> io::Result<()> {
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(_api_server),
+            Some(_remote_report_server),
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -4789,6 +4801,7 @@ fn take_startup_cwd() -> Option<PathBuf> {
 #[cfg(unix)]
 fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> {
     let loaded_config = config::Config::load();
+    config::set_remote_agent_reporting_enabled(loaded_config.config.remote.agent_reporting);
     let mut received = crate::server::handoff::receive(socket_path, token)?;
     crate::server::handoff::log_import_result(received.manifest.panes.len());
 
@@ -4833,11 +4846,14 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         wait_for_old_public_sockets_to_close(Duration::from_secs(5))?;
 
         let api_server = api::start_server(api_tx.clone(), event_hub.clone())?;
+        let remote_report_server = api::start_remote_report_listener(api_tx.clone())?;
+
         let mut server = HeadlessServer::new(
             app,
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(api_server),
+            Some(remote_report_server),
         )?;
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
@@ -4994,6 +5010,7 @@ mod tests {
             #[cfg(unix)]
             api_tx: None,
             api_server: None,
+            remote_report_server: None,
             #[cfg(unix)]
             client_listener: listener,
             client_socket_path: socket_path,

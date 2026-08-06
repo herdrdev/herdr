@@ -673,6 +673,7 @@ mod tests {
             agent_session: None,
             scroll,
             revision: 0,
+            remote_target: None,
         }
     }
 

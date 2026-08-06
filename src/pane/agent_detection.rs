@@ -1,6 +1,36 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::TerminalCursorState;
 use crate::detect::{Agent, AgentDetection, AgentState};
+
+// Called only by the unix pane detection loops; the remote report endpoint is
+// an AF_UNIX path, so Windows never emits prompt-ready events.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn remote_shell_prompt_ready(
+    content: &str,
+    cursor: Option<TerminalCursorState>,
+    scrolled_away_from_bottom: bool,
+) -> bool {
+    let Some(cursor) = cursor.filter(|cursor| cursor.visible) else {
+        return false;
+    };
+    if scrolled_away_from_bottom {
+        return false;
+    }
+
+    let Some(line) = content.lines().nth(cursor.y as usize) else {
+        return false;
+    };
+    let prompt = line.trim_end();
+    let Some(last) = prompt.chars().last() else {
+        return false;
+    };
+    if !matches!(last, '#' | '$' | '%' | '>' | '❯') {
+        return false;
+    }
+
+    cursor.x as usize >= prompt.chars().count()
+}
 
 pub(super) const AGENT_PENDING_IDLE_RECHECK: std::time::Duration =
     std::time::Duration::from_millis(100);
@@ -552,5 +582,62 @@ mod tests {
         mark_detection_content_changed(&seq);
 
         assert_eq!(seq.load(Ordering::Relaxed), 1);
+    }
+
+    fn cursor(x: u16, y: u16, visible: bool) -> TerminalCursorState {
+        TerminalCursorState {
+            x,
+            y,
+            visible,
+            shape: 0,
+        }
+    }
+
+    #[test]
+    fn remote_shell_prompt_ready_matrix() {
+        for (prompt, x) in [("$", 1), ("#", 1), ("%", 1), (">", 1), ("❯", 1)] {
+            assert!(remote_shell_prompt_ready(
+                &format!("output\n{prompt}"),
+                Some(cursor(x, 1, true)),
+                false,
+            ));
+        }
+
+        assert!(!remote_shell_prompt_ready(
+            "$ echo ready",
+            Some(cursor(12, 0, true)),
+            false,
+        ));
+        assert!(!remote_shell_prompt_ready(
+            "password:",
+            Some(cursor(9, 0, true)),
+            false,
+        ));
+        assert!(!remote_shell_prompt_ready(
+            "The authenticity of host cannot be established (yes/no)",
+            Some(cursor(56, 0, true)),
+            false,
+        ));
+        assert!(!remote_shell_prompt_ready(
+            "$",
+            Some(cursor(1, 0, false)),
+            false,
+        ));
+        assert!(!remote_shell_prompt_ready("$", None, false));
+        assert!(!remote_shell_prompt_ready(
+            "$",
+            Some(cursor(1, 0, true)),
+            true,
+        ));
+        assert!(!remote_shell_prompt_ready(
+            "$",
+            Some(cursor(1, 1, true)),
+            false,
+        ));
+        assert!(!remote_shell_prompt_ready(
+            "  $",
+            Some(cursor(2, 0, true)),
+            false,
+        ));
     }
 }

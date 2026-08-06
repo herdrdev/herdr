@@ -66,6 +66,17 @@ pub enum AppEvent {
         process_exited: bool,
         observed_at: Instant,
     },
+    /// The foreground process's SSH transport changed.
+    // Constructed only by the unix pane detection tasks; remote agent
+    // reporting is inert on Windows (the report endpoint is an AF_UNIX path).
+    #[cfg_attr(windows, allow(dead_code))]
+    RemoteTransportChanged {
+        pane_id: crate::layout::PaneId,
+        transport: Option<crate::detect::RemoteTransport>,
+    },
+    /// A remote shell prompt is ready for environment injection.
+    #[cfg_attr(windows, allow(dead_code))]
+    RemoteTransportPromptReady { pane_id: crate::layout::PaneId },
     /// Hook-authoritative agent state was reported for a pane.
     HookStateReported {
         pane_id: PaneId,

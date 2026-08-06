@@ -76,6 +76,14 @@ impl App {
         }
     }
 
+    pub(super) fn save_remote_agent_reporting(&mut self, enabled: bool) {
+        if self.update_config_file("remote agent reporting", |content| {
+            crate::config::upsert_section_bool(content, "remote", "agent_reporting", enabled)
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
     pub(super) fn save_toast_delivery(&mut self, delivery: crate::config::ToastDelivery) {
         let value = match delivery {
             crate::config::ToastDelivery::Off => "\"off\"",

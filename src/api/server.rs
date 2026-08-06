@@ -23,6 +23,9 @@ use crate::ipc::{
 };
 
 mod pane_graphics_stream;
+mod remote_report;
+pub(crate) use remote_report::{start_remote_report_listener, RemoteReportHandle};
+
 pub(crate) use pane_graphics_stream::cancel_inactive_streams as cancel_inactive_pane_graphics_streams;
 
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
@@ -877,6 +880,7 @@ mod tests {
             agent_session: None,
             scroll: None,
             revision: 0,
+            remote_target: None,
         }
     }
 

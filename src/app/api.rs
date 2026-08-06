@@ -254,6 +254,11 @@ impl App {
         } else {
             None
         };
+        let remote_prompt_ready = if let AppEvent::RemoteTransportPromptReady { pane_id } = &ev {
+            Some(*pane_id)
+        } else {
+            None
+        };
 
         let update_ready = if let AppEvent::UpdateReady {
             version,
@@ -288,6 +293,9 @@ impl App {
                     }
                 }
             }
+        }
+        if let Some(pane_id) = remote_prompt_ready {
+            self.maybe_inject_remote_env(pane_id);
         }
         self.sync_full_lifecycle_authority_detection_pauses();
         if terminal_cwd_reported {
@@ -359,7 +367,7 @@ impl App {
         }
     }
 
-    fn reset_all_agent_detection_runtimes(&self) {
+    pub(super) fn reset_all_agent_detection_runtimes(&self) {
         for runtime in self.terminal_runtimes.values() {
             runtime.reset_agent_detection();
         }
@@ -408,7 +416,7 @@ impl App {
         }
     }
 
-    fn sync_full_lifecycle_authority_detection_pauses(&self) {
+    pub(super) fn sync_full_lifecycle_authority_detection_pauses(&self) {
         for workspace in &self.state.workspaces {
             for tab in &workspace.tabs {
                 for pane in tab.panes.values() {

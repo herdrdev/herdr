@@ -8,6 +8,7 @@ mod wait;
 
 pub use event_hub::EventHub;
 pub(crate) use server::cancel_inactive_pane_graphics_streams;
+pub(crate) use server::{start_remote_report_listener, RemoteReportHandle};
 pub use server::{start_server, start_server_with_capabilities, ServerHandle};
 pub use status::{read_runtime_status_at, RuntimeStatus};
 

@@ -316,29 +316,13 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
 
 fn shell_command_from_argv(argv: &[String]) -> Option<String> {
     let mut parts = argv.iter();
-    let first = shell_quote(parts.next()?);
+    let first = crate::remote::shell_quote(parts.next()?);
     let mut command = first;
     for part in parts {
         command.push(' ');
-        command.push_str(&shell_quote(part));
+        command.push_str(&crate::remote::shell_quote(part));
     }
     Some(command)
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'_' | b'-' | b'.' | b'/' | b':' | b'@' | b'%' | b'+' | b'='
-            )
-    }) {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]

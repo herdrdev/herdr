@@ -16,6 +16,7 @@ pub(super) enum SettingsAction {
     SaveTheme(String),
     SaveStatusIndicators(StatusIndicatorStyle),
     SaveSound(bool),
+    SaveRemoteAgentReporting(bool),
     SaveToastDelivery(ToastDelivery),
     SaveAgentBorderLabels(bool),
     InstallRecommendedIntegrations,
@@ -29,6 +30,9 @@ impl App {
                 SettingsAction::SaveTheme(name) => self.save_theme(&name),
                 SettingsAction::SaveStatusIndicators(style) => self.save_status_indicators(style),
                 SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
+                SettingsAction::SaveRemoteAgentReporting(enabled) => {
+                    self.save_remote_agent_reporting(enabled)
+                }
                 SettingsAction::SaveToastDelivery(delivery) => self.save_toast_delivery(delivery),
                 SettingsAction::SaveAgentBorderLabels(enabled) => {
                     self.save_agent_border_labels(enabled)
@@ -166,8 +170,8 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = status_indicator_index(state.status_indicators);
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Integrations;
-                state.settings.list.selected = 0;
+                state.settings.section = SettingsSection::Remote;
+                state.settings.list.selected = usize::from(!state.remote_agent_reporting());
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
                 Some(super::modal::ModalAction::Apply) => return apply_settings(state),
@@ -279,14 +283,38 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = usize::from(!state.agent_border_labels_enabled());
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                state.settings.section = SettingsSection::Theme;
-                state.settings.list.selected = current_theme_index(&state.theme_name);
+                state.settings.section = SettingsSection::Remote;
+                state.settings.list.selected = usize::from(!state.remote_agent_reporting());
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
                 Some(super::modal::ModalAction::Apply) => return apply_settings(state),
                 Some(super::modal::ModalAction::Close) => cancel_settings(state),
                 _ => {}
             },
+        },
+        SettingsSection::Remote => match key.code {
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
+                state.settings.list.selected = 1 - state.settings.list.selected.min(1);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let enabled = state.settings.list.selected == 0;
+                return Some(SettingsAction::SaveRemoteAgentReporting(enabled));
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                state.settings.section = SettingsSection::Integrations;
+                state.settings.list.selected = 0;
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                state.settings.section = SettingsSection::Theme;
+                state.settings.list.selected = current_theme_index(&state.theme_name);
+            }
+            _ => {
+                if let Some(super::modal::ModalAction::Close) =
+                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
+                {
+                    cancel_settings(state);
+                }
+            }
         },
     }
 
@@ -309,6 +337,7 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
         SettingsSection::Toast => toast_delivery_index(state.toast_delivery()),
         SettingsSection::PaneLabels => usize::from(!state.agent_border_labels_enabled()),
         SettingsSection::Integrations => 0,
+        SettingsSection::Remote => usize::from(!state.remote_agent_reporting()),
     };
     state.mode = Mode::Settings;
 }
@@ -378,7 +407,7 @@ impl AppState {
                 let idx = scroll + (row - area.y) as usize;
                 (idx < THEME_NAMES.len()).then_some(idx)
             }
-            SettingsSection::Indicators | SettingsSection::Sound => {
+            SettingsSection::Indicators | SettingsSection::Sound | SettingsSection::Remote => {
                 let list_y = area.y + 3;
                 if row >= list_y && row < list_y + 2 {
                     Some((row - list_y) as usize)
@@ -421,6 +450,7 @@ impl AppState {
                         SettingsSection::PaneLabels => {
                             usize::from(!self.agent_border_labels_enabled())
                         }
+                        SettingsSection::Remote => usize::from(!self.remote_agent_reporting()),
                         SettingsSection::Integrations => 0,
                     });
                     return None;
@@ -448,6 +478,10 @@ impl AppState {
                             Some(SettingsAction::SaveAgentBorderLabels(enabled))
                         }
                         SettingsSection::Integrations => None,
+                        SettingsSection::Remote => {
+                            let enabled = idx == 0;
+                            Some(SettingsAction::SaveRemoteAgentReporting(enabled))
+                        }
                     };
                 }
 
@@ -555,7 +589,23 @@ mod tests {
     }
 
     #[test]
-    fn settings_tab_cycle_wraps_after_integrations() {
+    fn settings_remote_toggle_returns_save_action() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Remote);
+        state.settings.list.selected = 0;
+
+        let action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+
+        assert_eq!(action, Some(SettingsAction::SaveRemoteAgentReporting(true)));
+        assert!(!state.remote_agent_reporting());
+        assert_eq!(state.mode, Mode::Settings);
+    }
+
+    #[test]
+    fn settings_tab_cycle_wraps_after_remote() {
         let mut state = state_with_workspaces(&["test"]);
         open_settings_at(&mut state, SettingsSection::PaneLabels);
 
@@ -569,7 +619,19 @@ mod tests {
             &mut state,
             KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
         );
+        assert_eq!(state.settings.section, SettingsSection::Remote);
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+        );
         assert_eq!(state.settings.section, SettingsSection::Theme);
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
+        );
+        assert_eq!(state.settings.section, SettingsSection::Remote);
 
         update_settings_state(
             &mut state,
