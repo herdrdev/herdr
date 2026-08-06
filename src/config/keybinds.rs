@@ -1696,8 +1696,8 @@ close_tab = "X"
 
     #[test]
     fn shifted_letter_binding_matches_alternate_codepoint_without_shift_bit() {
-        let key =
-            TerminalKey::new(KeyCode::Char('r'), KeyModifiers::empty()).with_shifted_codepoint('R' as u32);
+        let key = TerminalKey::new(KeyCode::Char('r'), KeyModifiers::empty())
+            .with_shifted_codepoint('R' as u32);
         assert!(ActionKeybinds::prefix("shift+r").matches_prefix_key(&key));
         assert!(!ActionKeybinds::prefix("r").matches_prefix_key(&key));
     }
