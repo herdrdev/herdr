@@ -811,6 +811,10 @@ body.site .foot { padding: 22px var(--gut); border-top: 1px solid var(--line2); 
 body.site .foot a { color: var(--dim); text-decoration: none; }
 body.site .foot a:hover { color: var(--ink); }
 body.site .foot .ram { width: 15px; height: 15px; color: var(--faint); }
+body.site .meta.yc-meta { margin-top: 10px; }
+body.site .meta .yc { color: var(--dim); display: inline-flex; align-items: center; gap: 6px; }
+body.site .meta .yc img { display: block; }
+body.site .meta .yc:hover { color: var(--ink); text-decoration: none; }
 body.site .foot .fact { color: var(--faint); font-variant-numeric: tabular-nums; }
 /* the outbound cluster sits right: site links and provenance on one side, ways
    to reach the project on the other. Its own gap is tighter than the row's, so
