@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-06-20T12:00:00.000Z",
-  "pluginCount": 10,
+  "pluginCount": 11,
   "repositoryCount": 7,
   "source": {
     "provider": "github",
@@ -11,6 +11,35 @@
     "truncated": false
   },
   "plugins": [
+    {
+      "id": 823456789,
+      "fullName": "IgorGanapolsky/ThumbGate",
+      "owner": "IgorGanapolsky",
+      "name": "ThumbGate",
+      "description": "Pre-action governance, spend guard, and safety approval gates for multi-agent terminal sessions in Herdr.",
+      "url": "https://github.com/IgorGanapolsky/ThumbGate",
+      "stars": 150,
+      "forks": 12,
+      "openIssues": 0,
+      "language": "JavaScript",
+      "topics": ["herdr-plugin", "security", "governance", "mcp"],
+      "createdAt": "2026-05-01T00:00:00Z",
+      "updatedAt": "2026-08-06T12:00:00Z",
+      "pushedAt": "2026-08-06T12:00:00Z",
+      "archived": false,
+      "fork": false,
+      "manifests": [
+        {
+          "path": "adapters/herdr/herdr-plugin.toml",
+          "id": "thumbgate-approvals",
+          "name": "ThumbGate Approvals",
+          "version": "1.35.0",
+          "minHerdrVersion": "0.7.0",
+          "description": "Pre-action governance, spend guard, and safety approval gates for multi-agent terminal sessions in Herdr.",
+          "platforms": ["linux", "macos", "windows"]
+        }
+      ]
+    },
     {
       "id": 123456789,
       "fullName": "ogulcancelik/herdr-plugin-github-start",
