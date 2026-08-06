@@ -12,8 +12,8 @@ patch: `vendor/patches/portable-pty/0001-control-conpty-loading.patch`
 
 herdr issues:
 
-- https://github.com/ogulcancelik/herdr/issues/761
-- https://github.com/ogulcancelik/herdr/issues/1533
+- https://github.com/herdrdev/herdr/issues/761
+- https://github.com/herdrdev/herdr/issues/1533
 
 upstream discussion: https://github.com/microsoft/terminal/issues/17452
 
@@ -57,7 +57,7 @@ status: active
 
 patch: `vendor/patches/portable-pty/0002-windows-raw-command-tail.patch`
 
-herdr issue: https://github.com/ogulcancelik/herdr/issues/1041
+herdr issue: https://github.com/herdrdev/herdr/issues/1041
 
 upstream discussion: none
 

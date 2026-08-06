@@ -38,6 +38,7 @@ fn modified_url_click_modifier_matches_terminal_mouse_reporting() {
 
 mod clipboard;
 mod copy_mode;
+mod lease;
 pub(super) mod modal;
 mod mouse;
 mod navigate;
@@ -49,6 +50,7 @@ mod sidebar;
 mod terminal;
 
 pub(crate) use self::{
+    lease::{ConsumedInputLease, ForwardedInputLease, InputLeaseKey, InputLeaseTable, RepeatPlan},
     modal::{
         handle_global_menu_key, handle_navigator_key, insert_navigator_search_text,
         insert_rename_input_text, open_new_workspace_dialog,
@@ -120,6 +122,66 @@ impl App {
             },
         }
         None
+    }
+
+    pub(crate) fn handle_text_commit_headless(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.state.popup_pane.is_some() {
+            if let Some(runtime) = self.popup_runtime() {
+                let _ = runtime.try_send_bytes(Bytes::copy_from_slice(text.as_bytes()));
+            } else {
+                self.close_popup_pane();
+            }
+            return;
+        }
+        if self.state.mode != Mode::Terminal {
+            self.paste_into_active_text_input(text);
+            return;
+        }
+
+        self.state.clear_selection();
+        self.selection_autoscroll_deadline = None;
+        self.state.update_dismissed = true;
+        if let Some(ws_idx) = self.state.active {
+            if let Some(runtime) = self
+                .state
+                .focused_runtime_in_workspace(&self.terminal_runtimes, ws_idx)
+            {
+                let _ = runtime.try_send_bytes(Bytes::copy_from_slice(text.as_bytes()));
+            }
+        }
+    }
+
+    pub(super) async fn handle_text_commit(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if self.state.popup_pane.is_some() {
+            if let Some(runtime) = self.popup_runtime() {
+                let _ = runtime.send_bytes(Bytes::from(text)).await;
+            } else {
+                self.close_popup_pane();
+            }
+            return;
+        }
+        if self.state.mode != Mode::Terminal {
+            self.paste_into_active_text_input(&text);
+            return;
+        }
+
+        self.state.clear_selection();
+        self.selection_autoscroll_deadline = None;
+        self.state.update_dismissed = true;
+        if let Some(ws_idx) = self.state.active {
+            if let Some(runtime) = self
+                .state
+                .focused_runtime_in_workspace(&self.terminal_runtimes, ws_idx)
+            {
+                let _ = runtime.send_bytes(Bytes::from(text)).await;
+            }
+        }
     }
 
     pub(super) async fn handle_paste(&mut self, text: String) {
@@ -338,18 +400,15 @@ impl App {
                     }
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),
+                        SettingsAction::SaveStatusIndicators(style) => {
+                            self.save_status_indicators(style)
+                        }
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                         SettingsAction::SaveToastDelivery(delivery) => {
                             self.save_toast_delivery(delivery)
                         }
                         SettingsAction::SaveAgentBorderLabels(enabled) => {
                             self.save_agent_border_labels(enabled)
-                        }
-                        SettingsAction::SavePaneHistory(enabled) => {
-                            self.save_pane_history_persistence(enabled)
-                        }
-                        SettingsAction::SaveSwitchAsciiInputSourceInPrefix(enabled) => {
-                            self.save_switch_ascii_input_source_in_prefix(enabled)
                         }
                         SettingsAction::InstallRecommendedIntegrations => {
                             self.install_recommended_integrations()
@@ -717,6 +776,7 @@ impl AppState {
                 cwd,
                 self.pane_scrollback_limit_bytes,
                 self.host_terminal_theme,
+                self.host_terminal_appearance,
                 crate::pane::PaneShellConfig::new(&self.default_shell, self.shell_mode),
                 Vec::new(),
             ) {

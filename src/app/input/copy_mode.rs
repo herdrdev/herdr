@@ -18,7 +18,7 @@ impl App {
         self.state.update_dismissed = true;
         // Esc keeps its copy-mode meaning (clear search, clear selection, exit)
         // even when it is also the prefix key.
-        if self.state.is_prefix_key(key) && key.code != KeyCode::Esc {
+        if self.state.is_prefix_key(&key) && key.code != KeyCode::Esc {
             self.state.enter_navigate_mode();
             return;
         }
@@ -82,7 +82,7 @@ impl AppState {
         terminal_runtimes: &TerminalRuntimeRegistry,
         key: TerminalKey,
     ) {
-        if self.handle_copy_mode_search_prompt_key(terminal_runtimes, key) {
+        if self.handle_copy_mode_search_prompt_key(terminal_runtimes, key.clone()) {
             return;
         }
         match key.code {

@@ -412,10 +412,13 @@ fn pane_read_defaults_to_text_format() {
     "#;
 
     let request: Request = serde_json::from_str(json).unwrap();
+    let serialized = serde_json::to_value(&request).unwrap();
+    assert!(serialized["params"].get("intent").is_none());
     let Method::PaneRead(params) = request.method else {
         panic!("wrong method parsed");
     };
     assert_eq!(params.format, ReadFormat::Text);
+    assert_eq!(params.intent, ReadIntent::Interactive);
 }
 
 #[test]

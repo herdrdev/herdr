@@ -22,6 +22,7 @@ jobs:
             const author = issue.user.login;
             const sender = context.payload.sender?.login ?? author;
             const bugConfirmationPattern = /^\s*-\s*\[[xX]\]\s*I confirm this is a reproducible bug, not a feature request, idea, question, contribution proposal, or direction check\.\s*$/m;
+            const reproductionConfirmationPattern = /^\s*-\s*\[[xX]\]\s*I reproduced this bug on the version and environment reported below using the exact steps provided\.\s*$/m;
             const requiredSections = [
               '### Is this a reproducible bug?',
               '### Current behavior',
@@ -30,24 +31,8 @@ jobs:
               '### Impact',
               '### Environment',
             ];
-            const requiredEnvironmentFields = [
-              {
-                label: 'herdr version',
-                pattern: /^\s*(?:-\s*)?Herdr version:[^\S\r\n]*\S.*$/im,
-              },
-              {
-                label: 'update channel',
-                pattern: /^\s*(?:-\s*)?(?:Update channel(?: \([^)]+\))?|Channel):[^\S\r\n]*\S.*$/im,
-              },
-              {
-                label: 'operating system',
-                pattern: /^\s*(?:-\s*)?(?:Operating system|OS):[^\S\r\n]*\S.*$/im,
-              },
-              {
-                label: 'terminal',
-                pattern: /^\s*(?:-\s*)?Terminal:[^\S\r\n]*\S.*$/im,
-              },
-            ];
+            const maxBodyLength = 8000;
+            const maxExtraHeadings = 1;
 
             function escapeRegExp(value) {
               return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -77,6 +62,17 @@ jobs:
 
             function hasContent(section) {
               return typeof section === 'string' && section.trim().length > 0;
+            }
+
+            function hasEnvironmentContent(section) {
+              if (!hasContent(section)) {
+                return false;
+              }
+
+              return section.split(/\r?\n/).some((line) => {
+                const value = line.trim();
+                return value.length > 0 && !/^(?:-\s*)?[^:]+:\s*$/.test(value);
+              });
             }
 
             function bodyWithoutFencedCodeBlocks(value) {
@@ -130,12 +126,37 @@ jobs:
               return;
             }
 
-            const hasBugConfirmation = bugConfirmationPattern.test(body);
-            const hasBugTemplate = requiredSections.every((section) => body.includes(section));
+            const hasBugConfirmation = bugConfirmationPattern.test(body) && reproductionConfirmationPattern.test(body);
             const allowedHeadings = new Set(requiredSections);
             const headingBody = bodyWithoutFencedCodeBlocks(body);
             const headings = [...headingBody.matchAll(/^\s{0,3}#{1,6}\s+(.+?)\s*$/gm)].map((match) => match[0].trim());
+            const headingCounts = new Map(
+              requiredSections.map((section) => [
+                section,
+                headings.filter((heading) => heading === section).length,
+              ]),
+            );
+            const hasEveryRequiredHeading = requiredSections.every(
+              (section) => headingCounts.get(section) > 0,
+            );
+            const hasBugTemplate = requiredSections.every(
+              (section) => headingCounts.get(section) === 1,
+            );
+            const repeatedTemplateHeadings = requiredSections.filter(
+              (section) => headingCounts.get(section) > 1,
+            );
             const extraHeadings = headings.filter((heading) => !allowedHeadings.has(heading));
+            const structuralViolations = [];
+            if (repeatedTemplateHeadings.length > 0) {
+              structuralViolations.push('one or more required template headings are repeated');
+            }
+            if (extraHeadings.length > maxExtraHeadings) {
+              structuralViolations.push(`${extraHeadings.length} extra markdown headings were added`);
+            }
+            if (body.length > maxBodyLength) {
+              structuralViolations.push(`the report is ${body.length} characters; the limit is ${maxBodyLength}`);
+            }
+
             const currentBehavior = extractSection(body, '### Current behavior');
             const expectedBehavior = extractSection(body, '### Expected behavior');
             const reproduction = extractSection(body, '### Reproduction');
@@ -147,23 +168,16 @@ jobs:
               reproduction,
               impact,
             ].every(hasContent);
-            const missingEnvironmentFields = hasContent(environment)
-              ? requiredEnvironmentFields
-                .filter((field) => !field.pattern.test(environment))
-                .map((field) => field.label)
-              : requiredEnvironmentFields.map((field) => field.label);
-            const hasEnvironmentFields = missingEnvironmentFields.length === 0;
-            if (hasBugConfirmation && hasBugTemplate && extraHeadings.length > 0) {
+            const hasEnvironment = hasEnvironmentContent(environment);
+
+            if (hasBugConfirmation && hasEveryRequiredHeading && structuralViolations.length > 0) {
               const message = [
                 `hi @${author}, thanks for opening this.`,
                 '',
-                'this issue uses extra markdown headings outside the bug report template.',
+                'this report exceeds the bug report structure limits:',
+                ...structuralViolations.map((violation) => `- ${violation}`),
                 '',
-                'please use the exact template sections only. bug reports should describe observed behavior, exact reproduction steps, impact, and environment. extra root-cause analysis, proposed fixes, implementation plans, or generated diagnosis make reports harder to triage.',
-                ...(hasEnvironmentFields ? [] : [
-                  '',
-                  `this report is also missing required environment details: ${missingEnvironmentFields.join(', ')}.`,
-                ]),
+                'please keep the report within the required template, under 8,000 characters, and focused on observed behavior, exact reproduction, impact, and environment.',
                 '',
                 'closing this so the issue tracker stays limited to concise, actionable bug reports.',
               ].join('\n');
@@ -185,16 +199,16 @@ jobs:
               return;
             }
 
-            if (hasBugConfirmation && hasBugTemplate && hasRequiredContent && hasEnvironmentFields) {
+            if (hasBugConfirmation && hasBugTemplate && hasRequiredContent && hasEnvironment) {
               console.log(`#${issue.number} matches the bug report template`);
               return;
             }
 
-            if (hasBugConfirmation && hasBugTemplate && hasRequiredContent && !hasEnvironmentFields) {
+            if (hasBugConfirmation && hasBugTemplate && hasRequiredContent && !hasEnvironment) {
               const message = [
                 `hi @${author}, thanks for opening this.`,
                 '',
-                `this bug report is missing required environment details: ${missingEnvironmentFields.join(', ')}. please edit the issue and fill in the missing fields.`,
+                'this bug report has no filled environment details. please edit the environment section with the Herdr version, update channel, operating system, and terminal.',
                 '',
                 'shell and relevant config are optional, but they help when they affect the bug.',
               ].join('\n');
@@ -206,7 +220,7 @@ jobs:
                 body: message,
               });
 
-              console.log(`#${issue.number} is missing required environment details; leaving issue open for correction`);
+              console.log(`#${issue.number} has no environment details; leaving issue open for correction`);
               return;
             }
 

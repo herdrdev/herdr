@@ -82,4 +82,4 @@ This gives integrations a supported way to make panes more readable while keepin
 
 This page highlights the product changes. The complete release notes remain on GitHub.
 
-[Open the 0.6.3 GitHub release](https://github.com/ogulcancelik/herdr/releases/tag/v0.6.3).
+[Open the 0.6.3 GitHub release](https://github.com/herdrdev/herdr/releases/tag/v0.6.3).

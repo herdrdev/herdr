@@ -53,6 +53,12 @@
           "description": "Override the panel_bg color token on top of the base theme. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
         },
         {
+          "key": "theme.custom.sidebar_bg",
+          "type": "color",
+          "default": "unset",
+          "description": "Set the desktop sidebar background without changing other panel surfaces. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        },
+        {
           "key": "theme.custom.surface0",
           "type": "color",
           "default": "unset",
@@ -659,6 +665,12 @@
           "description": "Draw borders around split panes."
         },
         {
+          "key": "ui.pane_scrollbars",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw interactive scrollbars beside terminal panes. Disable to reclaim the scrollbar column and keep it out of terminal-native selections."
+        },
+        {
           "key": "ui.pane_gaps",
           "type": "boolean",
           "default": "true",
@@ -677,6 +689,16 @@
           "description": "Hide the tab row when the workspace has one tab."
         },
         {
+          "key": "ui.tab_bar_position",
+          "type": "enum",
+          "default": "\"top\"",
+          "description": "Place the desktop tab row above or below the terminal panes.",
+          "values": [
+            "top",
+            "bottom"
+          ]
+        },
+        {
           "key": "ui.agent_panel_sort",
           "type": "enum",
           "default": "\"spaces\"",
@@ -684,6 +706,16 @@
           "values": [
             "spaces",
             "priority"
+          ]
+        },
+        {
+          "key": "ui.status_indicators",
+          "type": "enum",
+          "default": "\"dots\"",
+          "description": "Choose compact color dots or distinct static symbols for agent states.",
+          "values": [
+            "dots",
+            "symbols"
           ]
         },
         {
@@ -708,7 +740,7 @@
           "key": "ui.sidebar.spaces.row_gap",
           "type": "integer",
           "default": "0",
-          "description": "Blank terminal rows between expanded Space sidebar entries. Set to 1 to restore the previous spacing. Consecutive indented worktree children remain packed as one group."
+          "description": "Blank terminal rows between worktree groups and unrelated top-level Spaces. Worktree parents and their indented children remain packed."
         },
         {
           "key": "ui.sidebar.spaces.rows",

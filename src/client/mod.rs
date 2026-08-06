@@ -16,7 +16,7 @@ mod input;
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write as _};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -37,7 +37,6 @@ use tracing::{debug, info, warn};
 
 use crate::ipc::LocalStream;
 use crate::protocol::render_ansi;
-#[cfg(unix)]
 use crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD;
 use crate::protocol::{
     self, AttachScrollDirection, AttachScrollSource, ClientKeybindings, ClientLaunchMode,
@@ -59,7 +58,6 @@ struct ClientLoopConfig {
     host_cursor: crate::config::HostCursorModeConfig,
     kitty_graphics_enabled: bool,
     mouse_capture_active: bool,
-    #[cfg(unix)]
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
 }
 
@@ -83,7 +81,6 @@ struct ClientState {
     #[cfg(unix)]
     mouse_scroll_lines: usize,
     /// Local-client shortcut that sends a clipboard image to a remote Herdr session.
-    #[cfg(unix)]
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     /// Whether outer focus gain should force a full host-terminal redraw.
     redraw_on_focus_gained: bool,
@@ -676,7 +673,6 @@ fn requested_render_encoding() -> RenderEncoding {
     }
 }
 
-#[cfg(unix)]
 fn is_remote_client_process() -> bool {
     std::env::var(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR).is_ok()
 }
@@ -689,11 +685,9 @@ fn is_remote_client_process() -> bool {
 /// window; on a high-latency link that easily exceeds 5s, so it gets a far
 /// larger budget. See issue #753.
 const LOCAL_HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(unix)]
 const REMOTE_HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn handshake_read_timeout() -> Duration {
-    #[cfg(unix)]
     if is_remote_client_process() {
         return REMOTE_HANDSHAKE_READ_TIMEOUT;
     }
@@ -1135,7 +1129,6 @@ fn run_client_with_mode(
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
     let direct_attach_requested = attach_request.is_some();
-    #[cfg(unix)]
     let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
     let kitty_graphics_enabled =
         loaded_config.config.experimental.kitty_graphics && !direct_attach_requested;
@@ -1146,7 +1139,6 @@ fn run_client_with_mode(
         host_cursor,
         kitty_graphics_enabled,
         mouse_capture_active: mouse_capture,
-        #[cfg(unix)]
         remote_image_paste_key,
     };
 
@@ -1167,7 +1159,7 @@ fn run_client_with_mode(
 
     // Get the terminal geometry before handshake (before raw mode).
     let (cols, rows, cell_width_px, cell_height_px) =
-        current_terminal_geometry(kitty_graphics_enabled);
+        initial_terminal_geometry(kitty_graphics_enabled);
 
     // Perform handshake while the stream is still in blocking mode.
     let negotiated_encoding = match do_handshake(
@@ -1236,17 +1228,22 @@ fn run_client_with_mode(
 
     let should_quit = Arc::new(AtomicBool::new(false));
 
-    // Install Ctrl+C handler.
+    // ctrlc's "termination" feature also catches SIGTERM/SIGHUP so direct
+    // termination signals still run the quit path and TerminalGuard::Drop.
     let quit_flag = should_quit.clone();
-    let _ = ctrlc::set_handler(move || {
+    if let Err(err) = ctrlc::set_handler(move || {
         quit_flag.store(true, Ordering::Release);
-    });
+    }) {
+        warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
+    }
 
     let result = rt.block_on(async {
         run_client_loop(
             stream,
             cols,
             rows,
+            cell_width_px,
+            cell_height_px,
             should_quit,
             loop_config,
             negotiated_encoding,
@@ -1291,6 +1288,8 @@ async fn run_client_loop(
     stream: LocalStream,
     cols: u16,
     rows: u16,
+    initial_cell_width_px: u32,
+    initial_cell_height_px: u32,
     should_quit: Arc<AtomicBool>,
     config: ClientLoopConfig,
     negotiated_encoding: RenderEncoding,
@@ -1299,7 +1298,6 @@ async fn run_client_loop(
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
-    #[cfg(unix)]
     let is_remote_client = is_remote_client_process();
 
     let mut state = ClientState {
@@ -1312,7 +1310,6 @@ async fn run_client_loop(
         attach_escape,
         #[cfg(unix)]
         mouse_scroll_lines: config.mouse_scroll_lines,
-        #[cfg(unix)]
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
@@ -1320,6 +1317,9 @@ async fn run_client_loop(
     };
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
+    // Cell size reported by the host terminal, packed as width<<32 | height.
+    // Zero means the host has not reported one.
+    let reported_cell_size = Arc::new(AtomicU64::new(0));
 
     // Channel for events from the stdin, resize, and server reader threads.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
@@ -1327,6 +1327,10 @@ async fn run_client_loop(
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme =
         state.attach_escape.is_none() && should_query_host_terminal_theme();
+    // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
+    // host terminal directly instead of falling back to an assumed cell size.
+    let will_query_host_cell_size = state.attach_escape.is_none()
+        && host_cell_size_query_required(state.kitty_graphics_enabled);
     let stdin_quit = should_quit.clone();
     let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
@@ -1335,6 +1339,7 @@ async fn run_client_loop(
             stdin_tx,
             &stdin_quit,
             will_query_host_terminal_theme,
+            will_query_host_cell_size,
             stdin_mouse_capture_active,
         );
     });
@@ -1343,12 +1348,26 @@ async fn run_client_loop(
         query_host_terminal_theme();
     }
 
+    if will_query_host_cell_size {
+        query_host_cell_size();
+    }
+
     // Spawn the resize poller thread.
     let resize_quit = should_quit.clone();
     let resize_tx = event_tx.clone();
+    let resize_cell_size = reported_cell_size.clone();
     let kitty_graphics_enabled = state.kitty_graphics_enabled;
     std::thread::spawn(move || {
-        resize_poll_loop(resize_tx, cols, rows, kitty_graphics_enabled, &resize_quit);
+        resize_poll_loop(
+            resize_tx,
+            cols,
+            rows,
+            initial_cell_width_px,
+            initial_cell_height_px,
+            kitty_graphics_enabled,
+            &resize_cell_size,
+            &resize_quit,
+        );
     });
 
     // Spawn the server reader thread (blocking reads from the socket).
@@ -1437,6 +1456,9 @@ async fn run_client_loop(
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
                         query_host_terminal_theme();
                     }
+                    if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
+                        store_reported_cell_size(&reported_cell_size, width_px, height_px);
+                    }
                     data
                 };
                 if should_bridge_clipboard_image_paste(
@@ -1445,26 +1467,7 @@ async fn run_client_loop(
                     state.remote_image_paste_key,
                 ) {
                     if let Some(image) = crate::platform::read_clipboard_image() {
-                        if image.bytes.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD {
-                            warn!(
-                                bytes = image.bytes.len(),
-                                max = MAX_CLIPBOARD_IMAGE_PAYLOAD,
-                                "local clipboard image is too large to bridge"
-                            );
-                            continue;
-                        }
-                        info!(
-                            bytes = image.bytes.len(),
-                            extension = image.extension,
-                            "bridging local clipboard image paste to remote server"
-                        );
-                        let msg = ClientMessage::ClipboardImage {
-                            extension: image.extension.to_owned(),
-                            data: image.bytes,
-                        };
-                        if let Err(e) = write_to_server(&mut write_stream, &msg) {
-                            return Err(ClientError::ConnectionLost(e));
-                        }
+                        write_remote_image_to_server(&mut write_stream, image, "clipboard paste")?;
                         continue;
                     }
                     info!(
@@ -1472,18 +1475,7 @@ async fn run_client_loop(
                     );
                 }
                 if let Some(image) = read_image_file_from_terminal_drop(&data, is_remote_client) {
-                    info!(
-                        bytes = image.bytes.len(),
-                        extension = image.extension,
-                        "bridging local image file drop to remote server"
-                    );
-                    let msg = ClientMessage::ClipboardImage {
-                        extension: image.extension.to_owned(),
-                        data: image.bytes,
-                    };
-                    if let Err(e) = write_to_server(&mut write_stream, &msg) {
-                        return Err(ClientError::ConnectionLost(e));
-                    }
+                    write_remote_image_to_server(&mut write_stream, image, "file drop")?;
                     continue;
                 }
                 let msg = ClientMessage::Input { data };
@@ -1494,6 +1486,23 @@ async fn run_client_loop(
             #[cfg(windows)]
             ClientLoopEvent::StdinEvents(events) => {
                 if state.attach_escape.is_some() {
+                    continue;
+                }
+                if should_bridge_clipboard_image_events(
+                    &events,
+                    is_remote_client,
+                    state.remote_image_paste_key,
+                ) {
+                    if let Some(image) = crate::platform::read_clipboard_image() {
+                        write_remote_image_to_server(&mut write_stream, image, "clipboard paste")?;
+                        continue;
+                    }
+                    info!(
+                        "clipboard image paste trigger received, but local clipboard has no image"
+                    );
+                }
+                if let Some(image) = read_image_file_from_client_events(&events, is_remote_client) {
+                    write_remote_image_to_server(&mut write_stream, image, "file drop")?;
                     continue;
                 }
                 let raw_events = events
@@ -1593,7 +1602,6 @@ async fn run_client_loop(
                         &mut state.sound_config,
                         &mut state.redraw_on_focus_gained,
                         &mut state.draw_host_cursor,
-                        #[cfg(unix)]
                         &mut state.remote_image_paste_key,
                     );
                 }
@@ -1712,11 +1720,41 @@ fn write_to_server(stream: &mut LocalStream, msg: &ClientMessage) -> io::Result<
     protocol::write_message(stream, msg).map_err(|e| io::Error::other(e.to_string()))
 }
 
+fn write_remote_image_to_server(
+    stream: &mut LocalStream,
+    image: crate::platform::ClipboardImage,
+    source: &'static str,
+) -> Result<(), ClientError> {
+    if image.bytes.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD {
+        warn!(
+            bytes = image.bytes.len(),
+            max = MAX_CLIPBOARD_IMAGE_PAYLOAD,
+            source,
+            "local image is too large to bridge"
+        );
+        return Ok(());
+    }
+
+    info!(
+        bytes = image.bytes.len(),
+        extension = image.extension,
+        source,
+        "bridging local image to remote server"
+    );
+    write_to_server(
+        stream,
+        &ClientMessage::ClipboardImage {
+            extension: image.extension.to_owned(),
+            data: image.bytes,
+        },
+    )
+    .map_err(ClientError::ConnectionLost)
+}
+
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 
-#[cfg(unix)]
 fn client_remote_image_paste_key(
     config: &crate::config::Config,
 ) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
@@ -1737,7 +1775,7 @@ fn reload_local_client_config(
     sound_config: &mut crate::config::SoundConfig,
     redraw_on_focus_gained: &mut bool,
     draw_host_cursor: &mut bool,
-    #[cfg(unix)] remote_image_paste_key: &mut Option<(
+    remote_image_paste_key: &mut Option<(
         crossterm::event::KeyCode,
         crossterm::event::KeyModifiers,
     )>,
@@ -1747,15 +1785,11 @@ fn reload_local_client_config(
             for diagnostic in loaded.config.ui.sound.diagnostics() {
                 warn!(diagnostic = %diagnostic, "local sound config diagnostic");
             }
-            #[cfg(unix)]
             let loaded_remote_image_paste_key = client_remote_image_paste_key(&loaded.config);
             *sound_config = loaded.config.ui.sound;
             *redraw_on_focus_gained = loaded.config.ui.redraw_on_focus_gained;
             *draw_host_cursor = should_draw_host_cursor(loaded.config.ui.host_cursor);
-            #[cfg(unix)]
-            {
-                *remote_image_paste_key = loaded_remote_image_paste_key;
-            }
+            *remote_image_paste_key = loaded_remote_image_paste_key;
             debug!("reloaded local client config");
         }
         Err(diagnostics) => {
@@ -1849,7 +1883,41 @@ fn should_bridge_clipboard_image_paste(
         events.as_slice(),
         [crate::raw_input::RawInputEvent::Key(key)]
             if key.kind == crossterm::event::KeyEventKind::Press
-                && crate::config::terminal_key_matches_combo(*key, remote_image_paste_key)
+                && crate::config::terminal_key_matches_combo(key, remote_image_paste_key)
+    )
+}
+
+#[cfg(any(windows, test))]
+fn should_bridge_clipboard_image_events(
+    events: &[crate::protocol::ClientInputEvent],
+    is_remote_client: bool,
+    remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
+) -> bool {
+    if !is_remote_client {
+        return false;
+    }
+    if matches!(
+        events,
+        [crate::protocol::ClientInputEvent::Paste { text }] if text.is_empty()
+    ) {
+        return true;
+    }
+
+    let Some(remote_image_paste_key) = remote_image_paste_key else {
+        return false;
+    };
+    matches!(
+        events,
+        [event]
+            if matches!(
+                event.to_raw_input_event(),
+                crate::raw_input::RawInputEvent::Key(key)
+                    if key.kind == crossterm::event::KeyEventKind::Press
+                        && crate::config::terminal_key_matches_combo(
+                            &key,
+                            remote_image_paste_key,
+                        )
+            )
     )
 }
 
@@ -1859,6 +1927,28 @@ fn read_image_file_from_terminal_drop(
     is_remote_client: bool,
 ) -> Option<crate::platform::ClipboardImage> {
     let (path, extension) = image_path_from_terminal_drop(data, is_remote_client)?;
+    read_image_file(path, extension)
+}
+
+#[cfg(any(windows, test))]
+fn read_image_file_from_client_events(
+    events: &[crate::protocol::ClientInputEvent],
+    is_remote_client: bool,
+) -> Option<crate::platform::ClipboardImage> {
+    let [crate::protocol::ClientInputEvent::Paste { text }] = events else {
+        return None;
+    };
+    let text = normalized_terminal_drop_text(text)?;
+    // Windows events already carry native paths; Unix backslash unescaping would corrupt them.
+    let (path, extension) =
+        image_path_from_drop_text(strip_matching_path_quotes(text), is_remote_client)?;
+    read_image_file(path, extension)
+}
+
+fn read_image_file(
+    path: std::path::PathBuf,
+    extension: &'static str,
+) -> Option<crate::platform::ClipboardImage> {
     let metadata = std::fs::metadata(&path).ok()?;
     if !metadata.is_file() {
         return None;
@@ -1886,23 +1976,29 @@ fn image_path_from_terminal_drop(
     data: &[u8],
     is_remote_client: bool,
 ) -> Option<(std::path::PathBuf, &'static str)> {
+    let bytes = bracketed_paste_payload(data).unwrap_or(data);
+    let text = std::str::from_utf8(bytes).ok()?;
+    let text = normalized_terminal_drop_text(text)?;
+    let text = unescape_terminal_drop_path(strip_matching_path_quotes(text));
+    image_path_from_drop_text(&text, is_remote_client)
+}
+
+fn normalized_terminal_drop_text(text: &str) -> Option<&str> {
+    let text = text.trim_end_matches(['\r', '\n']);
+    (!text.is_empty() && !text.contains(['\r', '\n'])).then_some(text)
+}
+
+fn image_path_from_drop_text(
+    text: &str,
+    is_remote_client: bool,
+) -> Option<(std::path::PathBuf, &'static str)> {
     if !is_remote_client {
         return None;
     }
-
-    let bytes = bracketed_paste_payload(data).unwrap_or(data);
-    let text = std::str::from_utf8(bytes).ok()?;
-    let text = text.trim_end_matches(['\r', '\n']);
-    if text.is_empty() || text.contains(['\r', '\n']) {
-        return None;
-    }
-
-    let text = unescape_terminal_drop_path(strip_matching_path_quotes(text));
     let path = std::path::PathBuf::from(text);
     if !path.is_absolute() {
         return None;
     }
-
     let extension = recognized_image_extension(path.extension()?.to_str()?)?;
     Some((path, extension))
 }
@@ -1914,7 +2010,6 @@ fn bracketed_paste_payload(data: &[u8]) -> Option<&[u8]> {
     data.strip_prefix(START)?.strip_suffix(END)
 }
 
-#[cfg(unix)]
 fn strip_matching_path_quotes(text: &str) -> &str {
     if text.len() < 2 {
         return text;
@@ -1945,7 +2040,6 @@ fn unescape_terminal_drop_path(text: &str) -> String {
     unescaped
 }
 
-#[cfg(unix)]
 fn recognized_image_extension(extension: &str) -> Option<&'static str> {
     if extension.eq_ignore_ascii_case("png") {
         Some("png")
@@ -2093,23 +2187,56 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // Resize polling
 // ---------------------------------------------------------------------------
 
-fn current_terminal_geometry(kitty_graphics_enabled: bool) -> (u16, u16, u32, u32) {
+/// Cell size assumed when neither the terminal size ioctl nor the host
+/// terminal reports pixel dimensions.
+const DEFAULT_CELL_WIDTH_PX: u32 = 8;
+const DEFAULT_CELL_HEIGHT_PX: u32 = 16;
+
+/// Cell size derived from the terminal size ioctl, if it reports pixels.
+fn ioctl_cell_size() -> Option<(u32, u32)> {
+    let size = crossterm::terminal::window_size().ok()?;
+    if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
+        return None;
+    }
+    Some((
+        (size.width as u32 / size.columns as u32).max(1),
+        (size.height as u32 / size.rows as u32).max(1),
+    ))
+}
+
+/// Cell size used when the ioctl reports no pixels.
+fn cell_size_fallback(reported: u64) -> (u32, u32) {
+    unpack_cell_size(reported).unwrap_or((DEFAULT_CELL_WIDTH_PX, DEFAULT_CELL_HEIGHT_PX))
+}
+
+#[cfg(any(unix, test))]
+fn pack_cell_size(width_px: u32, height_px: u32) -> u64 {
+    (u64::from(width_px) << 32) | u64::from(height_px)
+}
+
+fn unpack_cell_size(packed: u64) -> Option<(u32, u32)> {
+    let width_px = (packed >> 32) as u32;
+    let height_px = (packed & u64::from(u32::MAX)) as u32;
+    (width_px > 0 && height_px > 0).then_some((width_px, height_px))
+}
+
+fn current_terminal_geometry(
+    kitty_graphics_enabled: bool,
+    reported_cell_size: &AtomicU64,
+) -> (u16, u16, u32, u32) {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     if !kitty_graphics_enabled {
         return (cols, rows, 0, 0);
     }
-    let Ok(size) = crossterm::terminal::window_size() else {
-        return (cols, rows, 8, 16);
-    };
-    if size.columns == 0 || size.rows == 0 || size.width == 0 || size.height == 0 {
-        return (cols, rows, 8, 16);
-    }
-    (
-        cols,
-        rows,
-        (size.width as u32 / size.columns as u32).max(1),
-        (size.height as u32 / size.rows as u32).max(1),
-    )
+    let (cell_width_px, cell_height_px) = ioctl_cell_size()
+        .unwrap_or_else(|| cell_size_fallback(reported_cell_size.load(Ordering::Acquire)));
+    (cols, rows, cell_width_px, cell_height_px)
+}
+
+/// Reads the terminal geometry before the handshake, before any host cell
+/// size report can exist.
+fn initial_terminal_geometry(kitty_graphics_enabled: bool) -> (u16, u16, u32, u32) {
+    current_terminal_geometry(kitty_graphics_enabled, &AtomicU64::new(0))
 }
 
 /// Reports polled changes and signalled resizes that return to the same size.
@@ -2122,16 +2249,21 @@ fn resize_report_required(
 }
 
 /// Watches the terminal size and sends resize events when it changes.
+///
+/// The baseline cell size must match what the handshake sent to the server:
+/// reading a fresh one here would race the host cell size reply and could
+/// swallow the first change.
 fn resize_poll_loop(
     resize_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
     initial_cols: u16,
     initial_rows: u16,
+    initial_cell_width: u32,
+    initial_cell_height: u32,
     kitty_graphics_enabled: bool,
+    reported_cell_size: &AtomicU64,
     should_quit: &Arc<AtomicBool>,
 ) {
     crate::platform::watch_terminal_resize_signal();
-    let (_, _, initial_cell_width, initial_cell_height) =
-        current_terminal_geometry(kitty_graphics_enabled);
     let mut last_size = (
         initial_cols,
         initial_rows,
@@ -2141,7 +2273,7 @@ fn resize_poll_loop(
     while !should_quit.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(100));
         let signalled = crate::platform::take_terminal_resize_signal();
-        let new_size = current_terminal_geometry(kitty_graphics_enabled);
+        let new_size = current_terminal_geometry(kitty_graphics_enabled, reported_cell_size);
         if resize_report_required(signalled, new_size, last_size) {
             last_size = new_size;
             if resize_tx
@@ -2173,6 +2305,49 @@ fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()>
     let query = crate::terminal_theme::host_terminal_theme_query_sequence();
     writer.write_all(query.as_bytes())?;
     writer.flush()
+}
+
+/// XTWINOPS request for the host terminal cell size in pixels.
+const HOST_CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
+
+fn query_host_cell_size() {
+    let _ = write_host_cell_size_query(io::stdout());
+}
+
+fn should_query_host_cell_size() -> bool {
+    !cfg!(windows)
+}
+
+/// Only pane graphics need pixel dimensions, and only when the ioctl cannot
+/// provide them.
+fn host_cell_size_query_required(kitty_graphics_enabled: bool) -> bool {
+    kitty_graphics_enabled && should_query_host_cell_size() && ioctl_cell_size().is_none()
+}
+
+fn write_host_cell_size_query(mut writer: impl io::Write) -> io::Result<()> {
+    writer.write_all(HOST_CELL_SIZE_QUERY)?;
+    writer.flush()
+}
+
+#[cfg(any(unix, test))]
+fn store_reported_cell_size(reported_cell_size: &AtomicU64, width_px: u32, height_px: u32) {
+    let packed = pack_cell_size(width_px, height_px);
+    if reported_cell_size.swap(packed, Ordering::AcqRel) != packed {
+        debug!(width_px, height_px, "host terminal reported cell size");
+    }
+}
+
+#[cfg(any(unix, test))]
+fn reported_cell_size_from_events(
+    events: &[crate::raw_input::RawInputEvent],
+) -> Option<(u32, u32)> {
+    events.iter().rev().find_map(|event| match event {
+        crate::raw_input::RawInputEvent::HostCellSizeReport {
+            width_px,
+            height_px,
+        } => Some((*width_px, *height_px)),
+        _ => None,
+    })
 }
 
 fn init_logging() {
@@ -2262,6 +2437,14 @@ mod tests {
     }
 
     #[test]
+    fn remote_client_uses_extended_handshake_timeout() {
+        let _guard = env_lock().lock().unwrap();
+        let _remote = EnvVarGuard::set(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR, "local");
+
+        assert_eq!(handshake_read_timeout(), REMOTE_HANDSHAKE_READ_TIMEOUT);
+    }
+
+    #[test]
     fn host_cursor_policy_auto_uses_platform_default() {
         assert_eq!(
             should_draw_host_cursor(crate::config::HostCursorModeConfig::Auto),
@@ -2319,12 +2502,10 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     struct TempImageFile {
         path: std::path::PathBuf,
     }
 
-    #[cfg(unix)]
     impl TempImageFile {
         fn new(extension: &str, bytes: &[u8]) -> Self {
             Self::with_name_fragment("test", extension, bytes)
@@ -2344,11 +2525,62 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for TempImageFile {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+
+    #[test]
+    fn clipboard_image_event_bridge_matches_remote_key_and_empty_paste() {
+        let ctrl_v = crate::config::parse_key_combo("ctrl+v").unwrap();
+        let key = crate::protocol::ClientInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('v'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
+            kind: crate::protocol::ClientKeyKind::Press,
+            repeat_count: 1,
+            generated_text: None,
+            source: crate::protocol::ClientKeySource::Synthesized,
+        };
+        let empty_paste = crate::protocol::ClientInputEvent::Paste {
+            text: String::new(),
+        };
+
+        assert!(should_bridge_clipboard_image_events(
+            std::slice::from_ref(&key),
+            true,
+            Some(ctrl_v),
+        ));
+        assert!(should_bridge_clipboard_image_events(
+            std::slice::from_ref(&empty_paste),
+            true,
+            None,
+        ));
+        assert!(!should_bridge_clipboard_image_events(
+            &[key],
+            false,
+            Some(ctrl_v),
+        ));
+        assert!(!should_bridge_clipboard_image_events(
+            &[crate::protocol::ClientInputEvent::Paste {
+                text: "text".to_string(),
+            }],
+            true,
+            Some(ctrl_v),
+        ));
+    }
+
+    #[test]
+    fn remote_image_file_drop_bridge_reads_semantic_paste_path() {
+        let file = TempImageFile::new("PNG", b"image-bytes");
+        let events = [crate::protocol::ClientInputEvent::Paste {
+            text: format!("\"{}\"", file.path.display()),
+        }];
+
+        let image = read_image_file_from_client_events(&events, true).unwrap();
+
+        assert_eq!(image.extension, "png");
+        assert_eq!(image.bytes, b"image-bytes");
     }
 
     #[cfg(unix)]
@@ -2489,6 +2721,36 @@ mod tests {
     #[test]
     fn host_terminal_theme_query_is_disabled_on_windows() {
         assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
+    }
+
+    #[test]
+    fn write_host_cell_size_query_emits_xtwinops_request() {
+        let mut output = Vec::new();
+        write_host_cell_size_query(&mut output).unwrap();
+
+        assert_eq!(output, b"\x1b[16t");
+    }
+
+    #[test]
+    fn host_cell_size_query_is_disabled_on_windows() {
+        assert_eq!(should_query_host_cell_size(), !cfg!(windows));
+    }
+
+    #[test]
+    fn cell_size_fallback_prefers_reported_size_over_default() {
+        assert_eq!(cell_size_fallback(0), (8, 16));
+        assert_eq!(cell_size_fallback(pack_cell_size(10, 21)), (10, 21));
+        assert_eq!(cell_size_fallback(pack_cell_size(10, 0)), (8, 16));
+        assert_eq!(cell_size_fallback(pack_cell_size(0, 21)), (8, 16));
+    }
+
+    #[test]
+    fn reported_cell_size_is_taken_from_host_cell_size_events() {
+        let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
+        assert_eq!(reported_cell_size_from_events(&events), None);
+
+        let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[6;21;10t\x1b[6;18;9t");
+        assert_eq!(reported_cell_size_from_events(&events), Some((9, 18)));
     }
 
     #[test]
@@ -2831,14 +3093,12 @@ mod tests {
         let mut sound_config = crate::config::SoundConfig::default();
         let mut redraw_on_focus_gained = true;
         let mut draw_host_cursor = false;
-        #[cfg(unix)]
         let mut remote_image_paste_key = None;
 
         reload_local_client_config(
             &mut sound_config,
             &mut redraw_on_focus_gained,
             &mut draw_host_cursor,
-            #[cfg(unix)]
             &mut remote_image_paste_key,
         );
 

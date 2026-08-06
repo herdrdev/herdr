@@ -40,13 +40,11 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     let code = kitty_codepoint_to_keycode(codepoint)?;
     let kind = parse_kitty_event_type(event_type)?;
 
-    Some(TerminalKey {
-        code,
-        modifiers: key_modifiers_from_u8(modifier),
-        kind,
-        shifted_codepoint,
-        is_text_commit: false,
-    })
+    let mut key = TerminalKey::new(code, key_modifiers_from_u8(modifier)).with_kind(kind);
+    if let Some(shifted_codepoint) = shifted_codepoint {
+        key = key.with_shifted_codepoint(shifted_codepoint);
+    }
+    Some(key)
 }
 
 #[allow(dead_code)] // Reserved for the upcoming raw stdin parser.
@@ -121,7 +119,7 @@ fn parse_legacy_ctrl_char(ch: char) -> Option<TerminalKey> {
         28 => Some(TerminalKey::new(KeyCode::Char('\\'), KeyModifiers::CONTROL)),
         29 => Some(TerminalKey::new(KeyCode::Char(']'), KeyModifiers::CONTROL)),
         30 => Some(TerminalKey::new(KeyCode::Char('^'), KeyModifiers::CONTROL)),
-        31 => Some(TerminalKey::new(KeyCode::Char('-'), KeyModifiers::CONTROL)),
+        31 => Some(TerminalKey::new(KeyCode::Char('_'), KeyModifiers::CONTROL)),
         _ => None,
     }
 }
@@ -533,7 +531,7 @@ mod tests {
     fn parse_legacy_alt_shift_letter_preserves_shift() {
         let key = parse_terminal_key_sequence("\x1bA").expect("alt-shift letter should parse");
         assert_terminal_key_eq(
-            key,
+            key.clone(),
             KeyCode::Char('A'),
             KeyModifiers::ALT | KeyModifiers::SHIFT,
             crossterm::event::KeyEventKind::Press,
@@ -620,7 +618,7 @@ mod tests {
     fn parse_kitty_sequence_with_associated_emoji_text() {
         let key = parse_terminal_key_sequence("\x1b[128512;1;128512u").unwrap();
         assert_terminal_key_eq(
-            key,
+            key.clone(),
             KeyCode::Char('😀'),
             KeyModifiers::empty(),
             crossterm::event::KeyEventKind::Press,
@@ -794,7 +792,7 @@ mod tests {
             (b'\x1c', '\\'),
             (b'\x1d', ']'),
             (b'\x1e', '^'),
-            (b'\x1f', '-'),
+            (b'\x1f', '_'),
         ] {
             let key = parse_terminal_key_sequence(std::str::from_utf8(&[byte]).unwrap()).unwrap();
             assert_terminal_key_eq(

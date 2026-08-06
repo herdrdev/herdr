@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use super::App;
 
 impl App {
@@ -52,6 +50,7 @@ impl App {
         }
         self.state.host_terminal_appearance = Some(appearance);
         self.state.host_terminal_appearance_explicit = explicit;
+        self.apply_host_terminal_appearance_to_panes();
         self.refresh_effective_app_theme()
     }
 
@@ -67,6 +66,7 @@ impl App {
         }
         self.state.host_terminal_appearance = appearance;
         self.state.host_terminal_appearance_explicit = explicit;
+        self.apply_host_terminal_appearance_to_panes();
         self.refresh_effective_app_theme()
     }
 
@@ -92,9 +92,15 @@ impl App {
         }
         self.state.theme_name = theme_name;
         self.state.palette = palette;
-        self.render_dirty.store(true, Ordering::Release);
+        self.render_dirty.request_generic();
         self.render_notify.notify_one();
         true
+    }
+
+    fn apply_host_terminal_appearance_to_panes(&self) {
+        for runtime in self.terminal_runtimes.values() {
+            runtime.apply_host_terminal_appearance(self.state.host_terminal_appearance);
+        }
     }
 
     fn apply_host_terminal_theme_to_panes(&self) {
@@ -102,7 +108,7 @@ impl App {
             runtime.apply_host_terminal_theme(self.state.host_terminal_theme);
         }
 
-        self.render_dirty.store(true, Ordering::Release);
+        self.render_dirty.request_generic();
         self.render_notify.notify_one();
     }
 }

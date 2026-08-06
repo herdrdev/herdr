@@ -258,6 +258,9 @@ pub struct PaneReadParams {
     pub format: ReadFormat,
     #[serde(default = "super::default_true")]
     pub strip_ansi: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) intent: super::common::ReadIntent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

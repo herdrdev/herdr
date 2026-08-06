@@ -143,7 +143,10 @@ pub(super) fn read_terminal_snapshot(
     }
 }
 
-fn limit_snapshot_lines(text: String, limit: Option<usize>) -> crate::pane::TerminalReadSnapshot {
+pub(crate) fn limit_snapshot_lines(
+    text: String,
+    limit: Option<usize>,
+) -> crate::pane::TerminalReadSnapshot {
     let Some(limit) = limit else {
         return crate::pane::TerminalReadSnapshot {
             text,

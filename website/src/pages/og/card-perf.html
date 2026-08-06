@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" class="og">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>herdr performance OG card — source</title>
+<meta name="robots" content="noindex" />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/og-card.css?v=3" />
+<style>
+  /* Source of truth for /assets/og-blog-frames-v1.png. Same capture recipe as
+     card-b: open the page, capture the full document, it is already 1200x630.
+
+     A share card is read at thumbnail size in a timeline, so it carries the
+     headline and the one measurement that backs it. The caveats live in the
+     post, where there is room to read them. */
+  .head {
+    position: absolute; left: 62px; right: 62px; top: 48px; z-index: 1;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .head .sub { color: var(--faint); font-size: 21px; letter-spacing: 0.1em; }
+  .head .sub b { color: var(--dim); font-weight: 400; }
+
+  .in { display: flex; flex-direction: column; justify-content: center; padding: 118px 62px 54px; }
+  h1 {
+    font-family: var(--disp); font-weight: 900; letter-spacing: -0.055em;
+    line-height: 0.9; font-size: 96px; margin: 0; color: var(--ink);
+  }
+  h1 em { font-style: normal; color: var(--spot); }
+
+  .meas {
+    display: flex; align-items: baseline; gap: 22px;
+    margin-top: 42px; padding-top: 22px; border-top: 1px solid var(--line2);
+    color: var(--faint); font-size: 22px; letter-spacing: 0.04em;
+  }
+  .meas b { color: var(--ink); font-weight: 400; }
+  .meas .r { margin-left: auto; color: var(--dim); }
+</style>
+</head>
+<body class="og">
+<div class="card">
+  <span class="ram mass"></span>
+  <div class="head">
+    <div class="lockup"><span class="ram"></span><b>herdr</b></div>
+    <div class="sub"><b>herdr.dev</b> &nbsp;·&nbsp; Apache 2.0</div>
+  </div>
+  <div class="in">
+    <h1>Ten agents,<br />three clients,<br /><em>95% less CPU.</em></h1>
+    <div class="meas">
+      <span>total cpu <b>13.014% → 0.617%</b></span>
+      <span class="r">v0.7.5 → v0.8.0</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

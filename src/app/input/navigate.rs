@@ -31,14 +31,14 @@ pub(crate) fn terminal_direct_navigation_action(
 
 pub(crate) fn terminal_direct_non_indexed_navigation_action(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
 ) -> Option<NavigateAction> {
     non_indexed_action_for_key(state, key, BindingDispatch::Direct)
 }
 
 pub(crate) fn terminal_direct_indexed_navigation_action(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
 ) -> Option<NavigateAction> {
     indexed_navigation_action(state, key, BindingDispatch::Direct)
 }
@@ -120,7 +120,7 @@ impl App {
 
         // Pressed again, the prefix key leaves navigation and reaches the pane,
         // so `esc esc` still delivers a literal esc.
-        if self.state.is_prefix_key(raw_key) {
+        if self.state.is_prefix_key(&raw_key) {
             if self.state.copy_mode_pane_is_focused() {
                 self.state.cancel_copy_mode(&self.terminal_runtimes);
             }
@@ -140,7 +140,7 @@ impl App {
             .keybinds
             .navigate
             .workspace_up
-            .matches_direct_key(raw_key)
+            .matches_direct_key(&raw_key)
         {
             self.focus_relative_workspace_in_navigate_mode(-1);
             return;
@@ -150,7 +150,7 @@ impl App {
             .keybinds
             .navigate
             .workspace_down
-            .matches_direct_key(raw_key)
+            .matches_direct_key(&raw_key)
         {
             self.focus_relative_workspace_in_navigate_mode(1);
             return;
@@ -160,7 +160,7 @@ impl App {
             .keybinds
             .navigate
             .tab_previous
-            .matches_direct_key(raw_key)
+            .matches_direct_key(&raw_key)
         {
             self.focus_relative_tab_in_navigate_mode(-1);
             return;
@@ -170,7 +170,7 @@ impl App {
             .keybinds
             .navigate
             .tab_next
-            .matches_direct_key(raw_key)
+            .matches_direct_key(&raw_key)
         {
             self.focus_relative_tab_in_navigate_mode(1);
             return;
@@ -178,23 +178,23 @@ impl App {
 
         // Bindings resolve before navigation's own keys, so a `prefix+<key>`
         // binding keeps its meaning here instead of being shadowed by the mode.
-        if let Some(action) = navigate_mode_non_indexed_action_for_key(&self.state, raw_key) {
+        if let Some(action) = navigate_mode_non_indexed_action_for_key(&self.state, &raw_key) {
             self.execute_command_action(action, ActionContext::Navigate);
             return;
         }
 
-        if let Some(binding) = command_for_key(&self.state, raw_key, BindingDispatch::Prefix) {
+        if let Some(binding) = command_for_key(&self.state, &raw_key, BindingDispatch::Prefix) {
             self.cancel_copy_mode_if_active();
             self.launch_custom_command(binding, ActionContext::Navigate);
             return;
         }
 
-        if let Some(action) = navigate_mode_indexed_action_for_key(&self.state, raw_key) {
+        if let Some(action) = navigate_mode_indexed_action_for_key(&self.state, &raw_key) {
             self.execute_command_action(action, ActionContext::Navigate);
             return;
         }
 
-        if let Some(action) = navigate_reserved_action_for_key(&self.state, raw_key) {
+        if let Some(action) = navigate_reserved_action_for_key(&self.state, &raw_key) {
             self.execute_command_action(action, ActionContext::Navigate);
         }
     }
@@ -773,7 +773,7 @@ impl App {
             return false;
         };
 
-        let bytes = rt.encode_terminal_key(key);
+        let bytes = rt.encode_terminal_key(key.clone());
         if bytes.is_empty() || rt.try_send_bytes(Bytes::from(bytes)).is_err() {
             return false;
         }
@@ -1005,6 +1005,7 @@ impl App {
             env,
             self.state.pane_scrollback_limit_bytes,
             self.state.host_terminal_theme,
+            self.state.host_terminal_appearance,
         )?;
         let new_pane_id = new_pane.pane_id;
         self.terminal_runtimes
@@ -1091,6 +1092,7 @@ impl App {
                 extra_env,
                 self.state.pane_scrollback_limit_bytes,
                 self.state.host_terminal_theme,
+                self.state.host_terminal_appearance,
                 true,
             );
             let (tab_idx, new_pane) = match result {
@@ -1136,7 +1138,7 @@ pub(crate) enum BindingDispatch {
 
 pub(crate) fn command_for_key(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
     dispatch: BindingDispatch,
 ) -> Option<crate::config::CustomCommandKeybind> {
     state
@@ -1152,7 +1154,12 @@ pub(crate) fn command_for_key(
 
 #[cfg(test)]
 pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKey) -> bool {
-    if state.keybinds.navigate.workspace_up.matches_direct_key(key) {
+    if state
+        .keybinds
+        .navigate
+        .workspace_up
+        .matches_direct_key(&key)
+    {
         state.previous_workspace();
         return true;
     }
@@ -1160,16 +1167,21 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
         .keybinds
         .navigate
         .workspace_down
-        .matches_direct_key(key)
+        .matches_direct_key(&key)
     {
         state.next_workspace();
         return true;
     }
-    if state.keybinds.navigate.tab_previous.matches_direct_key(key) {
+    if state
+        .keybinds
+        .navigate
+        .tab_previous
+        .matches_direct_key(&key)
+    {
         state.previous_tab();
         return true;
     }
-    if state.keybinds.navigate.tab_next.matches_direct_key(key) {
+    if state.keybinds.navigate.tab_next.matches_direct_key(&key) {
         state.next_tab();
         return true;
     }
@@ -1204,19 +1216,19 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
         }
     }
 
-    if state.keybinds.navigate.pane_left.matches_direct_key(key) {
+    if state.keybinds.navigate.pane_left.matches_direct_key(&key) {
         state.navigate_pane(NavDirection::Left);
         return true;
     }
-    if state.keybinds.navigate.pane_down.matches_direct_key(key) {
+    if state.keybinds.navigate.pane_down.matches_direct_key(&key) {
         state.navigate_pane(NavDirection::Down);
         return true;
     }
-    if state.keybinds.navigate.pane_up.matches_direct_key(key) {
+    if state.keybinds.navigate.pane_up.matches_direct_key(&key) {
         state.navigate_pane(NavDirection::Up);
         return true;
     }
-    if state.keybinds.navigate.pane_right.matches_direct_key(key) {
+    if state.keybinds.navigate.pane_right.matches_direct_key(&key) {
         state.navigate_pane(NavDirection::Right);
         return true;
     }
@@ -1226,7 +1238,7 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
 
 /// Reports whether a key belongs to the navigate-mode workspace or tab
 /// movement bindings, which switch focus without leaving navigation mode.
-fn navigate_movement_binding_matches(state: &AppState, key: TerminalKey) -> bool {
+fn navigate_movement_binding_matches(state: &AppState, key: &TerminalKey) -> bool {
     let navigate = &state.keybinds.navigate;
     navigate.workspace_up.matches_direct_key(key)
         || navigate.workspace_down.matches_direct_key(key)
@@ -1238,7 +1250,7 @@ fn navigate_movement_binding_matches(state: &AppState, key: TerminalKey) -> bool
 /// confirm, pane cycling, and arrow pane movement once the navigate tab
 /// bindings release the arrows. Digits are not among them, so workspaces are
 /// switched through an explicit `switch_workspace` binding.
-fn navigate_reserved_action_for_key(state: &AppState, key: TerminalKey) -> Option<NavigateAction> {
+fn navigate_reserved_action_for_key(state: &AppState, key: &TerminalKey) -> Option<NavigateAction> {
     if navigate_movement_binding_matches(state, key) {
         return None;
     }
@@ -1294,12 +1306,12 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
     state.update_dismissed = true;
     let terminal_key = TerminalKey::from(key);
 
-    if state.is_prefix_key(terminal_key) || key.code == KeyCode::Esc {
+    if state.is_prefix_key(&terminal_key) || key.code == KeyCode::Esc {
         leave_navigate_mode(state);
         return;
     }
 
-    if let Some(action) = navigate_mode_action_for_key(state, terminal_key) {
+    if let Some(action) = navigate_mode_action_for_key(state, terminal_key.clone()) {
         execute_navigate_action_in_context(
             state,
             &mut terminal_runtimes,
@@ -1385,7 +1397,7 @@ fn copy_mode_survives_command_action(action: NavigateAction) -> bool {
 
 fn indexed_navigation_action(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
     let kb = &state.keybinds;
@@ -1429,7 +1441,7 @@ fn indexed_navigation_action(
 
 fn action_matches(
     bindings: &crate::config::ActionKeybinds,
-    key: TerminalKey,
+    key: &TerminalKey,
     dispatch: BindingDispatch,
 ) -> bool {
     match dispatch {
@@ -1444,13 +1456,13 @@ fn action_for_key(
     key: TerminalKey,
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
-    non_indexed_action_for_key(state, key, dispatch)
-        .or_else(|| indexed_navigation_action(state, key, dispatch))
+    non_indexed_action_for_key(state, &key, dispatch)
+        .or_else(|| indexed_navigation_action(state, &key, dispatch))
 }
 
 fn non_indexed_action_for_key(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
     dispatch: BindingDispatch,
 ) -> Option<NavigateAction> {
     let kb = &state.keybinds;
@@ -1524,7 +1536,7 @@ fn navigate_mode_action_for_key(state: &AppState, key: TerminalKey) -> Option<Na
 
 fn navigate_mode_non_indexed_action_for_key(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
 ) -> Option<NavigateAction> {
     let action = non_indexed_action_for_key(state, key, BindingDispatch::Prefix)?;
     if matches!(
@@ -1541,7 +1553,7 @@ fn navigate_mode_non_indexed_action_for_key(
 
 fn navigate_mode_indexed_action_for_key(
     state: &AppState,
-    key: TerminalKey,
+    key: &TerminalKey,
 ) -> Option<NavigateAction> {
     indexed_navigation_action(state, key, BindingDispatch::Prefix)
 }
@@ -2804,9 +2816,9 @@ command = "echo literal"
         state.keybinds = config.keybinds();
 
         let key = TerminalKey::new(KeyCode::Char('!'), KeyModifiers::empty());
-        assert!(command_for_key(&state, key, BindingDispatch::Prefix).is_some());
+        assert!(command_for_key(&state, &key, BindingDispatch::Prefix).is_some());
         assert_eq!(
-            indexed_navigation_action(&state, key, BindingDispatch::Prefix),
+            indexed_navigation_action(&state, &key, BindingDispatch::Prefix),
             Some(NavigateAction::SwitchWorkspace(0))
         );
     }
@@ -3056,6 +3068,26 @@ navigate_pane_down = "ctrl+j"
         ))
         .await;
         app.handle_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn navigate_focus_pane_returns_to_terminal() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        let root = app.state.workspaces[0].tabs[0].root_pane;
+        let below = app.state.workspaces[0].test_split(Direction::Vertical);
+        app.state.workspaces[0].layout.focus_pane(below);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .active_tab()
+            .unwrap()
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.state.mode = Mode::Navigate;
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
@@ -3362,6 +3394,7 @@ navigate_pane_down = "ctrl+j"
             80,
             app.state.pane_scrollback_limit_bytes,
             app.state.host_terminal_theme,
+            app.state.host_terminal_appearance,
             crate::pane::PaneShellConfig::new(&app.state.default_shell, app.state.shell_mode),
             app.event_tx.clone(),
             app.render_notify.clone(),

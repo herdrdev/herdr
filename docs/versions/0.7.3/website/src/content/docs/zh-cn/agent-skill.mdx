@@ -3,7 +3,7 @@ title: 智能体技能文件
 description: 为 Claude Code 或其他编程智能体安装 Herdr 使用说明。
 ---
 
-Herdr 提供了一个可复用的智能体技能文件: [`SKILL.md`](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)。
+Herdr 提供了一个可复用的智能体技能文件: [`SKILL.md`](https://github.com/herdrdev/herdr/blob/master/SKILL.md)。
 
 把这个文件安装到任何支持可复用技能或自定义指令的编程智能体中。这份技能教智能体如何在 Herdr 窗格内部控制 Herdr。
 
@@ -28,7 +28,7 @@ Herdr 还提供了另一份用途不同的指南: [`herdr.dev/agent-guide.md`](h
 用 `npx skills` 安装技能:
 
 ```bash
-npx skills add ogulcancelik/herdr --skill herdr -g
+npx skills add herdrdev/herdr --skill herdr -g
 ```
 
 `-g` 参数为受支持的智能体全局安装。省略 `-g` 则安装到当前项目。
@@ -36,7 +36,7 @@ npx skills add ogulcancelik/herdr --skill herdr -g
 以仓库中的副本作为手动兜底和事实来源:
 
 ```text
-https://github.com/ogulcancelik/herdr/blob/master/SKILL.md
+https://github.com/herdrdev/herdr/blob/master/SKILL.md
 ```
 
 对于有技能系统的智能体,把这个文件安装为名为 `herdr` 的技能。对于没有技能系统的智能体,把文件内容粘贴到智能体的项目指令或用户指令中。
@@ -62,4 +62,4 @@ claude
 
 在这里阅读源文件:
 
-[在 GitHub 上打开 `SKILL.md` →](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)
+[在 GitHub 上打开 `SKILL.md` →](https://github.com/herdrdev/herdr/blob/master/SKILL.md)

@@ -57,6 +57,7 @@ impl App {
         let default_shell = self.state.default_shell.clone();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.host_terminal_theme;
+        let host_terminal_appearance = self.state.host_terminal_appearance;
         let previous_focus = self.state.current_pane_focus_target();
         let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
             return encode_error(id, "pane_not_found", "pane not found");
@@ -76,6 +77,7 @@ impl App {
                 split_cwd,
                 scrollback_limit_bytes,
                 host_terminal_theme,
+                host_terminal_appearance,
                 shell_config,
                 extra_env,
                 params.focus,
@@ -88,6 +90,7 @@ impl App {
                 split_cwd,
                 scrollback_limit_bytes,
                 host_terminal_theme,
+                host_terminal_appearance,
                 shell_config,
                 extra_env,
                 params.focus,
@@ -868,10 +871,6 @@ impl App {
                     self.recover_failed_pane_move(recovery_context, moved);
                     return encode_error(id, "pane_move_failed", "target tab disappeared");
                 };
-                let previous_target_focus = self.state.workspaces[target_ws_idx].tabs
-                    [target_tab_idx]
-                    .layout
-                    .focused();
                 let direction = split_direction_to_layout(split);
                 let moved_pane_id = match self.state.workspaces[target_ws_idx]
                     .insert_moved_pane_into_tab(
@@ -880,6 +879,7 @@ impl App {
                         moved,
                         direction,
                         ratio,
+                        focus,
                     ) {
                     Ok(pane_id) => pane_id,
                     Err(moved) => {
@@ -891,11 +891,6 @@ impl App {
                         );
                     }
                 };
-                if !focus {
-                    self.state.workspaces[target_ws_idx].tabs[target_tab_idx]
-                        .layout
-                        .focus_pane(previous_target_focus);
-                }
                 (target_ws_idx, target_tab_idx, moved_pane_id)
             }
             ResolvedPaneMoveDestination::NewTab {
@@ -1976,6 +1971,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_pane_send_keys_encodes_shift_tab_as_backtab() {
+        let (mut app, pane_id, mut rx) = app_with_send_key_runtime(1);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: vec!["shift+tab".into()],
+            }),
+        });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert_eq!(rx.try_recv().unwrap(), bytes::Bytes::from_static(b"\x1b[Z"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn api_pane_get_exposes_scroll_metrics() {
         let (mut app, public_pane_id, pane_id) = app_with_scrollback_runtime();
         let runtime = app
@@ -2013,6 +2026,7 @@ mod tests {
                 lines: Some(2),
                 format: crate::api::schema::ReadFormat::Text,
                 strip_ansi: true,
+                intent: crate::api::schema::ReadIntent::Interactive,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -2677,7 +2691,7 @@ mod tests {
             rx.try_recv().expect("forwarded release after pane move"),
             bytes::Bytes::from_static(b"\x1b[106;1:3u")
         );
-        assert!(app.pressed_terminal_keys.is_empty());
+        assert!(app.input_leases.is_empty());
     }
 
     #[test]

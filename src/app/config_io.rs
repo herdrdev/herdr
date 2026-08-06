@@ -55,6 +55,19 @@ impl App {
         }
     }
 
+    pub(super) fn save_status_indicators(&mut self, style: crate::config::StatusIndicatorStyle) {
+        if self.update_config_file("status indicators", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "ui",
+                "status_indicators",
+                &format!("\"{}\"", style.as_str()),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
     pub(super) fn save_sound(&mut self, enabled: bool) {
         if self.update_config_file("sound setting", |content| {
             crate::config::upsert_section_bool(content, "ui.sound", "enabled", enabled)
@@ -85,27 +98,6 @@ impl App {
                 content,
                 "ui",
                 "show_agent_labels_on_pane_borders",
-                enabled,
-            )
-        }) {
-            self.apply_config_from_disk(false);
-        }
-    }
-
-    pub(super) fn save_pane_history_persistence(&mut self, enabled: bool) {
-        if self.update_config_file("pane screen history", |content| {
-            crate::config::upsert_section_bool(content, "experimental", "pane_history", enabled)
-        }) {
-            self.apply_config_from_disk(false);
-        }
-    }
-
-    pub(super) fn save_switch_ascii_input_source_in_prefix(&mut self, enabled: bool) {
-        if self.update_config_file("prefix ascii input source", |content| {
-            crate::config::upsert_section_bool(
-                content,
-                "experimental",
-                "switch_ascii_input_source_in_prefix",
                 enabled,
             )
         }) {

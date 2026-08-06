@@ -58,7 +58,6 @@ mod agent_resume;
 mod api;
 mod app;
 mod build_info;
-#[cfg(not(windows))]
 mod checksum;
 mod cli;
 mod client;
@@ -88,6 +87,7 @@ mod raw_input;
 mod release_notes;
 mod remote;
 mod render_prof;
+mod render_signal;
 mod selection;
 mod server;
 mod session;
@@ -127,6 +127,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Override individual color tokens on top of the base theme.
 # Accepts: hex (#rrggbb), named colors, rgb(r,g,b), or panel_bg = "reset"
 # [theme.custom]
+# sidebar_bg = "#181825"
 # panel_bg = "reset"
 # accent = "#f5c2e7"
 # red = "#ff6188"
@@ -307,6 +308,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Draw borders around split panes.
 # pane_borders = true
 
+# Draw interactive scrollbars beside terminal panes.
+# Set false to reclaim the scrollbar column and keep it out of terminal-native selections.
+# pane_scrollbars = true
+
 # Keep split panes visually separated instead of sharing divider borders.
 # pane_gaps = true
 
@@ -317,9 +322,16 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # New tabs can still be created with the configured keybinding.
 # hide_tab_bar_when_single_tab = false
 
+# Desktop tab row placement: "top" or "bottom".
+# tab_bar_position = "top"
+
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
+
+# Agent status indicators: "dots" preserves the compact color marks; "symbols" uses
+# distinct static glyphs for blocked, working, done, idle, and unknown states.
+# status_indicators = "dots"
 
 # Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
 # terminal_title, and terminal_title_stripped.
@@ -428,7 +440,7 @@ pane_history = false
 "##;
 
 // Bundled at build time so the printed skill always matches this binary's release.
-const SKILL: &str = include_str!("../SKILL.md");
+const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
     should_block_nested_for_env(config, std::env::var(HERDR_ENV_VAR).ok().as_deref())
@@ -459,8 +471,28 @@ fn exit_if_nested_disabled(config: &config::Config) {
     }
 }
 
+fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    args.into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            arg.into_string()
+                .map_err(|_| format!("argument {index} is not valid UTF-8"))
+        })
+        .collect()
+}
+
 fn main() -> io::Result<()> {
-    let raw_args: Vec<String> = std::env::args().collect();
+    let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'herdr --help' for usage");
+            std::process::exit(2);
+        }
+    };
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
@@ -496,6 +528,14 @@ fn main() -> io::Result<()> {
         Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
         Ok(cli::CommandOutcome::NotCli) => {}
         Err(err) if cli::protocol_mismatch_was_reported(&err) => std::process::exit(1),
+        Err(err) if cli::server_not_running_was_reported(&err) => {
+            if let Some(response) = cli::server_not_running_reported_response(&err) {
+                if let Ok(json) = serde_json::to_string(response) {
+                    eprintln!("{json}");
+                }
+            }
+            std::process::exit(1);
+        }
         Err(err) => return Err(err),
     }
 
@@ -891,5 +931,39 @@ mod tests {
         assert!(NESTED_HERDR_MESSAGES
             .iter()
             .all(|message| !message.starts_with("herdr:")));
+    }
+
+    #[cfg(unix)]
+    fn invalid_utf8_arg() -> std::ffi::OsString {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    }
+
+    #[cfg(windows)]
+    fn invalid_utf8_arg() -> std::ffi::OsString {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    }
+
+    #[test]
+    fn args_as_utf8_passes_through_valid_arguments() {
+        let args = ["herdr", "pane", "get", "pane-1"].map(std::ffi::OsString::from);
+        assert_eq!(
+            args_as_utf8(args).unwrap(),
+            ["herdr", "pane", "get", "pane-1"]
+        );
+    }
+
+    #[test]
+    fn args_as_utf8_reports_the_offending_argument_instead_of_panicking() {
+        let args = vec![
+            std::ffi::OsString::from("herdr"),
+            std::ffi::OsString::from("pane"),
+            invalid_utf8_arg(),
+        ];
+        assert_eq!(
+            args_as_utf8(args).unwrap_err(),
+            "argument 2 is not valid UTF-8"
+        );
     }
 }

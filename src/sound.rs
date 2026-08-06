@@ -8,9 +8,7 @@ use std::io::Write;
 #[cfg(not(any(windows, target_os = "macos")))]
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
-use std::process::Command;
-use std::process::Output;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(any(windows, target_os = "macos")))]
 use std::time::{Duration, Instant};
@@ -18,6 +16,8 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
+#[cfg(any(windows, test))]
+const WINDOWS_SOUND_PATH_ENV: &str = "HERDR_SOUND_PATH";
 #[cfg(not(any(windows, target_os = "macos")))]
 const AUDIO_PLAYER_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -72,7 +72,7 @@ fn sound_playback_disabled_by_env() -> bool {
 fn play_file(path: &Path) -> Result<(), String> {
     match run_player(path) {
         Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(format!("player exited with {}", output.status)),
+        Ok(output) => Err(playback_error(&output)),
         Err(err) => Err(err),
     }
 }
@@ -90,8 +90,18 @@ fn play_bytes(data: &[u8]) -> Result<(), String> {
 
     match result {
         Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(format!("player exited with {}", output.status)),
+        Ok(output) => Err(playback_error(&output)),
         Err(e) => Err(e),
+    }
+}
+
+fn playback_error(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!("player exited with {}", output.status)
+    } else {
+        format!("player exited with {}: {stderr}", output.status)
     }
 }
 
@@ -121,38 +131,46 @@ fn run_player(path: &Path) -> Result<Output, String> {
 #[cfg(any(windows, test))]
 fn windows_media_player_script() -> &'static str {
     r#"
-param([string]$Path)
 $ErrorActionPreference = 'Stop'
+$Path = [Environment]::GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')
+if ([string]::IsNullOrWhiteSpace($Path)) { throw 'HERDR_SOUND_PATH is not set' }
 Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
 $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
-$player = [System.Windows.Media.MediaPlayer]::new()
-$script:done = $false
+$script:player = [System.Windows.Media.MediaPlayer]::new()
+$script:frame = [System.Windows.Threading.DispatcherFrame]::new()
+$script:timer = [System.Windows.Threading.DispatcherTimer]::new()
+$script:timer.Interval = [TimeSpan]::FromSeconds(15)
 $script:failed = $null
-$player.add_MediaEnded({ $script:done = $true })
-$player.add_MediaFailed({
+$script:timedOut = $false
+$script:player.add_MediaOpened({ $script:player.Play() })
+$script:player.add_MediaEnded({ $script:frame.Continue = $false })
+$script:player.add_MediaFailed({
     param($sender, $eventArgs)
     $script:failed = $eventArgs.ErrorException
-    $script:done = $true
+    $script:frame.Continue = $false
 })
-$player.Open([Uri]::new($resolved))
-$deadline = [DateTime]::UtcNow.AddSeconds(15)
-while (-not $script:done -and -not $player.NaturalDuration.HasTimeSpan -and [DateTime]::UtcNow -lt $deadline) {
-    Start-Sleep -Milliseconds 25
+$script:timer.add_Tick({
+    $script:timedOut = $true
+    $script:frame.Continue = $false
+})
+try {
+    $script:player.Open([Uri]::new($resolved))
+    $script:timer.Start()
+    [System.Windows.Threading.Dispatcher]::PushFrame($script:frame)
+} finally {
+    $script:timer.Stop()
+    $script:player.Close()
 }
-if ($script:failed) { throw $script:failed }
-$player.Play()
-while (-not $script:done -and [DateTime]::UtcNow -lt $deadline) {
-    Start-Sleep -Milliseconds 50
-}
-$player.Close()
-if ($script:failed) { throw $script:failed }
-if (-not $script:done) { throw 'sound playback timed out' }
+if ($script:failed) { throw "sound media failed: $($script:failed.Message)" }
+if ($script:timedOut) { throw 'sound playback timed out' }
 "#
 }
 
-#[cfg(windows)]
-fn run_windows_player(path: &Path) -> Result<Output, String> {
-    crate::noninteractive_process::command("powershell.exe")
+#[cfg(any(windows, test))]
+fn windows_player_command(path: &Path) -> Command {
+    let mut command = crate::noninteractive_process::command("powershell.exe");
+    command
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -162,7 +180,13 @@ fn run_windows_player(path: &Path) -> Result<Output, String> {
             "-Command",
             windows_media_player_script(),
         ])
-        .arg(path)
+        .env(WINDOWS_SOUND_PATH_ENV, path);
+    command
+}
+
+#[cfg(windows)]
+fn run_windows_player(path: &Path) -> Result<Output, String> {
+    windows_player_command(path)
         .output()
         .map_err(|e| format!("Windows MediaPlayer playback failed: {e}"))
 }
@@ -403,11 +427,38 @@ mod tests {
     }
 
     #[test]
-    fn windows_media_player_script_accepts_literal_path_argument() {
+    fn windows_media_player_uses_process_environment_and_dispatcher() {
         let script = windows_media_player_script();
+        let path = Path::new(r"C:\sound dir\döne.mp3");
+        let command = windows_player_command(path);
+        let env_path = command.get_envs().find_map(|(key, value)| {
+            (key == std::ffi::OsStr::new(WINDOWS_SOUND_PATH_ENV))
+                .then_some(value)
+                .flatten()
+        });
 
-        assert!(script.contains("param([string]$Path)"));
+        assert!(script.contains("GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')"));
+        assert!(!script.contains("param([string]$Path)"));
         assert!(script.contains("Resolve-Path -LiteralPath $Path"));
-        assert!(script.contains("System.Windows.Media.MediaPlayer"));
+        assert!(script.contains("Dispatcher]::PushFrame"));
+        assert!(script.contains("add_MediaEnded"));
+        assert!(script.contains("add_MediaFailed"));
+        assert_eq!(env_path, Some(path.as_os_str()));
+        assert!(!command.get_args().any(|arg| arg == path.as_os_str()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_media_player_reports_invalid_media_without_waiting_for_timeout() {
+        let path = temp_sound_path();
+        std::fs::write(&path, b"not an mp3").unwrap();
+        let output = run_windows_player(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("sound media failed"),
+            "stderr should identify a MediaFailed error"
+        );
     }
 }

@@ -566,3 +566,17 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
 
     cleanup_spawned_herdr(herdr, base);
 }
+
+#[test]
+fn pane_read_rejects_invalid_value_with_usage_error() {
+    // Invalid option values fail as CLI usage errors before any server
+    // contact: exit 2 with the plain parser message, not the old
+    // `Error: Custom { ... }` io::Error wrapper from main.
+    let socket_path = Path::new("/tmp/herdr-cli-invalid-values-no-server.sock");
+
+    let read = run_cli(socket_path, &["pane", "read", "w1:p1", "--source", "bogus"]);
+    assert_eq!(read.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&read.stderr);
+    assert!(stderr.contains("invalid read source: bogus"));
+    assert!(!stderr.contains("Error: Custom"));
+}

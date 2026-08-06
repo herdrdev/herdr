@@ -68,7 +68,7 @@ integration-assets-test:
 
 # Run plugin marketplace Worker tests
 plugin-marketplace-test:
-    cd workers/plugin-marketplace && bun test
+    cd workers/plugin-marketplace && bun install --frozen-lockfile && bun test
 
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:
@@ -79,7 +79,9 @@ release-docs-check:
     python3 scripts/agent_detection_manifest_check.py --require-website
     python3 scripts/config_reference_check.py
     node website/scripts/docs-versions.mjs check
+    node website/scripts/docs-preview.mjs check
     @test -f docs/next/README.md
+    @test -f docs/next/README.zh-CN.md
     @if ! diff -u CHANGELOG.md docs/next/CHANGELOG.md; then \
         echo "error: CHANGELOG.md differs from docs/next/CHANGELOG.md; finalize release notes before releasing"; \
         exit 1; \
@@ -108,8 +110,8 @@ release-docs-check:
         fi; \
     done
     python3 scripts/docs_translation_parity.py --docs-root docs/next/website/src/content/docs
-    python3 scripts/docs_translation_parity.py --docs-root website/src/content/docs
     just website-build
+    cd website && bun run build:draft
 
 # Prepare the release commit without tagging or pushing (usage: just release-prepare 0.1.1)
 release-prepare version:

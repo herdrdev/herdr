@@ -131,10 +131,10 @@ herdr workspace create --cwd ~/project --label api --no-focus
 ## Worktree
 
 ```bash
-herdr worktree list [--workspace ID | --cwd PATH] [--json]
-herdr worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--json]
-herdr worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]
-herdr worktree remove --workspace ID [--force] [--json]
+herdr worktree list [--workspace ID | --cwd PATH]
+herdr worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus]
+herdr worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus]
+herdr worktree remove --workspace ID [--force]
 ```
 
 worktree 是带有 Git 检出来源信息的普通 Herdr 工作区。`worktree create` 创建一个 Git worktree 检出,作为工作区打开,并与父仓库工作区分到一组。如果 `--branch` 指向已有的本地分支,Herdr 检出它;否则从 `--base` 或 `HEAD` 创建分支。没有 `--path` 时,Herdr 在 `<worktrees.directory>/<repo>/<branch-slug>` 下创建检出。

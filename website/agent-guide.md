@@ -2,7 +2,7 @@
 
 You are reading this because a human asked you to help them understand, set up, or troubleshoot Herdr. This file gives you the concept model, the setup path, and the diagnosis recipes so you can guide them accurately. Canonical documentation lives at https://herdr.dev/docs/ — link the human there for depth, and verify any command you are unsure about against those pages instead of guessing.
 
-If you are running *inside* a Herdr pane (the environment variable `HERDR_ENV=1` is set), Herdr also ships a skill file that teaches you to control Herdr yourself through the `herdr` CLI: https://raw.githubusercontent.com/ogulcancelik/herdr/master/SKILL.md. That file is about you operating Herdr; this file is about you teaching a human.
+If you are running *inside* a Herdr pane (the environment variable `HERDR_ENV=1` is set), Herdr also ships a skill file that teaches you to control Herdr yourself through the `herdr` CLI: https://raw.githubusercontent.com/herdrdev/herdr/master/skills/herdr/SKILL.md. That file is about you operating Herdr; this file is about you teaching a human.
 
 ## What Herdr is
 
@@ -65,9 +65,9 @@ Important framing for new users: Herdr does not require learning keybindings. Th
 
 ## Install the Herdr skill into yourself
 
-Herdr ships `SKILL.md` (https://raw.githubusercontent.com/ogulcancelik/herdr/master/SKILL.md), an instruction file that teaches a coding agent to control Herdr from inside a pane — splitting panes, running commands without stealing focus, reading output, waiting on other agents.
+Herdr ships `skills/herdr/SKILL.md` (https://raw.githubusercontent.com/herdrdev/herdr/master/skills/herdr/SKILL.md), an instruction file that teaches a coding agent to control Herdr from inside a pane — splitting panes, running commands without stealing focus, reading output, waiting on other agents.
 
-Once the human is set up, offer to install it into your own harness so future sessions know Herdr natively. For agents supported by the open skills CLI, use `npx skills add ogulcancelik/herdr --skill herdr -g`. Agents without a skill system can paste the GitHub copy above into global custom instructions. Ask the human before writing to their config locations, and use the GitHub copy above as the source of truth.
+Once the human is set up, offer to install it into your own harness so future sessions know Herdr natively. For agents supported by the open skills CLI, use `npx skills add herdrdev/herdr --skill herdr -g`. Agents without a skill system can paste the GitHub copy above into global custom instructions. Ask the human before writing to their config locations, and use the GitHub copy above as the source of truth.
 
 ## Configuration
 

@@ -633,8 +633,8 @@ pub(crate) fn handle_resize_key(state: &mut AppState, raw_key: TerminalKey) {
     let key = raw_key.as_key_event();
     if key.code == KeyCode::Esc
         || key.code == KeyCode::Enter
-        || state.keybinds.resize_mode.matches_prefix_key(raw_key)
-        || state.keybinds.resize_mode.matches_direct_key(raw_key)
+        || state.keybinds.resize_mode.matches_prefix_key(&raw_key)
+        || state.keybinds.resize_mode.matches_direct_key(&raw_key)
     {
         if state.active.is_some() {
             state.mode = Mode::Terminal;
@@ -1049,8 +1049,8 @@ impl App {
         let key = raw_key.as_key_event();
         if key.code == KeyCode::Esc
             || key.code == KeyCode::Enter
-            || self.state.keybinds.resize_mode.matches_prefix_key(raw_key)
-            || self.state.keybinds.resize_mode.matches_direct_key(raw_key)
+            || self.state.keybinds.resize_mode.matches_prefix_key(&raw_key)
+            || self.state.keybinds.resize_mode.matches_direct_key(&raw_key)
         {
             self.state.mode = if self.state.active.is_some() {
                 Mode::Terminal

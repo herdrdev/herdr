@@ -26,6 +26,8 @@ Windows 测试版构建只通过预览通道发布。在 Windows 上,Herdr 默�
 | 本地持久会话 | 测试版 |
 | 通过 ConPTY 的原生窗格 | 测试版 |
 | Windows Terminal / PowerShell 应用连接 | 测试版 |
+| 连接 Linux/macOS 主机的 `herdr --remote` | 测试版 |
+| 远程剪贴板图像和图像文件拖放 | 测试版 |
 | `cmd.exe` 窗格 | 测试版 |
 | 启动 cwd 和工作区标签 | 测试版 |
 | 窗格启动 cwd | 测试版 |
@@ -47,14 +49,14 @@ Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接�
 | --- | --- |
 | shell `cd` 之后的实时 cwd | 部分支持 |
 | 通过 shell 集成/OSC7 的实时 cwd | 测试版 |
-| 向智能体粘贴剪贴板图像 | 未验证 |
+| 向本地窗格中的智能体粘贴剪贴板图像 | 未验证 |
 | CJK 输入法候选窗口定位 | 部分支持 |
 | Kitty graphics 渲染 | 未验证 |
 | 主机光标渲染 | 部分支持 |
 
 Herdr 可以在正确的目录中启动窗格,并能从你启动 Herdr 的目录创建初始工作区。启动之后 PowerShell 的目录变化则不同: Herdr 能检查的进程字段无法可靠跟踪后续的逻辑 `cd` 变化。实时 cwd 上报请使用 Herdr 集成或提示符 shell 集成。
 
-Windows Terminal 可能为特定智能体支持图像粘贴路径,但 Herdr 自己的剪贴板图像读取器尚未在 Windows 上接通。在 Windows 剪贴板桥实现并测试之前,请把 `alt+v` 图像粘贴视为未验证。远程剪贴板图像桥是独立功能,仍然绑定于 Unix/macOS 的 `herdr --remote`。
+使用 `herdr --remote` 时,配置的远程图像粘贴键会读取 Windows 剪贴板图像并传输到远程主机。把一个本地图像文件拖入 Windows Terminal 也会传输该文件并粘贴远程路径。向本地原生 Windows 窗格粘贴剪贴板图像仍未验证。
 
 Kitty graphics 仍是实验性功能,尚未宣称支持 Windows。除非你专门在 Windows Terminal 中测试图像渲染,否则保持 `experimental.kitty_graphics = false`。
 
@@ -92,22 +94,20 @@ Herdr 的窗格文本复制在 Windows 测试版上可用。在窗格内拖选�
 | 能力 | 状态 |
 | --- | --- |
 | 直接终端附加 | 不支持 |
-| Windows 二进制的 `herdr --remote` | 不支持 |
+| Windows 作为 `herdr --remote` 的目标主机 | 不支持 |
 | 实时服务器交接 | 不支持 |
 | Unix 文件描述符交接 | 不支持 |
 | Unix 前台进程组 | 不支持 |
-| 远程剪贴板图像桥 | 不支持 |
 | 前缀输入法切换 | 不支持 |
 | 签名二进制 / 规避 SmartScreen | 不支持 |
 
-在 Windows 上进行远程工作,请 SSH 到服务器并在那里运行 `herdr`:
+在 Windows Terminal 中,使用与 Linux 和 macOS 相同的远程命令:
 
 ```powershell
-ssh you@server
-herdr
+herdr --remote workbox
 ```
 
-这种模式下 Herdr 运行在远程主机上。Windows 原生的 `herdr --remote` 不在测试版范围内。
+目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
 
 Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
 

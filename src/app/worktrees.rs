@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -864,14 +863,14 @@ impl App {
                         }
                     }
                 }
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
             Err(message) => {
                 tracing::warn!(checkout_path = %create.checkout_path.display(), error = %message, "git worktree add failed");
                 create.creating = false;
                 create.error = Some(message);
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
         }
@@ -942,7 +941,7 @@ impl App {
                 } else {
                     Mode::Navigate
                 };
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
             Err(message) => {
@@ -956,7 +955,7 @@ impl App {
                 } else {
                     remove.error = Some(message);
                 }
-                self.render_dirty.store(true, Ordering::Release);
+                self.render_dirty.request_generic();
                 self.render_notify.notify_one();
             }
         }
@@ -998,14 +997,12 @@ impl App {
         ws_idx: usize,
     ) {
         for terminal_id in self.state.terminal_ids_for_workspace(ws_idx) {
-            if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
-                tracing::debug!(
-                    workspace_index = ws_idx,
-                    terminal_id = %terminal_id,
-                    "shutting down terminal runtime before worktree removal"
-                );
-                runtime.shutdown();
-            }
+            tracing::debug!(
+                workspace_index = ws_idx,
+                terminal_id = %terminal_id,
+                "shutting down terminal runtime before worktree removal"
+            );
+            self.shutdown_terminal_runtime(terminal_id);
         }
     }
 }

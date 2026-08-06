@@ -132,6 +132,34 @@ function Send-RawAndObserve {
     }
 }
 
+function Send-NativeRecordAndObserve {
+    param(
+        [string] $PaneId,
+        [string] $Text,
+        [string] $ExpectedRecord
+    )
+    $needle = "PROBE_RECORD:$ExpectedRecord"
+    $before = ([regex]::Matches((Read-Pane -PaneId $PaneId), [regex]::Escape($needle))).Count
+    & $script:Exe pane send-text $PaneId $Text | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "pane send-text failed with exit code $LASTEXITCODE"
+    }
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $paneText = Read-Pane -PaneId $PaneId
+        $after = ([regex]::Matches($paneText, [regex]::Escape($needle))).Count
+        if ($after -gt $before) {
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    return [ordered]@{
+        expected_record = $needle
+        delivered = $after -gt $before
+        pane = $paneText
+    }
+}
+
 $script:Exe = (Resolve-Path $ExePath).Path
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) "herdr-conpty-input-$([guid]::NewGuid().ToString('N'))"
 $probeSource = Join-Path $workDir "probe.rs"
@@ -175,6 +203,12 @@ extern "system" {
         bytes_read: *mut u32,
         overlapped: *mut c_void,
     ) -> i32;
+    fn ReadConsoleInputW(
+        handle: Handle,
+        records: *mut InputRecord,
+        length: u32,
+        records_read: *mut u32,
+    ) -> i32;
     fn WriteFile(
         handle: Handle,
         buffer: *const c_void,
@@ -183,6 +217,31 @@ extern "system" {
         overlapped: *mut c_void,
     ) -> i32;
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KeyEventRecord {
+    key_down: i32,
+    repeat_count: u16,
+    virtual_key_code: u16,
+    virtual_scan_code: u16,
+    unicode_char: u16,
+    control_key_state: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union InputRecordEvent {
+    key: KeyEventRecord,
+}
+
+#[repr(C)]
+struct InputRecord {
+    event_type: u16,
+    event: InputRecordEvent,
+}
+
+const KEY_EVENT: u16 = 0x0001;
 
 fn write_all(handle: Handle, mut bytes: &[u8]) {
     while !bytes.is_empty() {
@@ -212,43 +271,88 @@ fn main() {
         write_all(output, b"PROBE_ERROR_GET_MODE\r\n");
         std::process::exit(1);
     }
-    let raw_vt_mode = (console_mode | ENABLE_VIRTUAL_TERMINAL_INPUT)
-        & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
-    if unsafe { SetConsoleMode(input, raw_vt_mode) } == 0 {
-        write_all(output, b"PROBE_ERROR_SET_MODE\r\n");
-        std::process::exit(2);
+    if mode != "native" {
+        let raw_vt_mode = (console_mode | ENABLE_VIRTUAL_TERMINAL_INPUT)
+            & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+        if unsafe { SetConsoleMode(input, raw_vt_mode) } == 0 {
+            write_all(output, b"PROBE_ERROR_SET_MODE\r\n");
+            std::process::exit(2);
+        }
     }
 
-    if mode == "kitty" {
+    if mode == "native" {
+        write_all(output, b"PROBE_READY_NATIVE\r\n");
+    } else if mode == "kitty" {
         write_all(output, b"\x1b[>7u\x1b[?u\x1b[cPROBE_READY_KITTY\r\n");
     } else {
         write_all(output, b"PROBE_READY_LEGACY\r\n");
     }
 
-    let mut all = Vec::new();
-    let mut buffer = [0u8; 256];
-    loop {
-        let mut read = 0;
-        let ok = unsafe {
-            ReadFile(
-                input,
-                buffer.as_mut_ptr().cast(),
-                buffer.len() as u32,
-                &mut read,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 || read == 0 {
-            break;
+    if mode == "native" {
+        let mut records: [InputRecord; 16] = std::array::from_fn(|_| InputRecord {
+            event_type: 0,
+            event: InputRecordEvent {
+                key: KeyEventRecord {
+                    key_down: 0,
+                    repeat_count: 0,
+                    virtual_key_code: 0,
+                    virtual_scan_code: 0,
+                    unicode_char: 0,
+                    control_key_state: 0,
+                },
+            },
+        });
+        loop {
+            let mut read = 0;
+            let ok = unsafe {
+                ReadConsoleInputW(input, records.as_mut_ptr(), records.len() as u32, &mut read)
+            };
+            if ok == 0 || read == 0 {
+                break;
+            }
+            for record in &records[..read as usize] {
+                if record.event_type != KEY_EVENT {
+                    continue;
+                }
+                let key = unsafe { &record.event.key };
+                let line = format!(
+                    "PROBE_RECORD:{};{};{};{};{};{}\r\n",
+                    if key.key_down != 0 { 1 } else { 0 },
+                    key.repeat_count,
+                    key.virtual_key_code,
+                    key.virtual_scan_code,
+                    key.unicode_char,
+                    key.control_key_state,
+                );
+                write_all(output, line.as_bytes());
+            }
         }
-        all.extend_from_slice(&buffer[..read as usize]);
-        let mut line = String::from("PROBE_ALL:");
-        for byte in &all {
-            use std::fmt::Write as _;
-            let _ = write!(&mut line, "{byte:02x}");
+    } else {
+        let mut all = Vec::new();
+        let mut buffer = [0u8; 256];
+        loop {
+            let mut read = 0;
+            let ok = unsafe {
+                ReadFile(
+                    input,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as u32,
+                    &mut read,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 || read == 0 {
+                break;
+            }
+            all.extend_from_slice(&buffer[..read as usize]);
+            let mut line = String::from("PROBE_ALL:");
+            for byte in &all {
+                use std::fmt::Write as _;
+                let _ = write!(&mut line, "{byte:02x}");
+            }
+            line.push_str("\r\n");
+            write_all(output, line.as_bytes());
         }
-        line.push_str("\r\n");
-        write_all(output, line.as_bytes());
     }
 }
 '@ | Set-Content -NoNewline -Encoding utf8 $probeSource
@@ -311,6 +415,13 @@ fn main() {
     $report.raw_alt_v = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "v") -ExpectedHex "1b76"
     $report.raw_ctrl_u = Send-RawAndObserve -PaneId $kittyPane -Text ([string][char]0x15) -ExpectedHex "15"
 
+    $nativePane = New-ProbePane -Mode "native"
+    # Win32 input mode records use CSI Vk;Scan;Unicode;Down;Control;Repeat _.
+    $nativeEscapeDown = [char]27 + "[27;1;27;1;0;3_"
+    $nativeEscapeRelease = [char]27 + "[27;1;27;0;0;1_"
+    $report.native_escape_down = Send-NativeRecordAndObserve -PaneId $nativePane -Text $nativeEscapeDown -ExpectedRecord "1;3;27;1;27;0"
+    $report.native_escape_release = Send-NativeRecordAndObserve -PaneId $nativePane -Text $nativeEscapeRelease -ExpectedRecord "0;1;27;1;27;0"
+
     $consoleHosts = @(Get-Process -Name conhost, OpenConsole -ErrorAction SilentlyContinue |
         Where-Object { $initialConsoleHostIds -notcontains $_.Id } |
         ForEach-Object {
@@ -354,6 +465,8 @@ fn main() {
         -or -not $report.raw_kitty_ctrl_delete.delivered `
         -or -not $report.raw_alt_v.delivered `
         -or -not $report.raw_ctrl_u.delivered `
+        -or -not $report.native_escape_down.delivered `
+        -or -not $report.native_escape_release.delivered `
         -or ($appLocalHostRequired -and -not $report.app_local_console_host)
 } finally {
     if ($null -ne $server) {

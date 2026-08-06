@@ -31,7 +31,7 @@ class PreviewNotesTests(unittest.TestCase):
             notes = "Preview notes\n"
             content = preview.build_manifest(
                 output=output,
-                repo="ogulcancelik/herdr",
+                repo="herdrdev/herdr",
                 tag="preview-2026-06-02-abcdef123456",
                 build_id="2026-06-02-abcdef123456",
                 commit="abcdef1234567890",
@@ -54,7 +54,7 @@ class PreviewNotesTests(unittest.TestCase):
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["url"],
-                "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
+                "https://github.com/herdrdev/herdr/releases/download/preview-2026-06-02-abcdef123456/herdr-windows-x86_64.zip",
             )
             self.assertEqual(
                 data["assets"]["windows-x86_64"]["sha256"],
@@ -68,7 +68,7 @@ class PreviewNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "windows-x86_64 requires"):
                 preview.build_manifest(
                     output=Path(tmp) / "preview.json",
-                    repo="ogulcancelik/herdr",
+                    repo="herdrdev/herdr",
                     tag="preview-test",
                     build_id="test",
                     commit="abcdef",
@@ -181,8 +181,11 @@ file: ../../../public/assets/logo.svg
         self.assertIn("file: ../../../../public/assets/logo.svg", output)
         self.assertIn("from '../../../components/ConfigReference.astro'", output)
         self.assertIn("from '../../../../components/LocaleWidget.astro'", output)
-        self.assertIn("Next docs describe unreleased work", output)
-        self.assertIn("edit/master/docs/next/website/src/content/docs/", output)
+        self.assertIn("Preview build `2026-07-29-44b3adb12552`", output)
+        self.assertIn(
+            "blob/44b3adb125524ea9a55739eee3776f922f2115ad/docs/next/website/src/content/docs/",
+            output,
+        )
 
     def test_version_docs_rewrite_links_and_source_paths(self):
         source = """---
@@ -192,7 +195,7 @@ title: Install Herdr
 import ConfigReference from '../../components/ConfigReference.astro';
 
 [Install](/docs/install/)
-[Skill](https://github.com/ogulcancelik/herdr/blob/master/SKILL.md)
+[Skill](https://github.com/herdrdev/herdr/blob/master/SKILL.md)
 file: ../../../public/assets/logo.svg
 """
         output = subprocess.check_output(
@@ -208,7 +211,7 @@ file: ../../../public/assets/logo.svg
         self.assertIn("[Install](/docs/0.7.4/install/)", output)
         self.assertIn("file: ../../../../../public/assets/logo.svg", output)
         self.assertIn("from '../../../../components/ConfigReference.astro'", output)
-        self.assertIn("blob/v0.7.4/docs/next/website/src/content/docs/index.mdx", output)
+        self.assertIn("blob/master/docs/versions/0.7.4/website/src/content/docs/index.mdx", output)
         self.assertIn("blob/v0.7.4/SKILL.md", output)
 
 

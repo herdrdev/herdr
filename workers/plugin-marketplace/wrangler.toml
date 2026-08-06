@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-06-21"
 workers_dev = false
 
+[limits]
+subrequests = 3500
+
 [[r2_buckets]]
 binding = "PLUGIN_MARKETPLACE_BUCKET"
 bucket_name = "herdr-plugin-marketplace"

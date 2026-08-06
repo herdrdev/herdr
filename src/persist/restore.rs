@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use ratatui::layout::Direction;
@@ -11,6 +10,7 @@ use crate::detect::AgentState;
 use crate::events::AppEvent;
 use crate::layout::{Node, PaneId, TileLayout};
 use crate::pane::{PaneLaunchEnv, PaneState};
+use crate::render_signal::RenderSignal;
 use crate::terminal::{TerminalId, TerminalRuntime, TerminalState};
 use crate::workspace::Workspace;
 
@@ -40,7 +40,7 @@ struct RestoreRuntimeContext<'a> {
     resume_agents_on_restore: bool,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 }
 
 type RestoredSession = (
@@ -73,7 +73,7 @@ pub fn restore(
     resume_agents_on_restore: bool,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
     let mut imported_panes = HashMap::new();
     restore_with_imports(
@@ -100,7 +100,7 @@ pub fn restore_handoff(
     imports: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
     restore_with_imports_strict(
         snapshot,
@@ -196,7 +196,7 @@ fn restore_with_imports_strict(
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
     let (restored, failed_imports) = restore_with_imports_and_failures(
         snapshot,
@@ -236,7 +236,7 @@ fn restore_with_imports(
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
     restore_with_imports_and_failures(
         snapshot,
@@ -265,7 +265,7 @@ fn restore_with_imports_and_failures(
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
-    render_dirty: Arc<AtomicBool>,
+    render_dirty: Arc<RenderSignal>,
 ) -> RestoreFailures<RestoredSession> {
     let mut workspaces = Vec::new();
     let mut terminals = HashMap::new();
@@ -582,6 +582,7 @@ fn restore_tab(
                     },
                     runtime_context.scrollback_limit_bytes,
                     crate::terminal_theme::TerminalTheme::default(),
+                    None,
                     runtime_context.events.clone(),
                     runtime_context.render_notify.clone(),
                     runtime_context.render_dirty.clone(),
@@ -594,6 +595,7 @@ fn restore_tab(
                     cwd.clone(),
                     runtime_context.scrollback_limit_bytes,
                     crate::terminal_theme::TerminalTheme::default(),
+                    None,
                     runtime_context.shell_config,
                     &launch_env,
                     startup.initial_history_ansi,
@@ -612,6 +614,7 @@ fn restore_tab(
                     cwd.clone(),
                     runtime_context.scrollback_limit_bytes,
                     crate::terminal_theme::TerminalTheme::default(),
+                    None,
                     runtime_context.shell_config,
                     &launch_env,
                     startup.initial_history_ansi,
@@ -1222,7 +1225,7 @@ mod tests {
             false,
             events,
             Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(RenderSignal::new()),
         );
 
         let terminal = terminals
@@ -1315,7 +1318,7 @@ mod tests {
             false,
             events,
             Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(RenderSignal::new()),
         );
 
         let workspace = workspaces.first().expect("workspace should restore");
@@ -1422,7 +1425,7 @@ mod tests {
             false,
             events,
             Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(RenderSignal::new()),
         );
 
         let workspace = workspaces.first().expect("workspace should restore");
@@ -1533,7 +1536,7 @@ mod tests {
             true,
             events,
             Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(RenderSignal::new()),
         );
 
         let terminal = terminals
@@ -1561,7 +1564,7 @@ mod tests {
             &mut imports,
             mpsc::channel(4).0,
             Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(RenderSignal::new()),
         )
         .expect("handoff restore should preserve pending native agent resume");
         let handoff_terminal = handoff_terminals
@@ -1583,7 +1586,7 @@ mod tests {
         let (snapshot, history) = snapshot_with_saved_pane_history();
         let (events, _events_rx) = mpsc::channel(8);
         let render_notify = Arc::new(Notify::new());
-        let render_dirty = Arc::new(AtomicBool::new(false));
+        let render_dirty = Arc::new(RenderSignal::new());
 
         let (_workspaces, _terminals, runtimes) = restore(
             &snapshot,
@@ -1621,7 +1624,7 @@ mod tests {
         let (snapshot, _history) = snapshot_with_saved_pane_history();
         let (events, _events_rx) = mpsc::channel(8);
         let render_notify = Arc::new(Notify::new());
-        let render_dirty = Arc::new(AtomicBool::new(false));
+        let render_dirty = Arc::new(RenderSignal::new());
 
         let (_workspaces, _terminals, runtimes) = restore(
             &snapshot,
