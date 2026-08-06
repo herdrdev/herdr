@@ -40,6 +40,14 @@ pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuild
 }
 
 #[cfg(not(windows))]
+pub(crate) fn terminal_title_settle_delay(
+    _current: &str,
+    _candidate: &str,
+) -> Option<std::time::Duration> {
+    None
+}
+
+#[cfg(not(windows))]
 fn apply_pane_runtime_marker_platform(_command: &mut portable_pty::CommandBuilder) {}
 
 pub(crate) fn configure_background_command(command: &mut std::process::Command) {

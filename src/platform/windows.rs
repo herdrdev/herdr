@@ -83,6 +83,7 @@ const PROCESS_ENVIRONMENT_READ_CHUNK_BYTES: usize = 16 * 1024;
 const PROCESS_RUNTIME_MARKER_CACHE_CAPACITY: usize = 1_024;
 const PROCESS_RUNTIME_MARKER_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PROCESS_RUNTIME_MARKER_NEGATIVE_TTL: Duration = Duration::from_secs(1);
+const ELEVATED_TERMINAL_TITLE_SETTLE: Duration = Duration::from_millis(200);
 
 static NEXT_PANE_RUNTIME_MARKER: AtomicU64 = AtomicU64::new(1);
 static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRuntimeMarker>>> =
@@ -258,6 +259,11 @@ struct CachedGitBashProcess {
 
 static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
     Mutex::new(ProcessSnapshotCache { cached: None });
+
+pub(crate) fn terminal_title_settle_delay(current: &str, candidate: &str) -> Option<Duration> {
+    (candidate.strip_prefix("Administrator: ") == Some(current))
+        .then_some(ELEVATED_TERMINAL_TITLE_SETTLE)
+}
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true

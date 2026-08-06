@@ -128,6 +128,7 @@ pub struct TerminalState {
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     pub terminal_title: Option<String>,
+    pending_terminal_title_until: Option<Instant>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
@@ -161,6 +162,7 @@ impl TerminalState {
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
             terminal_title: None,
+            pending_terminal_title_until: None,
             manual_label: None,
             agent_name: None,
             agent_name_owner: None,
@@ -188,6 +190,31 @@ impl TerminalState {
     }
 
     pub(crate) fn set_terminal_title(&mut self, title: Option<String>) -> TerminalTitleChange {
+        self.set_terminal_title_at(title, Instant::now())
+    }
+
+    fn set_terminal_title_at(
+        &mut self,
+        title: Option<String>,
+        now: Instant,
+    ) -> TerminalTitleChange {
+        let settle_delay = self
+            .terminal_title
+            .as_deref()
+            .zip(title.as_deref())
+            .and_then(|(current, candidate)| {
+                crate::platform::terminal_title_settle_delay(current, candidate)
+            });
+        if let Some(publish_at) = self.pending_terminal_title_until.take() {
+            if settle_delay.is_some() && now < publish_at {
+                self.pending_terminal_title_until = Some(publish_at);
+                return TerminalTitleChange::default();
+            }
+        } else if let Some(delay) = settle_delay {
+            self.pending_terminal_title_until = Some(now + delay);
+            return TerminalTitleChange::default();
+        }
+
         if self.terminal_title == title {
             return TerminalTitleChange::default();
         }
@@ -2058,6 +2085,49 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn elevated_title_settlement_cancels_transient_and_promotes_persistent_transition() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        let original = Some("task".to_string());
+        let elevated = Some("Administrator: task".to_string());
+
+        assert!(
+            terminal
+                .set_terminal_title_at(original.clone(), now)
+                .raw_changed
+        );
+        assert_eq!(
+            terminal.set_terminal_title_at(elevated.clone(), now + Duration::from_millis(1)),
+            TerminalTitleChange::default()
+        );
+        assert_eq!(terminal.terminal_title, original);
+
+        assert_eq!(
+            terminal.set_terminal_title_at(Some("task".into()), now + Duration::from_millis(100)),
+            TerminalTitleChange::default()
+        );
+        assert_eq!(
+            terminal.set_terminal_title_at(elevated.clone(), now + Duration::from_millis(101)),
+            TerminalTitleChange::default()
+        );
+        assert_eq!(
+            terminal.set_terminal_title_at(elevated.clone(), now + Duration::from_millis(300)),
+            TerminalTitleChange::default()
+        );
+        assert!(
+            terminal
+                .set_terminal_title_at(elevated.clone(), now + Duration::from_millis(301))
+                .raw_changed
+        );
+        assert_eq!(terminal.terminal_title, elevated);
+        assert_eq!(
+            terminal.terminal_title_stripped().as_deref(),
+            Some("Administrator: task")
+        );
     }
 
     fn test_session_path(name: &str) -> String {
