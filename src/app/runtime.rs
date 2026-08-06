@@ -181,6 +181,7 @@ impl App {
                 let key = self.input_leases.normalize_press(&lease_key, key);
                 match key.kind {
                     crossterm::event::KeyEventKind::Press => {
+                        let repeat_copy_navigation = self.state.allows_copy_navigation_repeat(&key);
                         let initial_context = self.terminal_input_context();
                         let target = self.handle_key(key.clone()).await;
                         let resulting_context = self.terminal_input_context();
@@ -191,7 +192,27 @@ impl App {
                             resulting_context.as_ref(),
                             target,
                         );
+                        if repeat_copy_navigation && self.state.mode == crate::app::Mode::Copy {
+                            self.input_leases.insert_consumed(
+                                lease_key,
+                                super::input::ConsumedInputLease::RepeatCopyNavigation,
+                            );
+                        }
                         self.execute_repeat_plan(lease_key, key, plan).await;
+                        true
+                    }
+                    crossterm::event::KeyEventKind::Repeat
+                        if self.state.allows_copy_navigation_repeat(&key)
+                            && self.input_leases.repeats_copy_navigation(&lease_key) =>
+                    {
+                        let repetitions = key.repeat_count;
+                        let key = key.with_repeat_count(1);
+                        for _ in 0..repetitions {
+                            if self.state.mode != crate::app::Mode::Copy {
+                                break;
+                            }
+                            self.handle_key(key.clone()).await;
+                        }
                         true
                     }
                     crossterm::event::KeyEventKind::Repeat => {

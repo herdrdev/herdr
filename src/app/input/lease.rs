@@ -27,6 +27,7 @@ pub(crate) struct ForwardedInputLease {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ConsumedInputLease {
     ReprocessRepeats(TerminalInputContext),
+    RepeatCopyNavigation,
     SuppressRepeats,
 }
 
@@ -129,7 +130,9 @@ impl InputLeaseTable {
                 self.insert_consumed(lease_key, ConsumedInputLease::SuppressRepeats);
                 return RepeatPlan::Ignore;
             }
-            Some(InputLease::Consumed(ConsumedInputLease::SuppressRepeats)) => {
+            Some(InputLease::Consumed(
+                ConsumedInputLease::RepeatCopyNavigation | ConsumedInputLease::SuppressRepeats,
+            )) => {
                 return RepeatPlan::Ignore;
             }
             None => {}
@@ -168,6 +171,15 @@ impl InputLeaseTable {
     #[cfg(test)]
     pub(crate) fn contains(&self, key: &InputLeaseKey) -> bool {
         self.leases.contains_key(key)
+    }
+
+    pub(crate) fn repeats_copy_navigation(&self, key: &InputLeaseKey) -> bool {
+        matches!(
+            self.leases.get(key),
+            Some(InputLease::Consumed(
+                ConsumedInputLease::RepeatCopyNavigation
+            ))
+        )
     }
 
     pub(crate) fn insert_forwarded(

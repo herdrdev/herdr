@@ -27,6 +27,10 @@ impl App {
 }
 
 impl AppState {
+    pub(crate) fn allows_copy_navigation_repeat(&self, key: &TerminalKey) -> bool {
+        self.mode == Mode::Copy && !self.is_prefix_key(key) && is_repeatable_navigation_key(key)
+    }
+
     pub(crate) fn enter_copy_mode(&mut self, terminal_runtimes: &TerminalRuntimeRegistry) {
         let Some(ws_idx) = self.active else {
             return;
@@ -955,6 +959,20 @@ fn copy_mode_page_lines(height: u16, half_page: bool) -> usize {
     }
 }
 
+fn is_repeatable_navigation_key(key: &TerminalKey) -> bool {
+    matches!(
+        key.code,
+        KeyCode::Left
+            | KeyCode::Down
+            | KeyCode::Up
+            | KeyCode::Right
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Home
+            | KeyCode::End
+    )
+}
+
 fn copy_mode_command_char(key: TerminalKey) -> Option<char> {
     if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
         return None;
@@ -1163,6 +1181,20 @@ mod tests {
         assert_eq!(
             app.state.copy_mode.as_ref().expect("copy mode").pane_id,
             pane_id
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_mode_repeats_ghostty_enhanced_arrow_navigation() {
+        let (mut app, _) = app_with_copy_screen(b"alpha\nbeta\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        app.state.copy_mode.as_mut().expect("copy mode").cursor_col = 3;
+
+        app.route_client_input(b"\x1b[1;1:1D\x1b[1;1:2D\x1b[1;1:2D\x1b[1;1:3D".to_vec());
+
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+            0
         );
     }
 
