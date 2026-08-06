@@ -51,8 +51,10 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
       </p>
       </div>
       <aside class="ph-side">
-        <b>{pluginCount.toLocaleString('en-US')}</b>
-        <span>plugins across {repositoryCount.toLocaleString('en-US')} repositories</span>
+        <b id="plugins-hero-count">{pluginCount.toLocaleString('en-US')}</b>
+        <span id="plugins-hero-summary">
+          plugins across {repositoryCount.toLocaleString('en-US')} repositories
+        </span>
         <a href="/docs/plugins/">Publish yours →</a>
       </aside>
     </header>
@@ -115,6 +117,8 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
     const sortSelect = document.getElementById("plugins-sort");
     const metaEl = document.getElementById("plugins-meta");
     const moreButton = document.getElementById("plugins-more");
+    const heroCountEl = document.getElementById("plugins-hero-count");
+    const heroSummaryEl = document.getElementById("plugins-hero-summary");
 
     // 24 fills complete rows in both the 3-column and 2-column grid layouts.
     const PAGE_SIZE = 24;
@@ -306,6 +310,12 @@ const apiUrl = import.meta.env.DEV ? null : snapshotUrl;
         repos.reduce((n, repo) => n + (manifestsOf(repo).length || 1), 0);
       parts.push(total + (total === 1 ? " plugin" : " plugins"));
       parts.push(repoCount + (repoCount === 1 ? " repository" : " repositories"));
+      heroCountEl.textContent = total.toLocaleString("en-US");
+      heroSummaryEl.textContent =
+        (total === 1 ? "plugin" : "plugins") +
+        " across " +
+        repoCount.toLocaleString("en-US") +
+        (repoCount === 1 ? " repository" : " repositories");
       const ago = timeAgo(data && data.generatedAt);
       if (ago) parts.push("updated " + ago);
       if (usingFallback) parts.push("preview data");

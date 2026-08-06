@@ -1,7 +1,7 @@
 id = "cursor"
-version = "2026.06.10.1"
+version = "2026.08.03.1"
 min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+updated_at = "2026-08-03T01:08:04Z"
 aliases = ["cursor-agent"]
 
 [[rules]]
@@ -29,7 +29,7 @@ any = [
   { line_regex = ['(?i)^\s*allow .*\(y\)'] },
   { contains = ["keep (n)"] },
   { contains = ["skip (esc or n)"] },
-  { line_regex = ['(?i)^\s*(run |.*\(y\).*(allow|run \(once\)|→ run))'] },
+  { line_regex = ['(?i)^\s*(?:→\s*)?run .*\(y\)'] },
 ]
 
 [[rules]]

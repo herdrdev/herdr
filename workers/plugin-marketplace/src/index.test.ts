@@ -19,7 +19,11 @@ type TreeFixture = {
 
 class MemoryR2 {
   objects = new Map<string, { value: string; options: unknown }>();
+  putCount = 0;
+  failPuts = false;
   async put(key: string, value: string, options?: unknown): Promise<void> {
+    if (this.failPuts) throw new Error("simulated R2 put failure");
+    this.putCount += 1;
     this.objects.set(key, { value, options });
   }
 
@@ -84,9 +88,10 @@ platforms = ["linux", "macos"]
 ${overrides}`;
 }
 
-function env(bucket = new MemoryR2(), blacklist?: MemoryKV): Env {
+function env(bucket = new MemoryR2(), blacklist?: MemoryKV, backupBucket = new MemoryR2()): Env {
   return {
     PLUGIN_MARKETPLACE_BUCKET: bucket,
+    PLUGIN_MARKETPLACE_BACKUP_BUCKET: backupBucket,
     PLUGIN_MARKETPLACE_BLACKLIST: blacklist,
     GITHUB_TOKEN: "token",
   };
@@ -313,10 +318,24 @@ describe("refreshPlugins", () => {
       ],
     });
     expect(snapshot.plugins[0]).not.toHaveProperty("defaultBranch");
+    expect(snapshot.plugins[0]).toMatchObject({
+      firstSeenAt: "2026-06-20T12:00:00.000Z",
+      starsDelta7d: null,
+      starsDelta30d: null,
+    });
     expect(bucket.objects.has("plugins/scan-cache.json")).toBe(true);
-    expect(
-      [...bucket.objects.keys()].some((key) => key.includes("history")),
-    ).toBe(false);
+    const history = JSON.parse(bucket.objects.get("plugins/star-history.json")?.value ?? "");
+    expect(history).toEqual({
+      schemaVersion: 1,
+      entries: [
+        {
+          repositoryId: 1,
+          fullName,
+          firstSeenAt: "2026-06-20T12:00:00.000Z",
+          samples: [{ date: "2026-06-20", stars: 5 }],
+        },
+      ],
+    });
   });
 
   test("reuses cached manifests without resolving or rescanning an unchanged repository", async () => {
@@ -652,6 +671,227 @@ describe("refreshPlugins", () => {
     expect(recovered.snapshot.source.skippedRepositoryCount).toBe(0);
     expect(recovered.snapshot.repositoryCount).toBe(50);
   });
+
+  test("keeps one star sample per UTC day with the first observation winning", async () => {
+    const bucket = new MemoryR2();
+    const backupBucket = new MemoryR2();
+    const repository = repo({ stargazers_count: 5 });
+    const logger = { error() {} };
+    const run = (stars: number, now: string) => {
+      repository.stargazers_count = stars;
+      return refreshPlugins(env(bucket, undefined, backupBucket), {
+        fetch: repositoryFetch({ repositories: [repository] }),
+        now: new Date(now),
+        logger,
+      });
+    };
+
+    expect((await run(5, "2026-06-20T00:10:00.000Z")).ok).toBe(true);
+    expect((await run(9, "2026-06-20T23:50:00.000Z")).ok).toBe(true);
+    const sameDay = JSON.parse(bucket.objects.get("plugins/star-history.json")?.value ?? "");
+    expect(sameDay.entries[0].samples).toEqual([{ date: "2026-06-20", stars: 5 }]);
+
+    const nextDay = await run(12, "2026-06-21T00:10:00.000Z");
+    expect(nextDay.ok).toBe(true);
+    if (!nextDay.ok) return;
+    expect(nextDay.snapshot.plugins[0].firstSeenAt).toBe("2026-06-20T00:10:00.000Z");
+    const history = JSON.parse(bucket.objects.get("plugins/star-history.json")?.value ?? "");
+    expect(history.entries[0].samples).toEqual([
+      { date: "2026-06-20", stars: 5 },
+      { date: "2026-06-21", stars: 12 },
+    ]);
+
+    // One dated backup per UTC day, written on the first run of that day and
+    // never touched by later intraday runs.
+    expect(backupBucket.putCount).toBe(2);
+    expect([...backupBucket.objects.keys()]).toEqual([
+      "backups/star-history/2026-06-20.json",
+      "backups/star-history/2026-06-21.json",
+    ]);
+    const firstBackup = JSON.parse(
+      backupBucket.objects.get("backups/star-history/2026-06-20.json")?.value ?? "",
+    );
+    expect(firstBackup.entries[0].samples).toEqual([{ date: "2026-06-20", stars: 5 }]);
+  });
+
+  test("fails the refresh without touching the primary bucket when the backup put fails", async () => {
+    const bucket = new MemoryR2();
+    await bucket.put("plugins/index.json", '{"schemaVersion":1,"plugins":[{"id":1}]}');
+    const backupBucket = new MemoryR2();
+    backupBucket.failPuts = true;
+    const errors: string[] = [];
+    const options = {
+      fetch: repositoryFetch({ repositories: [repo()] }),
+      now: new Date("2026-06-20T12:00:00.000Z"),
+      logger: { error(message: unknown) { errors.push(String(message)); } },
+    };
+
+    const failed = await refreshPlugins(env(bucket, undefined, backupBucket), options);
+    expect(failed.ok).toBe(false);
+    expect(errors[0]).toContain("simulated R2 put failure");
+    expect(bucket.objects.get("plugins/index.json")?.value).toBe(
+      '{"schemaVersion":1,"plugins":[{"id":1}]}',
+    );
+    expect(bucket.objects.has("plugins/star-history.json")).toBe(false);
+    expect(bucket.objects.has("plugins/scan-cache.json")).toBe(false);
+
+    backupBucket.failPuts = false;
+    const retried = await refreshPlugins(env(bucket, undefined, backupBucket), options);
+    expect(retried.ok).toBe(true);
+    expect(backupBucket.objects.has("backups/star-history/2026-06-20.json")).toBe(true);
+    expect(bucket.objects.has("plugins/star-history.json")).toBe(true);
+  });
+
+  test("computes star deltas from near-boundary baselines and rejects stale ones", async () => {
+    const bucket = new MemoryR2();
+    await bucket.put(
+      "plugins/star-history.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        entries: [
+          {
+            repositoryId: 1,
+            fullName: "ogulcancelik/herdr-plugin-example",
+            firstSeenAt: "2026-05-01T00:00:00.000Z",
+            samples: [
+              { date: "2026-05-01", stars: 10 },
+              { date: "2026-05-20", stars: 30 },
+              { date: "2026-06-13", stars: 40 },
+              { date: "2026-06-19", stars: 90 },
+            ],
+          },
+          {
+            repositoryId: 2,
+            fullName: "example/rejoined",
+            firstSeenAt: "2026-05-01T00:00:00.000Z",
+            samples: [{ date: "2026-05-01", stars: 3 }],
+          },
+        ],
+      }),
+    );
+
+    const result = await refreshPlugins(env(bucket), {
+      fetch: repositoryFetch({
+        repositories: [
+          repo({ stargazers_count: 100 }),
+          repo({
+            id: 2,
+            full_name: "example/rejoined",
+            owner: { login: "example" },
+            name: "rejoined",
+            html_url: "https://github.com/example/rejoined",
+            stargazers_count: 50,
+          }),
+        ],
+      }),
+      now: new Date("2026-06-20T12:00:00.000Z"),
+      logger: { error() {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.snapshot.plugins[0]).toMatchObject({
+      firstSeenAt: "2026-05-01T00:00:00.000Z",
+      starsDelta7d: 60,
+      starsDelta30d: 70,
+    });
+    // The rejoined repository only has a six-week-old sample: far past both
+    // window boundaries, so no delta is reported instead of an inflated one.
+    expect(result.snapshot.plugins[1]).toMatchObject({
+      fullName: "example/rejoined",
+      starsDelta7d: null,
+      starsDelta30d: null,
+    });
+  });
+
+  test("prunes aged samples and keeps history for delisted repositories", async () => {
+    const bucket = new MemoryR2();
+    await bucket.put(
+      "plugins/star-history.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        entries: [
+          {
+            repositoryId: 1,
+            fullName: "ogulcancelik/herdr-plugin-example",
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            samples: [
+              { date: "2026-01-01", stars: 1 },
+              { date: "2026-06-19", stars: 4 },
+            ],
+          },
+          {
+            repositoryId: 2,
+            fullName: "example/delisted-recently",
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            samples: [
+              { date: "2026-01-05", stars: 5 },
+              { date: "2026-06-01", stars: 7 },
+            ],
+          },
+          {
+            repositoryId: 3,
+            fullName: "example/delisted-long-ago",
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            samples: [{ date: "2026-01-05", stars: 3 }],
+          },
+        ],
+      }),
+    );
+
+    const result = await refreshPlugins(env(bucket), {
+      fetch: repositoryFetch({ repositories: [repo()] }),
+      now: new Date("2026-06-20T12:00:00.000Z"),
+      logger: { error() {} },
+    });
+
+    expect(result.ok).toBe(true);
+    const history = JSON.parse(bucket.objects.get("plugins/star-history.json")?.value ?? "");
+    expect(history.entries.map((entry: { repositoryId: number }) => entry.repositoryId)).toEqual([
+      1, 2,
+    ]);
+    expect(history.entries[0].samples.map((sample: { date: string }) => sample.date)).toEqual([
+      "2026-06-19",
+      "2026-06-20",
+    ]);
+    expect(history.entries[1].samples).toEqual([{ date: "2026-06-01", stars: 7 }]);
+  });
+
+  for (const { name, record } of [
+    { name: "malformed JSON", record: "broken" },
+    { name: "an unsupported shape", record: '{"schemaVersion":2,"entries":[]}' },
+    {
+      name: "an invalid entry",
+      record: JSON.stringify({
+        schemaVersion: 1,
+        entries: [{ repositoryId: -5, samples: "broken" }],
+      }),
+    },
+  ]) {
+    test(`fails the refresh without overwriting anything when star history has ${name}`, async () => {
+      const bucket = new MemoryR2();
+      await bucket.put("plugins/index.json", '{"schemaVersion":1,"plugins":[{"id":1}]}');
+      await bucket.put("plugins/star-history.json", record);
+      const backupBucket = new MemoryR2();
+      const errors: string[] = [];
+
+      const result = await refreshPlugins(env(bucket, undefined, backupBucket), {
+        fetch: repositoryFetch({ repositories: [repo()] }),
+        now: new Date("2026-06-20T12:00:00.000Z"),
+        logger: { error(message: unknown) { errors.push(String(message)); } },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(errors[0]).toContain("invalid plugin marketplace star history");
+      expect(bucket.objects.get("plugins/star-history.json")?.value).toBe(record);
+      expect(bucket.objects.get("plugins/index.json")?.value).toBe(
+        '{"schemaVersion":1,"plugins":[{"id":1}]}',
+      );
+      expect(bucket.objects.has("plugins/scan-cache.json")).toBe(false);
+      // Broken history must never be preserved as a "backup".
+      expect(backupBucket.objects.size).toBe(0);
+    });
+  }
 
   for (const { name, fetch } of [
     {
