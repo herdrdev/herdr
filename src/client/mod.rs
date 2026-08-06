@@ -563,6 +563,16 @@ fn set_mouse_capture(enabled: bool) -> io::Result<()> {
     }
 }
 
+/// Re-apply the host mouse mode set after the host surface may have been
+/// re-created underneath us. `set_mouse_capture` clears host mouse reporting
+/// first, so this also drops a tracking mode that a reconnect restored behind
+/// herdr's back in an encoding the client cannot parse.
+fn refresh_host_mouse_capture(enabled: bool) {
+    if let Err(err) = set_mouse_capture(enabled) {
+        warn!(err = %err, "failed to re-assert host mouse capture");
+    }
+}
+
 fn restore_terminal_state(
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
@@ -1442,6 +1452,9 @@ async fn run_client_loop(
                     ) {
                         state.request_repaint();
                     }
+                    if crate::raw_input::events_require_host_mode_refresh(&events) {
+                        refresh_host_mouse_capture(state.mouse_capture_active);
+                    }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
                         query_host_terminal_theme();
                     }
@@ -1504,6 +1517,9 @@ async fn run_client_loop(
                 ) {
                     state.request_repaint();
                 }
+                if crate::raw_input::events_require_host_mode_refresh(&raw_events) {
+                    refresh_host_mouse_capture(state.mouse_capture_active);
+                }
                 let msg = ClientMessage::InputEvents { events };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
@@ -1513,6 +1529,10 @@ async fn run_client_loop(
                 state.reported_size = (new_cols, new_rows);
                 // Resizing invalidates the host-side blit baseline.
                 state.request_repaint();
+                // A reconnect re-syncs the terminal size before the user touches
+                // anything, so this usually restores the mode set before the
+                // first stray mouse report can leak into a pane.
+                refresh_host_mouse_capture(state.mouse_capture_active);
                 let msg = ClientMessage::Resize {
                     cols: new_cols,
                     rows: new_rows,

@@ -579,6 +579,21 @@ pub(crate) fn events_require_host_surface_redraw(
             .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
 }
 
+/// A host terminal can be re-created underneath a live client. Web VS Code, for
+/// example, restores a reconnected terminal from a serialized snapshot that
+/// brings back mouse tracking without the SGR encoding herdr asked for, so every
+/// mouse report then arrives in an encoding the client cannot parse and leaks
+/// into the focused pane as text. Regained focus is the earliest signal that the
+/// surface may be new, so use it to re-assert the host terminal modes.
+///
+/// This is deliberately independent of `redraw_on_focus_gained`: that option
+/// only controls repainting, while a stale mode set corrupts input regardless.
+pub(crate) fn events_require_host_mode_refresh(events: &[RawInputEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
+}
+
 #[cfg(any(not(windows), test))]
 pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
     events
@@ -1542,6 +1557,18 @@ mod tests {
 
         let events = parse_raw_input_bytes_sync(b"\x1b[O");
         assert!(!events_require_host_surface_redraw(&events, true));
+    }
+
+    #[test]
+    fn outer_focus_gained_requests_host_mode_refresh() {
+        let events = parse_raw_input_bytes_sync(b"\x1b[I");
+        assert!(events_require_host_mode_refresh(&events));
+
+        let events = parse_raw_input_bytes_sync(b"\x1b[O");
+        assert!(!events_require_host_mode_refresh(&events));
+
+        let events = parse_raw_input_bytes_sync(b"a");
+        assert!(!events_require_host_mode_refresh(&events));
     }
 
     #[test]
