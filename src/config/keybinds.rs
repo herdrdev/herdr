@@ -1313,8 +1313,16 @@ fn key_parts_match_combo(
     shifted_codepoint: Option<u32>,
     combo: KeyCombo,
 ) -> bool {
-    let (actual_code, actual_modifiers) = normalize_key_combo((actual_code, actual_modifiers));
+    let (actual_code, mut actual_modifiers) = normalize_key_combo((actual_code, actual_modifiers));
     let (expected_code, expected_modifiers) = normalize_key_combo(combo);
+
+    // WezTerm kitty mode sends shifted letters with no SHIFT bit, only the
+    // uppercase alternate codepoint; restore SHIFT so shift+<letter> still matches.
+    if let KeyCode::Char(c) = actual_code {
+        if c.is_ascii_lowercase() && shifted_codepoint == Some(c.to_ascii_uppercase() as u32) {
+            actual_modifiers |= KeyModifiers::SHIFT;
+        }
+    }
 
     if actual_modifiers == expected_modifiers
         && key_codes_match(
@@ -1684,6 +1692,14 @@ close_tab = "X"
         let bindings = ActionKeybinds::direct("shift+n");
         assert!(bindings
             .matches_direct_key(&TerminalKey::new(KeyCode::Char('N'), KeyModifiers::empty(),)));
+    }
+
+    #[test]
+    fn shifted_letter_binding_matches_alternate_codepoint_without_shift_bit() {
+        let key =
+            TerminalKey::new(KeyCode::Char('r'), KeyModifiers::empty()).with_shifted_codepoint('R' as u32);
+        assert!(ActionKeybinds::prefix("shift+r").matches_prefix_key(&key));
+        assert!(!ActionKeybinds::prefix("r").matches_prefix_key(&key));
     }
 
     #[test]
