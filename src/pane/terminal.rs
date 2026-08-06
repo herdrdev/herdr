@@ -71,6 +71,9 @@ pub(crate) enum TerminalWordMotion {
     NextStart,
     PreviousStart,
     NextEnd,
+    NextBigStart,
+    PreviousBigStart,
+    NextBigEnd,
 }
 
 const COPY_MODE_WORD_SEPARATORS: &str = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
@@ -320,6 +323,12 @@ impl PaneTerminal {
                 TerminalWordMotion::NextStart | TerminalWordMotion::NextEnd => {
                     (row, row.saturating_add(window_rows).min(total_rows))
                 }
+                TerminalWordMotion::PreviousBigStart => {
+                    (row.saturating_sub(window_rows.saturating_sub(1)), row + 1)
+                }
+                TerminalWordMotion::NextBigStart | TerminalWordMotion::NextBigEnd => {
+                    (row, row.saturating_add(window_rows).min(total_rows))
+                }
             };
             let rows = core
                 .terminal
@@ -333,10 +342,12 @@ impl PaneTerminal {
                 .is_some_and(|row| row.soft_wrapped && end_row < total_rows);
             let buffer = RetainedTextBuffer::new_words(cols, rows, u32::try_from(start_row).ok()?);
             let target = buffer.word_motion(u32::try_from(row).ok()?, col, motion);
-            let needs_more_history = motion == TerminalWordMotion::PreviousStart
+            let needs_more_history = (motion == TerminalWordMotion::PreviousStart
+                || motion == TerminalWordMotion::PreviousBigStart)
                 && target
                     .is_some_and(|target| starts_in_continuation && target.row == start_row as u32);
-            let needs_more_future = motion == TerminalWordMotion::NextEnd
+            let needs_more_future = (motion == TerminalWordMotion::NextEnd
+                || motion == TerminalWordMotion::NextBigEnd)
                 && ends_in_continuation
                 && target.is_some_and(|target| buffer.point_is_final_atom(target));
             if target.is_some() && !needs_more_history && !needs_more_future {
@@ -346,6 +357,10 @@ impl PaneTerminal {
             let reached_edge = match motion {
                 TerminalWordMotion::PreviousStart => start_row == 0,
                 TerminalWordMotion::NextStart | TerminalWordMotion::NextEnd => {
+                    end_row == total_rows
+                }
+                TerminalWordMotion::PreviousBigStart => start_row == 0,
+                TerminalWordMotion::NextBigStart | TerminalWordMotion::NextBigEnd => {
                     end_row == total_rows
                 }
             };
@@ -782,6 +797,9 @@ impl RetainedTextBuffer {
             TerminalWordMotion::NextStart => self.next_word_start(current),
             TerminalWordMotion::PreviousStart => self.previous_word_start(current),
             TerminalWordMotion::NextEnd => self.next_word_end(current),
+            TerminalWordMotion::NextBigStart => self.next_big_word_start(current),
+            TerminalWordMotion::PreviousBigStart => self.previous_big_word_start(current),
+            TerminalWordMotion::NextBigEnd => self.next_big_word_end(current),
         }
     }
 
@@ -842,6 +860,71 @@ impl RetainedTextBuffer {
             .atoms
             .get(next + 1)
             .is_some_and(|atom| atom.class == class)
+        {
+            next += 1;
+        }
+        self.previous_point(next)
+    }
+
+    fn next_big_word_start(&self, current: usize) -> Option<TerminalTextPoint> {
+        let mut next = current.saturating_add(1);
+        if self
+            .atoms
+            .get(current)
+            .is_some_and(|atom| atom.class != TextClass::Whitespace)
+        {
+            while self
+                .atoms
+                .get(next)
+                .is_some_and(|atom| atom.class != TextClass::Whitespace)
+            {
+                next += 1;
+            }
+        }
+        while self
+            .atoms
+            .get(next)
+            .is_some_and(|atom| atom.class == TextClass::Whitespace)
+        {
+            next += 1;
+        }
+        self.next_point(next)
+    }
+
+    fn previous_big_word_start(&self, current: usize) -> Option<TerminalTextPoint> {
+        let mut previous = current.checked_sub(1)?;
+        while self
+            .atoms
+            .get(previous)
+            .is_some_and(|atom| atom.class == TextClass::Whitespace)
+        {
+            previous = previous.checked_sub(1)?;
+        }
+        while previous > 0
+            && self
+                .atoms
+                .get(previous - 1)
+                .is_some_and(|atom| atom.class != TextClass::Whitespace)
+        {
+            previous -= 1;
+        }
+        self.previous_point(previous)
+    }
+
+    fn next_big_word_end(&self, current: usize) -> Option<TerminalTextPoint> {
+        let mut next = current.saturating_add(1);
+        while self
+            .atoms
+            .get(next)
+            .is_some_and(|atom| atom.class == TextClass::Whitespace)
+        {
+            next += 1;
+        }
+        self.atoms.get(next)?;
+        while self
+            .atoms
+            .get(next + 1)
+            .is_some_and(|atom| atom.class != TextClass::Whitespace)
         {
             next += 1;
         }
@@ -3382,6 +3465,99 @@ mod tests {
         assert_eq!(
             buffer.word_motion(1, 1, TerminalWordMotion::PreviousStart),
             Some(TerminalTextPoint { row: 1, col: 0 })
+        );
+    }
+
+    #[test]
+    fn retained_text_big_word_motions_treat_only_whitespace_as_separators() {
+        let buffer = RetainedTextBuffer::new(
+            20,
+            vec![text_row(
+                "foo.bar baz qux/quux"
+                    .chars()
+                    .map(|ch| text_cell(&ch.to_string())),
+                false,
+            )],
+        );
+
+        // `W` skips punctuation-separated segments and lands on the next
+        // whitespace-delimited run.
+        assert_eq!(
+            buffer.word_motion(0, 0, TerminalWordMotion::NextBigStart),
+            Some(TerminalTextPoint { row: 0, col: 8 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 8, TerminalWordMotion::NextBigStart),
+            Some(TerminalTextPoint { row: 0, col: 12 })
+        );
+        // `E` lands on the last character of the current/next run.
+        assert_eq!(
+            buffer.word_motion(0, 0, TerminalWordMotion::NextBigEnd),
+            Some(TerminalTextPoint { row: 0, col: 6 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 6, TerminalWordMotion::NextBigEnd),
+            Some(TerminalTextPoint { row: 0, col: 10 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 12, TerminalWordMotion::NextBigEnd),
+            Some(TerminalTextPoint { row: 0, col: 19 })
+        );
+        // `B` returns to the beginning of the previous run.
+        assert_eq!(
+            buffer.word_motion(0, 19, TerminalWordMotion::PreviousBigStart),
+            Some(TerminalTextPoint { row: 0, col: 12 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 12, TerminalWordMotion::PreviousBigStart),
+            Some(TerminalTextPoint { row: 0, col: 8 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 8, TerminalWordMotion::PreviousBigStart),
+            Some(TerminalTextPoint { row: 0, col: 0 })
+        );
+
+        // Lowercase motions keep their punctuation-aware behavior.
+        assert_eq!(
+            buffer.word_motion(0, 0, TerminalWordMotion::NextStart),
+            Some(TerminalTextPoint { row: 0, col: 3 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 3, TerminalWordMotion::NextStart),
+            Some(TerminalTextPoint { row: 0, col: 4 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 4, TerminalWordMotion::PreviousStart),
+            Some(TerminalTextPoint { row: 0, col: 3 })
+        );
+    }
+
+    #[test]
+    fn retained_text_big_word_motions_cross_rows_and_blank_lines() {
+        let buffer = RetainedTextBuffer::new(
+            6,
+            vec![
+                text_row("a.b-c ".chars().map(|ch| text_cell(&ch.to_string())), false),
+                text_row("      ".chars().map(|ch| text_cell(&ch.to_string())), false),
+                text_row("d_e   ".chars().map(|ch| text_cell(&ch.to_string())), false),
+            ],
+        );
+
+        assert_eq!(
+            buffer.word_motion(0, 0, TerminalWordMotion::NextBigStart),
+            Some(TerminalTextPoint { row: 2, col: 0 })
+        );
+        assert_eq!(
+            buffer.word_motion(2, 0, TerminalWordMotion::PreviousBigStart),
+            Some(TerminalTextPoint { row: 0, col: 0 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 0, TerminalWordMotion::NextBigEnd),
+            Some(TerminalTextPoint { row: 0, col: 4 })
+        );
+        assert_eq!(
+            buffer.word_motion(0, 4, TerminalWordMotion::NextBigEnd),
+            Some(TerminalTextPoint { row: 2, col: 2 })
         );
     }
 
