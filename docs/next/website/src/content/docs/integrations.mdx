@@ -87,7 +87,7 @@ You can include `--agent-session-id` or `--agent-session-path` with `report-agen
 
 Use `HERDR_BIN_PATH` and the CLI wrappers for portable integrations. Code that needs direct IPC can send the equivalent `pane.report_agent`, `pane.report_agent_session`, and `pane.release_agent` requests described in the [Socket API](/docs/socket-api/#agent-state-reporting).
 
-[Prime Agent's built-in Herdr reporter](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts) is a real-world example. It activates only inside Herdr, maps agent events to `working`, `idle`, and `blocked`, preserves report ordering across sessions, and releases authority on exit.
+[Prime Agent's built-in Herdr reporter](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts) is a real-world example. It activates only inside Herdr, maps agent events to `working`, `idle`, and `blocked`, preserves report ordering across sessions, and releases authority on exit. Prime Agent also ships native session restore — see [Prime Agent](#prime-agent).
 
 Some integrations report native agent session references. Herdr uses official session references to resume Claude Code, Codex, Devin CLI, Droid, Kimi Code CLI, Qoder CLI, Cursor Agent CLI, Grok CLI, GitHub Copilot CLI, Pi, OMP, Hermes Agent, OpenCode, Kilo Code CLI, MastraCode, and Antigravity CLI panes after a Herdr server restart unless `[session] resume_agents_on_restore = false` disables it.
 
@@ -314,6 +314,34 @@ The hook reports session identity through Grok's `SessionStart` hook while Grok 
 Herdr uses `~/.grok` by default, or `GROK_HOME` when set. The Grok config directory must already exist. Grok merges every `hooks/*.json` file in that directory, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to the `hooks/herdr-agent-state.sh` script, and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
 
 After Grok emits a session start event, Herdr can use the reported session id to resume the pane with `grok --resume <id>`.
+
+## Prime Agent
+
+Prime Agent is a coding agent CLI with an IPython-backed tool runtime. It
+integrates with Herdr through a built-in reporter that ships with the agent
+itself, so there is no `herdr integration install prime-agent` step: any
+supported Prime Agent version reports when it runs inside a Herdr pane.
+
+- **Lifecycle state** — the built-in reporter (`dist/core/extensions/builtin/herdr-agent-state.js`)
+  activates only when `HERDR_ENV=1` and maps agent events to `working`,
+  `idle`, and `blocked`. When the reporter is actively reporting for the
+  pane, it authors lifecycle state; otherwise Herdr falls back to the
+  prime-agent screen manifest. The reporter preserves report ordering
+  across sessions with a per-source sequence, debounces idle transitions,
+  and releases authority on exit.
+- **Session identity and restore** — the reporter sends the pane's native
+  session reference (`~/.prime/agent/sessions/<uuid>.jsonl`, reported as a
+  session path under the `herdr:pi` source with the `prime-agent` agent
+  label). Herdr persists that reference and, after a server restart with
+  `[session] resume_agents_on_restore = true` (the default), resumes the
+  pane with `prime-agent --resume <path|id>`.
+- **Agent control** — Prime Agent is a supported `agent start` kind, so
+  scripts and other agents can launch it in a pane with
+  `herdr agent start reviewer --kind prime-agent --pane <pane-id>`.
+
+Restore requires a Prime Agent version that ships the built-in reporter
+(reporter source `herdr:pi` / agent label `prime-agent`) and a Herdr build
+that registers that source as official (this version).
 
 ## Custom status labels
 

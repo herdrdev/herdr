@@ -1,0 +1,18 @@
+id = "prime-agent"
+version = "2026.08.07.1"
+min_engine_version = 2
+updated_at = "2026-08-07T00:00:00Z"
+aliases = ["herdr:pi"]
+
+# prime-agent's built-in herdr reporter (source herdr:pi, agent label
+# prime-agent) authors lifecycle state authoritatively on panes where it is
+# active. These rules are a screen-manifest fallback only: prime-agent panes
+# that cannot report (older builds, wrapped launches) still get a best-effort
+# idle classification from the interactive prompt marker below.
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 100
+region = "whole_recent"
+visible_idle = true
+contains = ["Try \"explain how"]

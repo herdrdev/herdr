@@ -60,7 +60,7 @@ pub fn session_ref_from_report(
         return None;
     }
 
-    if agent == "pi" || agent == "omp" {
+    if agent == "pi" || agent == "omp" || agent == "prime-agent" {
         return _agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
@@ -102,7 +102,9 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "omp" | "prime-agent", AgentSessionRefKind::Path) => {
+            AgentSessionRef::path(value)?
+        }
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -155,6 +157,16 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
             // `--session` flag, unlike pi.
             vec!["omp".into(), format!("--resume={}", session_ref.value)]
+        }
+        ("herdr:pi", "prime-agent", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            // prime-agent resume is `-r, --resume=<path|id>`. The session
+            // reference reported by prime-agent's built-in herdr reporter is
+            // the conversation log path (~/.prime/agent/sessions/<uuid>.jsonl).
+            vec![
+                "prime-agent".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
             vec![
@@ -226,6 +238,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
+            | ("herdr:pi", "prime-agent")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
             | ("herdr:qodercli", "qodercli")
@@ -257,6 +270,43 @@ mod tests {
             .join(name)
             .display()
             .to_string()
+    }
+
+    #[test]
+    fn prime_agent_session_refs_are_official_and_path_round_trip() {
+        let path = absolute_test_path("prime-agent-session.jsonl");
+        let reported = session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            Some("019fdc98-0000-0000-0000-000000000000".into()),
+            Some(path.clone()),
+        )
+        .unwrap();
+        assert_eq!(reported.kind, AgentSessionRefKind::Path);
+        assert_eq!(reported.value, path);
+
+        let snapshot = session_ref_from_snapshot(
+            "herdr:pi",
+            "prime-agent",
+            AgentSessionRefKind::Path,
+            &path,
+        )
+        .unwrap();
+        assert_eq!(snapshot.source, "herdr:pi");
+        assert_eq!(snapshot.agent, "prime-agent");
+        assert_eq!(snapshot.session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(snapshot.session_ref.value, path);
+
+        assert!(is_official_agent_source("herdr:pi", "prime-agent"));
+        // id-only reports still work (fall back from path to id)
+        let id_only = session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            Some("019fdc98-0000-0000-0000-000000000000".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(id_only.kind, AgentSessionRefKind::Id);
     }
 
     #[test]
@@ -364,6 +414,27 @@ mod tests {
             .unwrap()
             .argv,
             vec!["omp", format!("--resume={omp_session}").as_str()]
+        );
+        let prime_agent_session = absolute_test_path("prime-agent-session.jsonl");
+        assert_eq!(
+            plan(
+                "herdr:pi",
+                "prime-agent",
+                &AgentSessionRef::path(&prime_agent_session).unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["prime-agent", "--resume", prime_agent_session.as_str()]
+        );
+        assert_eq!(
+            plan(
+                "herdr:pi",
+                "prime-agent",
+                &AgentSessionRef::id("prime-agent-id").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["prime-agent", "--resume", "prime-agent-id"]
         );
         assert_eq!(
             plan(

@@ -602,6 +602,7 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
     fn accepts_every_canonical_agent_override_key() {
         let agents = [
             Agent::Pi,
+            Agent::PrimeAgent,
             Agent::Claude,
             Agent::Codex,
             Agent::Gemini,
