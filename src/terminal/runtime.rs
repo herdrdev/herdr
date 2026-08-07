@@ -462,6 +462,27 @@ impl TerminalRuntime {
         Some((screen, crate::terminal::ScreenSnapshot { cols, rows }))
     }
 
+    pub(crate) fn screen_text_snapshot_with_seq(
+        &self,
+    ) -> Option<(
+        crate::ghostty::ActiveScreen,
+        crate::terminal::ScreenSnapshot,
+        u64,
+    )> {
+        for _ in 0..3 {
+            let before = self.content_seq();
+            if !before.is_multiple_of(2) {
+                continue;
+            }
+            let (screen, snapshot) = self.screen_text_snapshot()?;
+            let after = self.content_seq();
+            if before == after {
+                return Some((screen, snapshot, after));
+            }
+        }
+        None
+    }
+
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
@@ -517,6 +538,10 @@ impl TerminalRuntime {
 
     pub(crate) fn current_size(&self) -> (u16, u16) {
         self.0.current_size()
+    }
+
+    pub(crate) fn content_seq(&self) -> u64 {
+        self.0.content_seq()
     }
 }
 
