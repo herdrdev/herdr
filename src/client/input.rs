@@ -77,6 +77,7 @@ fn unix_stdin_reader_loop(
     if host_color_query_sent {
         framer.host_color_query_sent();
         framer.enable_host_color_scheme_change_tracking();
+        framer.enable_host_appearance_query_on_focus();
     }
     if host_cell_size_query_sent {
         framer.host_cell_size_query_sent();

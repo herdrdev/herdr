@@ -298,6 +298,8 @@ struct RemoteUpdateManifest {
     version: String,
     protocol: Option<u32>,
     assets: BTreeMap<String, RemoteAssetRef>,
+    #[serde(default)]
+    sha256: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_remote_manifest_releases")]
     releases: BTreeMap<String, RemoteReleaseMetadata>,
 }
@@ -307,6 +309,8 @@ struct RemoteReleaseMetadata {
     protocol: Option<u32>,
     #[serde(default)]
     assets: BTreeMap<String, RemoteAssetRef>,
+    #[serde(default)]
+    sha256: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -350,6 +354,7 @@ impl RemoteUpdateManifest {
             return Some(RemoteManifestReleaseRef {
                 protocol: self.protocol,
                 assets: &self.assets,
+                sha256: &self.sha256,
             });
         }
 
@@ -357,6 +362,7 @@ impl RemoteUpdateManifest {
             (!release.assets.is_empty()).then_some(RemoteManifestReleaseRef {
                 protocol: release.protocol,
                 assets: &release.assets,
+                sha256: &release.sha256,
             })
         })
     }
@@ -366,6 +372,7 @@ impl RemoteUpdateManifest {
 struct RemoteManifestReleaseRef<'a> {
     protocol: Option<u32>,
     assets: &'a BTreeMap<String, RemoteAssetRef>,
+    sha256: &'a BTreeMap<String, String>,
 }
 
 fn current_version() -> String {
@@ -1531,15 +1538,21 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
             )));
         }
     }
-    release
-        .assets
-        .get(asset_key)
-        .map(remote_asset_info)
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "no {asset_key} binary in the release manifest for herdr {current_version}"
-            ))
-        })
+    let asset = release.assets.get(asset_key).ok_or_else(|| {
+        io::Error::other(format!(
+            "no {asset_key} binary in the release manifest for herdr {current_version}"
+        ))
+    })?;
+    let mut asset = remote_asset_info(asset);
+    asset.sha256 = asset
+        .sha256
+        .or_else(|| release.sha256.get(asset_key).cloned());
+    if asset.sha256.is_none() {
+        return Err(io::Error::other(format!(
+            "release manifest asset {asset_key} is missing a SHA-256 checksum"
+        )));
+    }
+    Ok(asset)
 }
 
 fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
@@ -2891,6 +2904,9 @@ mod tests {
                 "assets": {
                     "linux-x86_64": "https://example.com/latest"
                 },
+                "sha256": {
+                    "linux-x86_64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
                 "releases": {
                     "1.2.3": {
                         "assets": {
@@ -2902,12 +2918,14 @@ mod tests {
         )
         .unwrap();
 
+        let release = manifest.release_for_version("1.2.3").unwrap();
         assert_eq!(
-            manifest
-                .release_for_version("1.2.3")
-                .and_then(|release| release.assets.get("linux-x86_64"))
-                .map(RemoteAssetRef::url),
+            release.assets.get("linux-x86_64").map(RemoteAssetRef::url),
             Some("https://example.com/latest")
+        );
+        assert_eq!(
+            release.sha256.get("linux-x86_64").map(String::as_str),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
     }
 

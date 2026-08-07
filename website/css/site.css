@@ -787,6 +787,47 @@ body.site .toc a {
 body.site .toc a:hover { color: var(--ink); }
 body.site .toc a[aria-current] { color: var(--spot); border-left-color: var(--spot); }
 
+body.site .cmp { padding: 40px var(--gut) 46px; border-bottom: 1px solid var(--line2); }
+body.site .cmp-scroll { overflow-x: auto; }
+body.site .cmp table {
+  width: 100%; min-width: 940px; border-collapse: collapse;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+}
+body.site .cmp th, body.site .cmp td {
+  text-align: left; vertical-align: top; padding: 12px 14px;
+  border: 1px solid var(--line); color: var(--dim); font-weight: 400;
+  background: none;
+}
+body.site .cmp thead th {
+  color: var(--faint); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; background: var(--panel); white-space: nowrap;
+}
+body.site .cmp tbody th { color: var(--ink); }
+body.site .cmp .h { color: var(--ink); background: color-mix(in srgb, var(--spot) 6%, transparent); }
+body.site .cmp thead .h { color: var(--spot); }
+body.site .cmp .no { color: var(--faint); }
+
+body.site .caps .cap-flat { cursor: default; }
+body.site .caps .cap-flat:hover { background: none; }
+body.site .caps .cap-flat:hover h3 { color: var(--ink); }
+body.site .caps .cap-flat:hover .n > span:first-child { color: var(--mass); }
+
+body.site .vs { padding: 40px var(--gut) 46px; border-bottom: 1px solid var(--line2); }
+body.site .vs-list { border: 1px solid var(--line2); }
+body.site .vs-list article {
+  display: grid; grid-template-columns: minmax(150px, 230px) minmax(0, 1fr);
+  gap: 0 30px; padding: 16px 18px; border-bottom: 1px solid var(--line);
+}
+body.site .vs-list article:last-child { border-bottom: 0; }
+body.site .vs-list b {
+  font-family: var(--mono); font-weight: 400; font-size: 12px;
+  letter-spacing: .04em; color: var(--ink);
+}
+body.site .vs-list p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.7; max-width: 74ch; }
+@media (max-width: 700px) {
+  body.site .vs-list article { grid-template-columns: minmax(0, 1fr); gap: 7px 0; }
+}
+
 /* ── close ── */
 body.site .end { position: relative; overflow: hidden; padding: 96px var(--gut) 104px; border-bottom: 1px solid var(--line2); }
 /* The bleed is a fraction of the mark, not of the section. As a percentage it
@@ -811,6 +852,10 @@ body.site .foot { padding: 22px var(--gut); border-top: 1px solid var(--line2); 
 body.site .foot a { color: var(--dim); text-decoration: none; }
 body.site .foot a:hover { color: var(--ink); }
 body.site .foot .ram { width: 15px; height: 15px; color: var(--faint); }
+body.site .meta.yc-meta { margin-top: 10px; }
+body.site .meta .yc { color: var(--dim); display: inline-flex; align-items: center; gap: 6px; }
+body.site .meta .yc img { display: block; }
+body.site .meta .yc:hover { color: var(--ink); text-decoration: none; }
 body.site .foot .fact { color: var(--faint); font-variant-numeric: tabular-nums; }
 /* the outbound cluster sits right: site links and provenance on one side, ways
    to reach the project on the other. Its own gap is tighter than the row's, so

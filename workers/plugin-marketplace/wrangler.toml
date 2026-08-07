@@ -10,6 +10,10 @@ subrequests = 3500
 binding = "PLUGIN_MARKETPLACE_BUCKET"
 bucket_name = "herdr-plugin-marketplace"
 
+[[r2_buckets]]
+binding = "PLUGIN_MARKETPLACE_BACKUP_BUCKET"
+bucket_name = "herdr-plugin-marketplace-backup"
+
 [[kv_namespaces]]
 binding = "PLUGIN_MARKETPLACE_BLACKLIST"
 id = "6504b3b84171492db56e805f6aad1686"

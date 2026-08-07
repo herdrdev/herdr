@@ -55,6 +55,8 @@ pub enum DefaultColorKind {
 }
 
 pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
+#[cfg(any(not(windows), test))]
+pub const HOST_COLOR_SCHEME_QUERY_SEQUENCE: &str = "\x1b[?996n";
 pub const HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE: &str = "\x1b[?2031h";
 pub const HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE: &str = "\x1b[?2031l";
 
