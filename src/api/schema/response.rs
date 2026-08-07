@@ -169,6 +169,8 @@ pub enum ResponseResult {
     PaneGraphicsInfo {
         cell_width_px: u32,
         cell_height_px: u32,
+        /// True only when this pane is on the currently rendered terminal surface.
+        pane_visible: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file_frame_directory: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

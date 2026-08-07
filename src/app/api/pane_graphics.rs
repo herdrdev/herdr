@@ -12,6 +12,25 @@ use crate::layout::PaneId;
 use super::responses::{encode_error, encode_success};
 
 impl App {
+    /// Whether graphics for a pane can be placed on the surface rendered by this client.
+    ///
+    /// This deliberately follows the pane layout rather than pane existence: inactive
+    /// workspaces/tabs and panes hidden by zoom are not placeable. Short-lived UI modes do not
+    /// suspend the producer because the pane becomes visible again without a layout event.
+    fn pane_graphics_visible(&self, ws_idx: usize, pane_id: PaneId) -> bool {
+        if self.state.active != Some(ws_idx) {
+            return false;
+        }
+        let Some(tab) = self.state.workspaces[ws_idx].active_tab() else {
+            return false;
+        };
+        if tab.zoomed {
+            tab.layout.focused() == pane_id
+        } else {
+            tab.layout.pane_ids().contains(&pane_id)
+        }
+    }
+
     pub(super) fn handle_pane_graphics_info(
         &mut self,
         id: String,
@@ -20,9 +39,10 @@ impl App {
         if let Err(response) = require_enabled(self, &id) {
             return response;
         }
-        if self.parse_pane_id(&target.pane_id).is_none() {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
             return pane_not_found(id, &target.pane_id);
-        }
+        };
+        let pane_visible = self.pane_graphics_visible(ws_idx, pane_id);
         if !self.state.host_cell_size.is_known() {
             return encode_error(id, "cell_size_unavailable", "host cell size is unavailable");
         }
@@ -36,6 +56,7 @@ impl App {
             ResponseResult::PaneGraphicsInfo {
                 cell_width_px: self.state.host_cell_size.width_px,
                 cell_height_px: self.state.host_cell_size.height_px,
+                pane_visible,
                 file_frame_directory: file_frame_directory
                     .map(|directory| directory.to_string_lossy().into_owned()),
                 file_frame_formats: if direct {
@@ -530,6 +551,71 @@ mod tests {
             data_base64: String::new(),
             placement: Default::default(),
         }
+    }
+
+    fn pane_visible(response: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(response).unwrap()["result"]["pane_visible"]
+            .as_bool()
+            .unwrap()
+    }
+
+    #[test]
+    fn info_reports_visibility_for_terminal_surface_workspace_tab_and_zoom() {
+        let (mut app, pane_id) = app();
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.active = Some(0);
+        app.state.host_cell_size = crate::kitty_graphics::HostCellSize {
+            width_px: 10,
+            height_px: 20,
+        };
+        let visible = app.handle_pane_graphics_info(
+            "visible".into(),
+            crate::api::schema::PaneTarget {
+                pane_id: pane_id.clone(),
+            },
+        );
+        assert!(pane_visible(&visible));
+
+        let hidden_workspace = Workspace::test_new("hidden");
+        let hidden_workspace_pane = hidden_workspace.tabs[0].root_pane;
+        app.state.workspaces.push(hidden_workspace);
+        let hidden_workspace_id = app.public_pane_id(1, hidden_workspace_pane).unwrap();
+        let hidden = app.handle_pane_graphics_info(
+            "hidden-workspace".into(),
+            crate::api::schema::PaneTarget {
+                pane_id: hidden_workspace_id,
+            },
+        );
+        assert!(!pane_visible(&hidden));
+
+        let inactive_tab = app.state.workspaces[0].test_add_tab(Some("inactive"));
+        let inactive_pane = app.state.workspaces[0].tabs[inactive_tab].root_pane;
+        let inactive_id = app.public_pane_id(0, inactive_pane).unwrap();
+        let hidden_tab = app.handle_pane_graphics_info(
+            "hidden-tab".into(),
+            crate::api::schema::PaneTarget {
+                pane_id: inactive_id,
+            },
+        );
+        assert!(!pane_visible(&hidden_tab));
+
+        app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.workspaces[0].tabs[0].zoomed = true;
+        let zoomed_away = app.handle_pane_graphics_info(
+            "zoomed-away".into(),
+            crate::api::schema::PaneTarget {
+                pane_id: pane_id.clone(),
+            },
+        );
+        assert!(!pane_visible(&zoomed_away));
+
+        app.state.workspaces[0].tabs[0].zoomed = false;
+        app.state.mode = crate::app::Mode::Navigate;
+        let short_lived_mode = app.handle_pane_graphics_info(
+            "navigate".into(),
+            crate::api::schema::PaneTarget { pane_id },
+        );
+        assert!(pane_visible(&short_lived_mode));
     }
 
     #[test]

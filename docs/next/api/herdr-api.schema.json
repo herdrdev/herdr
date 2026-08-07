@@ -9325,6 +9325,10 @@
                   "minimum": 0,
                   "type": "integer"
                 },
+                "pane_visible": {
+                  "description": "True only when this pane is on the currently rendered terminal surface.",
+                  "type": "boolean"
+                },
                 "pixel_mouse": {
                   "default": false,
                   "type": "boolean"
@@ -9337,7 +9341,8 @@
               "required": [
                 "type",
                 "cell_width_px",
-                "cell_height_px"
+                "cell_height_px",
+                "pane_visible"
               ],
               "type": "object"
             },
