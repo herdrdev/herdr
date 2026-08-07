@@ -845,7 +845,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     client_handshake(&mut client_b, CURRENT_PROTOCOL, 80, 24);
     let saw_working_on_client =
         wait_for_frame_matching(&mut client_b, Duration::from_secs(5), |frame| {
-            frame_contains_colored_symbol(frame, "●", (249, 226, 175))
+            frame_contains_colored_symbol(frame, "◐", (249, 226, 175))
         })
         .expect("frame decoding should succeed");
     assert!(
@@ -864,7 +864,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
 
     let saw_blocked_on_client =
         wait_for_frame_matching(&mut client_b, Duration::from_secs(5), |frame| {
-            frame_contains_colored_symbol(frame, "●", (243, 139, 168))
+            frame_contains_colored_symbol(frame, "×", (243, 139, 168))
         })
         .expect("frame decoding should succeed");
     assert!(
