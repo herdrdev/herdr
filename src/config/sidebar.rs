@@ -393,10 +393,10 @@ impl Default for AgentsSidebarConfig {
             rows: vec![
                 vec![
                     AgentSidebarToken::StateIcon,
-                    AgentSidebarToken::Workspace,
-                    AgentSidebarToken::Tab,
+                    AgentSidebarToken::Agent,
+                    AgentSidebarToken::StateText,
                 ],
-                vec![AgentSidebarToken::Agent],
+                vec![AgentSidebarToken::Workspace, AgentSidebarToken::Tab],
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
@@ -443,10 +443,10 @@ mod tests {
             vec![
                 vec![
                     AgentSidebarToken::StateIcon,
-                    AgentSidebarToken::Workspace,
-                    AgentSidebarToken::Tab,
+                    AgentSidebarToken::Agent,
+                    AgentSidebarToken::StateText,
                 ],
-                vec![AgentSidebarToken::Agent],
+                vec![AgentSidebarToken::Workspace, AgentSidebarToken::Tab],
             ]
         );
         assert!(config.agents.rows_by_agent.is_empty());
