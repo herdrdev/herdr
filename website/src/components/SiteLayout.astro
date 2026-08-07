@@ -95,7 +95,7 @@ const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
       window.herdrGround.apply(window.herdrGround.read());
     </script>
     <link rel="stylesheet" href="/css/style.css?v=59" />
-    <link rel="stylesheet" href="/css/site.css?v=60" />
+    <link rel="stylesheet" href="/css/site.css?v=62" />
   </head>
   <body class="site">
     <div class="hd-frame">
@@ -105,6 +105,7 @@ const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
         <a class="lnk" href="/docs/">Docs</a>
         <a class="lnk" href="/plugins/">Plugins</a>
         <a class="lnk" href="/blog/">Blog</a>
+        <a class="lnk" href="/compare/">Compare</a>
         <a class="ico wide" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub — star count">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
           <b data-stars>{fmt(starCount)}</b>
@@ -126,6 +127,7 @@ const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
         <a href="/docs/">Docs</a>
         <a href="/plugins/">Plugins</a>
         <a href="/blog/">Blog</a>
+        <a href="/compare/">Compare</a>
         <a href="https://x.com/herdrdev">@herdrdev</a>
         <div class="sheet-ground">
           <span>Ground</span>
@@ -143,7 +145,8 @@ const facts = version ? `v${version} · Apache 2.0` : 'Apache 2.0';
         <a href="/docs/">docs</a>
         <a href="/plugins/">plugins</a>
         <a href="/blog/">blog</a>
-        <span>built in the terminal · {year}</span>
+        <a href="/compare/">compare</a>
+        <span>built in the terminal · © {year} Herdr, Inc.</span>
         <span class="fact">{facts}</span>
         <span class="out">
           <a class="ico" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">

@@ -24,6 +24,12 @@ const PLUGIN_VERSION_MAX_CHARS = 64;
 const PLUGIN_DESCRIPTION_MAX_CHARS = 500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const SCAN_CACHE_SCHEMA_VERSION = 1;
+const STAR_HISTORY_KEY = "plugins/star-history.json";
+const STAR_HISTORY_BACKUP_KEY_PREFIX = "backups/star-history/";
+const STAR_HISTORY_SCHEMA_VERSION = 1;
+const STAR_HISTORY_MAX_AGE_DAYS = 60;
+const STAR_BASELINE_TOLERANCE_DAYS = 2;
+const DAY_MS = 86_400_000;
 
 const PLUGIN_PLATFORMS = new Set(["linux", "macos", "windows"]);
 const REGULAR_BLOB_MODES = new Set(["100644", "100755"]);
@@ -57,6 +63,7 @@ type ScheduledController = unknown;
 
 export type Env = {
   PLUGIN_MARKETPLACE_BUCKET: R2Bucket;
+  PLUGIN_MARKETPLACE_BACKUP_BUCKET: R2Bucket;
   PLUGIN_MARKETPLACE_BLACKLIST?: KVNamespace;
   GITHUB_TOKEN?: string;
 };
@@ -101,7 +108,27 @@ export type PluginManifestListing = {
 
 export type PluginListing = Omit<RepositoryListing, "defaultBranch"> & {
   headCommit: string;
+  firstSeenAt: string;
+  starsDelta7d: number | null;
+  starsDelta30d: number | null;
   manifests: PluginManifestListing[];
+};
+
+export type StarHistorySample = {
+  date: string;
+  stars: number;
+};
+
+export type StarHistoryEntry = {
+  repositoryId: number;
+  fullName: string;
+  firstSeenAt: string;
+  samples: StarHistorySample[];
+};
+
+export type StarHistory = {
+  schemaVersion: 1;
+  entries: StarHistoryEntry[];
 };
 
 export type PluginSnapshot = {
@@ -252,14 +279,30 @@ export async function refreshPlugins(
       };
     });
     const entriesById = new Map(nextEntries.map((entry) => [entry.repositoryId, entry]));
-    const plugins = resolved
-      .map(({ repository }) => {
-        const entry = entriesById.get(repository.id);
-        if (!entry || entry.manifests.length === 0) return null;
-        const { defaultBranch: _defaultBranch, ...card } = repository;
-        return { ...card, headCommit: entry.headCommit, manifests: entry.manifests };
-      })
-      .filter((plugin): plugin is PluginListing => plugin !== null);
+    const cards = resolved.flatMap(({ repository }) => {
+      const entry = entriesById.get(repository.id);
+      if (!entry || entry.manifests.length === 0) return [];
+      const { defaultBranch: _defaultBranch, ...card } = repository;
+      return [{ ...card, headCommit: entry.headCommit, manifests: entry.manifests }];
+    });
+
+    const now = options.now ?? new Date();
+    // History updates are read-modify-write without a conditional put.
+    // Overlapping runs are rare (30-minute cron, sub-minute refreshes) and the
+    // worst case is a daily sample recording a slightly later observation, so
+    // the race is accepted instead of building compare-and-swap on R2.
+    const history = await readStarHistory(env.PLUGIN_MARKETPLACE_BUCKET);
+    const nextHistory = updateStarHistory(history, cards, now);
+    const historyById = new Map(nextHistory.entries.map((entry) => [entry.repositoryId, entry]));
+    const plugins: PluginListing[] = cards.map((card) => {
+      const entry = historyById.get(card.id);
+      return {
+        ...card,
+        firstSeenAt: entry?.firstSeenAt ?? now.toISOString(),
+        starsDelta7d: entry ? starsDeltaSince(entry, card.stars, now, 7) : null,
+        starsDelta30d: entry ? starsDeltaSince(entry, card.stars, now, 30) : null,
+      };
+    });
 
     const pluginCount = plugins.reduce((total, plugin) => total + plugin.manifests.length, 0);
     const warnings = nextEntries.flatMap((entry) => (entry.warning ? [entry.warning] : []));
@@ -268,7 +311,7 @@ export async function refreshPlugins(
         `GitHub returned ${search.totalCount} results; only the first ${search.repositories.length} were collected.`,
       );
     }
-    const generatedAt = (options.now ?? new Date()).toISOString();
+    const generatedAt = now.toISOString();
     const snapshot: PluginSnapshot = {
       schemaVersion: 1,
       generatedAt,
@@ -300,6 +343,30 @@ export async function refreshPlugins(
     };
 
     const nextCache: ScanCache = { schemaVersion: SCAN_CACHE_SCHEMA_VERSION, entries: nextEntries };
+    // Star history is the only object that cannot be rebuilt, so the first run
+    // of each UTC day copies it to a dated key in the private backup bucket.
+    // The dated key's existence marks the day as backed up, which stays correct
+    // when history is empty or a repository joins mid-day. Backups are kept
+    // forever; the backup put runs before the primary puts so a failure leaves
+    // the primary untouched and the next run retries the same dated key. The
+    // get-then-put pair is not atomic; like the history read-modify-write
+    // above, overlapping runs are accepted because the worst case is the dated
+    // backup holding an observation from seconds later.
+    const backupKey = `${STAR_HISTORY_BACKUP_KEY_PREFIX}${isoDate(now)}.json`;
+    if ((await env.PLUGIN_MARKETPLACE_BACKUP_BUCKET.get(backupKey)) === null) {
+      await env.PLUGIN_MARKETPLACE_BACKUP_BUCKET.put(backupKey, JSON.stringify(nextHistory), {
+        httpMetadata: {
+          contentType: "application/json; charset=utf-8",
+          cacheControl: "no-store",
+        },
+      });
+    }
+    await env.PLUGIN_MARKETPLACE_BUCKET.put(STAR_HISTORY_KEY, JSON.stringify(nextHistory), {
+      httpMetadata: {
+        contentType: "application/json; charset=utf-8",
+        cacheControl: "no-store",
+      },
+    });
     await env.PLUGIN_MARKETPLACE_BUCKET.put(SCAN_CACHE_KEY, JSON.stringify(nextCache), {
       httpMetadata: {
         contentType: "application/json; charset=utf-8",
@@ -693,6 +760,137 @@ export function parseManifestSummary(manifestText: string): Omit<PluginManifestL
   } catch {
     return null;
   }
+}
+
+export function updateStarHistory(
+  history: StarHistory,
+  cards: Array<{ id: number; fullName: string; stars: number }>,
+  now: Date,
+): StarHistory {
+  const today = isoDate(now);
+  const oldestKeptMs = now.getTime() - STAR_HISTORY_MAX_AGE_DAYS * DAY_MS;
+  const entriesById = new Map(history.entries.map((entry) => [entry.repositoryId, entry]));
+  const nextEntries = new Map<number, StarHistoryEntry>();
+
+  for (const card of cards) {
+    const existing = entriesById.get(card.id);
+    const samples = (existing?.samples ?? []).filter(
+      (sample) => dateMs(sample.date) >= oldestKeptMs,
+    );
+    // One sample per UTC day, first observation wins, so intraday cron runs
+    // keep a stable baseline for delta computation.
+    if (samples[samples.length - 1]?.date !== today) {
+      samples.push({ date: today, stars: card.stars });
+    }
+    nextEntries.set(card.id, {
+      repositoryId: card.id,
+      fullName: card.fullName,
+      firstSeenAt: existing?.firstSeenAt ?? now.toISOString(),
+      samples,
+    });
+  }
+
+  // Keep history for repositories that dropped out of the snapshot (renamed,
+  // temporarily invalid manifest, blacklist experiments) so they rejoin with
+  // their record intact, until their samples age out.
+  for (const entry of history.entries) {
+    if (nextEntries.has(entry.repositoryId)) continue;
+    const samples = entry.samples.filter((sample) => dateMs(sample.date) >= oldestKeptMs);
+    if (samples.length > 0) {
+      nextEntries.set(entry.repositoryId, { ...entry, samples });
+    }
+  }
+
+  return {
+    schemaVersion: STAR_HISTORY_SCHEMA_VERSION,
+    entries: [...nextEntries.values()].sort((a, b) => a.repositoryId - b.repositoryId),
+  };
+}
+
+export function starsDeltaSince(
+  entry: StarHistoryEntry,
+  currentStars: number,
+  now: Date,
+  windowDays: number,
+): number | null {
+  // The baseline must sit close to the window boundary. A repository that was
+  // delisted for weeks would otherwise report months of growth as a short
+  // window and dominate trending rankings.
+  const cutoffMs = now.getTime() - windowDays * DAY_MS;
+  const oldestAcceptedMs = cutoffMs - STAR_BASELINE_TOLERANCE_DAYS * DAY_MS;
+  let baseline: StarHistorySample | null = null;
+  for (const sample of entry.samples) {
+    const sampleMs = dateMs(sample.date);
+    if (sampleMs > cutoffMs) break;
+    if (sampleMs >= oldestAcceptedMs) baseline = sample;
+  }
+  return baseline ? currentStars - baseline.stars : null;
+}
+
+// Unlike the scan cache, star history cannot be rebuilt from GitHub, so any
+// invalid state fails the refresh instead of being discarded and overwritten.
+async function readStarHistory(bucket: R2Bucket): Promise<StarHistory> {
+  const object = await bucket.get(STAR_HISTORY_KEY);
+  if (!object) return { schemaVersion: STAR_HISTORY_SCHEMA_VERSION, entries: [] };
+  const invalid = (reason: string): Error =>
+    new Error(
+      `invalid plugin marketplace star history (${reason}); remove ${STAR_HISTORY_KEY} to accept losing recorded history`,
+    );
+  let value: unknown;
+  try {
+    value = JSON.parse(await object.text());
+  } catch {
+    throw invalid("malformed JSON");
+  }
+  if (
+    !isObject(value) ||
+    value.schemaVersion !== STAR_HISTORY_SCHEMA_VERSION ||
+    !Array.isArray(value.entries)
+  ) {
+    throw invalid("unsupported shape");
+  }
+  const entries = value.entries.map(readStarHistoryEntry);
+  if (entries.some((entry) => entry === null)) {
+    throw invalid("invalid entry");
+  }
+  return { schemaVersion: STAR_HISTORY_SCHEMA_VERSION, entries: entries as StarHistoryEntry[] };
+}
+
+function readStarHistoryEntry(value: unknown): StarHistoryEntry | null {
+  if (!isObject(value) || !Array.isArray(value.samples)) return null;
+  const repositoryId = readInteger(value.repositoryId);
+  const fullName = readString(value.fullName);
+  const firstSeenAt = readIsoString(value.firstSeenAt);
+  const samples = value.samples.map(readStarHistorySample);
+  if (
+    repositoryId === null ||
+    repositoryId <= 0 ||
+    !fullName ||
+    !firstSeenAt ||
+    samples.some((sample) => sample === null)
+  ) {
+    return null;
+  }
+  return {
+    repositoryId,
+    fullName,
+    firstSeenAt,
+    samples: (samples as StarHistorySample[]).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
+function readStarHistorySample(value: unknown): StarHistorySample | null {
+  if (!isObject(value)) return null;
+  const date = readString(value.date);
+  const stars = readNonNegativeIntegerOrNull(value.stars);
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || stars === null) {
+    return null;
+  }
+  return { date, stars };
+}
+
+function isoDate(now: Date): string {
+  return now.toISOString().slice(0, 10);
 }
 
 async function readScanCache(

@@ -24,6 +24,31 @@ from scripts.changelog import (
 )
 
 
+def release_sha256() -> dict[str, str]:
+    return {
+        "linux-x86_64": "a" * 64,
+        "linux-aarch64": "b" * 64,
+        "macos-x86_64": "c" * 64,
+        "macos-aarch64": "d" * 64,
+    }
+
+
+def release_assets_with_digests() -> list[dict[str, str]]:
+    return [
+        {
+            "name": f"herdr-{target}",
+            "url": f"https://example.com/{target}",
+            "digest": f"sha256:{digest * 64}",
+        }
+        for target, digest in (
+            ("linux-x86_64", "a"),
+            ("linux-aarch64", "b"),
+            ("macos-x86_64", "c"),
+            ("macos-aarch64", "d"),
+        )
+    ]
+
+
 class ChangelogScriptTests(unittest.TestCase):
     def test_prepare_release_moves_unreleased_into_versioned_section(self) -> None:
         original = """# Changelog\n\n## Unreleased\n\n### Fixed\n- Smoothed Claude flapping.\n\n## [0.1.0] - 2026-03-27\n\n### Added\n- Initial release.\n"""
@@ -55,6 +80,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.1",
                 "\n### Fixed\n- One\n\n",
                 default_release_assets("0.1.1"),
+                release_sha256(),
             )
         )
 
@@ -67,6 +93,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "v0.1.1",
                 "### Fixed\n- Smoothed Claude flapping.\n",
                 default_release_assets("0.1.1"),
+                release_sha256(),
             )
         )
 
@@ -83,6 +110,8 @@ class ChangelogScriptTests(unittest.TestCase):
             },
         )
         self.assertEqual(manifest["releases"]["0.1.1"]["assets"], manifest["assets"])
+        self.assertEqual(manifest["sha256"], release_sha256())
+        self.assertEqual(manifest["releases"]["0.1.1"]["sha256"], manifest["sha256"])
 
     def test_build_latest_json_embeds_product_announcement(self) -> None:
         manifest = json.loads(
@@ -90,6 +119,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.1",
                 "### Fixed\n- One",
                 default_release_assets("0.1.1"),
+                release_sha256(),
                 announcement={"id": "keybinding-v2", "title": "Keybind Refactor", "body": "body"},
             )
         )
@@ -109,6 +139,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.2",
                 "### Fixed\n- Two",
                 default_release_assets("0.1.2"),
+                release_sha256(),
                 releases={"0.1.1": {"notes": "### Fixed\n- One"}},
             )
         )
@@ -127,6 +158,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.2",
                 "### Fixed\n- Two",
                 default_release_assets("0.1.2"),
+                release_sha256(),
                 releases={"0.1.1": {"notes": "### Fixed\n- One", "assets": assets}},
             )
         )
@@ -139,6 +171,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.2",
                 "### Fixed\n- Two",
                 default_release_assets("0.1.2"),
+                release_sha256(),
                 releases={"0.1.1": {"notes": "### Fixed\n- One", "protocol": 7}},
             )
         )
@@ -151,6 +184,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "0.1.2",
                 "### Fixed\n- Two",
                 default_release_assets("0.1.2"),
+                release_sha256(),
                 releases={
                     "0.1.1": {
                         "notes": "### Breaking Changes\n- The client/server protocol is now version 7."
@@ -280,19 +314,14 @@ class ChangelogScriptTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
-    def test_manifest_from_release_payload_uses_release_body_and_asset_urls(self) -> None:
+    def test_manifest_from_release_payload_uses_release_body_and_asset_digests(self) -> None:
         manifest = manifest_from_release_payload(
             {
                 "tagName": "v0.1.1",
                 "isDraft": False,
                 "isPrerelease": False,
                 "body": "### Fixed\n- One\n",
-                "assets": [
-                    {"name": "herdr-linux-x86_64", "url": "https://example.com/linux-x86_64"},
-                    {"name": "herdr-linux-aarch64", "url": "https://example.com/linux-aarch64"},
-                    {"name": "herdr-macos-x86_64", "url": "https://example.com/macos-x86_64"},
-                    {"name": "herdr-macos-aarch64", "url": "https://example.com/macos-aarch64"},
-                ],
+                "assets": release_assets_with_digests(),
             },
             "0.1.1",
         )
@@ -309,6 +338,7 @@ class ChangelogScriptTests(unittest.TestCase):
                     "macos-x86_64": "https://example.com/macos-x86_64",
                     "macos-aarch64": "https://example.com/macos-aarch64",
                 },
+                "sha256": release_sha256(),
             },
         )
 
@@ -319,18 +349,29 @@ class ChangelogScriptTests(unittest.TestCase):
                 "isDraft": False,
                 "isPrerelease": False,
                 "body": "### Fixed\n- One\n",
-                "assets": [
-                    {"name": "herdr-linux-x86_64", "url": "https://example.com/linux-x86_64"},
-                    {"name": "herdr-linux-aarch64", "url": "https://example.com/linux-aarch64"},
-                    {"name": "herdr-macos-x86_64", "url": "https://example.com/macos-x86_64"},
-                    {"name": "herdr-macos-aarch64", "url": "https://example.com/macos-aarch64"},
-                ],
+                "assets": release_assets_with_digests(),
             },
             "0.1.1",
             protocol=42,
         )
 
         self.assertEqual(manifest["protocol"], 42)
+
+    def test_manifest_from_release_payload_rejects_missing_digest(self) -> None:
+        assets = release_assets_with_digests()
+        assets[0].pop("digest")
+
+        with self.assertRaisesRegex(ChangelogError, "missing a SHA-256 digest"):
+            manifest_from_release_payload(
+                {
+                    "tagName": "v0.1.1",
+                    "isDraft": False,
+                    "isPrerelease": False,
+                    "body": "### Fixed\n- One\n",
+                    "assets": assets,
+                },
+                "0.1.1",
+            )
 
     def test_manifest_from_release_payload_rejects_missing_asset(self) -> None:
         with self.assertRaisesRegex(ChangelogError, "missing asset herdr-macos-aarch64"):
@@ -386,6 +427,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "macos-x86_64": "https://example.com/macos-x86_64",
                 "macos-aarch64": "https://example.com/macos-aarch64",
             },
+            "sha256": release_sha256(),
         }
         expected = {
             "version": "0.1.1",
@@ -397,6 +439,7 @@ class ChangelogScriptTests(unittest.TestCase):
                 "macos-x86_64": "https://example.com/macos-x86_64",
                 "macos-aarch64": "https://example.com/macos-aarch64",
             },
+            "sha256": release_sha256(),
         }
 
         canonical = ensure_manifest_matches_expected(actual, expected, "test manifest")
@@ -410,10 +453,12 @@ class ChangelogScriptTests(unittest.TestCase):
                 "protocol": read_protocol_version(),
                 "notes": "### Fixed\n- One",
                 "assets": assets,
+                "sha256": release_sha256(),
                 "releases": {
                     "0.1.1": {
                         "notes": "### Fixed\n- One",
                         "assets": assets,
+                        "sha256": release_sha256(),
                     }
                 },
             },
@@ -428,10 +473,12 @@ class ChangelogScriptTests(unittest.TestCase):
                     "protocol": read_protocol_version(),
                     "notes": "### Fixed\n- One",
                     "assets": default_release_assets("0.1.1"),
+                    "sha256": release_sha256(),
                     "releases": {
                         "0.1.1": {
                             "notes": "### Fixed\n- One",
                             "assets": default_release_assets("0.1.0"),
+                            "sha256": release_sha256(),
                         }
                     },
                 },
@@ -451,6 +498,7 @@ class ChangelogScriptTests(unittest.TestCase):
                         "macos-x86_64": "https://example.com/macos-x86_64",
                         "macos-aarch64": "https://example.com/macos-aarch64",
                     },
+                    "sha256": release_sha256(),
                 },
                 {
                     "version": "0.1.1",
@@ -462,6 +510,7 @@ class ChangelogScriptTests(unittest.TestCase):
                         "macos-x86_64": "https://example.com/macos-x86_64",
                         "macos-aarch64": "https://example.com/macos-aarch64",
                     },
+                    "sha256": release_sha256(),
                 },
                 "test manifest",
             )
@@ -483,12 +532,14 @@ class ChangelogScriptTests(unittest.TestCase):
             "protocol": read_protocol_version() + 1,
             "notes": "### Fixed\n- One",
             "assets": default_release_assets("0.1.1"),
+            "sha256": release_sha256(),
         }
         expected = {
             "version": "0.1.1",
             "protocol": read_protocol_version(),
             "notes": "### Fixed\n- One",
             "assets": default_release_assets("0.1.1"),
+            "sha256": release_sha256(),
         }
 
         with self.assertRaisesRegex(ChangelogError, "does not match"):
