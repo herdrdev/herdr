@@ -154,12 +154,21 @@ function Get-ManifestAsset {
         throw "Release manifest does not include a binary for $Target."
     }
 
+    $sha256 = $null
+    $shaMapProperty = $Manifest.PSObject.Properties["sha256"]
+    if ($null -ne $shaMapProperty -and $null -ne $shaMapProperty.Value) {
+        $targetShaProperty = $shaMapProperty.Value.PSObject.Properties[$Target]
+        if ($null -ne $targetShaProperty -and -not [string]::IsNullOrWhiteSpace([string]$targetShaProperty.Value)) {
+            $sha256 = [string]$targetShaProperty.Value
+        }
+    }
+
     $asset = $property.Value
     if ($asset -is [string]) {
         $url = [string]$asset
         return [PSCustomObject]@{
             Url = $url
-            Sha256 = $null
+            Sha256 = $sha256
             Format = if ($url.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) { "zip" } else { "exe" }
         }
     }
@@ -180,10 +189,8 @@ function Get-ManifestAsset {
         throw "Release manifest asset $Target has unsupported format '$format'."
     }
     $shaProperty = $asset.PSObject.Properties["sha256"]
-    $sha256 = if ($null -eq $shaProperty -or [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
-        $null
-    } else {
-        [string]$shaProperty.Value
+    if ($null -ne $shaProperty -and -not [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
+        $sha256 = [string]$shaProperty.Value
     }
 
     return [PSCustomObject]@{
