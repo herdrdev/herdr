@@ -20,6 +20,15 @@ use crate::terminal::TerminalRuntimeRegistry;
 const KITTY_CHUNK_BYTES: usize = 3072;
 const HOST_IMAGE_ID_BASE: u32 = 10_000;
 const PANE_GRAPHICS_IMAGE_ID_BIT: u32 = 1 << 31;
+/// Set alongside `PANE_GRAPHICS_IMAGE_ID_BIT` to further split the
+/// pane-graphics id space between a pane's own content overlay and its
+/// sidebar-row overlay, so both can be live on the same pane without
+/// colliding. Terminal-sourced ids never set either bit (they stay in the
+/// small `HOST_IMAGE_ID_BASE`-relative range), so all three namespaces are
+/// mutually disjoint — see `pane_graphics_image_ids_are_disjoint_from_terminal_image_ids`
+/// and `sidebar_graphics_image_ids_are_disjoint_from_pane_and_terminal_image_ids`.
+const SIDEBAR_GRAPHICS_IMAGE_ID_BIT: u32 = 1 << 30;
+const PANE_GRAPHICS_HASH_MASK: u32 = !(PANE_GRAPHICS_IMAGE_ID_BIT | SIDEBAR_GRAPHICS_IMAGE_ID_BIT);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HostCellSize {
@@ -84,6 +93,7 @@ struct HostPlacement {
 enum HostSourceKey {
     Terminal { pane_id: PaneId, image_id: u32 },
     PaneLayer { pane_id: PaneId },
+    SidebarRowLayer { pane_id: PaneId },
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -289,6 +299,21 @@ pub(crate) fn has_visible_pane_graphics(
             }
         }
     }
+
+    for row in surface.sidebar_row_areas {
+        let empty_uploaded = HashMap::new();
+        if app
+            .sidebar_graphics_layers
+            .get(&row.pane_id)
+            .is_some_and(|layer| {
+                let host_placement =
+                    sidebar_graphics_host_placement(row, cell_size, layer, &empty_uploaded, false);
+                clipped_placement(&host_placement).is_some()
+            })
+        {
+            return true;
+        }
+    }
     false
 }
 
@@ -313,7 +338,12 @@ fn encode_graphics_update(
     let mut removed_pane_layer_images = HashSet::new();
     sources.retain(|source, host_id| {
         let retain = current_sources.contains(source);
-        if !retain && matches!(source, HostSourceKey::PaneLayer { .. }) {
+        if !retain
+            && matches!(
+                source,
+                HostSourceKey::PaneLayer { .. } | HostSourceKey::SidebarRowLayer { .. }
+            )
+        {
             removed_pane_layer_images.insert(*host_id);
         }
         retain
@@ -593,6 +623,19 @@ fn collect_visible_placements(
             });
         }
     }
+
+    for row in surface.sidebar_row_areas {
+        if let Some(layer) = app.sidebar_graphics_layers.get(&row.pane_id) {
+            placements.push(sidebar_graphics_host_placement(
+                row,
+                cell_size,
+                layer,
+                uploaded_images,
+                true,
+            ));
+        }
+    }
+
     tracing::debug!(
         placements_len = placements.len(),
         "collect_visible_placements: done"
@@ -607,6 +650,54 @@ fn pane_graphics_host_placement(
     uploaded_images: &HashMap<u32, ImageSignature>,
     include_data: bool,
 ) -> HostPlacement {
+    graphics_layer_host_placement(
+        info.id,
+        info.inner_rect,
+        cell_size,
+        layer,
+        uploaded_images,
+        include_data,
+        HostSourceKey::PaneLayer { pane_id: info.id },
+        pane_graphics_host_image_id,
+    )
+}
+
+/// Same shape as `pane_graphics_host_placement`, targeting a persisted
+/// sidebar-row rect instead of a pane's own content rect. The clip/scale
+/// pipeline downstream (`clipped_placement`) is rect-agnostic, so this needs
+/// no new geometry logic — see `HostPlacement.area`.
+fn sidebar_graphics_host_placement(
+    row: &crate::app::state::SidebarRowArea,
+    cell_size: HostCellSize,
+    layer: &crate::app::state::PaneGraphicsLayer,
+    uploaded_images: &HashMap<u32, ImageSignature>,
+    include_data: bool,
+) -> HostPlacement {
+    graphics_layer_host_placement(
+        row.pane_id,
+        row.rect,
+        cell_size,
+        layer,
+        uploaded_images,
+        include_data,
+        HostSourceKey::SidebarRowLayer {
+            pane_id: row.pane_id,
+        },
+        sidebar_graphics_host_image_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn graphics_layer_host_placement(
+    pane_id: PaneId,
+    area: Rect,
+    cell_size: HostCellSize,
+    layer: &crate::app::state::PaneGraphicsLayer,
+    uploaded_images: &HashMap<u32, ImageSignature>,
+    include_data: bool,
+    source_key: HostSourceKey,
+    host_image_id_fn: fn(PaneId, ImageSignature) -> u32,
+) -> HostPlacement {
     let format = pane_graphics_kitty_format(layer.format);
     let format_code = kitty_format_code(format);
     let signature = ImageSignature {
@@ -616,7 +707,7 @@ fn pane_graphics_host_placement(
         data_len: layer.data.len(),
         data_fingerprint: layer.data_fingerprint,
     };
-    let host_id = pane_graphics_host_image_id(info.id, signature);
+    let host_id = host_image_id_fn(pane_id, signature);
     let data = if !include_data || uploaded_images.get(&host_id).copied() == Some(signature) {
         Vec::new()
     } else {
@@ -624,21 +715,21 @@ fn pane_graphics_host_placement(
     };
     let render = layer.render;
     let grid_cols = if render.grid_cols == 0 {
-        u32::from(info.inner_rect.width)
+        u32::from(area.width)
     } else {
         render.grid_cols
     };
     let grid_rows = if render.grid_rows == 0 {
-        u32::from(info.inner_rect.height)
+        u32::from(area.height)
     } else {
         render.grid_rows
     };
 
     HostPlacement {
-        pane_id: info.id,
-        area: info.inner_rect,
+        pane_id,
+        area,
         cell_size,
-        source_key: HostSourceKey::PaneLayer { pane_id: info.id },
+        source_key,
         scrollback_offset: 0,
         placement: KittyImagePlacement {
             image_id: 1,
@@ -701,7 +792,16 @@ fn pane_graphics_host_image_id(pane_id: PaneId, signature: ImageSignature) -> u3
     let mut hasher = DefaultHasher::new();
     pane_id.raw().hash(&mut hasher);
     signature.hash(&mut hasher);
-    PANE_GRAPHICS_IMAGE_ID_BIT | ((hasher.finish() as u32) & !PANE_GRAPHICS_IMAGE_ID_BIT)
+    PANE_GRAPHICS_IMAGE_ID_BIT | ((hasher.finish() as u32) & PANE_GRAPHICS_HASH_MASK)
+}
+
+fn sidebar_graphics_host_image_id(pane_id: PaneId, signature: ImageSignature) -> u32 {
+    let mut hasher = DefaultHasher::new();
+    pane_id.raw().hash(&mut hasher);
+    signature.hash(&mut hasher);
+    PANE_GRAPHICS_IMAGE_ID_BIT
+        | SIDEBAR_GRAPHICS_IMAGE_ID_BIT
+        | ((hasher.finish() as u32) & PANE_GRAPHICS_HASH_MASK)
 }
 
 fn host_placement_id(source_key: HostSourceKey, placement: &KittyImagePlacement) -> u32 {
@@ -710,6 +810,10 @@ fn host_placement_id(source_key: HostSourceKey, placement: &KittyImagePlacement)
         HostSourceKey::Terminal { pane_id, .. } => pane_id.raw().hash(&mut hasher),
         HostSourceKey::PaneLayer { pane_id } => {
             "pane.graphics".hash(&mut hasher);
+            pane_id.raw().hash(&mut hasher);
+        }
+        HostSourceKey::SidebarRowLayer { pane_id } => {
+            "sidebar.graphics".hash(&mut hasher);
             pane_id.raw().hash(&mut hasher);
         }
     }
@@ -1086,6 +1190,27 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_graphics_image_ids_are_disjoint_from_pane_and_terminal_image_ids() {
+        let placement = test_placement(0, 0);
+        let signature = image_signature(&placement, kitty_format_code(placement.placement.format));
+        let terminal_id = host_image_id_for_signature(placement.pane_id, signature);
+        let pane_content_id = pane_graphics_host_image_id(placement.pane_id, signature);
+        let sidebar_row_id = sidebar_graphics_host_image_id(placement.pane_id, signature);
+
+        // A pane can carry a content overlay and a sidebar-row overlay at the
+        // same time (the captain's expanded scope), so these three ids must
+        // never collide with each other even when every other input matches.
+        assert_ne!(sidebar_row_id, terminal_id);
+        assert_ne!(sidebar_row_id, pane_content_id);
+        assert_eq!(terminal_id & PANE_GRAPHICS_IMAGE_ID_BIT, 0);
+        assert_eq!(pane_content_id & SIDEBAR_GRAPHICS_IMAGE_ID_BIT, 0);
+        assert_eq!(
+            sidebar_row_id & (PANE_GRAPHICS_IMAGE_ID_BIT | SIDEBAR_GRAPHICS_IMAGE_ID_BIT),
+            PANE_GRAPHICS_IMAGE_ID_BIT | SIDEBAR_GRAPHICS_IMAGE_ID_BIT
+        );
+    }
+
+    #[test]
     fn clipped_placement_handles_positive_viewport_without_wrapping() {
         let placement = test_placement(2, 2);
         let (clipped, _) = clipped_placement(&placement).expect("visible placement");
@@ -1147,6 +1272,49 @@ mod tests {
         assert_eq!(clipped.cols, 8);
         assert_eq!(clipped.rows, 3);
         assert_eq!(placement.placement.data.len(), 80 * 30 * 4);
+    }
+
+    #[test]
+    fn pane_graphics_layer_full_pane_grid_tracks_pane_resize() {
+        let layer = crate::app::state::PaneGraphicsLayer::new(
+            crate::api::schema::PaneGraphicsFormat::Rgba,
+            80,
+            30,
+            vec![255; 80 * 30 * 4],
+            crate::api::schema::PaneGraphicsPlacementParams::default(),
+        );
+        let cell_size = HostCellSize {
+            width_px: 10,
+            height_px: 10,
+        };
+
+        let wide_info = PaneInfo {
+            id: PaneId::from_raw(9),
+            rect: Rect::new(0, 0, 22, 12),
+            inner_rect: Rect::new(2, 1, 20, 10),
+            scrollbar_rect: None,
+            borders: ratatui::widgets::Borders::NONE,
+            is_focused: true,
+        };
+        let wide_placement =
+            pane_graphics_host_placement(&wide_info, cell_size, &layer, &HashMap::new(), true);
+        let (wide_clipped, _) = clipped_placement(&wide_placement).expect("visible layer");
+        assert_eq!(wide_clipped.cols, 20);
+        assert_eq!(wide_clipped.rows, 10);
+
+        // A resize (e.g. a split or a terminal resize) recomputes `PaneInfo`
+        // fresh every frame; the placement must follow it to the new full rect
+        // without any extra addressing work, matching the funding spike's
+        // finding that pane-content overlays already reach whole-pane rects.
+        let narrow_info = PaneInfo {
+            inner_rect: Rect::new(2, 1, 6, 4),
+            ..wide_info
+        };
+        let narrow_placement =
+            pane_graphics_host_placement(&narrow_info, cell_size, &layer, &HashMap::new(), true);
+        let (narrow_clipped, _) = clipped_placement(&narrow_placement).expect("visible layer");
+        assert_eq!(narrow_clipped.cols, 6);
+        assert_eq!(narrow_clipped.rows, 4);
     }
 
     #[test]
@@ -1751,5 +1919,116 @@ mod tests {
         let delete = String::from_utf8_lossy(&bytes);
         assert!(delete.contains("a=d,d=i"));
         assert!(placements.is_empty());
+    }
+
+    /// Encode-cost smoke test for `herdr-pixel-rendering-path`: measures the
+    /// `collect_visible_placements`/`encode_graphics_update` cost of a full,
+    /// every-frame-changing 1440p pane-content overlay (284x80 cells at a
+    /// 9x18px cell, matching the funding decision's 1440p sizing target —
+    /// 4K is explicitly out of scope), with and without 20 simultaneously
+    /// animated sidebar/agent rows. Not part of `just check` (release-mode
+    /// timing is too hardware-sensitive for CI); run manually with
+    /// `cargo test --release -- --ignored --nocapture sidebar_row_overlay_encode_cost_at_1440p`.
+    /// Whole-surface *delivery* fps (escape-stream vs. local-file, PNG vs.
+    /// raw pixels) is already measured in `data/tracks/B-animation-scope.md`
+    /// and isn't re-derived here; this isolates the marginal cost this task's
+    /// own new sidebar-row addressing adds on top of that.
+    #[test]
+    #[ignore = "release-mode perf smoke test, run manually"]
+    fn sidebar_row_overlay_encode_cost_at_1440p() {
+        use std::time::Instant;
+
+        fn run(iterations: u32, with_sidebar_rows: bool) -> std::time::Duration {
+            let cell_size = HostCellSize {
+                width_px: 9,
+                height_px: 18,
+            };
+            let pane_area = Rect::new(0, 0, 284, 80);
+            let pane_pixel_w = 284u32 * 9;
+            let pane_pixel_h = 80u32 * 18;
+            let mut cache = HostGraphicsCache::default();
+            let mut counter = 0u8;
+
+            let start = Instant::now();
+            for _ in 0..iterations {
+                counter = counter.wrapping_add(1);
+                let pane_layer = crate::app::state::PaneGraphicsLayer::new(
+                    crate::api::schema::PaneGraphicsFormat::Rgba,
+                    pane_pixel_w,
+                    pane_pixel_h,
+                    vec![counter; (pane_pixel_w * pane_pixel_h * 4) as usize],
+                    crate::api::schema::PaneGraphicsPlacementParams::default(),
+                );
+                let pane_info = PaneInfo {
+                    id: PaneId::from_raw(1),
+                    rect: pane_area,
+                    inner_rect: pane_area,
+                    scrollbar_rect: None,
+                    borders: ratatui::widgets::Borders::NONE,
+                    is_focused: true,
+                };
+                let mut placements = vec![pane_graphics_host_placement(
+                    &pane_info,
+                    cell_size,
+                    &pane_layer,
+                    &cache.images,
+                    true,
+                )];
+                if with_sidebar_rows {
+                    for row_idx in 0..20u16 {
+                        let row = crate::app::state::SidebarRowArea {
+                            pane_id: PaneId::from_raw(u32::from(row_idx) + 2),
+                            rect: Rect::new(0, row_idx, 26, 1),
+                        };
+                        let row_layer = crate::app::state::PaneGraphicsLayer::new(
+                            crate::api::schema::PaneGraphicsFormat::Rgba,
+                            26 * 9,
+                            18,
+                            vec![counter; (26 * 9 * 18 * 4) as usize],
+                            crate::api::schema::PaneGraphicsPlacementParams::default(),
+                        );
+                        placements.push(sidebar_graphics_host_placement(
+                            &row,
+                            cell_size,
+                            &row_layer,
+                            &cache.images,
+                            true,
+                        ));
+                    }
+                }
+                let mut bytes = Vec::new();
+                encode_graphics_update(
+                    &mut bytes,
+                    &placements,
+                    false,
+                    &mut cache.images,
+                    &mut cache.placements,
+                    &mut cache.sources,
+                );
+                std::hint::black_box(&bytes);
+            }
+            start.elapsed()
+        }
+
+        let iterations = 30u32;
+        let pane_only = run(iterations, false);
+        let with_rows = run(iterations, true);
+        eprintln!(
+            "1440p pane content only, {iterations} full-change frames: {:?} total, {:?}/frame, implied max fps {:.1}",
+            pane_only,
+            pane_only / iterations,
+            iterations as f64 / pane_only.as_secs_f64()
+        );
+        eprintln!(
+            "1440p pane content + 20 sidebar rows, {iterations} full-change frames: {:?} total, {:?}/frame, implied max fps {:.1}",
+            with_rows,
+            with_rows / iterations,
+            iterations as f64 / with_rows.as_secs_f64()
+        );
+        eprintln!(
+            "marginal cost of 20 sidebar rows: {:?}/frame ({:.2}%)",
+            (with_rows.saturating_sub(pane_only)) / iterations,
+            100.0 * (with_rows.as_secs_f64() - pane_only.as_secs_f64()) / pane_only.as_secs_f64()
+        );
     }
 }

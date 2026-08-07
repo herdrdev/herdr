@@ -261,6 +261,9 @@ impl App {
             }
             // Cell size reports are consumed by the thin client, not the runtime.
             crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => false,
+            crate::raw_input::RawInputEvent::KittyGraphicsCapability(confirmed) => {
+                self.update_kitty_graphics_capability(confirmed)
+            }
             crate::raw_input::RawInputEvent::Unsupported => false,
         };
         self.sync_prefix_input_source(previous_mode);

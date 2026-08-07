@@ -1333,6 +1333,7 @@ mod pane_graphics_request_tests {
         let request = Request {
             id: "graphics-max".into(),
             method: Method::PaneGraphicsSet(crate::api::schema::PaneGraphicsSetParams {
+                surface: crate::api::schema::PaneGraphicsSurface::Content,
                 pane_id: "pane_1".into(),
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Png,

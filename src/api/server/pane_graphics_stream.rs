@@ -102,6 +102,7 @@ fn serve_with_timeouts(
     read_timeouts: ReadTimeouts,
 ) -> std::io::Result<()> {
     let pane_id = params.pane_id.clone();
+    let surface = params.surface;
     let owner = next_owner();
     params.owner = owner.clone();
     let open_response = dispatch_to_app_with_timeout(
@@ -114,7 +115,7 @@ fn serve_with_timeouts(
     );
     if api_response_outcome(&open_response) != "ok" {
         let write_result = write_text_line_allow_disconnect(&mut stream, &open_response);
-        clear_layer(&pane_id, &owner, api_tx);
+        clear_layer(&pane_id, &owner, surface, api_tx);
         write_result?;
         return Ok(());
     }
@@ -126,7 +127,7 @@ fn serve_with_timeouts(
             result: ResponseResult::Ok {},
         },
     ) {
-        clear_layer(&pane_id, &owner, api_tx);
+        clear_layer(&pane_id, &owner, surface, api_tx);
         if is_connection_closed_error(&err) {
             return Ok(());
         }
@@ -140,13 +141,14 @@ fn serve_with_timeouts(
         &request_id,
         &owner,
         &pane_id,
+        surface,
         api_tx,
         running,
         &stream_active,
         read_timeouts,
     );
     unregister_stream(&owner);
-    clear_layer(&pane_id, &owner, api_tx);
+    clear_layer(&pane_id, &owner, surface, api_tx);
     result
 }
 
@@ -155,6 +157,7 @@ fn serve_frames(
     request_id: &str,
     owner: &str,
     pane_id: &str,
+    surface: crate::api::schema::PaneGraphicsSurface,
     api_tx: &ApiRequestSender,
     running: &Arc<AtomicBool>,
     stream_active: &Arc<AtomicBool>,
@@ -246,6 +249,7 @@ fn serve_frames(
                     data: Some(data),
                     data_base64: String::new(),
                     placement: header.placement,
+                    surface,
                 }),
             },
             api_tx,
@@ -315,13 +319,19 @@ fn next_owner() -> String {
     format!("pane.graphics.stream:{}:{id}", std::process::id())
 }
 
-fn clear_layer(pane_id: &str, owner: &str, api_tx: &ApiRequestSender) {
+fn clear_layer(
+    pane_id: &str,
+    owner: &str,
+    surface: crate::api::schema::PaneGraphicsSurface,
+    api_tx: &ApiRequestSender,
+) {
     let _response = dispatch_to_app_with_timeout(
         Request {
             id: format!("pane.graphics.stream.clear:{pane_id}"),
             method: Method::PaneGraphicsStreamClose(PaneGraphicsStreamParams {
                 pane_id: pane_id.to_string(),
                 owner: owner.to_string(),
+                surface,
             }),
         },
         api_tx,
@@ -797,6 +807,7 @@ mod tests {
                 server,
                 "stream_timeout".into(),
                 PaneGraphicsStreamParams {
+                    surface: crate::api::schema::PaneGraphicsSurface::Content,
                     pane_id: "pane_1".into(),
                     owner: String::new(),
                 },
@@ -955,6 +966,7 @@ mod tests {
                 server,
                 "stream-cancel".into(),
                 PaneGraphicsStreamParams {
+                    surface: crate::api::schema::PaneGraphicsSurface::Content,
                     pane_id: "pane_1".into(),
                     owner: String::new(),
                 },
@@ -1101,6 +1113,7 @@ mod tests {
                 server,
                 "stream-timeout".into(),
                 PaneGraphicsStreamParams {
+                    surface: crate::api::schema::PaneGraphicsSurface::Content,
                     pane_id: "pane_1".into(),
                     owner: String::new(),
                 },
@@ -1176,6 +1189,7 @@ mod tests {
                 "stream-oversized",
                 "owner-1",
                 "pane_1",
+                crate::api::schema::PaneGraphicsSurface::Content,
                 &api_tx,
                 &server_running,
                 &stream_active,

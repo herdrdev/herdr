@@ -2454,6 +2454,10 @@
           "properties": {
             "pane_id": {
               "type": "string"
+            },
+            "surface": {
+              "$ref": "#/schemas/request/$defs/PaneGraphicsSurface",
+              "default": "content"
             }
           },
           "required": [
@@ -2526,6 +2530,10 @@
                 "viewport_col": 0,
                 "viewport_row": 0
               }
+            },
+            "surface": {
+              "$ref": "#/schemas/request/$defs/PaneGraphicsSurface",
+              "default": "content"
             }
           },
           "required": [
@@ -2535,6 +2543,14 @@
             "image_height"
           ],
           "type": "object"
+        },
+        "PaneGraphicsSurface": {
+          "description": "Which visible surface a pane-graphics overlay paints over. `pane_id`\nalways identifies the pane; for `SidebarRow` it is the pane whose\nagent-panel row the overlay should track, not the pane's own content area.\nThe two surfaces are addressed independently, so a pane can carry both a\n`Content` overlay and a `SidebarRow` overlay at once.",
+          "enum": [
+            "content",
+            "sidebar_row"
+          ],
+          "type": "string"
         },
         "PaneLayoutParams": {
           "properties": {

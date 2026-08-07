@@ -646,6 +646,16 @@ pub struct WorkspaceCardArea {
     pub indented: bool,
 }
 
+/// One agent-panel row's on-screen rect, persisted the same way
+/// `PaneInfo`/`pane_infos` is so a pixel overlay can target a sidebar row
+/// outside the render closure that draws it. Computed by
+/// `compute_agent_row_areas`; see `PaneGraphicsSurface::SidebarRow`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarRowArea {
+    pub pane_id: PaneId,
+    pub rect: Rect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeCreateState {
     pub source_workspace_id: String,
@@ -812,6 +822,11 @@ pub struct ViewState {
     pub toast_hit_area: Rect,
     pub pane_infos: Vec<PaneInfo>,
     pub split_borders: Vec<SplitBorder>,
+    /// Expanded-sidebar agent-panel row rects, persisted like `pane_infos` so
+    /// `paint_local_pane_graphics` can target a `PaneGraphicsSurface::SidebarRow`
+    /// overlay outside the render closure. Empty in mobile layout and while
+    /// the sidebar is collapsed, neither of which show this row list.
+    pub sidebar_row_areas: Vec<SidebarRowArea>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1541,6 +1556,11 @@ pub struct AppState {
     /// `[experimental] switch_ascii_input_source_in_prefix`.
     pub switch_ascii_input_source_in_prefix: bool,
     pub kitty_graphics_enabled: bool,
+    /// Whether the real outer terminal has confirmed it understands the Kitty
+    /// Graphics Protocol, via `query_kitty_graphics_capability`. Painting must
+    /// gate on this in addition to `kitty_graphics_enabled`: the config flag is
+    /// only the user's opt-in, not proof the attached terminal can render it.
+    pub kitty_graphics_capability_confirmed: bool,
     pub default_shell: String,
     pub shell_mode: crate::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
@@ -1579,6 +1599,12 @@ pub struct AppState {
     pub(crate) pane_graphics_layers: std::collections::HashMap<PaneId, PaneGraphicsLayer>,
     /// Active streaming graphics owner token by pane id.
     pub(crate) pane_graphics_streams: std::collections::HashMap<PaneId, String>,
+    /// Runtime image layers composited over a pane's sidebar/agent-panel row,
+    /// addressed independently from `pane_graphics_layers` (that pane's own
+    /// content area) so both can be live on the same pane at once.
+    pub(crate) sidebar_graphics_layers: std::collections::HashMap<PaneId, PaneGraphicsLayer>,
+    /// Active streaming graphics owner token by pane id, for sidebar-row overlays.
+    pub(crate) sidebar_graphics_streams: std::collections::HashMap<PaneId, String>,
     /// Monotonic marker for accepted pane graphics mutations.
     pub(crate) pane_graphics_revision: u64,
     /// Session-modal terminal popup. This is intentionally outside workspace layouts.
@@ -1845,6 +1871,7 @@ impl AppState {
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
+                sidebar_row_areas: Vec::new(),
             },
             drag: None,
             workspace_press: None,
@@ -1901,6 +1928,7 @@ impl AppState {
             cjk_ime_cursor_shape: 2, // steady_block
             switch_ascii_input_source_in_prefix: false,
             kitty_graphics_enabled: false,
+            kitty_graphics_capability_confirmed: false,
             default_shell: String::new(),
             shell_mode: crate::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,
@@ -1940,6 +1968,8 @@ impl AppState {
             plugin_panes: std::collections::HashMap::new(),
             pane_graphics_layers: std::collections::HashMap::new(),
             pane_graphics_streams: std::collections::HashMap::new(),
+            sidebar_graphics_layers: std::collections::HashMap::new(),
+            sidebar_graphics_streams: std::collections::HashMap::new(),
             pane_graphics_revision: 0,
             popup_pane: None,
             plugin_command_logs: Vec::new(),

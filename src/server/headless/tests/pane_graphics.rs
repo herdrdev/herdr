@@ -14,6 +14,7 @@ fn enable_graphics_and_render(
     client_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
 ) -> FrameData {
     server.app.state.kitty_graphics_enabled = true;
+    server.app.state.kitty_graphics_capability_confirmed = true;
     server.clients.get_mut(&1).unwrap().cell_size = crate::kitty_graphics::HostCellSize {
         width_px: 10,
         height_px: 20,
@@ -28,6 +29,23 @@ fn enable_graphics_and_render(
 
 fn set_graphics_layer(server: &mut HeadlessServer, pane_id: crate::layout::PaneId, data: Vec<u8>) {
     server.app.state.pane_graphics_layers.insert(
+        pane_id,
+        crate::app::state::PaneGraphicsLayer::new(
+            api::schema::PaneGraphicsFormat::Png,
+            1,
+            1,
+            data,
+            api::schema::PaneGraphicsPlacementParams::default(),
+        ),
+    );
+}
+
+fn set_sidebar_graphics_layer(
+    server: &mut HeadlessServer,
+    pane_id: crate::layout::PaneId,
+    data: Vec<u8>,
+) {
+    server.app.state.sidebar_graphics_layers.insert(
         pane_id,
         crate::app::state::PaneGraphicsLayer::new(
             api::schema::PaneGraphicsFormat::Png,
@@ -67,6 +85,7 @@ fn stream_set_message(
                 id: id.into(),
                 method: api::schema::Method::PaneGraphicsStreamSet(
                     api::schema::PaneGraphicsSetParams {
+                        surface: api::schema::PaneGraphicsSurface::Content,
                         pane_id: pane_id.into(),
                         owner: owner.into(),
                         format: api::schema::PaneGraphicsFormat::Png,
@@ -129,6 +148,45 @@ async fn focus_repaint_preserves_uploaded_graphics() {
             .expect("focus redraw"),
     );
     assert!(focused.graphics.is_empty());
+}
+
+#[tokio::test]
+async fn sidebar_row_overlay_renders_alongside_pane_content_overlay() {
+    let (mut server, client_rx, pane_id) = retained_test_server(b"aaaa");
+    // The agent panel only lists panes with a detected/named agent, so give
+    // this pane one — otherwise it never gets a persisted sidebar row rect.
+    server.app.state.ensure_test_terminals();
+    let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .detected_agent = Some(crate::detect::Agent::Pi);
+    set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
+    set_sidebar_graphics_layer(&mut server, pane_id, vec![4, 5, 6]);
+
+    let frame = enable_graphics_and_render(&mut server, &client_rx);
+    assert!(
+        server
+            .app
+            .state
+            .view
+            .sidebar_row_areas
+            .iter()
+            .any(|row| row.pane_id == pane_id),
+        "expected the pane's agent-panel row rect to be persisted by the render"
+    );
+    let graphics = String::from_utf8_lossy(&frame.graphics);
+
+    // The captain's expanded scope wants both surfaces live on the same pane
+    // at once: two distinct `a=t` uploads (content + sidebar row), not one
+    // overlay clobbering the other.
+    assert_eq!(graphics.matches("a=t").count(), 2, "graphics: {graphics}");
+    assert_eq!(graphics.matches("a=p").count(), 2, "graphics: {graphics}");
 }
 
 #[tokio::test]
@@ -313,6 +371,7 @@ fn stream_set_has_graphics_only_render_impact() {
         request: api::schema::Request {
             id: "direct-frame".into(),
             method: api::schema::Method::PaneGraphicsSet(api::schema::PaneGraphicsSetParams {
+                surface: api::schema::PaneGraphicsSurface::Content,
                 pane_id: public_pane_id,
                 owner: String::new(),
                 format: api::schema::PaneGraphicsFormat::Png,
@@ -344,6 +403,7 @@ fn rejected_or_stale_requests_do_not_schedule_rendering() {
         request: api::schema::Request {
             id: "disabled-set".into(),
             method: api::schema::Method::PaneGraphicsSet(api::schema::PaneGraphicsSetParams {
+                surface: api::schema::PaneGraphicsSurface::Content,
                 pane_id: public_pane_id.clone(),
                 owner: String::new(),
                 format: api::schema::PaneGraphicsFormat::Png,
@@ -381,6 +441,7 @@ fn rejected_or_stale_requests_do_not_schedule_rendering() {
             id: "stale-close".into(),
             method: api::schema::Method::PaneGraphicsStreamClose(
                 api::schema::PaneGraphicsStreamParams {
+                    surface: api::schema::PaneGraphicsSurface::Content,
                     pane_id: public_pane_id,
                     owner: "stale-owner".into(),
                 },

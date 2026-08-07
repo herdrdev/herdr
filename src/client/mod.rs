@@ -1341,6 +1341,10 @@ async fn run_client_loop(
         query_host_cell_size();
     }
 
+    if state.attach_escape.is_none() && state.kitty_graphics_enabled {
+        query_kitty_graphics_capability();
+    }
+
     // Spawn the resize poller thread.
     let resize_quit = should_quit.clone();
     let resize_tx = event_tx.clone();
@@ -2307,6 +2311,15 @@ fn should_query_host_terminal_theme() -> bool {
 fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
     let query = crate::terminal_theme::host_terminal_theme_query_sequence();
     writer.write_all(query.as_bytes())?;
+    writer.flush()
+}
+
+fn query_kitty_graphics_capability() {
+    let _ = write_kitty_graphics_capability_query(io::stdout());
+}
+
+fn write_kitty_graphics_capability_query(mut writer: impl io::Write) -> io::Result<()> {
+    writer.write_all(crate::terminal_theme::KITTY_GRAPHICS_CAPABILITY_QUERY_SEQUENCE.as_bytes())?;
     writer.flush()
 }
 

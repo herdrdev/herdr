@@ -587,6 +587,7 @@ impl App {
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
+                sidebar_row_areas: Vec::new(),
             },
             drag: None,
             workspace_press: None,
@@ -645,6 +646,7 @@ impl App {
                 .experimental
                 .switch_ascii_input_source_in_prefix,
             kitty_graphics_enabled: config.experimental.kitty_graphics,
+            kitty_graphics_capability_confirmed: false,
             default_shell: config.terminal.default_shell.clone(),
             shell_mode: config.terminal.shell_mode,
             new_terminal_cwd: config.terminal.new_cwd.clone(),
@@ -673,6 +675,8 @@ impl App {
             plugin_panes: std::collections::HashMap::new(),
             pane_graphics_layers: std::collections::HashMap::new(),
             pane_graphics_streams: std::collections::HashMap::new(),
+            sidebar_graphics_layers: std::collections::HashMap::new(),
+            sidebar_graphics_streams: std::collections::HashMap::new(),
             pane_graphics_revision: 0,
             popup_pane: None,
             plugin_command_logs: Vec::new(),
@@ -905,6 +909,9 @@ impl App {
             self.input_rx = Some(crate::raw_input::spawn_input_reader());
         }
         self.query_host_terminal_theme();
+        if self.state.kitty_graphics_enabled {
+            self.query_kitty_graphics_capability();
+        }
 
         let mut needs_render = true;
         let mut host_mouse_capture_active = self.state.mouse_capture;
@@ -1078,7 +1085,7 @@ impl App {
                         frame,
                     );
                 })?;
-                if kitty_graphics_enabled {
+                if kitty_graphics_enabled && self.state.kitty_graphics_capability_confirmed {
                     crate::kitty_graphics::paint_local_pane_graphics(
                         &self.state,
                         &self.terminal_runtimes,
@@ -1468,6 +1475,8 @@ impl App {
                 let _ = crate::kitty_graphics::clear_all_host_graphics();
                 self.state.pane_graphics_layers.clear();
                 self.state.pane_graphics_streams.clear();
+                self.state.sidebar_graphics_layers.clear();
+                self.state.sidebar_graphics_streams.clear();
                 self.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
             }
             self.state.reveal_hidden_cursor_for_cjk_ime =
@@ -1771,6 +1780,11 @@ impl App {
                     }
                 }
                 crate::raw_input::RawInputEvent::HostCellSizeReport { .. } => {}
+                crate::raw_input::RawInputEvent::KittyGraphicsCapability(confirmed) => {
+                    if apply_host_terminal_theme {
+                        self.update_kitty_graphics_capability(confirmed);
+                    }
+                }
                 crate::raw_input::RawInputEvent::Unsupported => {}
             }
             self.sync_prefix_input_source(previous_mode);
@@ -6322,6 +6336,16 @@ last_pane = "prefix+tab"
                 b: 0xff,
             })
         );
+    }
+
+    #[test]
+    fn route_client_input_confirms_kitty_graphics_capability_from_probe_response() {
+        let mut app = test_app();
+        assert!(!app.state.kitty_graphics_capability_confirmed);
+
+        app.route_client_input(b"\x1b_Gi=1;OK\x1b\\".to_vec());
+
+        assert!(app.state.kitty_graphics_capability_confirmed);
     }
 
     #[tokio::test]

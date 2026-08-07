@@ -60,6 +60,36 @@ pub const HOST_COLOR_SCHEME_QUERY_SEQUENCE: &str = "\x1b[?996n";
 pub const HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE: &str = "\x1b[?2031h";
 pub const HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE: &str = "\x1b[?2031l";
 
+/// Kitty Graphics Protocol image id reserved for the one-shot capability
+/// probe. `a=q` is the protocol's documented no-op "query" action: a
+/// supporting terminal always answers without displaying anything, so any
+/// reply addressed to this id — `OK` or an error code — proves the real
+/// outer terminal understands the protocol at all.
+const KITTY_GRAPHICS_CAPABILITY_PROBE_IMAGE_ID: u32 = 1;
+/// 1x1 RGB (`f=24`) placeholder pixel, base64 of three zero bytes.
+pub const KITTY_GRAPHICS_CAPABILITY_QUERY_SEQUENCE: &str =
+    "\x1b_Gi=1,a=q,t=d,f=24,s=1,v=1;AAAA\x1b\\";
+
+/// Parses a Kitty Graphics Protocol response addressed to the capability
+/// probe. Returns `Some(true)` for any well-formed reply carrying the probe's
+/// image id, regardless of whether the payload is `OK` or an error code —
+/// responding at all is the capability signal. Returns `None` for anything
+/// else (a different image id, or not a Kitty Graphics response), so the
+/// caller can fall through to other parsers. A terminal that doesn't support
+/// the protocol never replies, which the caller treats as the safe "not
+/// confirmed" default rather than something this parser needs to detect.
+pub fn parse_kitty_graphics_capability_response(sequence: &str) -> Option<bool> {
+    let body = sequence.strip_prefix("\x1b_G")?;
+    let body = body.strip_suffix("\x1b\\")?;
+    let (control, _payload) = body.split_once(';')?;
+    control
+        .split(',')
+        .find_map(|field| field.strip_prefix("i="))
+        .and_then(|id| id.parse::<u32>().ok())
+        .filter(|&id| id == KITTY_GRAPHICS_CAPABILITY_PROBE_IMAGE_ID)
+        .map(|_| true)
+}
+
 impl TerminalTheme {
     pub fn with_color(mut self, kind: DefaultColorKind, color: RgbColor) -> Self {
         match kind {
@@ -234,6 +264,38 @@ mod tests {
         assert_eq!(
             osc_reset_default_color_sequence(DefaultColorKind::Background),
             "\x1b]111\x1b\\"
+        );
+    }
+
+    #[test]
+    fn parses_kitty_graphics_capability_ok_response() {
+        assert_eq!(
+            parse_kitty_graphics_capability_response("\x1b_Gi=1;OK\x1b\\"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn parses_kitty_graphics_capability_error_response_as_supported() {
+        assert_eq!(
+            parse_kitty_graphics_capability_response("\x1b_Gi=1;EINVAL:bad request\x1b\\"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn ignores_kitty_graphics_response_with_unrelated_image_id() {
+        assert_eq!(
+            parse_kitty_graphics_capability_response("\x1b_Gi=42;OK\x1b\\"),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_non_kitty_graphics_sequence() {
+        assert_eq!(
+            parse_kitty_graphics_capability_response("\x1b]10;rgb:0000/0000/0000\x1b\\"),
+            None
         );
     }
 

@@ -434,6 +434,7 @@ fn windows_client_input_event_from_raw(
         | crate::raw_input::RawInputEvent::HostPaletteColors { .. }
         | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)
         | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
+        | crate::raw_input::RawInputEvent::KittyGraphicsCapability(_)
         | crate::raw_input::RawInputEvent::Unsupported => None,
     }
 }

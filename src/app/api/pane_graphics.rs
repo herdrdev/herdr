@@ -45,20 +45,22 @@ impl App {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        if self.state.pane_graphics_streams.contains_key(&pane_id) {
+        if pane_graphics_streams(&self.state, params.surface).contains_key(&pane_id) {
             return encode_error(
                 id,
                 "stream_conflict",
                 "pane already has an active graphics stream",
             );
         }
-        self.set_pane_graphics_layer(id, pane_id, params)
+        let surface = params.surface;
+        self.set_pane_graphics_layer(id, pane_id, surface, params)
     }
 
     fn set_pane_graphics_layer(
         &mut self,
         id: String,
         pane_id: PaneId,
+        surface: crate::api::schema::PaneGraphicsSurface,
         params: PaneGraphicsSetParams,
     ) -> String {
         if params.image_width == 0 || params.image_height == 0 {
@@ -113,7 +115,7 @@ impl App {
             data,
             params.placement,
         );
-        self.state.pane_graphics_layers.insert(pane_id, layer);
+        pane_graphics_layers_mut(&mut self.state, surface).insert(pane_id, layer);
         self.state.pane_graphics_revision = self.state.pane_graphics_revision.wrapping_add(1);
 
         encode_success(id, ResponseResult::Ok {})
@@ -130,14 +132,17 @@ impl App {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        if self.state.pane_graphics_streams.contains_key(&pane_id) {
+        if pane_graphics_streams(&self.state, params.surface).contains_key(&pane_id) {
             return encode_error(
                 id,
                 "stream_conflict",
                 "pane already has an active graphics stream",
             );
         }
-        if self.state.pane_graphics_layers.remove(&pane_id).is_some() {
+        if pane_graphics_layers_mut(&mut self.state, params.surface)
+            .remove(&pane_id)
+            .is_some()
+        {
             self.state.pane_graphics_revision = self.state.pane_graphics_revision.wrapping_add(1);
         }
 
@@ -155,7 +160,7 @@ impl App {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        match self.state.pane_graphics_streams.get(&pane_id) {
+        match pane_graphics_streams(&self.state, params.surface).get(&pane_id) {
             Some(owner) if owner == &params.owner => {}
             Some(_) => {
                 return encode_error(
@@ -166,7 +171,8 @@ impl App {
             }
             None => return encode_error(id, "stream_closed", "pane graphics stream is not active"),
         }
-        self.set_pane_graphics_layer(id, pane_id, params)
+        let surface = params.surface;
+        self.set_pane_graphics_layer(id, pane_id, surface, params)
     }
 
     pub(super) fn handle_pane_graphics_stream_open(
@@ -187,17 +193,15 @@ impl App {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        if self.state.pane_graphics_streams.contains_key(&pane_id) {
+        if pane_graphics_streams(&self.state, params.surface).contains_key(&pane_id) {
             return encode_error(
                 id,
                 "stream_conflict",
                 "pane already has an active graphics stream",
             );
         }
-        self.state
-            .pane_graphics_streams
-            .insert(pane_id, params.owner);
-        self.state.pane_graphics_layers.remove(&pane_id);
+        pane_graphics_streams_mut(&mut self.state, params.surface).insert(pane_id, params.owner);
+        pane_graphics_layers_mut(&mut self.state, params.surface).remove(&pane_id);
         self.state.pane_graphics_revision = self.state.pane_graphics_revision.wrapping_add(1);
 
         encode_success(id, ResponseResult::Ok {})
@@ -211,18 +215,49 @@ impl App {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        if self
-            .state
-            .pane_graphics_streams
+        if pane_graphics_streams(&self.state, params.surface)
             .get(&pane_id)
             .is_some_and(|owner| owner == &params.owner)
         {
-            self.state.pane_graphics_streams.remove(&pane_id);
-            self.state.pane_graphics_layers.remove(&pane_id);
+            pane_graphics_streams_mut(&mut self.state, params.surface).remove(&pane_id);
+            pane_graphics_layers_mut(&mut self.state, params.surface).remove(&pane_id);
             self.state.pane_graphics_revision = self.state.pane_graphics_revision.wrapping_add(1);
         }
 
         encode_success(id, ResponseResult::Ok {})
+    }
+}
+
+/// Selects the layer/stream maps for the requested overlay surface. `Content`
+/// and `SidebarRow` are addressed independently so a pane can carry both at
+/// once — see `PaneGraphicsSurface`.
+fn pane_graphics_layers_mut(
+    state: &mut crate::app::state::AppState,
+    surface: crate::api::schema::PaneGraphicsSurface,
+) -> &mut std::collections::HashMap<PaneId, PaneGraphicsLayer> {
+    match surface {
+        crate::api::schema::PaneGraphicsSurface::Content => &mut state.pane_graphics_layers,
+        crate::api::schema::PaneGraphicsSurface::SidebarRow => &mut state.sidebar_graphics_layers,
+    }
+}
+
+fn pane_graphics_streams(
+    state: &crate::app::state::AppState,
+    surface: crate::api::schema::PaneGraphicsSurface,
+) -> &std::collections::HashMap<PaneId, String> {
+    match surface {
+        crate::api::schema::PaneGraphicsSurface::Content => &state.pane_graphics_streams,
+        crate::api::schema::PaneGraphicsSurface::SidebarRow => &state.sidebar_graphics_streams,
+    }
+}
+
+fn pane_graphics_streams_mut(
+    state: &mut crate::app::state::AppState,
+    surface: crate::api::schema::PaneGraphicsSurface,
+) -> &mut std::collections::HashMap<PaneId, String> {
+    match surface {
+        crate::api::schema::PaneGraphicsSurface::Content => &mut state.pane_graphics_streams,
+        crate::api::schema::PaneGraphicsSurface::SidebarRow => &mut state.sidebar_graphics_streams,
     }
 }
 
@@ -326,6 +361,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-set".into(),
             method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Rgba,
@@ -357,6 +393,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-clear".into(),
             method: crate::api::schema::Method::PaneGraphicsClear(PaneGraphicsClearParams {
+                surface: Default::default(),
                 pane_id: public_pane_id,
             }),
         });
@@ -374,6 +411,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-set".into(),
             method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Rgba,
@@ -391,6 +429,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-clear".into(),
             method: crate::api::schema::Method::PaneGraphicsClear(PaneGraphicsClearParams {
+                surface: Default::default(),
                 pane_id: public_pane_id,
             }),
         });
@@ -413,6 +452,7 @@ mod tests {
             id: "graphics-stream-open".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamOpen(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: public_pane_id,
                     owner: "stream-1".into(),
                 },
@@ -429,6 +469,7 @@ mod tests {
             id: "graphics-stream-open-alias".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamOpen(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: alias.clone(),
                     owner: "stream-2".into(),
                 },
@@ -445,6 +486,7 @@ mod tests {
             id: "graphics-stream-close-wrong-owner".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamClose(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: alias.clone(),
                     owner: "stream-2".into(),
                 },
@@ -461,6 +503,7 @@ mod tests {
             id: "graphics-stream-close-alias".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamClose(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: alias,
                     owner: "stream-1".into(),
                 },
@@ -482,6 +525,7 @@ mod tests {
             id: "graphics-stream-open".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamOpen(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: public_pane_id.clone(),
                     owner: "stream-1".into(),
                 },
@@ -493,6 +537,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-set-public".into(),
             method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Rgba,
@@ -510,6 +555,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-set-stream".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
                 owner: "stream-1".into(),
                 format: crate::api::schema::PaneGraphicsFormat::Rgba,
@@ -528,6 +574,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-set-stream-wrong-owner".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
                 owner: "stream-2".into(),
                 format: crate::api::schema::PaneGraphicsFormat::Rgba,
@@ -548,6 +595,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-clear-public".into(),
             method: crate::api::schema::Method::PaneGraphicsClear(PaneGraphicsClearParams {
+                surface: Default::default(),
                 pane_id: public_pane_id.clone(),
             }),
         });
@@ -559,6 +607,7 @@ mod tests {
             id: "graphics-stream-close".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamClose(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: public_pane_id,
                     owner: "stream-1".into(),
                 },
@@ -582,6 +631,7 @@ mod tests {
             let response = app.handle_api_request(crate::api::schema::Request {
                 id: "graphics-overflow".into(),
                 method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                    surface: Default::default(),
                     pane_id: public_pane_id,
                     owner: String::new(),
                     format,
@@ -612,6 +662,7 @@ mod tests {
                 let response = app.handle_api_request(crate::api::schema::Request {
                     id: "graphics-raw-length".into(),
                     method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                        surface: Default::default(),
                         pane_id: public_pane_id,
                         owner: String::new(),
                         format,
@@ -645,6 +696,7 @@ mod tests {
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-public-too-large".into(),
             method: crate::api::schema::Method::PaneGraphicsSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id,
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Png,
@@ -673,6 +725,7 @@ mod tests {
             id: "graphics-stream-open".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamOpen(
                 crate::api::schema::PaneGraphicsStreamParams {
+                    surface: Default::default(),
                     pane_id: public_pane_id.clone(),
                     owner: "stream-1".into(),
                 },
@@ -684,6 +737,7 @@ mod tests {
         let set = app.handle_api_request(crate::api::schema::Request {
             id: "graphics-stream-set".into(),
             method: crate::api::schema::Method::PaneGraphicsStreamSet(PaneGraphicsSetParams {
+                surface: Default::default(),
                 pane_id: public_pane_id,
                 owner: "stream-1".into(),
                 format: crate::api::schema::PaneGraphicsFormat::Png,

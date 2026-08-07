@@ -27,6 +27,8 @@ impl HeadlessServer {
     pub(super) fn pane_graphics_runtime_active(&self) -> bool {
         !self.app.state.pane_graphics_layers.is_empty()
             || !self.app.state.pane_graphics_streams.is_empty()
+            || !self.app.state.sidebar_graphics_layers.is_empty()
+            || !self.app.state.sidebar_graphics_streams.is_empty()
     }
 
     pub(super) fn cancel_inactive_pane_graphics_streams(&self) {
@@ -35,6 +37,7 @@ impl HeadlessServer {
                 .state
                 .pane_graphics_streams
                 .values()
+                .chain(self.app.state.sidebar_graphics_streams.values())
                 .any(|active_owner| active_owner == owner)
         });
     }

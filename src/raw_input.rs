@@ -145,6 +145,10 @@ pub enum RawInputEvent {
         width_px: u32,
         height_px: u32,
     },
+    /// The real outer terminal answered the Kitty Graphics Protocol capability
+    /// probe. Always `true` today — see
+    /// `terminal_theme::parse_kitty_graphics_capability_response`.
+    KittyGraphicsCapability(bool),
     Unsupported,
 }
 
@@ -853,6 +857,11 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
                 seq_len,
             ));
         }
+        if let Some(confirmed) =
+            crate::terminal_theme::parse_kitty_graphics_capability_response(seq)
+        {
+            return Some((RawInputEvent::KittyGraphicsCapability(confirmed), seq_len));
+        }
 
         match seq {
             "\x1b[I" => return Some((RawInputEvent::OuterFocusGained, seq_len)),
@@ -1521,6 +1530,17 @@ mod tests {
                 b: 0xee
             }
         );
+    }
+
+    #[test]
+    fn parses_kitty_graphics_capability_response_as_one_complete_event() {
+        let (RawInputEvent::KittyGraphicsCapability(confirmed), consumed) =
+            extract_one_event(b"\x1b_Gi=1;OK\x1b\\").unwrap()
+        else {
+            panic!("expected kitty graphics capability response");
+        };
+        assert_eq!(consumed, 11);
+        assert!(confirmed);
     }
 
     #[test]

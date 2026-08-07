@@ -18,6 +18,24 @@ impl App {
         let _ = std::io::stdout().flush();
     }
 
+    pub(super) fn query_kitty_graphics_capability(&self) {
+        use std::io::Write;
+
+        let _ = std::io::stdout()
+            .write_all(crate::terminal_theme::KITTY_GRAPHICS_CAPABILITY_QUERY_SEQUENCE.as_bytes());
+        let _ = std::io::stdout().flush();
+    }
+
+    /// Records that the real outer terminal confirmed Kitty Graphics Protocol
+    /// support. Monotonic: once confirmed, stays confirmed for the session.
+    pub(super) fn update_kitty_graphics_capability(&mut self, confirmed: bool) -> bool {
+        if !confirmed || self.state.kitty_graphics_capability_confirmed {
+            return false;
+        }
+        self.state.kitty_graphics_capability_confirmed = true;
+        true
+    }
+
     pub(super) fn update_host_terminal_theme(
         &mut self,
         kind: crate::terminal_theme::DefaultColorKind,

@@ -169,21 +169,34 @@ Clients can treat `offset_from_bottom == 0` as at-bottom state.
 
 Pane graphics let a plugin place image data over a pane. They are available
 only when `[experimental].kitty_graphics = true`; otherwise every pane graphics
-method returns `feature_disabled`. Calling `pane.graphics.info` returns the
-attached client's cell width and height in pixels without creating a graphics
-layer. `pane.graphics.set` accepts `png`, `rgb`, or `rgba` data in `data_base64`,
-and `pane.graphics.clear` removes the layer.
+method returns `feature_disabled`. Herdr also probes the real attached
+terminal for Kitty Graphics Protocol support at startup; until that probe is
+confirmed, graphics are accepted and cached but not painted, so a
+non-supporting terminal never receives garbage escape sequences. Calling
+`pane.graphics.info` returns the attached client's cell width and height in
+pixels without creating a graphics layer. `pane.graphics.set` accepts `png`,
+`rgb`, or `rgba` data in `data_base64`, and `pane.graphics.clear` removes the
+layer.
+
+An optional `surface` field (`"content"`, the default, or `"sidebar_row"`)
+targets a pane's own content area versus its agent-panel sidebar row. The two
+are addressed independently, so a pane can carry both overlays at once.
 
 ```json
 {"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
 {"id":"graphics_set","method":"pane.graphics.set","params":{"pane_id":"w1:p1","format":"png","image_width":800,"image_height":600,"data_base64":"...","placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}}
+{"id":"graphics_set_row","method":"pane.graphics.set","params":{"pane_id":"w1:p1","surface":"sidebar_row","format":"png","image_width":200,"image_height":20,"data_base64":"..."}}
 {"id":"graphics_clear","method":"pane.graphics.clear","params":{"pane_id":"w1:p1"}}
 ```
 
 For repeated frames, open a dedicated socket with `pane.graphics.stream`. After
 Herdr replies with `ok`, send one JSON header and then exactly `data_length` raw
-bytes per frame. A stream owns that pane's graphics layer until the socket
-closes; concurrent set, clear, or stream requests return `stream_conflict`.
+bytes per frame. `pane.graphics.stream` also accepts `surface`, applied to
+every frame on that socket; a stream owns only that pane/surface pair's
+graphics layer until the socket closes, so a content stream and a
+sidebar-row stream on the same pane don't conflict with each other. Concurrent
+set, clear, or stream requests on the *same* pane/surface pair return
+`stream_conflict`.
 
 ```json
 {"id":"graphics_stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1"}}

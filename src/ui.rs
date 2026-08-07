@@ -79,12 +79,12 @@ pub(crate) use self::{
         agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
         agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
         agent_panel_toggle_rect, all_agent_panel_entries, collapsed_sidebar_sections,
-        collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,
-        expanded_sidebar_toggle_rect, normalized_workspace_scroll, sidebar_section_divider_rect,
-        workspace_drop_slots, workspace_group_chevron_rect, workspace_list_entries,
-        workspace_list_entries_expanded, workspace_list_rect, workspace_list_scroll_metrics,
-        workspace_list_scrollbar_rect, workspace_parent_group_state, AgentPanelEntry,
-        WorkspaceListEntry,
+        collapsed_sidebar_toggle_rect, compute_agent_row_areas, compute_workspace_card_areas,
+        expanded_sidebar_sections, expanded_sidebar_toggle_rect, normalized_workspace_scroll,
+        sidebar_section_divider_rect, workspace_drop_slots, workspace_group_chevron_rect,
+        workspace_list_entries, workspace_list_entries_expanded, workspace_list_rect,
+        workspace_list_scroll_metrics, workspace_list_scrollbar_rect, workspace_parent_group_state,
+        AgentPanelEntry, WorkspaceListEntry,
     },
 };
 
@@ -243,22 +243,28 @@ fn compute_view_internal(
         .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, main_area))
         .unwrap_or((Rect::default(), main_area));
 
-    if !app.sidebar_collapsed {
+    let sidebar_detail_area = if !app.sidebar_collapsed {
         app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
         let (_, detail_area) = expanded_sidebar_sections(sidebar_area, app.sidebar_section_split);
         let max_agent_scroll = agent_panel_scroll_metrics(app, detail_area).max_offset_from_bottom;
         app.agent_panel_scroll = app.agent_panel_scroll.min(max_agent_scroll);
+        Some(detail_area)
     } else {
         app.workspace_scroll = app
             .workspace_scroll
             .min(app.workspaces.len().saturating_sub(1));
         app.agent_panel_scroll = 0;
-    }
+        None
+    };
 
     let workspace_card_areas = if app.sidebar_collapsed {
         Vec::new()
     } else {
         compute_workspace_card_areas(app, sidebar_area)
+    };
+    let sidebar_row_areas = match sidebar_detail_area {
+        Some(detail_area) => compute_agent_row_areas(app, terminal_runtimes, detail_area),
+        None => Vec::new(),
     };
 
     let tab_bar_view = app
@@ -319,6 +325,7 @@ fn compute_view_internal(
         toast_hit_area,
         pane_infos,
         split_borders,
+        sidebar_row_areas,
     };
     app.sync_copy_mode_search_geometry();
 }
@@ -382,6 +389,7 @@ fn compute_mobile_view(
         toast_hit_area,
         pane_infos,
         split_borders,
+        sidebar_row_areas: Vec::new(),
     };
     app.sync_copy_mode_search_geometry();
 }

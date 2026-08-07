@@ -1,6 +1,7 @@
 use ratatui::{layout::Rect, Frame};
 
 use super::panes::{compute_pane_infos, render_panes, resize_tab_panes};
+use crate::app::state::SidebarRowArea;
 use crate::app::state::ViewState;
 use crate::app::{AppState, Mode};
 use crate::layout::{PaneInfo, SplitBorder};
@@ -16,6 +17,7 @@ pub(crate) struct TabSurfaceLayout {
 pub(crate) struct TabSurfaceView<'a> {
     pub(crate) pane_infos: &'a [PaneInfo],
     pub(crate) split_borders: &'a [SplitBorder],
+    pub(crate) sidebar_row_areas: &'a [SidebarRowArea],
 }
 
 impl ViewState {
@@ -23,6 +25,7 @@ impl ViewState {
         TabSurfaceView {
             pane_infos: &self.pane_infos,
             split_borders: &self.split_borders,
+            sidebar_row_areas: &self.sidebar_row_areas,
         }
     }
 }
@@ -212,6 +215,7 @@ mod tests {
         let surface_view = TabSurfaceView {
             pane_infos: &surface.pane_infos,
             split_borders: &surface.split_borders,
+            sidebar_row_areas: &[],
         };
         let mut terminal =
             Terminal::new(TestBackend::new(full_area.width, full_area.height)).unwrap();

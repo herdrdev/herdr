@@ -271,6 +271,21 @@ pub enum PaneGraphicsFormat {
     Rgba,
 }
 
+/// Which visible surface a pane-graphics overlay paints over. `pane_id`
+/// always identifies the pane; for `SidebarRow` it is the pane whose
+/// agent-panel row the overlay should track, not the pane's own content area.
+/// The two surfaces are addressed independently, so a pane can carry both a
+/// `Content` overlay and a `SidebarRow` overlay at once.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneGraphicsSurface {
+    #[default]
+    Content,
+    SidebarRow,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneGraphicsSetParams {
     pub pane_id: String,
@@ -286,6 +301,8 @@ pub struct PaneGraphicsSetParams {
     pub data_base64: String,
     #[serde(default)]
     pub placement: PaneGraphicsPlacementParams,
+    #[serde(default)]
+    pub surface: PaneGraphicsSurface,
 }
 
 #[derive(
@@ -305,6 +322,8 @@ pub struct PaneGraphicsPlacementParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneGraphicsClearParams {
     pub pane_id: String,
+    #[serde(default)]
+    pub surface: PaneGraphicsSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -313,6 +332,8 @@ pub struct PaneGraphicsStreamParams {
     #[serde(skip)]
     #[schemars(skip)]
     pub owner: String,
+    #[serde(default)]
+    pub surface: PaneGraphicsSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

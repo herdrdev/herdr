@@ -711,6 +711,48 @@ pub(crate) fn compute_workspace_card_areas(
     compute_workspace_list_areas(app, area).0
 }
 
+/// Computes the expanded agent-panel's per-row rects without rendering, so
+/// they can be persisted into `ViewState.sidebar_row_areas` the same way
+/// `compute_pane_infos` persists pane rects. Mirrors `render_agent_detail`'s
+/// row-layout loop exactly; keep the two in sync.
+pub(crate) fn compute_agent_row_areas(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+) -> Vec<crate::app::state::SidebarRowArea> {
+    if area.height < 3 {
+        return Vec::new();
+    }
+
+    let details = agent_panel_entries_from(app, terminal_runtimes);
+    let metrics = agent_panel_scroll_metrics(app, area);
+    let body = agent_panel_body_rect(area, should_show_scrollbar(metrics));
+    if body == Rect::default() {
+        return Vec::new();
+    }
+
+    let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+    let mut row_y = body.y;
+    let body_bottom = body.y + body.height;
+    let mut areas = Vec::new();
+    for (index, detail) in details.iter().enumerate().skip(scroll) {
+        let rows = resolved_agent_rows(app, detail);
+        let height = (rows.len().max(1) as u16).min(body.height);
+        if row_y.saturating_add(height) > body_bottom {
+            break;
+        }
+        areas.push(crate::app::state::SidebarRowArea {
+            pane_id: detail.pane_id,
+            rect: Rect::new(body.x, row_y, body.width, height),
+        });
+        row_y = row_y
+            .saturating_add(height)
+            .saturating_add(agent_entry_gap(app, index, details.len()))
+            .min(body_bottom);
+    }
+    areas
+}
+
 pub(crate) fn workspace_group_chevron_rect(card: &crate::app::state::WorkspaceCardArea) -> Rect {
     if card.rect.width == 0 || card.rect.height == 0 {
         return Rect::default();

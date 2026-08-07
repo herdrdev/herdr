@@ -1664,6 +1664,8 @@ impl AppState {
             self.plugin_panes.remove(&pane_id);
             self.pane_graphics_layers.remove(&pane_id);
             self.pane_graphics_streams.remove(&pane_id);
+            self.sidebar_graphics_layers.remove(&pane_id);
+            self.sidebar_graphics_streams.remove(&pane_id);
         }
     }
 

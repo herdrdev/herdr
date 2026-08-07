@@ -1589,6 +1589,27 @@ impl HeadlessServer {
         }
     }
 
+    /// Returns `true` if the server's own capability state just flipped to
+    /// confirmed, so the caller knows a repaint can now emit graphics.
+    fn update_client_kitty_graphics_capability_from_events(
+        &mut self,
+        client_id: u64,
+        events: &[crate::raw_input::RawInputEvent],
+    ) -> bool {
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return false;
+        };
+        if !client.update_kitty_graphics_capability_from_events(events) {
+            return false;
+        }
+        if self.foreground_client_id == Some(client_id) {
+            self.app.state.kitty_graphics_capability_confirmed = true;
+            true
+        } else {
+            false
+        }
+    }
+
     fn update_client_outer_focus_from_events(
         &mut self,
         client_id: u64,
@@ -2725,6 +2746,8 @@ impl HeadlessServer {
             self.resize_shared_runtime_to_effective_size_before_input();
         }
         let theme_changed = self.update_client_host_theme_from_events(client_id, &events);
+        let kitty_graphics_capability_changed =
+            self.update_client_kitty_graphics_capability_from_events(client_id, &events);
         // Client-local theme reports were applied above; routing them again would update every
         // pane once per palette entry instead of once per captured batch.
         self.app.route_client_events_from(client_id, events, false);
@@ -2752,7 +2775,10 @@ impl HeadlessServer {
 
             false
         } else {
-            foreground_changed || theme_changed || (interaction && !render_neutral_mouse_motion)
+            foreground_changed
+                || theme_changed
+                || kitty_graphics_capability_changed
+                || (interaction && !render_neutral_mouse_motion)
         }
     }
 
@@ -4158,7 +4184,11 @@ impl HeadlessServer {
             };
             let mut next_graphics_cache = client.graphics_cache.clone();
             let graphics_surface_reset_pending = client.graphics_surface_reset_pending;
-            if is_app_client && self.app.state.kitty_graphics_enabled && cell_size.is_known() {
+            if is_app_client
+                && self.app.state.kitty_graphics_enabled
+                && self.app.state.kitty_graphics_capability_confirmed
+                && cell_size.is_known()
+            {
                 if graphics_surface_reset_pending {
                     frame.graphics = next_graphics_cache.clear_bytes();
                 }
@@ -8118,6 +8148,73 @@ next_tab = ""
                 b: 0x56,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn foreground_client_kitty_graphics_capability_response_confirms_server_state() {
+        let mut server = test_headless_server();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                1,
+                RenderEncoding::SemanticFrame,
+                None,
+            ),
+        );
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+        assert!(!server.app.state.kitty_graphics_capability_confirmed);
+
+        assert!(server.handle_server_event(ServerEvent::ClientInput {
+            client_id: 1,
+            data: b"\x1b_Gi=1;OK\x1b\\".to_vec(),
+        }));
+
+        assert!(server.clients[&1].kitty_graphics_capability_confirmed);
+        assert!(server.app.state.kitty_graphics_capability_confirmed);
+    }
+
+    #[tokio::test]
+    async fn background_client_kitty_graphics_capability_response_does_not_confirm_server_state() {
+        let mut server = test_headless_server();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                1,
+                RenderEncoding::SemanticFrame,
+                None,
+            ),
+        );
+        server.clients.insert(
+            2,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                2,
+                RenderEncoding::SemanticFrame,
+                None,
+            ),
+        );
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+
+        server.handle_server_event(ServerEvent::ClientInput {
+            client_id: 2,
+            data: b"\x1b_Gi=1;OK\x1b\\".to_vec(),
+        });
+
+        assert!(server.clients[&2].kitty_graphics_capability_confirmed);
+        assert!(!server.app.state.kitty_graphics_capability_confirmed);
     }
 
     #[tokio::test]
