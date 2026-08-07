@@ -1,0 +1,80 @@
+id = "muse"
+version = "2026.08.06.1"
+min_engine_version = 2
+updated_at = "2026-08-06T00:00:00Z"
+aliases = ["muse-code", "muse-cli"]
+
+# Evidence: Live pane reads via `herdr pane read <pane> --source detection --format text`
+# captured from Muse Code 0.1.0 (muse-spark-1.2-contributor) in herdr.
+#
+# Idle (prompt ready) bottom chrome:
+#   ── Voice input (⌥ + v to start) ───── ... ─
+#   ⟩
+#   ───────────────────────────────────── ... ─
+#     muse-spark-1.2-contributor · xhigh · ~/Developer/herdr · YOLO
+# The prompt is a single `⟩` (U+27E9) on its own line. The status footer always
+# contains `·` separators and the model path `~/Developer/herdr` (cwd) plus
+# `YOLO` when launched with --yolo.
+#
+# Working (agent running tools/commands):
+#   ◆ Running command · <description> (0s · esc to interrupt)
+#   └ (ctrl+b to send to background)
+#   ── Voice input (⌥ + v to start) ─────
+#   ⟩ ...
+# Any live activity line contains `esc to interrupt`. This is the invariant
+# between idle and working – idle footer is `YOLO`/`xhigh` without `esc`.
+#
+# Blocked (approval) – Muse shows tool approval when not in --yolo. The
+# footer gains acceptance hints. We encode generic blocked signals so --yolo
+# idle is not misclassified. These patterns were not observed in the initial
+# capture and are kept lower priority / generic.
+#
+
+[[rules]]
+id = "pick_request_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(5)"
+visible_blocker = true
+contains = ["Enter to select"]
+
+[[rules]]
+id = "working_esc_interrupt"
+state = "working"
+priority = 900
+region = "whole_recent"
+visible_working = true
+contains = ["esc to interrupt"]
+not = [{ contains = ["Enter to select"] }]
+
+[[rules]]
+id = "blocked_approval"
+state = "blocked"
+priority = 850
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["Do you want to proceed?"] },
+  { contains = ["Allow", "Always allow"] },
+  { contains = ["waiting for approval", "run this command?"], any = [{ contains = ["proceed"] }] },
+  { contains = ["(y) (enter)"] },
+  { contains = ["do you want to allow"] },
+]
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+line_regex = ['^\s*⟩']
+not = [{ contains = ["esc to interrupt"] }]
+
+[[rules]]
+id = "idle_status_fallback"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+contains = ["YOLO"]
+not = [{ contains = ["esc to interrupt"] }]
