@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"019fd831-ef0c-7d63-acf7-ce6850c15991","timestamp":"2026-08-06T17:49:38.956Z","cwd":"/Users/abhishekvtangod"}
+{"type":"thinking_level_change","id":"9e72c203","parentId":null,"timestamp":"2026-08-06T17:49:38.988Z","thinkingLevel":"off"}
+{"type":"model_change","id":"3b3a20dd","parentId":"9e72c203","timestamp":"2026-08-06T17:55:06.493Z","provider":"azure-openai-responses","modelId":"gpt-5.4"}
+{"type":"thinking_level_change","id":"ea514f9c","parentId":"3b3a20dd","timestamp":"2026-08-06T17:55:06.494Z","thinkingLevel":"medium"}
+{"type":"message","id":"7c450563","parentId":"ea514f9c","timestamp":"2026-08-06T17:55:09.112Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1786038909106}}
+{"type":"message","id":"d94795bd","parentId":"7c450563","timestamp":"2026-08-06T17:55:09.193Z","message":{"role":"assistant","content":[],"api":"azure-openai-responses","provider":"azure-openai-responses","model":"gpt-5.4","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","timestamp":1786038909193,"errorMessage":"Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, or pass azureBaseUrl, azureResourceName, or model.baseUrl."}}

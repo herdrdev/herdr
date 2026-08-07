@@ -1,0 +1,10 @@
+{
+  "lastChangelogVersion": "0.84.0",
+  "theme": "dark",
+  "defaultProvider": "azure-foundry",
+  "defaultModel": "gpt-5.4",
+  "defaultThinkingLevel": "medium",
+  "packages": [
+    "npm:@nquandt/pi-azure-foundry"
+  ]
+}

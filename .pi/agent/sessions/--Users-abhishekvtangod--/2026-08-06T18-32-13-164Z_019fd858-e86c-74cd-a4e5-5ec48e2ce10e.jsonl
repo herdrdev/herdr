@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"019fd858-e86c-74cd-a4e5-5ec48e2ce10e","timestamp":"2026-08-06T18:32:13.164Z","cwd":"/Users/abhishekvtangod"}
+{"type":"model_change","id":"ac1a6ea6","parentId":null,"timestamp":"2026-08-06T18:32:14.554Z","provider":"azure-foundry","modelId":"Kimi-K2.5"}
+{"type":"thinking_level_change","id":"dead9b52","parentId":"ac1a6ea6","timestamp":"2026-08-06T18:32:14.554Z","thinkingLevel":"off"}
+{"type":"model_change","id":"1f8c4ddf","parentId":"dead9b52","timestamp":"2026-08-06T18:32:29.001Z","provider":"azure-foundry","modelId":"gpt-5.4"}
+{"type":"message","id":"9a895466","parentId":"1f8c4ddf","timestamp":"2026-08-06T18:32:30.581Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1786041150575}}
+{"type":"message","id":"78eab65f","parentId":"9a895466","timestamp":"2026-08-06T18:32:32.506Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi — how can I help?"}],"api":"azure-foundry","provider":"azure-foundry","model":"gpt-5.4","usage":{"input":1186,"output":11,"cacheRead":0,"cacheWrite":0,"totalTokens":1197,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1786041150584}}
+{"type":"message","id":"3c71607d","parentId":"78eab65f","timestamp":"2026-08-06T18:34:49.814Z","message":{"role":"user","content":[{"type":"text","text":"/exit"}],"timestamp":1786041289811}}
