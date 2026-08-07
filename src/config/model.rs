@@ -1043,7 +1043,7 @@ impl Default for UiConfig {
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
-            copy_on_select: true,
+            copy_on_select: false,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
             redraw_on_focus_gained: true,
@@ -1512,16 +1512,16 @@ mouse_capture = false
     }
 
     #[test]
-    fn copy_on_select_default_on_and_parse() {
+    fn copy_on_select_default_off_and_parse() {
         let default_config = Config::default();
-        assert!(default_config.ui.copy_on_select);
+        assert!(!default_config.ui.copy_on_select);
 
         let toml = r#"
 [ui]
-copy_on_select = false
+copy_on_select = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert!(!config.ui.copy_on_select);
+        assert!(config.ui.copy_on_select);
     }
 
     #[test]

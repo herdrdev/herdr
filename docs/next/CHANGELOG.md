@@ -7,6 +7,9 @@
 - Settings and `ui.status_indicators = "symbols"` can now use distinct static shapes for blocked, working, done, idle, and unknown agent states. (#2260)
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
 
+### Changed
+- `ui.copy_on_select` now defaults to `false`. Mouse selections were auto-copying to the clipboard on every drag or double-click, which could clobber other clipboard writers (e.g. system dictation) over OSC 52. `Ctrl+C`, or `Cmd+C` when the host forwards it, still copies and clears the retained selection.
+
 ### Fixed
 - Stable direct installs, self-updates, and remote helper downloads now require and verify the SHA-256 digest published for each GitHub release asset.
 - Configs containing the retired Herdr-written `ui.agent_panel_scope` setting no longer report it as an unknown key after upgrades. (#2292)

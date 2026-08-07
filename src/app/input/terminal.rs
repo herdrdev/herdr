@@ -641,6 +641,7 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.view.pane_infos = pane_infos;
+        app.state.copy_on_select = true;
 
         let row = info.inner_rect.y;
         let start_col = info.inner_rect.x + 1;
@@ -662,6 +663,7 @@ mod tests {
     #[tokio::test]
     async fn drag_copy_then_click_does_not_reuse_double_click_candidate() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta");
+        app.state.copy_on_select = true;
         let row = info.inner_rect.y;
         let start_col = info.inner_rect.x;
         let end_col = info.inner_rect.x + 4;
@@ -693,6 +695,7 @@ mod tests {
     #[tokio::test]
     async fn double_click_selects_and_copies_word() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta-gamma_delta@omega");
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + 13;
         let row = info.inner_rect.y;
         double_click(&mut app, col, row);
@@ -768,6 +771,7 @@ mod tests {
     #[tokio::test]
     async fn new_drag_cancels_stale_double_click_highlight_deadline() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta");
+        app.state.copy_on_select = true;
         let row = info.inner_rect.y;
         let word_col = info.inner_rect.x + 2;
 
@@ -799,6 +803,7 @@ mod tests {
     #[tokio::test]
     async fn ignored_left_down_keeps_double_click_highlight_deadline() {
         let (mut app, info) = app_with_screen_bytes(b"alpha beta");
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + 2;
         let row = info.inner_rect.y;
 
@@ -830,6 +835,7 @@ mod tests {
     #[tokio::test]
     async fn double_click_uses_display_columns_for_wide_chars() {
         let (mut app, info) = app_with_screen_bytes("echo 你好-world done".as_bytes());
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + 8;
         let row = info.inner_rect.y;
         double_click(&mut app, col, row);
@@ -842,6 +848,7 @@ mod tests {
     async fn double_click_copies_quoted_path_without_quotes() {
         let line = r#"cat "/tmp/build output/log.txt""#;
         let (mut app, info) = app_with_screen_bytes(line.as_bytes());
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + line.find("output").expect("path segment") as u16;
         let row = info.inner_rect.y;
         double_click(&mut app, col, row);
@@ -856,6 +863,7 @@ mod tests {
     #[tokio::test]
     async fn double_click_excludes_trailing_punctuation() {
         let (mut app, info) = app_with_screen_bytes(b"done.");
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + 2;
         let row = info.inner_rect.y;
         double_click(&mut app, col, row);
@@ -1185,6 +1193,7 @@ mod tests {
     #[tokio::test]
     async fn double_click_highlight_clears_after_short_delay() {
         let (mut app, info) = app_with_screen_bytes(b"copied");
+        app.state.copy_on_select = true;
         let col = info.inner_rect.x + 2;
         let row = info.inner_rect.y;
         double_click(&mut app, col, row);
