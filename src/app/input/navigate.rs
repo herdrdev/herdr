@@ -1901,7 +1901,12 @@ mod tests {
     use super::super::{state_with_workspaces, unique_temp_path};
     use super::*;
     use crate::{
-        app::App, config::Config, input::TerminalKey, terminal::TerminalState, workspace::Workspace,
+        app::App,
+        config::Config,
+        input::TerminalKey,
+        raw_input::{parse_raw_input_bytes_sync, RawInputEvent},
+        terminal::TerminalState,
+        workspace::Workspace,
     };
 
     fn mark_worktree_space_member(state: &mut AppState, ws_idx: usize, key: &str) {
@@ -2838,6 +2843,35 @@ command = "printf literal > '{}'"
         app.handle_navigate_key(TerminalKey::new(KeyCode::Char('W'), KeyModifiers::empty()));
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
+    }
+
+    #[tokio::test]
+    async fn kitty_shifted_alternate_without_modifier_prefers_reload_over_resize() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+
+        let mut events = parse_raw_input_bytes_sync(b"\x1b[114:82;1u");
+        assert_eq!(events.len(), 1);
+        let RawInputEvent::Key(key) = events.remove(0) else {
+            panic!("expected key event");
+        };
+        assert_eq!(
+            action_for_key(&app.state, key.clone(), BindingDispatch::Prefix),
+            Some(NavigateAction::ReloadConfig)
+        );
+        app.handle_prefix_key(key);
+
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[tokio::test]
