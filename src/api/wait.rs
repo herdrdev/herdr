@@ -223,10 +223,31 @@ pub(super) fn prompt_agent(
         return agent_wait_not_running(request_id).map(Some);
     }
 
+    // Composer text alone can bump state_change_seq before delayed Enter is written.
+    // Wait for the Enter delay, then rebaseline so --wait cannot treat pre-Enter
+    // screen updates as prompt effect.
+    std::thread::sleep(crate::api::AGENT_PROMPT_SUBMIT_DELAY);
+    let after_enter = match agent_get(&request_id, &target, api_tx) {
+        Ok(agent) => agent,
+        Err(response) => {
+            return serde_json::to_string(&response)
+                .map(Some)
+                .map_err(std::io::Error::other);
+        }
+    };
+    if !agent_wait_identity_matches(
+        &after_enter,
+        &before_prompt.terminal_id,
+        before_prompt.name.as_deref().filter(|name| *name == target),
+        before_prompt.agent.as_deref(),
+    ) {
+        return agent_wait_not_running(request_id).map(Some);
+    }
+
     let wait_started = std::time::Instant::now();
-    let prompt_state_change_seq = prompted.state_change_seq;
+    let prompt_state_change_seq = after_enter.state_change_seq;
     let until = agent_wait_statuses(wait.until);
-    let mut initial = prompted;
+    let mut initial = after_enter;
     let mut after_state_change_seq = Some(prompt_state_change_seq);
 
     if initial.agent_status != crate::api::schema::AgentStatus::Working {
@@ -782,6 +803,46 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle_agent_with_seq(state_change_seq: u64) -> crate::api::schema::AgentInfo {
+        serde_json::from_value(serde_json::json!({
+            "terminal_id": "t1",
+            "agent_status": "idle",
+            "workspace_id": "w1",
+            "tab_id": "tab1",
+            "pane_id": "p1",
+            "focused": false,
+            "state_change_seq": state_change_seq,
+            "revision": 0
+        }))
+        .expect("agent info")
+    }
+
+    #[test]
+    fn prompt_wait_rebaseline_rejects_composer_only_seq_bump() {
+        // Typing prompt text into the composer can advance state_change_seq
+        // before delayed Enter. Effect wait must use a post-Enter baseline.
+        let after_composer_text = idle_agent_with_seq(2);
+        let pre_enter_baseline = 1;
+        let post_enter_baseline = 2;
+        assert!(
+            agent_wait_matches(
+                &after_composer_text,
+                &[crate::api::schema::AgentStatus::Idle],
+                Some(pre_enter_baseline)
+            ),
+            "pre-Enter baseline would falsely treat composer text as effect"
+        );
+        assert!(
+            !agent_wait_matches(
+                &after_composer_text,
+                &[crate::api::schema::AgentStatus::Idle],
+                Some(post_enter_baseline)
+            ),
+            "post-Enter rebaseline must require a later lifecycle observation"
+        );
+        assert_eq!(crate::api::AGENT_PROMPT_SUBMIT_DELAY.as_millis(), 300);
+    }
 
     #[test]
     fn agent_wait_probe_only_translates_agent_disappearance() {

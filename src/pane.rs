@@ -1,10 +1,12 @@
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 
 use bytes::Bytes;
 use portable_pty::CommandBuilder;
@@ -984,6 +986,8 @@ pub struct PaneRuntime {
     pane_id: PaneId,
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
+    /// Holds intervening user input between prompt text and delayed Enter.
+    ordered: Arc<Mutex<OrderedSubmissionGate>>,
     current_size: Cell<(u16, u16, u32, u32)>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
@@ -996,6 +1000,12 @@ pub struct PaneRuntime {
     preserve_processes_on_drop: bool,
     // Task handles for deterministic shutdown
     detect_handle: Option<tokio::task::AbortHandle>,
+}
+
+#[derive(Debug, Default)]
+struct OrderedSubmissionGate {
+    holding: bool,
+    deferred: VecDeque<Bytes>,
 }
 
 enum PaneRuntimeIo {
@@ -1135,28 +1145,6 @@ impl PaneRuntimeIo {
                 if let Some(bytes) = response() {
                     let _ = sender.try_send(bytes);
                 }
-            }
-        }
-    }
-
-    fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        match self {
-            PaneRuntimeIo::Actor(actor) => {
-                let actor = actor.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    if let Err(err) = actor.write_user_input(bytes).await {
-                        warn!(error = %err, "failed to send delayed PTY input");
-                    }
-                });
-            }
-            #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, .. } => {
-                let sender = sender.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    let _ = sender.send(bytes).await;
-                });
             }
         }
     }
@@ -1926,6 +1914,7 @@ impl PaneRuntime {
             pane_id,
             terminal,
             io,
+            ordered: Arc::new(Mutex::new(OrderedSubmissionGate::default())),
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,
@@ -2443,6 +2432,7 @@ impl PaneRuntime {
             pane_id,
             terminal,
             io,
+            ordered: Arc::new(Mutex::new(OrderedSubmissionGate::default())),
             current_size: Cell::new((rows, cols, 0, 0)),
             child_pid,
             reported_cwd,
@@ -2697,15 +2687,158 @@ impl PaneRuntime {
     }
 
     pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
+        {
+            let mut gate = self
+                .ordered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if gate.holding {
+                gate.deferred.push_back(bytes);
+                return Ok(());
+            }
+        }
         self.io.send_bytes(bytes).await
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        {
+            let mut gate = self
+                .ordered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if gate.holding {
+                gate.deferred.push_back(bytes);
+                return Ok(());
+            }
+        }
         self.io.try_send_bytes(bytes)
     }
 
-    pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        self.io.send_bytes_after(bytes, delay);
+    /// Queue prompt bytes and a delayed Enter without allowing other user input
+    /// to interleave between them. Deferred inputs flush only after Enter is queued.
+    pub fn try_send_ordered_submission(
+        &self,
+        prompt: Bytes,
+        enter: Bytes,
+        delay: Duration,
+        on_written: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        {
+            let mut gate = self
+                .ordered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if gate.holding {
+                return Err(mpsc::error::TrySendError::Full(prompt));
+            }
+            gate.holding = true;
+        }
+
+        if let Err(err) = self.io.try_send_bytes(prompt) {
+            let mut gate = self
+                .ordered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            gate.holding = false;
+            gate.deferred.clear();
+            return Err(err);
+        }
+
+        match &self.io {
+            PaneRuntimeIo::Actor(actor) => {
+                let actor = actor.clone();
+                let ordered = Arc::clone(&self.ordered);
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    if let Err(err) = actor.write_user_input(enter).await {
+                        warn!(error = %err, "failed to send ordered prompt Enter");
+                    }
+                    let deferred = {
+                        let mut gate = ordered
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        gate.holding = false;
+                        std::mem::take(&mut gate.deferred)
+                    };
+                    for bytes in deferred {
+                        if let Err(err) = actor.write_user_input(bytes).await {
+                            warn!(error = %err, "failed to flush deferred PTY input");
+                            break;
+                        }
+                    }
+                    if let Some(on_written) = on_written {
+                        let _ = on_written.send(());
+                    }
+                });
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                let sender = sender.clone();
+                let ordered = Arc::clone(&self.ordered);
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    let _ = sender.send(enter).await;
+                    let deferred = {
+                        let mut gate = ordered
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        gate.holding = false;
+                        std::mem::take(&mut gate.deferred)
+                    };
+                    for bytes in deferred {
+                        if sender.send(bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                    if let Some(on_written) = on_written {
+                        let _ = on_written.send(());
+                    }
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)] // retained for callers outside agent.prompt
+    pub fn send_bytes_after(&self, bytes: Bytes, delay: Duration) {
+        let ordered = Arc::clone(&self.ordered);
+        match &self.io {
+            PaneRuntimeIo::Actor(actor) => {
+                let actor = actor.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    {
+                        let mut gate = ordered
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if gate.holding {
+                            gate.deferred.push_back(bytes);
+                            return;
+                        }
+                    }
+                    if let Err(err) = actor.write_user_input(bytes).await {
+                        warn!(error = %err, "failed to send delayed PTY input");
+                    }
+                });
+            }
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { sender, .. } => {
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    {
+                        let mut gate = ordered
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if gate.holding {
+                            gate.deferred.push_back(bytes);
+                            return;
+                        }
+                    }
+                    let _ = sender.send(bytes).await;
+                });
+            }
+        }
     }
 
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
@@ -2937,6 +3070,7 @@ impl PaneRuntime {
                     sender: tx,
                     resize_tx,
                 },
+                ordered: Arc::new(Mutex::new(OrderedSubmissionGate::default())),
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
@@ -2957,6 +3091,60 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ordered_submission_blocks_interleaved_input_until_enter() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+        runtime
+            .try_send_ordered_submission(
+                Bytes::from_static(b"prompt-bytes"),
+                Bytes::from_static(b"\r"),
+                Duration::from_millis(20),
+                Some(written_tx),
+            )
+            .expect("ordered submission should enqueue");
+        // Interleaved input while gate holds must be deferred, not written early.
+        runtime
+            .try_send_bytes(Bytes::from_static(b"interleaved"))
+            .expect("deferred enqueue should succeed");
+
+        let first = rx.recv().await.expect("prompt bytes");
+        assert_eq!(first.as_ref(), b"prompt-bytes");
+        // Enter has not been written yet; interleaved must not appear first.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(rx.try_recv().is_err(), "no interleaved write before Enter");
+
+        let enter = rx.recv().await.expect("enter bytes");
+        assert_eq!(enter.as_ref(), b"\r");
+        let deferred = rx.recv().await.expect("deferred interleaved bytes");
+        assert_eq!(deferred.as_ref(), b"interleaved");
+        written_rx.await.expect("on_written signal");
+    }
+
+    #[tokio::test]
+    async fn ordered_submission_rejects_second_hold_while_active() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        runtime
+            .try_send_ordered_submission(
+                Bytes::from_static(b"first"),
+                Bytes::from_static(b"\r"),
+                Duration::from_millis(30),
+                None,
+            )
+            .expect("first ordered submission");
+        let err = runtime
+            .try_send_ordered_submission(
+                Bytes::from_static(b"second"),
+                Bytes::from_static(b"\r"),
+                Duration::from_millis(30),
+                None,
+            )
+            .expect_err("second hold must fail");
+        assert!(matches!(err, mpsc::error::TrySendError::Full(_)));
+        assert_eq!(rx.recv().await.unwrap().as_ref(), b"first");
+        assert_eq!(rx.recv().await.unwrap().as_ref(), b"\r");
+    }
 
     #[test]
     fn pane_launch_env_removes_outer_codex_thread_id() {
@@ -3491,6 +3679,7 @@ mod tests {
                 sender: tx,
                 resize_tx,
             },
+            ordered: Arc::new(Mutex::new(OrderedSubmissionGate::default())),
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
@@ -3522,6 +3711,7 @@ mod tests {
                 sender: tx,
                 resize_tx,
             },
+            ordered: Arc::new(Mutex::new(OrderedSubmissionGate::default())),
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),

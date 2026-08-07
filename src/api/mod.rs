@@ -19,6 +19,12 @@ use crate::api::schema::{Method, Request};
 
 pub const SOCKET_PATH_ENV_VAR: &str = "HERDR_SOCKET_PATH";
 
+/// Delay between agent.prompt text and the submitting Enter.
+/// `--wait` must not observe prompt effect until this delay has elapsed so Enter
+/// has been handed to the PTY write path.
+pub(crate) const AGENT_PROMPT_SUBMIT_DELAY: std::time::Duration =
+    std::time::Duration::from_millis(300);
+
 pub(crate) fn request_changes_ui(request: &Request) -> bool {
     matches!(
         &request.method,

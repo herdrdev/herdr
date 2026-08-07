@@ -432,6 +432,18 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
+    pub fn try_send_ordered_submission(
+        &self,
+        prompt: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+        on_written: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Result<(), mpsc::error::TrySendError<Bytes>> {
+        self.0
+            .try_send_ordered_submission(prompt, enter, delay, on_written)
+    }
+
+    #[allow(dead_code)] // retained; agent.prompt uses ordered submission
     pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
         self.0.send_bytes_after(bytes, delay);
     }
