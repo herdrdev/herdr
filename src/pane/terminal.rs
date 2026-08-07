@@ -1284,7 +1284,7 @@ impl GhosttyPaneTerminal {
             .filter_map(|value| parse_reported_cwd(&value))
             .next_back();
         #[cfg(windows)]
-        windows_recent_fallback::update(&mut core);
+        windows_recent_fallback::update_after_write(&mut core);
         crate::render_prof::duration_since("pty.ghostty_write", write_started);
 
         let has_kitty_graphics_sequence = crate::kitty_graphics::is_enabled()
@@ -1545,7 +1545,7 @@ impl GhosttyPaneTerminal {
                         .saturating_sub(scrollbar.offset + scrollbar.len)
                 })
                 .unwrap_or(0);
-            let bottom_before_resize = ghostty_detection_text(&core)
+            let bottom_before_resize = ghostty_detection_text(&mut core)
                 .map(|text| !text.trim().is_empty())
                 .unwrap_or(false);
             let resize_recovery_probe_lines = usize::from(rows)
@@ -1555,7 +1555,7 @@ impl GhosttyPaneTerminal {
                 == Some(crate::ghostty::ActiveScreen::Primary)
                 && bottom_before_resize
             {
-                ghostty_recent_ansi(&core, resize_recovery_probe_lines, true)
+                ghostty_recent_ansi(&mut core, resize_recovery_probe_lines, true)
                     .ok()
                     .filter(|ansi| !ansi.trim().is_empty())
             } else {
@@ -1567,7 +1567,7 @@ impl GhosttyPaneTerminal {
                 .resize(cols, rows, cell_width_px, cell_height_px);
             let terminal_responses = self.drain_pending_pty_responses();
 
-            let bottom_is_blank = ghostty_detection_text(&core)
+            let bottom_is_blank = ghostty_detection_text(&mut core)
                 .map(|text| text.trim().is_empty())
                 .unwrap_or(false);
             if bottom_is_blank {
@@ -1575,6 +1575,12 @@ impl GhosttyPaneTerminal {
                     core.terminal.scroll_viewport_bottom();
                     core.terminal.write(ansi.as_bytes());
                 }
+            }
+            #[cfg(windows)]
+            if core.recent_fallback.usable {
+                core.recent_fallback.needs_refresh = true;
+                core.terminal.scroll_viewport_bottom();
+                windows_recent_fallback::update(&mut core);
             }
             ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset_from_bottom);
             if offset_from_bottom > 0 {
@@ -1596,6 +1602,8 @@ impl GhosttyPaneTerminal {
 
     pub fn scroll_up(&self, lines: usize) {
         if let Ok(mut core) = self.core.lock() {
+            #[cfg(windows)]
+            windows_recent_fallback::refresh_if_needed(&mut core);
             core.terminal.scroll_viewport_delta(-(lines as isize));
         }
     }
@@ -1614,6 +1622,8 @@ impl GhosttyPaneTerminal {
 
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
         if let Ok(mut core) = self.core.lock() {
+            #[cfg(windows)]
+            windows_recent_fallback::refresh_if_needed(&mut core);
             ghostty_set_scroll_offset_from_bottom(&mut core.terminal, lines);
         }
     }
@@ -1915,7 +1925,7 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_detection_text(&core).ok())
+            .and_then(|mut core| ghostty_detection_text(&mut core).ok())
             .unwrap_or_default()
     }
 
@@ -1927,7 +1937,7 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_recent_text_snapshot(&core, lines).ok())
+            .and_then(|mut core| ghostty_recent_text_snapshot(&mut core, lines).ok())
             .unwrap_or_default()
     }
 
@@ -1940,7 +1950,7 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_recent_ansi_snapshot(&core, lines, false).ok())
+            .and_then(|mut core| ghostty_recent_ansi_snapshot(&mut core, lines, false).ok())
             .unwrap_or_default()
     }
 
@@ -1953,7 +1963,7 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_recent_text_unwrapped_snapshot(&core, lines).ok())
+            .and_then(|mut core| ghostty_recent_text_unwrapped_snapshot(&mut core, lines).ok())
             .unwrap_or_default()
     }
 
@@ -1965,7 +1975,7 @@ impl GhosttyPaneTerminal {
         self.core
             .lock()
             .ok()
-            .and_then(|core| ghostty_recent_ansi_snapshot(&core, lines, true).ok())
+            .and_then(|mut core| ghostty_recent_ansi_snapshot(&mut core, lines, true).ok())
             .unwrap_or_default()
     }
 
@@ -2450,7 +2460,7 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty
     )
 }
 
-fn ghostty_detection_text(core: &GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {
+fn ghostty_detection_text(core: &mut GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {
     let lines = core
         .terminal
         .rows()
@@ -2524,14 +2534,14 @@ fn windows_powershell_prompt_line_cwd(line: &str) -> Option<std::path::PathBuf> 
 }
 
 fn ghostty_recent_text(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     lines: usize,
 ) -> Result<String, crate::ghostty::Error> {
     ghostty_recent_text_snapshot(core, lines).map(|snapshot| snapshot.text)
 }
 
 fn ghostty_recent_text_snapshot(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     lines: usize,
 ) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
     let text = ghostty_recent_text_for_terminal(&core.terminal, lines)?;
@@ -2539,7 +2549,7 @@ fn ghostty_recent_text_snapshot(
 }
 
 fn ghostty_recent_text_unwrapped_snapshot(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     lines: usize,
 ) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
     let text = ghostty_recent_text_unwrapped_for_terminal(&core.terminal, lines)?;
@@ -2547,7 +2557,7 @@ fn ghostty_recent_text_unwrapped_snapshot(
 }
 
 fn ghostty_recent_ansi(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     lines: usize,
     unwrap: bool,
 ) -> Result<String, crate::ghostty::Error> {
@@ -2555,7 +2565,7 @@ fn ghostty_recent_ansi(
 }
 
 fn ghostty_recent_ansi_snapshot(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     lines: usize,
     unwrap: bool,
 ) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
@@ -2564,7 +2574,7 @@ fn ghostty_recent_ansi_snapshot(
 }
 
 fn finish_recent_snapshot(
-    core: &GhosttyPaneCore,
+    core: &mut GhosttyPaneCore,
     text: String,
     lines: usize,
     unwrap: bool,
@@ -2573,6 +2583,7 @@ fn finish_recent_snapshot(
     let _ = unwrap;
     #[cfg(windows)]
     if text.trim().is_empty() {
+        windows_recent_fallback::refresh_if_needed(core);
         let fallback = windows_recent_fallback::recent_text(core, lines, unwrap);
         if !fallback.text.trim().is_empty() {
             return fallback;

@@ -768,6 +768,9 @@ pub fn encode_focus(event: FocusEvent) -> Result<Vec<u8>, Error> {
 
 pub struct Terminal {
     raw: ffi::GhosttyTerminal,
+    max_scrollback: usize,
+    #[cfg(windows)]
+    tracked_row: ffi::GhosttyTrackedGridRef,
     callback_state: Box<TerminalCallbackState>,
     kitty_fingerprints: Mutex<HashMap<u32, KittyImageFingerprintEntry>>,
     kitty_empty_generation: Cell<Option<u64>>,
@@ -788,6 +791,9 @@ impl Terminal {
 
         let mut terminal = Self {
             raw,
+            max_scrollback,
+            #[cfg(windows)]
+            tracked_row: ptr::null_mut(),
             callback_state: Box::new(TerminalCallbackState {
                 size_report: ffi::GhosttySizeReportSize {
                     rows,
@@ -1033,6 +1039,10 @@ impl Terminal {
         self.get_usize(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS)
     }
 
+    pub fn max_scrollback(&self) -> usize {
+        self.max_scrollback
+    }
+
     pub fn scrollbar(&self) -> Result<TerminalScrollbar, Error> {
         let mut out = ffi::GhosttyTerminalScrollbar::default();
         unsafe {
@@ -1048,6 +1058,22 @@ impl Terminal {
             offset: out.offset as usize,
             len: out.len as usize,
         })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn track_row(&mut self, y: u32) -> Option<usize> {
+        let mut point = ffi::GhosttyPointCoordinate::default();
+        let tag = ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN;
+        let result =
+            unsafe { ffi::ghostty_tracked_grid_ref_point(self.tracked_row, tag, &mut point) };
+        let terminal = self.raw;
+        let target = ghostty_viewport_point(0, y);
+        unsafe {
+            ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
+            self.tracked_row = ptr::null_mut();
+            let _ = ffi::ghostty_terminal_grid_ref_track(terminal, target, &mut self.tracked_row);
+        }
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(point.y as usize)
     }
 
     pub fn screen_cell(&self, x: u16, y: u32) -> Result<(CellWide, Vec<u32>), Error> {
@@ -1834,6 +1860,8 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         // SAFETY: freeing a null or live handle is allowed by the C API.
         unsafe {
+            #[cfg(windows)]
+            ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
             ffi::ghostty_terminal_free(self.raw);
         }
     }
