@@ -270,6 +270,8 @@ pub(crate) fn encode_local_pane_graphics(
         Vec::new()
     };
     cache.update_view(visible.then(|| active_view_key(app)).flatten());
+    // The host text blit overwrites Kitty placements, so every rendered frame must
+    // display cached images again even when their data and geometry are unchanged.
     cache.request_placement_replay();
     encode_graphics_update_incremental(cache, &placements, &live_pane_sources, transaction_budget)
 }
@@ -1720,6 +1722,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn regular_file_command_is_rgba_quiet_zero_and_path_encoded() {
         let mut bytes = Vec::new();

@@ -550,7 +550,10 @@ impl HeadlessServer {
                     MAX_GRAPHICS_FRAME_SIZE,
                 ) {
                     Ok(serialized) => Some(serialized),
-                    Err(_) => return RetainedGraphicsOutcome::Fallback,
+                    Err(_) => {
+                        crate::render_prof::event("retained_graphics_fallback.oversized");
+                        return RetainedGraphicsOutcome::Fallback;
+                    }
                 }
             };
             let result = match (serialized, client.writer.as_ref()) {

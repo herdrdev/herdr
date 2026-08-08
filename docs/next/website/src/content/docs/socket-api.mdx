@@ -184,8 +184,8 @@ file-frame options, pixel-mouse support, the 16-layer limit, and `pane_visible`.
 and is not hidden by zoom. Short-lived UI modes do not change it.
 
 `pane.graphics.set`, `pane.graphics.clear`, and `pane.graphics.stream` accept an
-optional `layer_id` (default `primary`) and `z_index`. Layers are placed in
-stable `(z_index, layer_id)` order. Each stream exclusively owns its layer, and
+optional `layer_id` (default `primary`). Set and stream also accept `z_index`;
+layers are placed in stable `(z_index, layer_id)` order. Each stream exclusively owns its layer, and
 closing it removes that layer. Inline frames accept `png`, `rgb`, `rgba`, or
 `bgra`; BGRA is normalized once to owned RGBA. Herdr advances the host cache
 one image transaction per render pass, so arbitrary layer sets progress without

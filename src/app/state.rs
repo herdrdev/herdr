@@ -1954,6 +1954,10 @@ impl AppState {
                 self.context_menu.is_none(),
                 "empty app state must not keep context menu"
             );
+            assert!(
+                self.host_mouse_pixels.is_none(),
+                "empty app state must not keep host mouse pixel provenance"
+            );
             return;
         }
 

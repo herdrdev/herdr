@@ -41,6 +41,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
 /// Maximum structured input events accepted in one client message.
 const MAX_INPUT_EVENT_BATCH: usize = 4096;
+/// Maximum encoded mouse report accepted with pixel geometry.
+const MAX_PIXEL_MOUSE_PAYLOAD: usize = 128;
 
 /// Channels owned by the server side of a client writer thread.
 #[derive(Clone, Debug)]
@@ -780,9 +782,29 @@ fn client_read_loop(
                 let Some(geometry) =
                     crate::input::mouse::HostGeometry::new(cols, rows, width_px, height_px)
                 else {
+                    warn!(
+                        client_id,
+                        cols,
+                        rows,
+                        width_px,
+                        height_px,
+                        "invalid pixel mouse geometry from client, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
                     break;
                 };
-                if data.len() > 128 || crate::input::mouse::parse_report(&data).is_none() {
+                if data.len() > MAX_PIXEL_MOUSE_PAYLOAD
+                    || crate::input::mouse::parse_report(&data).is_none()
+                {
+                    warn!(
+                        client_id,
+                        size = data.len(),
+                        max = MAX_PIXEL_MOUSE_PAYLOAD,
+                        "invalid pixel mouse report from client, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
                     break;
                 }
                 ServerEvent::ClientInputPixels {
@@ -1493,6 +1515,76 @@ new_tab = "ctrl+notakey"
             ServerEvent::ClientDisconnected { client_id: 7 }
         ));
 
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_disconnects_invalid_pixel_mouse_geometry() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-invalid-pixel-geometry");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::InputPixels {
+                data: b"\x1b[<35;1;1M".to_vec(),
+                cols: 0,
+                rows: 24,
+                width_px: 800,
+                height_px: 480,
+            },
+        )
+        .expect("write invalid pixel geometry");
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "invalid pixel geometry disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_disconnects_invalid_pixel_mouse_report() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-invalid-pixel-report");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::InputPixels {
+                data: vec![b'x'; MAX_PIXEL_MOUSE_PAYLOAD + 1],
+                cols: 80,
+                rows: 24,
+                width_px: 800,
+                height_px: 480,
+            },
+        )
+        .expect("write invalid pixel report");
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "invalid pixel report disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
         drop(client_stream);
         should_quit.store(true, Ordering::Release);
         handle

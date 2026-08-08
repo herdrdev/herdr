@@ -705,8 +705,10 @@ fn manifest_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::api::schema::PaneListParams;
     use crate::api::schema::{
-        Method, PaneListParams, PluginSourceInfo, PluginSourceKind, Request, SuccessResponse,
+        Method, PluginSourceInfo, PluginSourceKind, Request, SuccessResponse,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 

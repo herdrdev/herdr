@@ -615,7 +615,9 @@ fn read_should_retry(err: &io::Error) -> bool {
 mod tests {
     use super::*;
     use crate::api::schema::{ErrorResponse, Method, ResponseResult, SuccessResponse};
-    use crate::api::{ApiRequestMessage, EventHub};
+    use crate::api::ApiRequestMessage;
+    #[cfg(unix)]
+    use crate::api::EventHub;
     use crate::ipc::LocalStream;
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{BufRead, BufReader, Write};

@@ -3062,13 +3062,13 @@ impl HeadlessServer {
                         *cell_size = observed;
                     }
                     render_state.request_repaint();
-                    Some(terminal_id.clone())
+                    Some((terminal_id.clone(), *cell_size))
                 } else {
                     None
                 };
-                if let Some(terminal_id) = direct_terminal_id {
+                if let Some((terminal_id, cell_size)) = direct_terminal_id {
                     if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
-                        runtime.resize(rows, cols, cell_width_px, cell_height_px);
+                        runtime.resize(rows, cols, cell_size.width_px, cell_size.height_px);
                     }
                     return true;
                 }
@@ -3131,18 +3131,10 @@ impl HeadlessServer {
     }
 
     fn handle_server_event_with_render_impact(&mut self, ev: ServerEvent) -> RenderImpact {
-        let deferred_render = match &ev {
-            ServerEvent::ClientWriterDrained { client_id } => self
-                .clients
-                .get(client_id)
-                .map_or(DeferredRender::None, ClientConnection::deferred_render),
-            _ => DeferredRender::None,
-        };
-        if !self.handle_server_event(ev) {
-            return RenderImpact::None;
-        }
-        match deferred_render {
-            DeferredRender::None | DeferredRender::Full => RenderImpact::Full,
+        if self.handle_server_event(ev) {
+            RenderImpact::Full
+        } else {
+            RenderImpact::None
         }
     }
 
@@ -3417,8 +3409,8 @@ impl HeadlessServer {
         };
 
         let metadata_expired = self.app.expire_due_metadata(Instant::now());
-        let stream_owner = match &msg.request.method {
-            api::schema::Method::PaneGraphicsStreamOpen(params) => Some(params.owner.clone()),
+        let stream_open = match &msg.request.method {
+            api::schema::Method::PaneGraphicsStreamOpen(params) => Some(params.clone()),
             _ => None,
         };
         let stream_active = msg.stream_active.clone();
@@ -3582,8 +3574,9 @@ impl HeadlessServer {
                 }
             }
         }
-        if let (Some(owner), Some(active)) = (stream_owner, stream_active) {
-            self.app.pane_graphics.attach_stream_active(&owner, active);
+        if let (Some(params), Some(active)) = (stream_open.as_ref(), stream_active) {
+            self.app
+                .attach_pane_graphics_stream_active(params, active, &response);
         }
         if let Some(spec) = alt_screen_read_spec {
             if let Ok(success) = serde_json::from_str::<api::schema::SuccessResponse>(&response) {
@@ -3769,7 +3762,12 @@ impl HeadlessServer {
             .app
             .state
             .should_capture_host_mouse_from(&self.app.terminal_runtimes);
-        let sgr_pixels = self.focused_pane_graphics_demand()
+        let pixel_mouse_requested = self
+            .clients
+            .values()
+            .any(|client| client.is_full_app_client() && client.pixel_mouse);
+        let sgr_pixels = pixel_mouse_requested
+            && self.focused_pane_graphics_demand()
             && self
                 .app
                 .state
@@ -4348,7 +4346,12 @@ impl HeadlessServer {
                     client.graphics_cache = next_graphics_cache;
                     client.graphics_surface_reset_pending = false;
                 }
-                client.clear_deferred_render();
+                if encoded.incomplete {
+                    client.defer_full_render();
+                    deferred_frame = true;
+                } else {
+                    client.clear_deferred_render();
+                }
                 crate::render_prof::event("full_render.skip_identical");
                 continue;
             };
@@ -5552,6 +5555,42 @@ mod tests {
         chars.next().is_none()
             && ('\u{ff66}'..='\u{ff9d}').contains(&base)
             && matches!(mark, '\u{ff9e}' | '\u{ff9f}')
+    }
+
+    #[test]
+    fn direct_graphics_requires_one_negotiated_app_client() {
+        let mut server = test_headless_server();
+        let (writer_a, _control_a, _render_a) = test_client_writer();
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 1,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 10,
+            cell_height_px: 20,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: true,
+            writer: writer_a,
+        }));
+        assert!(server.clients[&1].direct_graphics);
+        assert!(server.clients[&1].pixel_mouse);
+        assert!(server.direct_graphics_available());
+
+        let (writer_b, _control_b, _render_b) = test_client_writer();
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 2,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 10,
+            cell_height_px: 20,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: false,
+            writer: writer_b,
+        }));
+        assert!(!server.direct_graphics_available());
     }
 
     #[test]
@@ -7904,6 +7943,51 @@ next_tab = ""
             }],
         }));
         assert_eq!(server.foreground_client_id, Some(3));
+    }
+
+    #[test]
+    fn terminal_attach_resize_preserves_known_cell_size_when_pixels_are_omitted() {
+        with_terminal_session_test_server(|server, _terminal_id, terminal_id, _pane_id| {
+            let mut client = ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize {
+                    width_px: 10,
+                    height_px: 20,
+                },
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                1,
+                RenderEncoding::SemanticFrame,
+                None,
+            );
+            client.mode = ClientConnectionMode::TerminalAttach {
+                terminal_id: terminal_id.clone(),
+            };
+            server.clients.insert(1, client);
+
+            assert!(server.handle_server_event(ServerEvent::ClientResize {
+                client_id: 1,
+                cols: 100,
+                rows: 30,
+                cell_width_px: 0,
+                cell_height_px: 0,
+            }));
+
+            assert_eq!(
+                server
+                    .runtime_for_terminal_id_string(&terminal_id)
+                    .unwrap()
+                    .pixel_size(),
+                Some((1_000, 600))
+            );
+            assert_eq!(
+                server.clients[&1].cell_size,
+                crate::kitty_graphics::HostCellSize {
+                    width_px: 10,
+                    height_px: 20,
+                }
+            );
+        });
     }
 
     #[tokio::test]

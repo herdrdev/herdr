@@ -158,13 +158,14 @@ impl Runtime {
 
     pub(crate) fn attach_stream_active(
         &mut self,
+        key: &Key,
         owner: &str,
         active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) {
         if let Some(slot) = self
             .slots
-            .values_mut()
-            .find(|slot| slot.stream_owner.as_deref() == Some(owner))
+            .get_mut(key)
+            .filter(|slot| slot.stream_owner.as_deref() == Some(owner))
         {
             slot.stream_active = Some(active);
         }
@@ -278,6 +279,34 @@ impl Layer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_liveness_attaches_only_to_the_exact_owned_layer() {
+        let mut runtime = Runtime::default();
+        let first = (PaneId::from_raw(1), "first".into());
+        let second = (PaneId::from_raw(2), "second".into());
+        for (key, id) in [(&first, 1), (&second, 2)] {
+            runtime.slots.insert(
+                key.clone(),
+                Slot {
+                    host_image_id: (1 << 31) | id,
+                    layer: None,
+                    stream_owner: Some("shared-owner".into()),
+                    stream_active: None,
+                    direct_gate: None,
+                },
+            );
+        }
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+        runtime.attach_stream_active(&second, "shared-owner", active.clone());
+
+        assert!(runtime.slots[&first].stream_active.is_none());
+        assert!(std::sync::Arc::ptr_eq(
+            runtime.slots[&second].stream_active.as_ref().unwrap(),
+            &active
+        ));
+    }
 
     #[test]
     fn runtime_bounds_total_slots_and_inline_bytes() {

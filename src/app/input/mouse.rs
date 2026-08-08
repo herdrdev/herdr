@@ -1675,17 +1675,23 @@ impl AppState {
     ) -> Option<crate::input::mouse::Position> {
         let column = mouse.column.checked_sub(inner.x)?;
         let row = mouse.row.checked_sub(inner.y)?;
+        let cell = crate::input::mouse::Position::Cell { column, row };
         let Some(host) = self.host_mouse_pixels else {
-            return Some(crate::input::mouse::Position::Cell { column, row });
+            return Some(cell);
         };
         let wants_pixels = runtime.input_state().is_some_and(|state| {
             state.mouse_protocol_encoding == crate::input::MouseProtocolEncoding::SgrPixels
         });
         if !wants_pixels {
-            return Some(crate::input::mouse::Position::Cell { column, row });
+            return Some(cell);
         }
-        let (width_px, height_px) = runtime.pixel_size()?;
-        host.pane_position(inner, width_px, height_px)
+        let Some((width_px, height_px)) = runtime.pixel_size() else {
+            return Some(cell);
+        };
+        Some(
+            host.pane_position(inner, width_px, height_px)
+                .unwrap_or(cell),
+        )
     }
 
     pub(super) fn forward_pane_mouse_button(
@@ -2403,15 +2409,25 @@ mod tests {
         };
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
         let inner = app.state.view.pane_infos[0].inner_rect;
-        app.state
-            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
-            .unwrap()
-            .resize(inner.height, inner.width, 10, 20);
         let geometry = crate::input::mouse::HostGeometry::new(106, 20, 1_060, 400).unwrap();
         let x = u32::from(inner.x + 2) * 10 + 8;
         let y = u32::from(inner.y + 3) * 20 + 9;
         let report = format!("\x1b[<35;{x};{y}M");
         app.state.host_mouse_pixels = Some(crate::input::mouse::HostPixels { x, y, geometry });
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        assert_eq!(runtime.pixel_size(), None);
+        assert_eq!(
+            app.state.pane_mouse_position(
+                runtime,
+                inner,
+                mouse(MouseEventKind::Moved, inner.x + 2, inner.y + 3),
+            ),
+            Some(crate::input::mouse::Position::Cell { column: 2, row: 3 })
+        );
+        runtime.resize(inner.height, inner.width, 10, 20);
         let runtime = app
             .state
             .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)

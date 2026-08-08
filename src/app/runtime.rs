@@ -61,10 +61,8 @@ impl App {
         msg: crate::api::ApiRequestMessage,
     ) -> bool {
         let previous_mode = self.state.mode;
-        let stream_owner = match &msg.request.method {
-            crate::api::schema::Method::PaneGraphicsStreamOpen(params) => {
-                Some(params.owner.clone())
-            }
+        let stream_open = match &msg.request.method {
+            crate::api::schema::Method::PaneGraphicsStreamOpen(params) => Some(params.clone()),
             _ => None,
         };
         let stream_active = msg.stream_active.clone();
@@ -90,8 +88,8 @@ impl App {
             return changed | deferred_changed;
         }
         let response = self.handle_api_request(msg.request);
-        if let (Some(owner), Some(active)) = (stream_owner, stream_active) {
-            self.pane_graphics.attach_stream_active(&owner, active);
+        if let (Some(params), Some(active)) = (stream_open.as_ref(), stream_active) {
+            self.attach_pane_graphics_stream_active(params, active, &response);
         }
         if !skip_default_workspace {
             changed |= self.ensure_default_workspace();

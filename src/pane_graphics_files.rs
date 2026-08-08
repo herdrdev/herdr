@@ -1,13 +1,13 @@
 #[cfg(unix)]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
-use std::io::{self, Read, Seek};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 #[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
@@ -118,16 +118,15 @@ impl Lease {
     pub(crate) fn copy_rgba(&self) -> io::Result<Vec<u8>> {
         let _keep_generation_alive = &self.inner.generation;
         validate_path_identity(&self.inner.path, &self.inner.metadata)?;
-        let mut file = self.inner.file.try_clone()?;
-        file.rewind()?;
-        let mut data = Vec::with_capacity(self.inner.len);
-        (&mut file)
-            .take(self.inner.len as u64 + 1)
-            .read_to_end(&mut data)?;
-        if data.len() != self.inner.len {
-            return Err(invalid("frame length changed while leased"));
+        let mut data = vec![0; self.inner.len];
+        read_exact_at(&self.inner.file, &mut data)?;
+        if has_byte_at(&self.inner.file, self.inner.len as u64)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "frame length changed while leased",
+            ));
         }
-        validate_metadata(&file.metadata()?, self.inner.len)?;
+        validate_metadata(&self.inner.file.metadata()?, self.inner.len)?;
         validate_path_identity(&self.inner.path, &self.inner.metadata)?;
         Ok(data)
     }
@@ -181,6 +180,7 @@ fn create_generation(base: &Path) -> io::Result<Generation> {
         fs::create_dir_all(base)?;
         fs::set_permissions(base, fs::Permissions::from_mode(DIRECTORY_MODE))?;
         validate_directory(base)?;
+        remove_stale_generations(base);
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -204,13 +204,64 @@ fn runtime_base() -> PathBuf {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| PathBuf::from("/var/tmp"));
-        root.join(format!("herdr-pane-graphics-{}", unsafe {
-            libc::geteuid()
-        }))
+        root.join(format!("herdr-pane-graphics-{}", effective_uid()))
     }
     #[cfg(not(unix))]
     {
         PathBuf::from("pane-graphics-unavailable")
+    }
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &File, data: &mut [u8]) -> io::Result<()> {
+    file.read_exact_at(data, 0)
+}
+
+#[cfg(not(unix))]
+fn read_exact_at(_file: &File, _data: &mut [u8]) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Unix only"))
+}
+
+#[cfg(unix)]
+fn has_byte_at(file: &File, offset: u64) -> io::Result<bool> {
+    Ok(file.read_at(&mut [0], offset)? != 0)
+}
+
+#[cfg(not(unix))]
+fn has_byte_at(_file: &File, _offset: u64) -> io::Result<bool> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "Unix only"))
+}
+
+#[cfg(unix)]
+fn remove_stale_generations(base: &Path) {
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_prefix("server-"))
+            .and_then(|name| name.split('-').next())
+            .and_then(|pid| pid.parse::<i32>().ok())
+            .filter(|pid| *pid > 0)
+        else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        // SAFETY: kill with signal 0 probes process existence without sending a signal.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if alive || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+            continue;
+        }
+        if let Err(err) = fs::remove_dir_all(entry.path()) {
+            tracing::warn!(path = %entry.path().display(), err = %err, "failed to remove stale pane graphics directory");
+        }
     }
 }
 
@@ -243,7 +294,7 @@ fn validate_metadata(metadata: &fs::Metadata, expected_len: usize) -> io::Result
     #[cfg(unix)]
     {
         if !metadata.file_type().is_file()
-            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.uid() != effective_uid()
             || metadata.mode() & 0o777 != FILE_MODE
             || metadata.nlink() != 1
             || metadata.len() != expected_len as u64
@@ -265,7 +316,7 @@ fn validate_metadata(metadata: &fs::Metadata, expected_len: usize) -> io::Result
 fn validate_directory(path: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.file_type().is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != effective_uid()
         || metadata.mode() & 0o777 != DIRECTORY_MODE
     {
         return Err(invalid("pane graphics directory is not private"));
@@ -289,6 +340,13 @@ fn validate_path_identity(path: &Path, expected: &fs::Metadata) -> io::Result<()
     }
 }
 
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid takes no arguments and has no preconditions.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(unix)]
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -385,6 +443,75 @@ mod tests {
             drop(store);
             let _ = fs::remove_dir_all(base);
         }
+    }
+
+    #[test]
+    fn direct_source_validation_accepts_only_the_runtime_generation() {
+        let runtime_store = FileStore::default();
+        let runtime_path = frame(&runtime_store, "direct", &[1, 2, 3, 4]);
+        validate_direct_source(&runtime_path, 4).unwrap();
+        assert!(validate_direct_source(&runtime_path, 8).is_err());
+        assert!(validate_direct_source(Path::new("relative"), 4).is_err());
+
+        let generation = runtime_path.parent().unwrap().parent().unwrap();
+        let wrong_source = generation.join("frames");
+        fs::create_dir(&wrong_source).unwrap();
+        fs::set_permissions(&wrong_source, fs::Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+        let wrong_source_path = wrong_source.join("frame");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(FILE_MODE)
+            .open(&wrong_source_path)
+            .unwrap();
+        file.write_all(&[1, 2, 3, 4]).unwrap();
+        assert!(validate_direct_source(&wrong_source_path, 4).is_err());
+
+        let (other_store, other_base) = store();
+        let other_path = frame(&other_store, "other", &[1, 2, 3, 4]);
+        assert!(validate_direct_source(&other_path, 4).is_err());
+        drop(other_store);
+        let _ = fs::remove_dir_all(other_base);
+
+        let invalid_generation = runtime_base().join(format!(
+            "invalid-generation-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let invalid_source = invalid_generation.join("source");
+        fs::create_dir_all(&invalid_source).unwrap();
+        fs::set_permissions(
+            &invalid_generation,
+            fs::Permissions::from_mode(DIRECTORY_MODE),
+        )
+        .unwrap();
+        fs::set_permissions(&invalid_source, fs::Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+        let invalid_path = invalid_source.join("frame");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(FILE_MODE)
+            .open(&invalid_path)
+            .unwrap();
+        file.write_all(&[1, 2, 3, 4]).unwrap();
+        assert!(validate_direct_source(&invalid_path, 4).is_err());
+        let _ = fs::remove_dir_all(invalid_generation);
+    }
+
+    #[test]
+    fn generation_creation_removes_dead_server_directories() {
+        let (store, base) = store();
+        fs::create_dir_all(&base).unwrap();
+        fs::set_permissions(&base, fs::Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+        let stale = base.join("server-2147483647-stale");
+        fs::create_dir(&stale).unwrap();
+        fs::set_permissions(&stale, fs::Permissions::from_mode(DIRECTORY_MODE)).unwrap();
+
+        store.source_directory().unwrap();
+
+        assert!(!stale.exists());
+        drop(store);
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]

@@ -727,7 +727,8 @@ fn direct_graphics_profile_allowed(direct_attach: bool) -> bool {
             || is_remote_client_process()
             || std::env::var_os("SSH_CONNECTION").is_some()
             || std::env::var_os("SSH_TTY").is_some()
-            || std::env::var_os("TMUX").is_some(),
+            || std::env::var_os("TMUX").is_some()
+            || std::env::var_os("STY").is_some(),
         io::stdin().is_terminal() && io::stdout().is_terminal(),
     )
 }
@@ -1826,7 +1827,7 @@ async fn run_client_loop(
                     let mouse_mode_changed = enabled != state.mouse_capture_active
                         || next_sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire);
                     if mouse_mode_changed {
-                        set_mouse_capture(enabled, sgr_pixels)
+                        set_mouse_capture(enabled, next_sgr_pixels)
                             .map_err(ClientError::ConnectionFailed)?;
                         #[cfg(windows)]
                         if enabled && windows_vti_input_backend_enabled() {

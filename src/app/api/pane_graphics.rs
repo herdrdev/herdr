@@ -74,6 +74,25 @@ impl App {
         )
     }
 
+    pub(crate) fn attach_pane_graphics_stream_active(
+        &mut self,
+        params: &PaneGraphicsStreamParams,
+        active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        response: &str,
+    ) {
+        if serde_json::from_str::<crate::api::schema::SuccessResponse>(response).is_err() {
+            return;
+        }
+        let Some((_, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return;
+        };
+        let Ok(key) = graphics_key(pane_id, params.layer_id.as_deref()) else {
+            return;
+        };
+        self.pane_graphics
+            .attach_stream_active(&key, &params.owner, active);
+    }
+
     pub(super) fn handle_pane_graphics_set(
         &mut self,
         id: String,
@@ -89,12 +108,12 @@ impl App {
             Ok(key) => key,
             Err(message) => return encode_error(id, "invalid_layer_id", message),
         };
+        self.reclaim_inactive_stream(&key);
         if self
             .pane_graphics
             .slots
             .get(&key)
-            .and_then(|slot| slot.stream_owner.as_ref())
-            .is_some()
+            .is_some_and(|slot| slot.stream_owner.is_some())
         {
             return encode_error(
                 id,
@@ -120,12 +139,12 @@ impl App {
             Ok(key) => key,
             Err(message) => return encode_error(id, "invalid_layer_id", message),
         };
+        self.reclaim_inactive_stream(&key);
         if self
             .pane_graphics
             .slots
             .get(&key)
-            .and_then(|slot| slot.stream_owner.as_ref())
-            .is_some()
+            .is_some_and(|slot| slot.stream_owner.is_some())
         {
             return encode_error(
                 id,
@@ -292,6 +311,13 @@ impl App {
                 "image_width and image_height must be greater than zero",
             );
         }
+        if !matches!(
+            params.format,
+            crate::api::schema::PaneGraphicsFormat::Rgba
+                | crate::api::schema::PaneGraphicsFormat::Bgra
+        ) {
+            return encode_error(id, "invalid_image", "direct frames require rgba or bgra");
+        }
         let expected_len =
             match expected_len(params.format, params.image_width, params.image_height) {
                 Ok(Some(len)) if len <= PANE_GRAPHICS_STREAM_MAX_BYTES => len,
@@ -418,11 +444,13 @@ impl App {
         let Some(host_image_id) = self.pane_graphics.reserve_image_id(&key) else {
             return encode_error(id, "layer_limit", "pane graphics image ids are exhausted");
         };
+        // Move the liveness handle out before replacing the slot so Slot::drop cannot
+        // deactivate the stream that the replacement still owns.
         let (stream_owner, stream_active) = self
             .pane_graphics
             .slots
             .get_mut(&key)
-            .map(|slot| (slot.stream_owner.clone(), slot.stream_active.take()))
+            .map(|slot| (slot.stream_owner.take(), slot.stream_active.take()))
             .unwrap_or_default();
         self.pane_graphics.slots.insert(
             key,
@@ -443,6 +471,18 @@ impl App {
         );
         self.pane_graphics.mark_changed();
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn reclaim_inactive_stream(&mut self, key: &PaneGraphicsKey) {
+        let stale = self
+            .pane_graphics
+            .slots
+            .get(key)
+            .is_some_and(|slot| slot.stream_owner.is_some() && !slot.stream_is_active());
+        if stale {
+            self.pane_graphics.slots.remove(key);
+            self.pane_graphics.mark_changed();
+        }
     }
 }
 
@@ -781,6 +821,53 @@ mod tests {
     }
 
     #[test]
+    fn static_set_and_clear_reclaim_inactive_stream_layers() {
+        let (mut app, pane_id) = app();
+        let open = |layer: &str| PaneGraphicsStreamParams {
+            pane_id: pane_id.clone(),
+            layer_id: Some(layer.into()),
+            z_index: 0,
+            owner: format!("owner-{layer}"),
+        };
+        for layer in ["set", "clear"] {
+            assert!(serde_json::from_str::<SuccessResponse>(
+                &app.handle_pane_graphics_stream_open(layer.into(), open(layer))
+            )
+            .is_ok());
+            let (_, pane) = app.parse_pane_id(&pane_id).unwrap();
+            app.pane_graphics.slots[&(pane, layer.into())]
+                .stream_active
+                .as_ref()
+                .unwrap()
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
+
+        assert!(
+            serde_json::from_str::<SuccessResponse>(&app.handle_pane_graphics_set(
+                "set-static".into(),
+                frame(pane_id.clone(), Some("set"), "", 4),
+            ))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<SuccessResponse>(&app.handle_pane_graphics_clear(
+                "clear-static".into(),
+                PaneGraphicsClearParams {
+                    pane_id,
+                    layer_id: Some("clear".into()),
+                },
+            ))
+            .is_ok()
+        );
+        assert_eq!(app.pane_graphics.slots.len(), 1);
+        assert!(app
+            .pane_graphics
+            .slots
+            .values()
+            .all(|slot| slot.stream_owner.is_none()));
+    }
+
+    #[test]
     fn layer_limit_counts_empty_and_populated_stream_slots() {
         let (mut app, pane_id) = app();
         for index in 0..PANE_GRAPHICS_MAX_LAYERS_PER_PANE {
@@ -986,6 +1073,17 @@ mod tests {
         for (width, height) in [(0, 1), (1, 0)] {
             let mut params = direct_params(pane_id.clone(), "owner", "unused".into());
             (params.image_width, params.image_height) = (width, height);
+            assert_eq!(
+                error_code(&app.handle_pane_graphics_stream_direct("invalid".into(), params)),
+                "invalid_image"
+            );
+        }
+        for format in [
+            crate::api::schema::PaneGraphicsFormat::Rgb,
+            crate::api::schema::PaneGraphicsFormat::Png,
+        ] {
+            let mut params = direct_params(pane_id.clone(), "owner", "unused".into());
+            params.format = format;
             assert_eq!(
                 error_code(&app.handle_pane_graphics_stream_direct("invalid".into(), params)),
                 "invalid_image"
