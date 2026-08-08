@@ -151,6 +151,11 @@ pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
 }
 
 /// Unsupported platform stub.
+pub fn process_virtual_env(_pid: u32) -> Option<super::VirtualEnvActivation> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn session_processes(_child_pid: u32) -> Vec<u32> {
     Vec::new()
 }

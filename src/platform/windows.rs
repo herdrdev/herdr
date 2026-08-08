@@ -1184,6 +1184,38 @@ fn read_process_environment(process: HANDLE, address: *const c_void) -> Option<V
     None
 }
 
+/// Read the interpreter environment a process was started in.
+pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+    if pid == 0 {
+        return None;
+    }
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)?;
+    let parameters = read_process_parameters(process.0)?;
+    let environment = read_process_environment(process.0, parameters.environment)?;
+    virtual_env_from_utf16(&environment)
+}
+
+/// A venv nested inside a conda environment leaves both prefixes exported, and
+/// `VIRTUAL_ENV` is the inner one, so it wins when both are present.
+fn virtual_env_from_utf16(environment: &[u16]) -> Option<super::VirtualEnvActivation> {
+    let read = |name: &str| {
+        environment_variable_from_utf16(environment, name).filter(|value| !value.is_empty())
+    };
+
+    if let Some(prefix) = read("VIRTUAL_ENV") {
+        return Some(super::VirtualEnvActivation {
+            kind: super::VirtualEnvKind::Venv,
+            prefix: prefix.into(),
+            name: read("VIRTUAL_ENV_PROMPT"),
+        });
+    }
+    read("CONDA_PREFIX").map(|prefix| super::VirtualEnvActivation {
+        kind: super::VirtualEnvKind::Conda,
+        prefix: prefix.into(),
+        name: read("CONDA_DEFAULT_ENV"),
+    })
+}
+
 fn environment_variable_from_utf16(environment: &[u16], name: &str) -> Option<String> {
     for variable in environment.split(|unit| *unit == 0) {
         if variable.is_empty() {

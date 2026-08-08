@@ -2896,6 +2896,32 @@ impl PaneRuntime {
             None
         }
     }
+
+    /// Interpreter environment the pane is currently working in, if any.
+    ///
+    /// A shell mutates its own environment in place when it activates one, and
+    /// that mutation is not visible from outside the process. What is visible
+    /// is the environment a process was launched with, so this reads the
+    /// foreground process group leader — the command the shell started, which
+    /// carries any activation that was in effect when it began.
+    ///
+    /// Session saves call this for every pane, so it stays at one process
+    /// lookup plus one environment read. In particular it does not ask the PTY
+    /// actor for the foreground group: that is a round trip which blocks while
+    /// the reader is paused for a handoff.
+    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {
+        let pid = self.child_pid.load(Ordering::Acquire);
+        if pid == 0 {
+            return None;
+        }
+        let foreground = crate::platform::foreground_process_group_id(pid)?;
+        // An idle prompt leaves the shell itself in the foreground, and the
+        // shell's own activation is the part that cannot be read.
+        if foreground == pid {
+            return None;
+        }
+        crate::platform::process_virtual_env(foreground)
+    }
 }
 
 #[cfg(test)]

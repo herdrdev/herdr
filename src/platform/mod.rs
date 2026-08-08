@@ -314,6 +314,172 @@ pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agen
     None
 }
 
+/// The activation tool a pane's interpreter environment came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VirtualEnvKind {
+    Conda,
+    Venv,
+}
+
+impl VirtualEnvKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Conda => "conda",
+            Self::Venv => "venv",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "conda" => Some(Self::Conda),
+            "venv" => Some(Self::Venv),
+            _ => None,
+        }
+    }
+}
+
+/// An activated interpreter environment observed on a live process.
+///
+/// `conda activate` and the `venv`/`virtualenv` activate scripts both work the
+/// same way: export a prefix variable and put that prefix's binary directory
+/// first on `PATH`. The prefix is therefore the whole activation — everything
+/// else is derived from it, which is why only the prefix and its display name
+/// are recorded here instead of a snapshot of the process `PATH`. A `PATH`
+/// captured on one run goes stale as soon as the user installs, removes, or
+/// upgrades anything outside the environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VirtualEnvActivation {
+    pub kind: VirtualEnvKind,
+    pub prefix: std::path::PathBuf,
+    /// `CONDA_DEFAULT_ENV`, or the prompt label a venv was activated with.
+    pub name: Option<String>,
+}
+
+impl VirtualEnvActivation {
+    /// Directories the activation puts in front of `PATH`, nearest first.
+    ///
+    /// Conda spreads a Windows environment over several directories and its
+    /// activate script adds all of them, so a single `Scripts` entry is not
+    /// enough to make the environment usable there.
+    pub(crate) fn path_entries(&self) -> Vec<std::path::PathBuf> {
+        let prefix = &self.prefix;
+        match (self.kind, cfg!(windows)) {
+            (VirtualEnvKind::Conda, true) => vec![
+                prefix.clone(),
+                prefix.join("Library").join("mingw-w64").join("bin"),
+                prefix.join("Library").join("usr").join("bin"),
+                prefix.join("Library").join("bin"),
+                prefix.join("Scripts"),
+                prefix.join("bin"),
+            ],
+            (VirtualEnvKind::Venv, true) => vec![prefix.join("Scripts")],
+            (_, false) => vec![prefix.join("bin")],
+        }
+    }
+
+    /// Environment overrides that re-enter this environment in a fresh process.
+    ///
+    /// `base_path` is the `PATH` the new process would otherwise inherit. The
+    /// activation entries are prepended to it, skipping any that survived, so
+    /// repeated restores cannot grow `PATH` without bound.
+    ///
+    /// `CONDA_SHLVL` is pinned to 1 rather than restored from the observed
+    /// process: nesting depth belongs to the shell that stacked the
+    /// activations, and a restored pane starts from an unactivated shell.
+    ///
+    /// Conda's automatic base activation is turned off for the restored shell.
+    /// A pane comes back as an interactive login shell, so it re-runs the
+    /// user's rc files, and conda's init hook activates base by default. That
+    /// runs after this environment is handed in and replaces it — it shadows a
+    /// restored venv's interpreter too, because base lands ahead of the venv on
+    /// `PATH`. Both spellings are set because conda renamed the setting in 25.x
+    /// and older releases only understand the previous one. Panes without a
+    /// recorded environment are untouched and still auto-activate base.
+    pub(crate) fn launch_env(&self, base_path: Option<&str>) -> Vec<(String, String)> {
+        let mut env = match self.kind {
+            VirtualEnvKind::Conda => {
+                let mut vars = vec![(
+                    "CONDA_PREFIX".to_string(),
+                    self.prefix.to_string_lossy().into_owned(),
+                )];
+                if let Some(name) = &self.name {
+                    vars.push(("CONDA_DEFAULT_ENV".to_string(), name.clone()));
+                }
+                vars.push(("CONDA_SHLVL".to_string(), "1".to_string()));
+                vars
+            }
+            VirtualEnvKind::Venv => {
+                let mut vars = vec![(
+                    "VIRTUAL_ENV".to_string(),
+                    self.prefix.to_string_lossy().into_owned(),
+                )];
+                if let Some(name) = &self.name {
+                    vars.push(("VIRTUAL_ENV_PROMPT".to_string(), name.clone()));
+                }
+                vars
+            }
+        };
+
+        env.push(("CONDA_AUTO_ACTIVATE".to_string(), "false".to_string()));
+        env.push(("CONDA_AUTO_ACTIVATE_BASE".to_string(), "false".to_string()));
+
+        let entries = self.path_entries();
+        let inherited = base_path.unwrap_or_default();
+        let kept = std::env::split_paths(inherited)
+            .filter(|dir| !entries.iter().any(|entry| entry == dir))
+            .collect::<Vec<_>>();
+        if let Ok(path) = std::env::join_paths(entries.into_iter().chain(kept)) {
+            env.push(("PATH".to_string(), path.to_string_lossy().into_owned()));
+        }
+        env
+    }
+}
+
+/// Read an activation out of a NUL-separated environment block.
+///
+/// A venv nested inside a conda environment leaves both prefixes exported, and
+/// `VIRTUAL_ENV` is the inner one, so it wins when both are present.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn parse_virtual_env_activation(environ: &[u8]) -> Option<VirtualEnvActivation> {
+    let mut conda_prefix = None;
+    let mut conda_name = None;
+    let mut venv_prefix = None;
+    let mut venv_name = None;
+
+    for record in environ.split(|&byte| byte == 0) {
+        let Some(index) = record.iter().position(|&byte| byte == b'=') else {
+            continue;
+        };
+        let (key, value) = record.split_at(index);
+        let Ok(value) = std::str::from_utf8(&value[1..]) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        match key {
+            b"CONDA_PREFIX" => conda_prefix = Some(value.to_string()),
+            b"CONDA_DEFAULT_ENV" => conda_name = Some(value.to_string()),
+            b"VIRTUAL_ENV" => venv_prefix = Some(value.to_string()),
+            b"VIRTUAL_ENV_PROMPT" => venv_name = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    if let Some(prefix) = venv_prefix {
+        return Some(VirtualEnvActivation {
+            kind: VirtualEnvKind::Venv,
+            prefix: prefix.into(),
+            name: venv_name,
+        });
+    }
+    conda_prefix.map(|prefix| VirtualEnvActivation {
+        kind: VirtualEnvKind::Conda,
+        prefix: prefix.into(),
+        name: conda_name,
+    })
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[derive(Debug)]
 pub(crate) struct InputSourceRestore;
@@ -366,6 +532,147 @@ impl PrefixInputSource for RealPrefixInputSource {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn environ(records: &[&str]) -> Vec<u8> {
+        let mut block = Vec::new();
+        for record in records {
+            block.extend_from_slice(record.as_bytes());
+            block.push(0);
+        }
+        block
+    }
+
+    fn path_value(env: &[(String, String)]) -> Vec<std::path::PathBuf> {
+        let path = env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.clone())
+            .expect("expected PATH");
+        std::env::split_paths(&path).collect()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn parse_virtual_env_activation_reads_conda_prefix_and_name() {
+        let activation = parse_virtual_env_activation(&environ(&[
+            "PATH=/opt/conda/envs/web/bin:/usr/bin",
+            "CONDA_PREFIX=/opt/conda/envs/web",
+            "CONDA_DEFAULT_ENV=web",
+            "TERM=xterm-256color",
+        ]))
+        .expect("expected an activation");
+
+        assert_eq!(activation.kind, VirtualEnvKind::Conda);
+        assert_eq!(
+            activation.prefix,
+            std::path::PathBuf::from("/opt/conda/envs/web")
+        );
+        assert_eq!(activation.name.as_deref(), Some("web"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn parse_virtual_env_activation_prefers_venv_nested_in_conda() {
+        let activation = parse_virtual_env_activation(&environ(&[
+            "CONDA_PREFIX=/opt/conda",
+            "CONDA_DEFAULT_ENV=base",
+            "VIRTUAL_ENV=/work/api/.venv",
+            "VIRTUAL_ENV_PROMPT=api",
+        ]))
+        .expect("expected an activation");
+
+        assert_eq!(activation.kind, VirtualEnvKind::Venv);
+        assert_eq!(
+            activation.prefix,
+            std::path::PathBuf::from("/work/api/.venv")
+        );
+        assert_eq!(activation.name.as_deref(), Some("api"));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn parse_virtual_env_activation_ignores_unactivated_and_empty_environments() {
+        assert!(parse_virtual_env_activation(&environ(&["PATH=/usr/bin", "TERM=xterm"])).is_none());
+        // conda exports an empty CONDA_PREFIX after the last `conda deactivate`.
+        assert!(
+            parse_virtual_env_activation(&environ(&["CONDA_PREFIX=", "VIRTUAL_ENV="])).is_none()
+        );
+    }
+
+    #[test]
+    fn launch_env_puts_the_environment_first_on_the_inherited_path() {
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Venv,
+            prefix: "/work/api/.venv".into(),
+            name: None,
+        };
+
+        let env = activation.launch_env(Some("/usr/local/bin:/usr/bin"));
+
+        assert!(env.contains(&("VIRTUAL_ENV".to_string(), "/work/api/.venv".to_string())));
+        assert_eq!(
+            path_value(&env),
+            [
+                std::path::PathBuf::from("/work/api/.venv/bin"),
+                std::path::PathBuf::from("/usr/local/bin"),
+                std::path::PathBuf::from("/usr/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_env_does_not_repeat_entries_already_on_the_inherited_path() {
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Conda,
+            prefix: "/opt/conda/envs/web".into(),
+            name: Some("web".to_string()),
+        };
+
+        let env = activation.launch_env(Some("/opt/conda/envs/web/bin:/usr/bin"));
+
+        assert_eq!(
+            path_value(&env),
+            [
+                std::path::PathBuf::from("/opt/conda/envs/web/bin"),
+                std::path::PathBuf::from("/usr/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_env_stops_conda_from_auto_activating_base_over_the_restored_env() {
+        // The restored shell re-runs the user's rc files, and conda's init hook
+        // activates base by default. Without this the pane comes back on base
+        // no matter what was handed in — including for a venv, which base
+        // shadows on PATH.
+        for kind in [VirtualEnvKind::Conda, VirtualEnvKind::Venv] {
+            let activation = VirtualEnvActivation {
+                kind,
+                prefix: "/work/api/.venv".into(),
+                name: None,
+            };
+
+            let env = activation.launch_env(Some("/usr/bin"));
+
+            assert!(env.contains(&("CONDA_AUTO_ACTIVATE".to_string(), "false".to_string())));
+            assert!(env.contains(&("CONDA_AUTO_ACTIVATE_BASE".to_string(), "false".to_string())));
+        }
+    }
+
+    #[test]
+    fn launch_env_pins_conda_nesting_depth_to_a_single_activation() {
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Conda,
+            prefix: "/opt/conda/envs/web".into(),
+            name: Some("web".to_string()),
+        };
+
+        let env = activation.launch_env(None);
+
+        assert!(env.contains(&("CONDA_SHLVL".to_string(), "1".to_string())));
+        assert!(env.contains(&("CONDA_DEFAULT_ENV".to_string(), "web".to_string())));
+    }
 
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {
