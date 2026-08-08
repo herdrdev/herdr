@@ -520,7 +520,7 @@ mod tests {
     fn settings_indicator_choice_returns_save_action() {
         let mut state = state_with_workspaces(&["test"]);
         open_settings_at(&mut state, SettingsSection::Indicators);
-        state.settings.list.selected = 1;
+        state.settings.list.selected = 0;
 
         let action = update_settings_state(
             &mut state,
@@ -530,10 +530,10 @@ mod tests {
         assert_eq!(
             action,
             Some(SettingsAction::SaveStatusIndicators(
-                StatusIndicatorStyle::Symbols
+                StatusIndicatorStyle::Dots
             ))
         );
-        assert_eq!(state.status_indicators, StatusIndicatorStyle::Dots);
+        assert_eq!(state.status_indicators, StatusIndicatorStyle::Symbols);
         assert_eq!(state.mode, Mode::Settings);
     }
 

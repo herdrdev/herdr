@@ -1855,7 +1855,7 @@ impl AppState {
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
-            status_indicators: crate::config::StatusIndicatorStyle::Dots,
+            status_indicators: crate::config::StatusIndicatorStyle::Symbols,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),

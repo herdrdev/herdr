@@ -261,14 +261,14 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
-Agent status uses compact colored dots by default. To distinguish blocked, working, done, idle, and unknown states by shape as well as color, choose **distinct symbols** in Settings or configure:
+Agent status uses distinct static symbols by default so blocked, working, done, idle, and unknown states differ by shape as well as color. To keep the compact color-only dots, choose **color dots** in Settings or configure:
 
 ```toml
 [ui]
-status_indicators = "symbols"
+status_indicators = "dots"
 ```
 
-The symbols are static, so this option does not enable spinner animation.
+Symbols remain static, so the default still does not enable spinner animation.
 
 ### Sidebar row layouts
 

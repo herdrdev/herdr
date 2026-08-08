@@ -3460,17 +3460,17 @@ mod tests {
         let mut app = test_app();
         assert_eq!(
             app.state.status_indicators,
-            crate::config::StatusIndicatorStyle::Dots
+            crate::config::StatusIndicatorStyle::Symbols
         );
 
-        app.save_status_indicators(crate::config::StatusIndicatorStyle::Symbols);
+        app.save_status_indicators(crate::config::StatusIndicatorStyle::Dots);
 
         assert_eq!(
             app.state.status_indicators,
-            crate::config::StatusIndicatorStyle::Symbols
+            crate::config::StatusIndicatorStyle::Dots
         );
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("status_indicators = \"symbols\""));
+        assert!(content.contains("status_indicators = \"dots\""));
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
