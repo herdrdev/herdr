@@ -1060,6 +1060,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Herdr session."
+        },
+        {
+          "key": "session.open_workspace_in_launch_directory",
+          "type": "boolean",
+          "default": "false",
+          "description": "When you run `herdr` from a directory, focus the workspace for that directory, or open a new workspace there when the restored session has none. Off by default so attaching restores the previous layout."
         }
       ]
     },

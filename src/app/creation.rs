@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::api::schema::{EventData, EventEnvelope, EventKind};
 #[cfg(test)]
@@ -272,6 +272,41 @@ impl App {
         }
         self.schedule_session_save();
         Ok(idx)
+    }
+
+    /// Focus the workspace whose resolved identity matches `launch_cwd`, or
+    /// create a new workspace there when none does. Returns true when a new
+    /// workspace was created.
+    ///
+    /// Used when a full app client attaches: running `herdr` from a directory
+    /// should land in (or open) a terminal pane in that directory, even when
+    /// the persistent session already has other workspaces.
+    pub(crate) fn ensure_workspace_for_launch_cwd(&mut self, launch_cwd: &Path) -> bool {
+        if self.state.mode == Mode::Onboarding {
+            return false;
+        }
+        let canonical_launch = crate::worktree::canonical_or_original(launch_cwd);
+        if let Some(idx) = self.state.workspaces.iter().position(|ws| {
+            ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+                .is_some_and(|cwd| crate::worktree::canonical_or_original(&cwd) == canonical_launch)
+        }) {
+            if self.state.active != Some(idx) {
+                self.state.switch_workspace(idx);
+                self.state.mode = Mode::Terminal;
+            }
+            return false;
+        }
+        match self.create_workspace_with_launch_env(canonical_launch.clone(), true, Vec::new()) {
+            Ok(_) => true,
+            Err(err) => {
+                tracing::warn!(
+                    cwd = %canonical_launch.display(),
+                    err = %err,
+                    "failed to create workspace for launch directory"
+                );
+                false
+            }
+        }
     }
 
     pub(super) fn collect_panes_for_workspace(

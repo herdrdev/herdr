@@ -395,6 +395,11 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # a Herdr server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
 
+# When you run `herdr` from a directory, focus the workspace for that directory,
+# or open a new workspace there when the restored session has none. Off by
+# default so attaching restores the previous layout.
+# open_workspace_in_launch_directory = false
+
 [remote]
 # Whether herdr manages the ssh config used for `herdr --remote`.
 # When true (default), herdr runs remote ssh through a generated config that

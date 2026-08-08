@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SendError, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
@@ -316,6 +317,7 @@ pub(crate) enum ServerEvent {
         keybindings: Option<Box<crate::config::LiveKeybindConfig>>,
         direct_attach_requested: bool,
         direct_graphics: bool,
+        launch_cwd: Option<PathBuf>,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -559,6 +561,7 @@ pub(crate) fn handle_client_handshake(
         keybindings,
         direct_attach_requested,
         direct_graphics,
+        launch_cwd,
     ) = match hello {
         ClientMessage::Hello {
             version,
@@ -569,6 +572,7 @@ pub(crate) fn handle_client_handshake(
             requested_encoding,
             keybindings,
             launch_mode,
+            launch_cwd,
         } => {
             // Version check.
             match protocol::check_client_version(version) {
@@ -609,6 +613,7 @@ pub(crate) fn handle_client_handshake(
                 keybindings,
                 launch_mode == ClientLaunchMode::TerminalAttach,
                 launch_mode == ClientLaunchMode::AppDirectGraphics,
+                launch_cwd,
             )
         }
         _ => {
@@ -664,6 +669,7 @@ pub(crate) fn handle_client_handshake(
         keybindings,
         direct_attach_requested,
         direct_graphics,
+        launch_cwd,
         writer,
     });
 
@@ -1298,6 +1304,7 @@ new_tab = "ctrl+notakey"
                 requested_encoding: RenderEncoding::TerminalAnsi,
                 keybindings: ClientKeybindings::Server,
                 launch_mode: ClientLaunchMode::App,
+                launch_cwd: None,
             },
         )
         .expect("write hello");
@@ -1331,6 +1338,7 @@ new_tab = "ctrl+notakey"
                 keybindings,
                 direct_attach_requested,
                 direct_graphics,
+                launch_cwd,
                 writer,
             } => {
                 assert_eq!(client_id, 42);
@@ -1340,6 +1348,7 @@ new_tab = "ctrl+notakey"
                 assert!(keybindings.is_none());
                 assert!(!direct_attach_requested);
                 assert!(!direct_graphics);
+                assert_eq!(launch_cwd, None);
                 drop(writer);
             }
             other => panic!("expected ClientConnected, got {other:?}"),
@@ -1375,6 +1384,7 @@ new_tab = "ctrl+notakey"
                 requested_encoding: RenderEncoding::TerminalAnsi,
                 keybindings: ClientKeybindings::Server,
                 launch_mode: ClientLaunchMode::TerminalAttach,
+                launch_cwd: None,
             },
         )
         .expect("write hello");

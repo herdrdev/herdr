@@ -271,12 +271,18 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// When a full app client runs `herdr` from a directory, focus the
+    /// workspace for that directory, or open a new workspace there when the
+    /// restored session has none. Off by default so attaching restores the
+    /// previous layout.
+    pub open_workspace_in_launch_directory: bool,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            open_workspace_in_launch_directory: false,
         }
     }
 }
@@ -1255,6 +1261,19 @@ resume_agents_on_restore = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+    }
+
+    #[test]
+    fn open_workspace_in_launch_directory_defaults_off_and_parses() {
+        let default_config = Config::default();
+        assert!(!default_config.session.open_workspace_in_launch_directory);
+
+        let toml = r#"
+[session]
+open_workspace_in_launch_directory = true
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.session.open_workspace_in_launch_directory);
     }
 
     #[test]

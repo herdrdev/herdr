@@ -817,6 +817,15 @@ fn do_handshake(
         .map_err(ClientError::ConnectionFailed)?;
 
     // Send Hello.
+    let launch_cwd = if direct_attach_requested
+        || std::env::var_os(crate::remote::REATTACH_COMMAND_ENV_VAR).is_some()
+    {
+        // Direct attaches are not app launches; remote attaches must not
+        // interpret the local launch directory on the remote server.
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
     let hello = ClientMessage::Hello {
         version: PROTOCOL_VERSION,
         cols,
@@ -831,6 +840,7 @@ fn do_handshake(
             cell_width_px,
             cell_height_px,
         ),
+        launch_cwd,
     };
     protocol::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;

@@ -2808,6 +2808,7 @@ impl HeadlessServer {
                 render_encoding,
                 direct_attach_requested,
                 direct_graphics,
+                launch_cwd,
             } => {
                 if self.handoff_in_progress {
                     if let Ok(message) =
@@ -2856,6 +2857,16 @@ impl HeadlessServer {
                 }
                 if first_app_client {
                     self.app.mark_git_status_refresh_due(Instant::now());
+                }
+                if !direct_attach_requested && self.app.state.open_workspace_in_launch_directory {
+                    if let Some(launch_cwd) = launch_cwd {
+                        if self.app.ensure_workspace_for_launch_cwd(&launch_cwd) {
+                            info!(
+                                cwd = %launch_cwd.display(),
+                                "opened a terminal pane in the client launch directory"
+                            );
+                        }
+                    }
                 }
                 self.sync_foreground_client_state();
                 self.resize_shared_runtime_to_effective_size();
@@ -4836,7 +4847,6 @@ pub fn run_server() -> io::Result<()> {
             api_rx,
             event_hub,
         );
-        seed_startup_workspace_if_empty(&mut app);
 
         // The server runs headless — disable local notification side effects.
         // Sound and terminal notifications are forwarded to connected clients
@@ -4877,36 +4887,6 @@ pub fn run_server() -> io::Result<()> {
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("server");
     result
-}
-
-fn seed_startup_workspace_if_empty(app: &mut app::App) {
-    let Some(cwd) = take_startup_cwd() else {
-        return;
-    };
-
-    if !app.state.workspaces.is_empty() {
-        info!(
-            cwd = %cwd.display(),
-            "restored session already has workspaces; ignoring startup cwd"
-        );
-        return;
-    }
-
-    match app.create_workspace_with_options(cwd.clone(), true) {
-        Ok(_) => {
-            info!(cwd = %cwd.display(), "created startup workspace");
-        }
-        Err(err) => {
-            warn!(cwd = %cwd.display(), err = %err, "failed to create startup workspace");
-            app.state.mode = app::Mode::Navigate;
-        }
-    }
-}
-
-fn take_startup_cwd() -> Option<PathBuf> {
-    let cwd = std::env::var_os(crate::server::autodetect::STARTUP_CWD_ENV_VAR)?;
-    std::env::remove_var(crate::server::autodetect::STARTUP_CWD_ENV_VAR);
-    (!cwd.is_empty()).then(|| PathBuf::from(cwd))
 }
 
 #[cfg(unix)]
@@ -5571,6 +5551,7 @@ mod tests {
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: true,
+            launch_cwd: None,
             writer: writer_a,
         }));
         assert!(server.clients[&1].direct_graphics);
@@ -5588,6 +5569,7 @@ mod tests {
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_b,
         }));
         assert!(!server.direct_graphics_available());
@@ -5618,6 +5600,7 @@ new_tab = "prefix+t"
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_a,
         }));
         assert_eq!(
@@ -5643,6 +5626,7 @@ new_tab = "prefix+t"
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5657,6 +5641,128 @@ new_tab = "prefix+t"
             .bindings
             .iter()
             .any(|binding| binding.label == "prefix+c"));
+    }
+
+    #[tokio::test]
+    async fn client_attach_with_launch_cwd_creates_workspace_there() {
+        let mut server = test_headless_server();
+        server.app.state.mode = crate::app::Mode::Navigate;
+        server.app.state.open_workspace_in_launch_directory = true;
+        let launch_dir =
+            std::env::temp_dir().join(format!("hh-launch-cwd-create-{}", std::process::id()));
+        let _ = fs::create_dir_all(&launch_dir);
+        let (writer, _control, _render) = test_client_writer();
+
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 1,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: false,
+            launch_cwd: Some(launch_dir.clone()),
+            writer,
+        }));
+
+        assert_eq!(server.app.state.workspaces.len(), 1);
+        assert_eq!(server.app.state.active, Some(0));
+        assert_eq!(server.app.state.mode, crate::app::Mode::Terminal);
+        let identity = server.app.state.workspaces[0].identity_cwd.clone();
+        assert_eq!(
+            crate::worktree::canonical_or_original(&identity),
+            crate::worktree::canonical_or_original(&launch_dir)
+        );
+    }
+
+    #[test]
+    fn client_attach_with_matching_launch_cwd_focuses_existing_workspace() {
+        let mut server = test_headless_server();
+        server.app.state.mode = crate::app::Mode::Navigate;
+        server.app.state.open_workspace_in_launch_directory = true;
+        let first_dir =
+            std::env::temp_dir().join(format!("hh-launch-cwd-first-{}", std::process::id()));
+        let second_dir =
+            std::env::temp_dir().join(format!("hh-launch-cwd-second-{}", std::process::id()));
+        let _ = fs::create_dir_all(&first_dir);
+        let _ = fs::create_dir_all(&second_dir);
+        let mut first = crate::workspace::Workspace::test_new("first");
+        first.identity_cwd = first_dir.clone();
+        let mut second = crate::workspace::Workspace::test_new("second");
+        second.identity_cwd = second_dir.clone();
+        server.app.state.workspaces = vec![first, second];
+        server.app.state.active = Some(0);
+        let (writer, _control, _render) = test_client_writer();
+
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 1,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: false,
+            launch_cwd: Some(second_dir),
+            writer,
+        }));
+
+        // No new workspace; the matching one is focused.
+        assert_eq!(server.app.state.workspaces.len(), 2);
+        assert_eq!(server.app.state.active, Some(1));
+        assert_eq!(server.app.state.mode, crate::app::Mode::Terminal);
+    }
+
+    #[test]
+    fn client_attach_with_launch_cwd_skipped_when_config_off() {
+        let mut server = test_headless_server();
+        server.app.state.mode = crate::app::Mode::Navigate;
+        let launch_dir =
+            std::env::temp_dir().join(format!("hh-launch-cwd-disabled-{}", std::process::id()));
+        let _ = fs::create_dir_all(&launch_dir);
+        let (writer, _control, _render) = test_client_writer();
+
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 1,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: false,
+            launch_cwd: Some(launch_dir),
+            writer,
+        }));
+
+        assert!(server.app.state.workspaces.is_empty());
+    }
+
+    #[test]
+    fn client_attach_without_launch_cwd_does_not_create_workspace() {
+        let mut server = test_headless_server();
+        let (writer, _control, _render) = test_client_writer();
+
+        assert!(server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 1,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            render_encoding: RenderEncoding::SemanticFrame,
+            keybindings: None,
+            direct_attach_requested: false,
+            direct_graphics: false,
+            launch_cwd: None,
+            writer,
+        }));
+
+        assert!(server.app.state.workspaces.is_empty());
+        assert_eq!(server.app.state.active, None);
     }
 
     #[test]
@@ -5684,6 +5790,7 @@ new_tab = "prefix+t"
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_a,
         }));
         assert_eq!(server.app.state.config_diagnostic, without_keybindings);
@@ -5698,6 +5805,7 @@ new_tab = "prefix+t"
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5742,6 +5850,7 @@ next_tab = ""
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -5818,6 +5927,7 @@ next_tab = ""
             keybindings: Some(Box::new(local_config.live_keybinds().unwrap())),
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_a,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -5839,6 +5949,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -5874,6 +5985,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         assert!(server.clients.contains_key(&7));
@@ -5940,6 +6052,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         control_rx
@@ -6353,6 +6466,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
 
@@ -6388,6 +6502,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
 
@@ -6422,6 +6537,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         assert!(server.has_app_client());
@@ -6523,6 +6639,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         assert!(
@@ -8548,6 +8665,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            launch_cwd: None,
             writer,
         }));
         assert!(

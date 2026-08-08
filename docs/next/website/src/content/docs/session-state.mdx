@@ -28,6 +28,13 @@ herdr
 
 This is the strongest persistence path because the original processes never stop.
 
+By default, reattaching restores the previous layout. To instead land in the directory where you ran `herdr` — focusing that workspace when one exists, or opening a new one there — enable:
+
+```toml
+[session]
+open_workspace_in_launch_directory = true
+```
+
 ## Snapshot restore
 
 If the Herdr server stops and starts again, the original pane processes are gone. Herdr restores the saved session shape: workspaces, tabs, panes, cwd, layout, and focus.

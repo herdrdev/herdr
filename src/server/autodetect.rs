@@ -28,10 +28,6 @@ const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Timeout for checking the stable JSON API before attaching to the binary protocol socket.
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Private daemon-start hint used to seed a fresh headless server from the
-/// directory where the user ran `herdr`.
-pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
-
 // ---------------------------------------------------------------------------
 // Server detection
 // ---------------------------------------------------------------------------
@@ -126,6 +122,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
         requested_encoding: crate::protocol::RenderEncoding::SemanticFrame,
         keybindings: crate::protocol::ClientKeybindings::Server,
         launch_mode: crate::protocol::ClientLaunchMode::App,
+        launch_cwd: None,
     };
 
     match crate::protocol::write_message(&mut stream, &hello) {
@@ -216,15 +213,6 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     crate::platform::detach_server_daemon_command(&mut command);
-
-    match std::env::current_dir() {
-        Ok(cwd) => {
-            command.env(STARTUP_CWD_ENV_VAR, cwd);
-        }
-        Err(_) => {
-            command.env_remove(STARTUP_CWD_ENV_VAR);
-        }
-    }
 
     if crate::session::explicit_session_requested() {
         command
@@ -366,18 +354,6 @@ mod tests {
         crate::session::clear_explicit_session_for_test();
     }
 
-    #[test]
-    fn server_daemon_command_passes_current_dir_as_startup_cwd() {
-        let expected = std::env::current_dir().unwrap();
-        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
-        let envs: Vec<_> = command.get_envs().collect();
-
-        assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new(STARTUP_CWD_ENV_VAR) && value == &Some(expected.as_os_str())
-        }));
-    }
-
-    #[cfg(target_os = "linux")]
     #[test]
     fn server_daemon_detach_creates_new_session() {
         let mut command = Command::new("sh");
