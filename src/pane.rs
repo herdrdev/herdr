@@ -2780,40 +2780,41 @@ impl PaneRuntime {
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if !self.input_state()?.mouse_protocol_mode.reporting_enabled() {
             return None;
         }
-        self.terminal
-            .encode_mouse_button(kind, column, row, modifiers)
+        self.terminal.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.terminal
-            .encode_mouse_motion(kind, column, row, modifiers)
+        self.terminal.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if self.wheel_routing()? != WheelRouting::MouseReport {
             return None;
         }
-        self.terminal
-            .encode_mouse_wheel(kind, column, row, modifiers)
+        self.terminal.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
+        let width = u32::from(cols).checked_mul(cell_width_px)?;
+        let height = u32::from(rows).checked_mul(cell_height_px)?;
+        (width > 0 && height > 0).then_some((width, height))
     }
 
     pub fn encode_alternate_scroll(

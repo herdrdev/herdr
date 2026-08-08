@@ -187,6 +187,9 @@ pub enum Method {
     PaneGraphicsStreamSet(PaneGraphicsSetParams),
     #[serde(skip)]
     #[schemars(skip)]
+    PaneGraphicsStreamDirect(PaneGraphicsDirectParams),
+    #[serde(skip)]
+    #[schemars(skip)]
     PaneGraphicsStreamOpen(PaneGraphicsStreamParams),
     #[serde(skip)]
     #[schemars(skip)]

@@ -1416,11 +1416,11 @@ impl Terminal {
         self.get_optional_rgb_color(TERMINAL_DATA_COLOR_CURSOR)
     }
 
-    fn width_px(&self) -> Result<u32, Error> {
+    pub(crate) fn width_px(&self) -> Result<u32, Error> {
         self.get_u32(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_WIDTH_PX)
     }
 
-    fn height_px(&self) -> Result<u32, Error> {
+    pub(crate) fn height_px(&self) -> Result<u32, Error> {
         self.get_u32(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_HEIGHT_PX)
     }
 

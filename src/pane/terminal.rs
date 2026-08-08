@@ -23,7 +23,8 @@ use super::{
     input::{
         ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
         ghostty_mouse_event_from_button_kind, ghostty_mouse_event_from_motion_kind,
-        ghostty_mouse_event_from_wheel_kind, ghostty_prefers_herdr_text_encoding,
+        ghostty_mouse_event_from_wheel_kind, ghostty_mouse_position_for_terminal,
+        ghostty_prefers_herdr_text_encoding,
     },
     kitty_keyboard::KittyKeyboardTracker,
     osc::{
@@ -537,37 +538,31 @@ impl PaneTerminal {
         self.ghostty.encode_terminal_key(key, protocol)
     }
 
-    pub fn encode_mouse_button(
+    pub(crate) fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.ghostty
-            .encode_mouse_button(kind, column, row, modifiers)
+        self.ghostty.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.ghostty
-            .encode_mouse_motion(kind, column, row, modifiers)
+        self.ghostty.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.ghostty
-            .encode_mouse_wheel(kind, column, row, modifiers)
+        self.ghostty.encode_mouse_wheel(kind, position, modifiers)
     }
 }
 
@@ -1488,6 +1483,9 @@ impl GhosttyPaneTerminal {
         let _ = core
             .terminal
             .mode_set(crate::ghostty::MODE_MOUSE_SGR, false);
+        let _ = core
+            .terminal
+            .mode_set(crate::ghostty::MODE_MOUSE_SGR_PIXELS, false);
         match input_state.mouse_protocol_encoding {
             crate::input::MouseProtocolEncoding::Default => {}
             crate::input::MouseProtocolEncoding::Utf8 => {
@@ -1497,6 +1495,11 @@ impl GhosttyPaneTerminal {
             }
             crate::input::MouseProtocolEncoding::Sgr => {
                 let _ = core.terminal.mode_set(crate::ghostty::MODE_MOUSE_SGR, true);
+            }
+            crate::input::MouseProtocolEncoding::SgrPixels => {
+                let _ = core
+                    .terminal
+                    .mode_set(crate::ghostty::MODE_MOUSE_SGR_PIXELS, true);
             }
         }
 
@@ -1688,6 +1691,10 @@ impl GhosttyPaneTerminal {
             .terminal
             .mode_get(crate::ghostty::MODE_MOUSE_UTF8)
             .ok()?;
+        let mouse_sgr_pixels = core
+            .terminal
+            .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+            .ok()?;
         let mouse_alternate_scroll = core
             .terminal
             .mode_get(crate::ghostty::MODE_MOUSE_ALTERNATE_SCROLL)
@@ -1703,7 +1710,9 @@ impl GhosttyPaneTerminal {
         } else {
             crate::input::MouseProtocolMode::None
         };
-        let mouse_protocol_encoding = if mouse_sgr {
+        let mouse_protocol_encoding = if mouse_sgr_pixels {
+            crate::input::MouseProtocolEncoding::SgrPixels
+        } else if mouse_sgr {
             crate::input::MouseProtocolEncoding::Sgr
         } else if mouse_utf8 {
             crate::input::MouseProtocolEncoding::Utf8
@@ -1838,57 +1847,58 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    pub fn encode_mouse_button(
+    pub(crate) fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        let Ok(core) = self.core.lock() else {
-            return None;
-        };
-        let mut encoder = ghostty_mouse_encoder_for_terminal(&core.terminal)?;
-        let event = ghostty_mouse_event_from_button_kind(kind, column, row, modifiers)?;
-        encoder
-            .encode(&event)
-            .ok()
-            .filter(|bytes| !bytes.is_empty())
+        self.encode_mouse_event(
+            ghostty_mouse_event_from_button_kind(kind, 0, 0, modifiers)?,
+            position,
+            false,
+        )
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        let Ok(core) = self.core.lock() else {
-            return None;
-        };
-        if !core.terminal.mode_get(MODE_MOUSE_ANY_MOTION).ok()? {
+        self.encode_mouse_event(
+            ghostty_mouse_event_from_motion_kind(kind, 0, 0, modifiers)?,
+            position,
+            true,
+        )
+    }
+
+    pub(crate) fn encode_mouse_wheel(
+        &self,
+        kind: crossterm::event::MouseEventKind,
+        position: crate::input::mouse::Position,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> Option<Vec<u8>> {
+        self.encode_mouse_event(
+            ghostty_mouse_event_from_wheel_kind(kind, 0, 0, modifiers)?,
+            position,
+            false,
+        )
+    }
+
+    fn encode_mouse_event(
+        &self,
+        mut event: crate::ghostty::MouseEvent,
+        position: crate::input::mouse::Position,
+        require_any_motion: bool,
+    ) -> Option<Vec<u8>> {
+        let core = self.core.lock().ok()?;
+        if require_any_motion && !core.terminal.mode_get(MODE_MOUSE_ANY_MOTION).ok()? {
             return None;
         }
-        let mut encoder = ghostty_mouse_encoder_for_terminal(&core.terminal)?;
-        let event = ghostty_mouse_event_from_motion_kind(kind, column, row, modifiers)?;
-        encoder
-            .encode(&event)
-            .ok()
-            .filter(|bytes| !bytes.is_empty())
-    }
-
-    pub fn encode_mouse_wheel(
-        &self,
-        kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
-        modifiers: crossterm::event::KeyModifiers,
-    ) -> Option<Vec<u8>> {
-        let Ok(core) = self.core.lock() else {
-            return None;
-        };
-        let mut encoder = ghostty_mouse_encoder_for_terminal(&core.terminal)?;
-        let event = ghostty_mouse_event_from_wheel_kind(kind, column, row, modifiers)?;
+        let mut encoder = ghostty_mouse_encoder_for_terminal(&core.terminal, position)?;
+        let (x, y) = ghostty_mouse_position_for_terminal(position)?;
+        event.set_position(x, y);
         encoder
             .encode(&event)
             .ok()
@@ -4670,8 +4680,7 @@ mod tests {
 
         let encoded = pane.encode_mouse_button(
             crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
-            11,
-            9,
+            crate::input::mouse::Position::Cell { column: 11, row: 9 },
             crossterm::event::KeyModifiers::empty(),
         );
 
@@ -4687,8 +4696,7 @@ mod tests {
 
         let encoded = pane.encode_mouse_button(
             crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
-            4,
-            6,
+            crate::input::mouse::Position::Cell { column: 4, row: 6 },
             crossterm::event::KeyModifiers::SHIFT,
         );
 
@@ -4704,8 +4712,7 @@ mod tests {
 
         let encoded = pane.encode_mouse_button(
             crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
-            4,
-            6,
+            crate::input::mouse::Position::Cell { column: 4, row: 6 },
             crossterm::event::KeyModifiers::empty(),
         );
 
@@ -4721,8 +4728,7 @@ mod tests {
 
         let encoded = pane.encode_mouse_motion(
             crossterm::event::MouseEventKind::Moved,
-            4,
-            6,
+            crate::input::mouse::Position::Cell { column: 4, row: 6 },
             crossterm::event::KeyModifiers::empty(),
         );
 
@@ -4730,20 +4736,26 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_mouse_sgr_pixels_downgrades_to_cell_coordinates() {
+    fn ghostty_mouse_sgr_pixels_preserves_exact_and_downgrades_cell_input() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        terminal.resize(80, 24, 10, 20).unwrap();
         terminal.write(b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        let encoded = pane.encode_mouse_motion(
+        let exact = pane.encode_mouse_motion(
             crossterm::event::MouseEventKind::Moved,
-            4,
-            6,
+            crate::input::mouse::Position::Pixels { x: 48, y: 139 },
+            crossterm::event::KeyModifiers::empty(),
+        );
+        let fallback = pane.encode_mouse_motion(
+            crossterm::event::MouseEventKind::Moved,
+            crate::input::mouse::Position::Cell { column: 4, row: 6 },
             crossterm::event::KeyModifiers::empty(),
         );
 
-        assert_eq!(encoded.as_deref(), Some(&b"\x1b[<35;5;7M"[..]));
+        assert_eq!(exact.as_deref(), Some(&b"\x1b[<35;48;139M"[..]));
+        assert_eq!(fallback.as_deref(), Some(&b"\x1b[<35;5;7M"[..]));
     }
 
     #[test]

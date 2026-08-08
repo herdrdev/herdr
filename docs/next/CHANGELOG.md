@@ -11,6 +11,7 @@
 
 ### Changed
 - Bumped the client/server protocol version to 20 for pane terminal bell forwarding.
+- Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
 - `herdr config check` now reports unknown built-in theme names instead of silently accepting them. (#2452)
