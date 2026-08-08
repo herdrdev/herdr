@@ -290,6 +290,18 @@
           "description": "Move workspace selection down in navigate mode."
         },
         {
+          "key": "keys.navigate_navigator_up",
+          "type": "keybinding",
+          "default": "\"ctrl+p\"",
+          "description": "Move the session navigator selection up."
+        },
+        {
+          "key": "keys.navigate_navigator_down",
+          "type": "keybinding",
+          "default": "\"ctrl+n\"",
+          "description": "Move the session navigator selection down."
+        },
+        {
           "key": "keys.navigate_pane_left",
           "type": "keybinding",
           "default": "\"h\"",
