@@ -255,6 +255,23 @@ yellow = "#f9e2af"
 
 Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `reset`, `default`, `none`, and `transparent`.
 
+When `auto_switch` is enabled, optional light and dark subtables layer on top of the shared custom colors:
+
+```toml
+[theme.custom]
+accent = "#89b4fa"
+
+[theme.custom.light]
+panel_bg = "#eff1f5"
+text = "#4c4f69"
+
+[theme.custom.dark]
+panel_bg = "#1e1e2e"
+text = "#cdd6f4"
+```
+
+The active palette is applied in this order: built-in theme, `[theme.custom]`, then `[theme.custom.light]` or `[theme.custom.dark]`. Omitting the mode subtables preserves the existing shared override behavior.
+
 ## UI and sidebar
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.

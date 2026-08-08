@@ -30,7 +30,7 @@ pub use self::{
         SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
-    theme::{parse_color, CustomThemeColors, ThemeConfig, THEME_NAMES},
+    theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig, THEME_NAMES},
 };
 
 pub(crate) use self::keybinds::parse_key_combo;

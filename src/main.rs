@@ -134,6 +134,15 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # red = "#ff6188"
 # green = "#a6e3a1"
 
+# Layer appearance-specific overrides on top when auto_switch is enabled.
+# [theme.custom.light]
+# panel_bg = "#eff1f5"
+# text = "#4c4f69"
+#
+# [theme.custom.dark]
+# panel_bg = "#1e1e2e"
+# text = "#cdd6f4"
+
 [terminal]
 # Executable used for new interactive panes.
 # Empty means $SHELL, then /bin/sh.
