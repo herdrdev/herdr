@@ -193,3 +193,9 @@ After that failed read, ask the agent to write its complete response as Markdown
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
 - CLI server errors are JSON on stderr with exit status 1. CLI syntax errors exit with status 2.
+
+## Pre-Action Safety Gates & Token Telemetry
+
+- **Pre-Action Approval Gates:** When an agent encounters a high-risk tool call (cloud deploy, production DB edit, paid dispatch), set agent state to `blocked` using `herdr agent signal --state blocked --reason "<reason>"`.
+- **Token Telemetry Overlay:** Formats prompt turn token counts via Tiktoken (`cl100k_base` / `o200k_base`) on stdout: `[Token Telemetry] 📥 In: <count> | 📤 Out: <count> | 💰 Cost: $<usd>`.
+
