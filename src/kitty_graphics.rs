@@ -1654,6 +1654,48 @@ mod tests {
     }
 
     #[test]
+    fn terminal_graphics_without_pane_layers_preserves_legacy_transcript() {
+        fn record(transcript: &mut Vec<u8>, bytes: &[u8]) {
+            transcript.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            transcript.extend_from_slice(bytes);
+        }
+
+        fn fnv1a(bytes: &[u8]) -> u64 {
+            bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            })
+        }
+
+        let mut cache = HostGraphicsCache::default();
+        let mut transcript = Vec::new();
+
+        record(
+            &mut transcript,
+            &update(&mut cache, &[test_placement(0, 0)], false),
+        );
+        record(
+            &mut transcript,
+            &update(&mut cache, &[test_placement(0, 0)], false),
+        );
+        record(
+            &mut transcript,
+            &update(&mut cache, &[test_placement(-1, 2)], false),
+        );
+        record(
+            &mut transcript,
+            &update(&mut cache, &[test_placement(-1, 2)], true),
+        );
+
+        let mut changed = test_placement(-1, 2);
+        changed.placement.data_fingerprint = 43;
+        record(&mut transcript, &update(&mut cache, &[changed], false));
+        record(&mut transcript, &update(&mut cache, &[], false));
+
+        assert_eq!(transcript.len(), 10_084);
+        assert_eq!(fnv1a(&transcript), 0xc5bd_83e4_b039_870e);
+    }
+
+    #[test]
     fn terminal_placement_id_preserves_legacy_identity() {
         let placement = test_placement(0, 0);
         let mut legacy = DefaultHasher::new();
