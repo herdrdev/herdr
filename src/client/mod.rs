@@ -1571,6 +1571,13 @@ async fn run_client_loop(
                         let _ = stdout.flush();
                     }
                 }
+                ServerMessage::TerminalBell { count } => {
+                    if let Err(err) =
+                        crate::terminal_effects::write_terminal_bells(&mut io::stdout(), count)
+                    {
+                        warn!(err = %err, "failed to emit terminal bell");
+                    }
+                }
                 ServerMessage::ServerShutdown { reason } => {
                     return Err(ClientError::ServerShutdown { reason });
                 }

@@ -2902,9 +2902,10 @@ impl AppState {
                     .collect()
                 }
             }
-            // Both intercepted before this dispatch — in App::handle_internal_event (monolithic)
+            // Intercepted before this dispatch — in App::handle_internal_event (monolithic)
             // or via HeadlessServer forwarding to the foreground client (server); never touch
             // AppState. Kept for AppEvent exhaustiveness.
+            AppEvent::TerminalBell { .. } => Vec::new(),
             AppEvent::ClipboardWrite { .. } => Vec::new(),
             AppEvent::PrefixInputSource { .. } => Vec::new(),
             AppEvent::TerminalCwdReported { pane_id, cwd } => {

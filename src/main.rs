@@ -93,6 +93,7 @@ mod server;
 mod session;
 mod sound;
 mod terminal;
+mod terminal_effects;
 mod terminal_modes;
 mod terminal_notify;
 mod terminal_theme;

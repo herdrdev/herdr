@@ -558,24 +558,24 @@ impl Palette {
 
     /// Resolve a theme by name. Returns None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_lowercase().replace([' ', '_'], "-").as_str() {
-            "catppuccin" | "catppuccin-mocha" => Some(Self::catppuccin()),
-            "catppuccin-latte" | "latte" | "light" => Some(Self::catppuccin_latte()),
+        match crate::config::canonical_theme_name(name)? {
+            "catppuccin" => Some(Self::catppuccin()),
+            "catppuccin-latte" => Some(Self::catppuccin_latte()),
             "terminal" => Some(Self::terminal()),
-            "tokyo-night" | "tokyonight" => Some(Self::tokyo_night()),
-            "tokyo-night-day" | "tokyo-day" | "tokyonight-day" => Some(Self::tokyo_night_day()),
+            "tokyo-night" => Some(Self::tokyo_night()),
+            "tokyo-night-day" => Some(Self::tokyo_night_day()),
             "dracula" => Some(Self::dracula()),
             "nord" => Some(Self::nord()),
-            "gruvbox" | "gruvbox-dark" => Some(Self::gruvbox()),
+            "gruvbox" => Some(Self::gruvbox()),
             "gruvbox-light" => Some(Self::gruvbox_light()),
-            "one-dark" | "onedark" => Some(Self::one_dark()),
-            "one-light" | "onelight" => Some(Self::one_light()),
-            "solarized" | "solarized-dark" => Some(Self::solarized()),
+            "one-dark" => Some(Self::one_dark()),
+            "one-light" => Some(Self::one_light()),
+            "solarized" => Some(Self::solarized()),
             "solarized-light" => Some(Self::solarized_light()),
             "kanagawa" => Some(Self::kanagawa()),
-            "kanagawa-lotus" | "lotus" => Some(Self::kanagawa_lotus()),
-            "rose-pine" | "rosepine" => Some(Self::rose_pine()),
-            "rose-pine-dawn" | "rosepine-dawn" | "dawn" => Some(Self::rose_pine_dawn()),
+            "kanagawa-lotus" => Some(Self::kanagawa_lotus()),
+            "rose-pine" => Some(Self::rose_pine()),
+            "rose-pine-dawn" => Some(Self::rose_pine_dawn()),
             "vesper" => Some(Self::vesper()),
             _ => None,
         }
@@ -1044,26 +1044,7 @@ impl SettingsSection {
 }
 
 /// All built-in theme names in display order.
-pub const THEME_NAMES: &[&str] = &[
-    "catppuccin",
-    "catppuccin-latte",
-    "terminal",
-    "tokyo-night",
-    "tokyo-night-day",
-    "dracula",
-    "nord",
-    "gruvbox",
-    "gruvbox-light",
-    "one-dark",
-    "one-light",
-    "solarized",
-    "solarized-light",
-    "kanagawa",
-    "kanagawa-lotus",
-    "rose-pine",
-    "rose-pine-dawn",
-    "vesper",
-];
+pub const THEME_NAMES: &[&str] = crate::config::THEME_NAMES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuListState {

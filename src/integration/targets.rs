@@ -7,7 +7,9 @@ use serde_json::{json, Map, Value};
 use super::claude_settings::{
     install as install_claude_settings, uninstall as uninstall_claude_settings,
 };
-use super::command::{hook_command, shell_single_quote};
+use super::command::hook_command;
+#[cfg(not(windows))]
+use super::command::shell_single_quote;
 use super::config_edit::{
     build_codex_config_with_hooks, build_kimi_config_with_hooks, ensure_command_hook,
     ensure_direct_command_hook, ensure_flat_command_hook, ensure_hermes_plugin_enabled,
@@ -948,8 +950,7 @@ pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
         "cursor hooks file",
         "cursor hooks file hooks",
     )?;
-    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
-    let session_command = format!("bash {quoted_hook_path} session");
+    let session_command = hook_command(&hook_path, Some("session"));
     remove_simple_command_hook(hooks, "beforeSubmitPrompt", &session_command)?;
     remove_simple_command_hook(hooks, "beforeShellExecution", &session_command)?;
     remove_simple_command_hook(hooks, "beforeMCPExecution", &session_command)?;
@@ -1029,8 +1030,7 @@ pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
             "cursor hooks file",
             "cursor hooks file hooks",
         )? {
-            let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
-            let session_command = format!("bash {quoted_hook_path} session");
+            let session_command = hook_command(&hook_path, Some("session"));
             updated_hooks |= remove_simple_command_hook(hooks, "sessionStart", &session_command)?;
             updated_hooks |=
                 remove_simple_command_hook(hooks, "beforeSubmitPrompt", &session_command)?;
@@ -1055,6 +1055,26 @@ pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
         removed_hook_file,
         updated_hooks,
     })
+}
+
+pub(crate) fn mastracode_hook_command(hook_path: &Path, action: &str) -> String {
+    #[cfg(windows)]
+    {
+        use base64::Engine;
+
+        let path = hook_path.display().to_string().replace('\'', "''");
+        let script = format!("& '{path}' {action}");
+        let encoded_script = script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_script);
+        format!("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}")
+    }
+    #[cfg(not(windows))]
+    {
+        hook_command(hook_path, Some(action))
+    }
 }
 
 pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
@@ -1082,15 +1102,16 @@ pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
         ))
     })?;
 
-    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
     for (event, action) in MASTRACODE_REMOVED_HOOK_EVENTS {
-        remove_flat_command_hook(hooks, event, &format!("bash {quoted_hook_path} {action}"))?;
+        remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
+        remove_flat_command_hook(hooks, event, &mastracode_hook_command(&hook_path, action))?;
     }
     for (event, action) in MASTRACODE_HOOK_EVENTS {
+        remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
         ensure_flat_command_hook(
             hooks,
             event,
-            format!("bash {quoted_hook_path} {action}"),
+            mastracode_hook_command(&hook_path, action),
             MASTRACODE_HOOK_TIMEOUT_MS,
         )?;
     }
@@ -1123,15 +1144,16 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
             ))
         })?;
 
-        let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
         for (event, action) in MASTRACODE_HOOK_EVENTS
             .into_iter()
             .chain(MASTRACODE_REMOVED_HOOK_EVENTS)
         {
+            updated_hooks |=
+                remove_flat_command_hook(hooks, event, &hook_command(&hook_path, Some(action)))?;
             updated_hooks |= remove_flat_command_hook(
                 hooks,
                 event,
-                &format!("bash {quoted_hook_path} {action}"),
+                &mastracode_hook_command(&hook_path, action),
             )?;
         }
 
@@ -1252,9 +1274,22 @@ pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallR
 
 /// The complete Herdr-owned Grok hook config. Installation and status share
 /// this value so any config drift is reported as outdated.
+fn grok_hook_command(hook_path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        hook_command(hook_path, Some("session"))
+    }
+    #[cfg(not(windows))]
+    {
+        format!(
+            "sh {} session",
+            shell_single_quote(&hook_path.display().to_string())
+        )
+    }
+}
+
 pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
-    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
-    let session_command = format!("sh {quoted_hook_path} session");
+    let session_command = grok_hook_command(hook_path);
     json!({
         "hooks": {
             "SessionStart": [

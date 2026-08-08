@@ -30,11 +30,11 @@ pub use self::{
         SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
-    theme::{parse_color, CustomThemeColors, ThemeConfig},
+    theme::{parse_color, CustomThemeColors, ThemeConfig, THEME_NAMES},
 };
 
-pub(crate) use self::io::upsert_top_level_bool;
 pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::{io::upsert_top_level_bool, theme::canonical_theme_name};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
@@ -72,6 +72,7 @@ impl Config {
             .into_iter()
             .chain(keybind_diags)
             .chain(self.remote_image_paste_key().err())
+            .chain(self.theme.diagnostics())
             .chain(self.ui.sound.diagnostics())
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .collect()

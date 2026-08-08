@@ -1499,6 +1499,20 @@ fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::PathBuf> {
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
 }
 
+fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+    if count == 0 {
+        return;
+    }
+    if let Err(err) = events.try_send(AppEvent::TerminalBell { pane_id, count }) {
+        warn!(
+            pane = pane_id.raw(),
+            count,
+            err = %err,
+            "failed to queue terminal bell"
+        );
+    }
+}
+
 fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
@@ -1868,6 +1882,7 @@ impl PaneRuntime {
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
                 observe_detection_content_change(bytes, &detection_content_seq);
                 if result.request_render && render_dirty.request_pty(pane_id) {
                     render_notify.notify_one();
@@ -2028,6 +2043,7 @@ impl PaneRuntime {
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                publish_terminal_bells(pane_id, result.terminal_bells, &events);
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
@@ -4212,6 +4228,46 @@ mod tests {
         )
         .await
         .expect("re-entering active authority should notify detection reset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pty_reader_aggregates_terminal_bells() {
+        let (events, mut event_rx) = mpsc::channel(8);
+        let pane_id = PaneId::from_raw(42);
+        let runtime = PaneRuntime::spawn_shell_command(
+            pane_id,
+            24,
+            80,
+            std::env::temp_dir(),
+            "printf '\\a\\a'; sleep 0.05",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let bell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(AppEvent::TerminalBell {
+                    pane_id: delivered_pane,
+                    count,
+                }) = event_rx.recv().await
+                {
+                    break (delivered_pane, count);
+                }
+            }
+        })
+        .await
+        .expect("PTY reader should publish terminal bells");
+
+        assert_eq!(bell, (pane_id, 2));
+        runtime.shutdown();
     }
 
     #[tokio::test]

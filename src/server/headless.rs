@@ -2098,6 +2098,15 @@ impl HeadlessServer {
     /// Returns true if the event changed visual state (requiring a re-render).
     fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
         match &ev {
+            AppEvent::TerminalBell { pane_id, count } => {
+                if !self.send_to_foreground_client(ServerMessage::TerminalBell { count: *count }) {
+                    debug!(
+                        pane = pane_id.raw(),
+                        count, "dropped terminal bell without a foreground client"
+                    );
+                }
+                false
+            }
             AppEvent::ClipboardWrite { content } => {
                 // Clipboard writes are client-local side effects. Forward them only to
                 // the foreground client instead of broadcasting to every attached client.
@@ -9581,6 +9590,72 @@ next_tab = ""
             other => panic!("expected ReloadSoundConfig, got {other:?}"),
         }
         assert!(!server.app.state.request_client_config_reload);
+    }
+
+    #[test]
+    fn terminal_bell_targets_foreground_client_only() {
+        let mut server = test_headless_server();
+        let (background_tx, background_control_rx, _background_rx) = test_client_writer();
+        let (foreground_tx, foreground_control_rx, _foreground_rx) = test_client_writer();
+
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (120, 40),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(background_tx),
+            ),
+        );
+        server.clients.insert(
+            2,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                2,
+                RenderEncoding::SemanticFrame,
+                Some(foreground_tx),
+            ),
+        );
+        server.foreground_client_id = Some(2);
+
+        let changed = server.handle_internal_event_with_forwarding(AppEvent::TerminalBell {
+            pane_id: crate::layout::PaneId::from_raw(1),
+            count: 3,
+        });
+
+        assert!(!changed);
+        match read_server_message(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("foreground terminal bell message"),
+        ) {
+            ServerMessage::TerminalBell { count } => assert_eq!(count, 3),
+            other => panic!("expected terminal bell message, got {other:?}"),
+        }
+        assert!(
+            background_control_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "background client should not receive terminal bells"
+        );
+
+        server.foreground_client_id = None;
+        server.handle_internal_event_with_forwarding(AppEvent::TerminalBell {
+            pane_id: crate::layout::PaneId::from_raw(1),
+            count: 1,
+        });
+        assert!(
+            foreground_control_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "bells without a foreground client must not be retained"
+        );
     }
 
     #[test]

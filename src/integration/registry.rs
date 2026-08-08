@@ -76,6 +76,11 @@ pub(crate) fn integration_target_supported(target: crate::api::schema::Integrati
                 | crate::api::schema::IntegrationTarget::Kimi
                 | crate::api::schema::IntegrationTarget::Qodercli
                 | crate::api::schema::IntegrationTarget::AntigravityCli
+                | crate::api::schema::IntegrationTarget::Devin
+                | crate::api::schema::IntegrationTarget::Hermes
+                | crate::api::schema::IntegrationTarget::Cursor
+                | crate::api::schema::IntegrationTarget::Mastracode
+                | crate::api::schema::IntegrationTarget::Grok
         )
     }
 
@@ -196,12 +201,9 @@ pub(crate) fn codex_executable_name() -> &'static str {
 pub(crate) fn hermes_install_layout_available() -> bool {
     #[cfg(windows)]
     {
-        let Some(local_app_data) =
-            std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())
-        else {
+        let Ok(dir) = hermes_dir() else {
             return false;
         };
-        let dir = PathBuf::from(local_app_data).join("hermes");
         [
             dir.join("hermes.exe"),
             dir.join("bin").join("hermes.exe"),

@@ -7,7 +7,7 @@ use std::{
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -234,7 +234,7 @@ pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) ->
 #[derive(Debug)]
 struct CachedProcessSnapshot {
     built_at: Instant,
-    entries: Arc<Vec<WindowsProcessEntry>>,
+    snapshot: Arc<ProcessSnapshot>,
 }
 
 #[derive(Debug)]
@@ -277,6 +277,31 @@ struct WindowsProcessEntry {
     argv0: Option<String>,
     argv: Option<Vec<String>>,
     cmdline: Option<String>,
+}
+
+#[derive(Debug)]
+struct ProcessSnapshot {
+    entries: Vec<WindowsProcessEntry>,
+    agent_indices: OnceLock<Vec<usize>>,
+}
+
+impl ProcessSnapshot {
+    fn new(entries: Vec<WindowsProcessEntry>) -> Self {
+        Self {
+            entries,
+            agent_indices: OnceLock::new(),
+        }
+    }
+
+    fn agent_indices(&self) -> &[usize] {
+        self.agent_indices.get_or_init(|| {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| process_entry_identifies_agent(entry).then_some(index))
+                .collect()
+        })
+    }
 }
 
 pub fn raise_server_nofile_limit() {}
@@ -631,8 +656,8 @@ pub fn current_process_is_detached_server_daemon() -> bool {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    let entries = snapshot_processes();
-    select_pane_foreground_job(child_pid, &entries)
+    let snapshot = ProcessSnapshot::new(snapshot_processes());
+    select_pane_foreground_job_from_snapshot(child_pid, &snapshot)
 }
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
@@ -653,8 +678,11 @@ fn available_pane_shell_from_snapshot(
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
-    let entries = cached_foreground_processes();
-    let entry = entries.iter().find(|entry| entry.pid == process_group_id)?;
+    let snapshot = cached_foreground_processes();
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.pid == process_group_id)?;
     Some(ForegroundJob {
         process_group_id,
         processes: vec![foreground_process_from_entry(entry)],
@@ -662,8 +690,8 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
 }
 
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    let entries = cached_foreground_processes();
-    select_pane_foreground_job(child_pid, &entries).map(|job| job.process_group_id)
+    let snapshot = cached_foreground_processes();
+    select_pane_foreground_job_from_snapshot(child_pid, &snapshot).map(|job| job.process_group_id)
 }
 
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
@@ -674,24 +702,25 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-fn select_pane_foreground_job(
+fn select_pane_foreground_job_from_snapshot(
     shell_pid: u32,
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
 ) -> Option<ForegroundJob> {
-    select_pane_foreground_job_with_runtime_inspection(
+    select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         shell_pid,
-        entries,
+        snapshot,
         |shell| process_is_git_bash(shell.pid),
         |entry| process_runtime_marker(entry.pid),
     )
 }
 
-fn select_pane_foreground_job_with_runtime_inspection(
+fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
     shell_pid: u32,
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
     shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
     mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
 ) -> Option<ForegroundJob> {
+    let entries = &snapshot.entries;
     let shell = entries.iter().find(|entry| entry.pid == shell_pid)?;
     let descendants = descendant_entries(shell_pid, entries);
     let mut candidates = Vec::new();
@@ -708,11 +737,8 @@ fn select_pane_foreground_job_with_runtime_inspection(
         return Some(foreground_job_from_entry(shell));
     }
 
-    let escaped_candidates: Vec<_> = entries
-        .iter()
-        .filter(|entry| process_entry_identifies_agent(entry))
-        .collect();
-    if escaped_candidates.is_empty() {
+    let escaped_agent_indices = snapshot.agent_indices();
+    if escaped_agent_indices.is_empty() {
         return Some(foreground_job_from_entry(shell));
     }
 
@@ -720,13 +746,22 @@ fn select_pane_foreground_job_with_runtime_inspection(
     else {
         return Some(foreground_job_from_entry(shell));
     };
-    let matching_candidates: Vec<_> = escaped_candidates
-        .into_iter()
+    let matching_candidates: Vec<_> = escaped_agent_indices
+        .iter()
+        .map(|&index| &entries[index])
         .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
         .collect();
     let selected =
         select_topmost_agent_chain_candidate(&matching_candidates, entries).unwrap_or(shell);
     Some(foreground_job_from_entry(selected))
+}
+
+#[cfg(test)]
+fn select_pane_foreground_job(
+    shell_pid: u32,
+    entries: &[WindowsProcessEntry],
+) -> Option<ForegroundJob> {
+    select_pane_foreground_job_from_snapshot(shell_pid, &ProcessSnapshot::new(entries.to_vec()))
 }
 
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
@@ -744,6 +779,9 @@ fn select_topmost_agent_chain_candidate<'a>(
     candidates: &[&'a WindowsProcessEntry],
     entries: &[WindowsProcessEntry],
 ) -> Option<&'a WindowsProcessEntry> {
+    if candidates.is_empty() {
+        return None;
+    }
     let parent_by_pid: HashMap<u32, u32> = entries
         .iter()
         .map(|entry| (entry.pid, entry.parent_pid))
@@ -854,7 +892,7 @@ fn snapshot_processes() -> Vec<WindowsProcessEntry> {
     output
 }
 
-fn cached_foreground_processes() -> Arc<Vec<WindowsProcessEntry>> {
+fn cached_foreground_processes() -> Arc<ProcessSnapshot> {
     let mut cache = FOREGROUND_PROCESS_SNAPSHOT_CACHE
         .lock()
         .unwrap_or_else(|err| err.into_inner());
@@ -866,19 +904,19 @@ impl ProcessSnapshotCache {
         &mut self,
         max_age: Duration,
         build: impl FnOnce() -> Vec<WindowsProcessEntry>,
-    ) -> Arc<Vec<WindowsProcessEntry>> {
+    ) -> Arc<ProcessSnapshot> {
         if let Some(cached) = &self.cached {
             if cached.built_at.elapsed() < max_age {
-                return Arc::clone(&cached.entries);
+                return Arc::clone(&cached.snapshot);
             }
         }
 
-        let entries = Arc::new(build());
+        let snapshot = Arc::new(ProcessSnapshot::new(build()));
         self.cached = Some(CachedProcessSnapshot {
             built_at: Instant::now(),
-            entries: Arc::clone(&entries),
+            snapshot: Arc::clone(&snapshot),
         });
-        entries
+        snapshot
     }
 }
 
@@ -2485,10 +2523,11 @@ mod tests {
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 10, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| panic!("Git Bash fallback must not run after normal detection succeeds"),
             |_| panic!("runtime marker must not be read after normal detection succeeds"),
         )
@@ -2500,8 +2539,8 @@ mod tests {
     }
 
     #[test]
-    fn windows_process_tree_recovers_git_bash_exec_chain_from_runtime_marker() {
-        let entries = vec![
+    fn windows_process_tree_shares_snapshot_candidates_across_git_bash_panes() {
+        let snapshot = super::ProcessSnapshot::new(vec![
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(
                 11,
@@ -2509,6 +2548,7 @@ mod tests {
                 "bash.exe",
                 &[r"C:\Program Files\Git\usr\bin\bash.exe"],
             ),
+            test_entry(12, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(
                 20,
                 99,
@@ -2530,23 +2570,40 @@ mod tests {
                 "codex.exe",
                 &[r"C:\npm\node_modules\@openai\codex\bin\codex.exe"],
             ),
-        ];
+            test_entry(50, 98, "claude.exe", &["claude.exe"]),
+        ]);
         let mut inspected = Vec::new();
+        assert!(snapshot.agent_indices.get().is_none());
+        let marker = |entry: &super::WindowsProcessEntry| match entry.pid {
+            12 | 50 => Some("pane-b".to_string()),
+            _ => Some("pane-a".to_string()),
+        };
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let first = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |entry| {
                 inspected.push(entry.pid);
-                Some("pane-a".to_string())
+                marker(entry)
             },
         )
         .unwrap();
+        let indices = snapshot.agent_indices.get().unwrap();
+        let second = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+            12,
+            &snapshot,
+            |_| true,
+            marker,
+        )
+        .unwrap();
 
-        assert_eq!(job.process_group_id, 20);
-        assert_eq!(job.processes[0].name, "sh.exe");
-        assert_eq!(inspected, vec![10, 20, 30, 40]);
+        assert_eq!(first.process_group_id, 20);
+        assert_eq!(first.processes[0].name, "sh.exe");
+        assert_eq!(second.process_group_id, 50);
+        assert_eq!(indices, &[3, 4, 5, 6]);
+        assert!(std::ptr::eq(indices, snapshot.agent_indices.get().unwrap()));
+        assert_eq!(inspected, vec![10, 20, 30, 40, 50]);
     }
 
     #[test]
@@ -2555,10 +2612,11 @@ mod tests {
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| false,
             |_| panic!("runtime marker must not be read for non-Git-Bash panes"),
         )
@@ -2573,10 +2631,11 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "git.exe", &["git.exe", "status"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |_| panic!("runtime marker must not be read without an agent candidate"),
         )
@@ -2591,11 +2650,12 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
         for shell_marker in [None, Some(String::new())] {
-            let job = super::select_pane_foreground_job_with_runtime_inspection(
+            let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
                 10,
-                &entries,
+                &snapshot,
                 |_| true,
                 |entry| {
                     if entry.pid == 10 {
@@ -2617,10 +2677,11 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |entry| Some(if entry.pid == 10 { "pane-a" } else { "pane-b" }.to_string()),
         )
@@ -2637,10 +2698,11 @@ mod tests {
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
             test_entry(30, 98, "claude.exe", &["claude.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |_| Some("pane-a".to_string()),
         )
@@ -2675,7 +2737,7 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert!(!Arc::ptr_eq(&second, &refreshed));
         assert_eq!(builds, 2);
-        assert_eq!(refreshed[0].pid, 20);
+        assert_eq!(refreshed.entries[0].pid, 20);
     }
 
     #[test]

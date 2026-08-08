@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -710,6 +710,12 @@ pub enum ServerMessage {
     PrefixInputSource {
         /// Whether the ASCII input source should be active.
         active: bool,
+    },
+
+    /// Ring the foreground client's outer terminal for pane-originated BEL characters.
+    TerminalBell {
+        /// Number of BEL characters parsed from one PTY read.
+        count: u16,
     },
 }
 
@@ -1553,6 +1559,15 @@ mod tests {
                 bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
             assert_eq!(msg, decoded);
         }
+    }
+
+    #[test]
+    fn server_terminal_bell_roundtrip() {
+        let msg = ServerMessage::TerminalBell { count: 3 };
+        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
+        let (decoded, _): (ServerMessage, _) =
+            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
+        assert_eq!(msg, decoded);
     }
 
     // ---- Framing ----
