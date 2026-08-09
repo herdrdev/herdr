@@ -1,43 +1,12 @@
 use crate::api::schema::{
-1:     EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCloseIfOutcome,
-    PaneCurrentParams, PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
-    PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
-    PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot, PaneLayoutSplit,
-    PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason, PaneMoveResult,
-    PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
-    PaneProcessInfoProcess, PaneProcessObservation, PaneReadParams, PaneReadResult,
-    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams,
-    PaneReportAgentSessionParams, PaneReportMetadataParams, PaneResizeParams, PaneResizeReason,
-    PaneResizeResult, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
-    PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneZoomMode,
-    PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
-2:     Method, OutputMatch, PaneCloseIfParams, PaneCurrentParams, PaneDirection, PaneEdgesParams,
+    Method, OutputMatch, PaneCloseIfParams, PaneCurrentParams, PaneDirection, PaneEdgesParams,
     PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
     PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams,
     PaneProcessObservation, PaneReadParams, PaneReleaseAgentParams, PaneRenameParams,
     PaneReportAgentParams, PaneReportAgentSessionParams, PaneReportMetadataParams,
-    PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
-3:     EmptyParams, Method, PaneCloseIfParams, PaneFocusDirectionParams, PaneInputSetParams,
-    PaneMoveParams,
-4:     build_info::initialize();
-    let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
-        Ok(args) => args,
-        Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
-            std::process::exit(2);
-        }
-    };
-5: /// Return the native process creation-time generation for PID-reuse resistance.
-pub fn process_generation(pid: u32) -> Option<String> {
-    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
-    process_creation_time(process.0).map(|value| value.to_string())
-}
-
-fn select_pane_foreground_job_from_snapshot(
-    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
-    SplitDirection,
+    PaneResizeParams, PaneRightClickTarget, PaneSendInputParams, PaneSendKeysParams,
+    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams,
+    PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request, SplitDirection,
 };
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
