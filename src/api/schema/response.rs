@@ -7,9 +7,9 @@ use super::integrations::{
     IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
 };
 use super::panes::{
-    LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
-    PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneZoomResult,
+    LayoutDescription, PaneCloseIfOutcome, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo,
+    PaneLayoutSnapshot, PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult,
+    PaneResizeResult, PaneSwapResult, PaneZoomResult,
 };
 use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
@@ -46,7 +46,9 @@ pub enum ResponseResult {
         version: String,
         protocol: u32,
         #[serde(default)]
-        capabilities: Option<ServerCapabilities>,
+        capabilities: ServerCapabilities,
+        #[serde(default)]
+        build_identity: super::server::BuildIdentity,
     },
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,
@@ -141,6 +143,9 @@ pub enum ResponseResult {
     },
     PaneProcessInfo {
         process_info: PaneProcessInfo,
+    },
+    PaneCloseIf {
+        outcome: PaneCloseIfOutcome,
     },
     LayoutExport {
         layout: LayoutDescription,

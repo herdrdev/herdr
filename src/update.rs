@@ -2316,7 +2316,7 @@ mod tests {
                 .unwrap();
             assert!(request.contains("\"method\":\"ping\""));
             let response = format!(
-                r#"{{"id":"runtime:status","result":{{"type":"pong","version":"{version}","protocol":{protocol},"capabilities":{{"live_handoff":true}}}}}}"#
+                r#"{{"id":"runtime:status","result":{{"type":"pong","version":"{version}","protocol":{protocol},"capabilities":{{"live_handoff":true,"conditional_mutations":{{"pane_close":0}}}},"build_identity":{{"source_commit":null,"executable_sha256":null,"release_manifest_digest":null}}}}}}"#
             );
             stream.write_all(response.as_bytes()).unwrap();
             stream.write_all(b"\n").unwrap();
@@ -2701,6 +2701,7 @@ mod tests {
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: None,
+            build_identity: None,
         };
         let compatible_release = ReleaseInfo {
             version: Version::parse("0.5.6").unwrap(),
@@ -2757,7 +2758,11 @@ mod tests {
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     live_handoff: true,
                     detached_server_daemon: true,
+                    conditional_mutations: crate::api::schema::ConditionalMutations {
+                        pane_close: 0,
+                    },
                 }),
+                build_identity: None,
             },
         };
 
@@ -2943,6 +2948,7 @@ mod tests {
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: None,
+            build_identity: None,
         };
         let release = ReleaseInfo {
             version: Version::parse("0.5.6").unwrap(),

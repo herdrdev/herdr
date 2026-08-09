@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "protocol": 20,
+  "protocol": 21,
   "schema_version": 1,
   "schemas": {
     "error_response": {
@@ -2449,6 +2449,25 @@
           ],
           "type": "object"
         },
+        "PaneCloseIfParams": {
+          "properties": {
+            "observation": {
+              "$ref": "#/schemas/request/$defs/PaneProcessObservation"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "request_id",
+            "observation"
+          ],
+          "type": "object"
+        },
         "PaneCurrentParams": {
           "properties": {
             "caller_pane_id": {
@@ -2768,6 +2787,69 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "PaneProcessObservation": {
+          "properties": {
+            "fingerprint_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "foreground_process_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "foreground_process_group_id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "process_fingerprint": {
+              "type": "string"
+            },
+            "process_generation": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shell_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "shell_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "fingerprint_version",
+            "pane_id",
+            "terminal_id",
+            "revision",
+            "process_generation",
+            "process_fingerprint"
+          ],
           "type": "object"
         },
         "PaneReadParams": {
@@ -5287,6 +5369,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.close_if",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneCloseIfParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "layout.export",
               "type": "string"
             },
@@ -6426,6 +6524,32 @@
           ],
           "type": "string"
         },
+        "BuildIdentity": {
+          "properties": {
+            "executable_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "release_manifest_digest": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source_commit": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -6433,6 +6557,19 @@
             "no_foreground_client"
           ],
           "type": "string"
+        },
+        "ConditionalMutations": {
+          "properties": {
+            "pane_close": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pane_close"
+          ],
+          "type": "object"
         },
         "ConfigReloadStatus": {
           "enum": [
@@ -7418,6 +7555,89 @@
           ],
           "type": "string"
         },
+        "PaneCloseIfOutcome": {
+          "oneOf": [
+            {
+              "properties": {
+                "receipt": {
+                  "$ref": "#/schemas/success_response/$defs/PaneCloseReceipt"
+                },
+                "type": {
+                  "const": "closed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "receipt"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "current": {
+                  "$ref": "#/schemas/success_response/$defs/PaneProcessObservation"
+                },
+                "type": {
+                  "const": "precondition_failed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "current"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "not_found",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "unsupported",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "PaneCloseReceipt": {
+          "properties": {
+            "observation": {
+              "$ref": "#/schemas/success_response/$defs/PaneProcessObservation"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "pane_id",
+            "terminal_id",
+            "observation"
+          ],
+          "type": "object"
+        },
         "PaneDirection": {
           "enum": [
             "left",
@@ -7874,8 +8094,16 @@
               },
               "type": "array"
             },
+            "observation": {
+              "$ref": "#/schemas/success_response/$defs/PaneProcessObservation"
+            },
             "pane_id": {
               "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             },
             "shell_pid": {
               "format": "uint32",
@@ -7885,6 +8113,9 @@
                 "null"
               ]
             },
+            "terminal_id": {
+              "type": "string"
+            },
             "tty": {
               "type": [
                 "string",
@@ -7893,7 +8124,10 @@
             }
           },
           "required": [
-            "pane_id"
+            "pane_id",
+            "terminal_id",
+            "revision",
+            "observation"
           ],
           "type": "object"
         },
@@ -7926,6 +8160,9 @@
                 "null"
               ]
             },
+            "generation": {
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -7937,7 +8174,71 @@
           },
           "required": [
             "pid",
+            "generation",
             "name"
+          ],
+          "type": "object"
+        },
+        "PaneProcessObservation": {
+          "properties": {
+            "fingerprint_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "foreground_process_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "foreground_process_group_id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "process_fingerprint": {
+              "type": "string"
+            },
+            "process_generation": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shell_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "shell_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "fingerprint_version",
+            "pane_id",
+            "terminal_id",
+            "revision",
+            "process_generation",
+            "process_fingerprint"
           ],
           "type": "object"
         },
@@ -8733,16 +9034,23 @@
           "oneOf": [
             {
               "properties": {
+                "build_identity": {
+                  "$ref": "#/schemas/success_response/$defs/BuildIdentity",
+                  "default": {
+                    "executable_sha256": null,
+                    "release_manifest_digest": null,
+                    "source_commit": null
+                  }
+                },
                 "capabilities": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/schemas/success_response/$defs/ServerCapabilities"
+                  "$ref": "#/schemas/success_response/$defs/ServerCapabilities",
+                  "default": {
+                    "conditional_mutations": {
+                      "pane_close": 0
                     },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "default": null
+                    "detached_server_daemon": false,
+                    "live_handoff": false
+                  }
                 },
                 "protocol": {
                   "format": "uint32",
@@ -9251,6 +9559,22 @@
               "required": [
                 "type",
                 "process_info"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "outcome": {
+                  "$ref": "#/schemas/success_response/$defs/PaneCloseIfOutcome"
+                },
+                "type": {
+                  "const": "pane_close_if",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "outcome"
               ],
               "type": "object"
             },
@@ -9918,6 +10242,12 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "conditional_mutations": {
+              "$ref": "#/schemas/success_response/$defs/ConditionalMutations",
+              "default": {
+                "pane_close": 0
+              }
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"

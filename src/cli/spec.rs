@@ -574,6 +574,13 @@ fn pane_command() -> Command {
         )
         .subcommand(id_command("close", "pane_id", "Close a pane"))
         .subcommand(
+            Command::new("close-if")
+                .about("Close a pane only when its process observation matches")
+                .arg(required("pane_id", "PANE_ID"))
+                .arg(option("request-id", "ID").required(true))
+                .arg(option("observation-json", "JSON").required(true)),
+        )
+        .subcommand(
             Command::new("send-text")
                 .about("Send literal text to a pane")
                 .arg(required("pane_id", "PANE_ID"))

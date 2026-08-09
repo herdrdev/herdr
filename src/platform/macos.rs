@@ -905,6 +905,17 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     }
     Some(PathBuf::from(OsStr::from_bytes(&vip_path[..nul])))
 }
+/// Return the kernel process start-time generation for PID-reuse resistance.
+pub fn process_generation(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let info = process_bsdinfo(pid)?;
+    Some(format!(
+        "{}:{}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
+}
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
     if child_pid == 0 {

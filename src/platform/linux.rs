@@ -380,6 +380,22 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// Return the kernel process start-time generation for PID-reuse resistance.
+pub fn process_generation(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let close = stat.rfind(')')?;
+    let fields: Vec<&str> = stat.get(close + 2..)?.split_whitespace().collect();
+    // After (comm): state is index 0 and starttime (field 22) is index 19.
+    fields
+        .get(19)?
+        .parse::<u64>()
+        .ok()
+        .map(|value| value.to_string())
+}
+
 /// Read a Herdr agent identity hint from a process environment.
 pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     if pid == 0 {

@@ -131,6 +131,12 @@ pub struct PaneProcessInfoParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneCloseIfParams {
+    pub pane_id: String,
+    pub request_id: String,
+    pub observation: PaneProcessObservation,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct LayoutExportParams {
@@ -488,6 +494,9 @@ pub struct PaneScrollInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneProcessInfo {
     pub pane_id: String,
+    pub terminal_id: String,
+    pub revision: u64,
+    pub observation: PaneProcessObservation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,8 +508,44 @@ pub struct PaneProcessInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneProcessObservation {
+    pub fingerprint_version: u32,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub revision: u64,
+    pub process_generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_process_group_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_process_generation: Option<String>,
+    pub process_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneCloseReceipt {
+    pub request_id: String,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub observation: PaneProcessObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PaneCloseIfOutcome {
+    Closed { receipt: PaneCloseReceipt },
+    PreconditionFailed { current: PaneProcessObservation },
+    NotFound {},
+    Unsupported {},
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneProcessInfoProcess {
     pub pid: u32,
+    pub generation: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argv0: Option<String>,

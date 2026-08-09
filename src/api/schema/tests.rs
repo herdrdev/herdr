@@ -454,6 +454,34 @@ fn pane_process_info_request_round_trips() {
 }
 
 #[test]
+fn pane_close_if_request_requires_correlation_and_exact_observation() {
+    let observation = PaneProcessObservation {
+        fingerprint_version: 1,
+        pane_id: "w1-1".into(),
+        terminal_id: "term-1".into(),
+        revision: 9,
+        process_generation: "a".repeat(64),
+        shell_pid: Some(42),
+        shell_generation: Some("b".repeat(64)),
+        foreground_process_group_id: Some(42),
+        foreground_process_generation: Some("c".repeat(64)),
+        process_fingerprint: "d".repeat(64),
+    };
+    let request = Request {
+        id: "req_close_if".into(),
+        method: Method::PaneCloseIf(PaneCloseIfParams {
+            pane_id: "w1-1".into(),
+            request_id: "attempt-1".into(),
+            observation,
+        }),
+    };
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["params"]["request_id"], "attempt-1");
+    let restored: Request = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, request);
+}
+
+#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {
@@ -637,10 +665,12 @@ fn success_response_round_trips() {
         result: ResponseResult::Pong {
             version: "0.1.2".into(),
             protocol: 6,
-            capabilities: Some(ServerCapabilities {
+            capabilities: ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
-            }),
+                conditional_mutations: ConditionalMutations { pane_close: 0 },
+            },
+            build_identity: BuildIdentity::default(),
         },
     };
 

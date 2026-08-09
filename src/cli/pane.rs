@@ -1,9 +1,40 @@
 use crate::api::schema::{
-    Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
+1:     EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCloseIfOutcome,
+    PaneCurrentParams, PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
+    PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
+    PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot, PaneLayoutSplit,
+    PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason, PaneMoveResult,
+    PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
+    PaneProcessInfoProcess, PaneProcessObservation, PaneReadParams, PaneReadResult,
+    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams,
+    PaneReportAgentSessionParams, PaneReportMetadataParams, PaneResizeParams, PaneResizeReason,
+    PaneResizeResult, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
+    PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneZoomMode,
+    PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
+2:     Method, OutputMatch, PaneCloseIfParams, PaneCurrentParams, PaneDirection, PaneEdgesParams,
     PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
-    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
-    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
+    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams,
+    PaneProcessObservation, PaneReadParams, PaneReleaseAgentParams, PaneRenameParams,
+    PaneReportAgentParams, PaneReportAgentSessionParams, PaneReportMetadataParams,
+    PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
+3:     EmptyParams, Method, PaneCloseIfParams, PaneFocusDirectionParams, PaneInputSetParams,
+    PaneMoveParams,
+4:     build_info::initialize();
+    let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'herdr --help' for usage");
+            std::process::exit(2);
+        }
+    };
+5: /// Return the native process creation-time generation for PID-reuse resistance.
+pub fn process_generation(pid: u32) -> Option<String> {
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    process_creation_time(process.0).map(|value| value.to_string())
+}
+
+fn select_pane_foreground_job_from_snapshot(
     PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
     PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
     SplitDirection,
@@ -31,8 +62,8 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "input" => pane_input(&args[1..]),
         "split" => pane_split(&args[1..]),
         "swap" => pane_swap(&args[1..]),
-        "move" => pane_move(&args[1..]),
         "close" => pane_close(&args[1..]),
+        "close-if" => pane_close_if(&args[1..]),
         "send-text" => pane_send_text(&args[1..]),
         "send-keys" => pane_send_keys(&args[1..]),
         "wait-output" => pane_wait_output(&args[1..]),
@@ -1022,6 +1053,25 @@ fn pane_close(args: &[String]) -> std::io::Result<i32> {
     super::runtime::pane_close(super::normalize_pane_id(raw_pane_id))
 }
 
+fn pane_close_if(args: &[String]) -> std::io::Result<i32> {
+    if args.len() != 5 || args[1] != "--request-id" || args[3] != "--observation-json" {
+        eprintln!("usage: herdr pane close-if <pane_id> --request-id ID --observation-json JSON");
+        return Ok(2);
+    }
+    let observation = match serde_json::from_str::<PaneProcessObservation>(&args[4]) {
+        Ok(observation) => observation,
+        Err(err) => {
+            eprintln!("invalid observation JSON: {err}");
+            return Ok(2);
+        }
+    };
+    super::runtime::pane_close_if(PaneCloseIfParams {
+        pane_id: super::normalize_pane_id(&args[0]),
+        request_id: args[2].clone(),
+        observation,
+    })
+}
+
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
         eprintln!("usage: herdr pane send-text <pane_id> <text>");
@@ -1651,6 +1701,7 @@ fn print_pane_help() {
     eprintln!("  herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
     eprintln!("  herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
     eprintln!("  herdr pane close <pane_id>");
+    eprintln!("  herdr pane close-if <pane_id> --request-id ID --observation-json JSON");
     eprintln!("  herdr pane send-text <pane_id> <text>");
     eprintln!("  herdr pane send-keys <pane_id> <key> [key ...]");
     eprintln!("  herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");

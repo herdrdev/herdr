@@ -54,6 +54,7 @@ pub(crate) struct PlatformCapabilities {
     pub(crate) live_handoff: bool,
     pub(crate) direct_terminal_attach: bool,
     pub(crate) preserve_legacy_doubled_escape_input: bool,
+    pub(crate) pane_close_if: bool,
 }
 
 pub(crate) const fn capabilities() -> PlatformCapabilities {
@@ -61,6 +62,9 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
         live_handoff: cfg!(unix),
         direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
+        // The Windows foreground-job reader currently returns only one selected
+        // process, so it cannot yet prove a complete process-set observation.
+        pane_close_if: cfg!(any(target_os = "linux", target_os = "macos")),
     }
 }
 

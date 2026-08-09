@@ -150,6 +150,11 @@ pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
     None
 }
 
+/// Process generations are unavailable on unsupported platforms.
+pub fn process_generation(_pid: u32) -> Option<String> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn session_processes(_child_pid: u32) -> Vec<u32> {
     Vec::new()

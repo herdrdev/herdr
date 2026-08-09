@@ -1065,6 +1065,9 @@ impl App {
             Method::PaneProcessInfo(params) => {
                 return self.handle_pane_process_info(request.id, params);
             }
+            Method::PaneCloseIf(params) => {
+                return self.handle_pane_close_if(request.id, params);
+            }
             Method::LayoutExport(params) => return self.handle_layout_export(request.id, params),
             Method::LayoutApply(params) => return self.handle_layout_apply(request.id, params),
             Method::LayoutSetSplitRatio(params) => {

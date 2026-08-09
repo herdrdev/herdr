@@ -1,18 +1,43 @@
 use bytes::Bytes;
+use sha2::{Digest, Sha256};
 
 use crate::api::schema::{
-    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCurrentParams,
-    PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
+1:     EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCloseIfOutcome,
+    PaneCurrentParams, PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
     PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
     PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot, PaneLayoutSplit,
     PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason, PaneMoveResult,
     PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
-    PaneProcessInfoProcess, PaneReadParams, PaneReadResult, PaneReleaseAgentParams,
-    PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
-    PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams,
-    PaneSwapReason, PaneSwapResult, PaneTarget, PaneZoomMode, PaneZoomParams, PaneZoomReason,
-    PaneZoomResult, ResponseResult,
+    PaneProcessInfoProcess, PaneProcessObservation, PaneReadParams, PaneReadResult,
+    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams,
+    PaneReportAgentSessionParams, PaneReportMetadataParams, PaneResizeParams, PaneResizeReason,
+    PaneResizeResult, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
+    PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneZoomMode,
+    PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
+2:     Method, OutputMatch, PaneCloseIfParams, PaneCurrentParams, PaneDirection, PaneEdgesParams,
+    PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
+    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams,
+    PaneProcessObservation, PaneReadParams, PaneReleaseAgentParams, PaneRenameParams,
+    PaneReportAgentParams, PaneReportAgentSessionParams, PaneReportMetadataParams,
+    PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
+3:     EmptyParams, Method, PaneCloseIfParams, PaneFocusDirectionParams, PaneInputSetParams,
+    PaneMoveParams,
+4:     build_info::initialize();
+    let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}");
+            eprintln!("run 'herdr --help' for usage");
+            std::process::exit(2);
+        }
+    };
+5: /// Return the native process creation-time generation for PID-reuse resistance.
+pub fn process_generation(pid: u32) -> Option<String> {
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    process_creation_time(process.0).map(|value| value.to_string())
+}
+
+fn select_pane_foreground_job_from_snapshot(
 };
 use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
 use crate::app::App;
@@ -27,6 +52,232 @@ use super::super::api_helpers::{
 #[cfg(test)]
 use super::super::api_helpers::{METADATA_SOURCE_MAX_CHARS, METADATA_TTL_MAX_MS};
 use super::responses::{encode_error, encode_success};
+
+const PANE_PROCESS_OBSERVATION_VERSION: u32 = 1;
+const MAX_PROCESS_EVIDENCE: usize = 64;
+const MAX_PROCESS_FIELD_BYTES: usize = 4096;
+
+fn digest_bytes(bytes: impl AsRef<[u8]>) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
+}
+
+fn generation_digest(raw: Option<&str>) -> String {
+    let mut bytes = Vec::new();
+    hash_field_bytes(&mut bytes, raw.unwrap_or_default());
+    digest_bytes(bytes)
+}
+
+fn hash_field_bytes(output: &mut Vec<u8>, field: &str) {
+    output.extend_from_slice(&(field.len() as u64).to_le_bytes());
+    output.extend_from_slice(field.as_bytes());
+}
+
+fn process_generation_digest(processes: &[PaneProcessInfoProcess]) -> String {
+    let mut bytes = Vec::new();
+    let mut sorted = processes.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|process| process.pid);
+    bytes.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
+    for process in sorted {
+        bytes.extend_from_slice(&process.pid.to_le_bytes());
+        hash_field_bytes(&mut bytes, &process.generation);
+    }
+    digest_bytes(bytes)
+}
+
+/// Version 1 canonical bytes are length-prefixed UTF-8 fields (u64 little-endian)
+/// and fixed-width little-endian integer fields. Every raw process field,
+/// optional identity, process ordering key, and generation is covered.
+pub(crate) fn canonical_process_fingerprint(
+    pane_id: &str,
+    terminal_id: &str,
+    revision: u64,
+    shell_pid: Option<u32>,
+    shell_generation: Option<&str>,
+    foreground_process_group_id: Option<u32>,
+    foreground_process_generation: Option<&str>,
+    processes: &[PaneProcessInfoProcess],
+) -> String {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&PANE_PROCESS_OBSERVATION_VERSION.to_le_bytes());
+    hash_field_bytes(&mut bytes, pane_id);
+    hash_field_bytes(&mut bytes, terminal_id);
+    bytes.extend_from_slice(&revision.to_le_bytes());
+    hash_optional_pid_bytes(&mut bytes, shell_pid);
+    hash_field_bytes(&mut bytes, shell_generation.unwrap_or_default());
+    hash_optional_pid_bytes(&mut bytes, foreground_process_group_id);
+    hash_field_bytes(
+        &mut bytes,
+        foreground_process_generation.unwrap_or_default(),
+    );
+    let mut sorted = processes.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|process| process.pid);
+    bytes.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
+    for process in sorted {
+        bytes.extend_from_slice(&process.pid.to_le_bytes());
+        hash_field_bytes(&mut bytes, &process.generation);
+        hash_field_bytes(&mut bytes, &process.name);
+        hash_field_bytes(&mut bytes, process.argv0.as_deref().unwrap_or_default());
+        let argv = process.argv.as_deref().unwrap_or_default();
+        bytes.extend_from_slice(&(argv.len() as u64).to_le_bytes());
+        for item in argv {
+            hash_field_bytes(&mut bytes, item);
+        }
+        hash_field_bytes(&mut bytes, process.cmdline.as_deref().unwrap_or_default());
+        hash_field_bytes(&mut bytes, process.cwd.as_deref().unwrap_or_default());
+    }
+    digest_bytes(bytes)
+}
+
+fn hash_optional_pid_bytes(output: &mut Vec<u8>, value: Option<u32>) {
+    output.push(u8::from(value.is_some()));
+    if let Some(value) = value {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn pane_process_observation(
+    pane_id: &str,
+    terminal_id: &str,
+    revision: u64,
+    shell_pid: Option<u32>,
+    foreground_process_group_id: Option<u32>,
+    processes: &[PaneProcessInfoProcess],
+) -> (PaneProcessObservation, bool) {
+    let shell_generation_raw = shell_pid.and_then(crate::platform::process_generation);
+    let foreground_generation_raw =
+        foreground_process_group_id.and_then(crate::platform::process_generation);
+    let shell_generation = shell_generation_raw
+        .as_deref()
+        .map(|raw| generation_digest(Some(raw)));
+    let foreground_generation = foreground_generation_raw
+        .as_deref()
+        .map(|raw| generation_digest(Some(raw)));
+    let process_generation = process_generation_digest(processes);
+    let process_fingerprint = canonical_process_fingerprint(
+        pane_id,
+        terminal_id,
+        revision,
+        shell_pid,
+        shell_generation.as_deref(),
+        foreground_process_group_id,
+        foreground_generation.as_deref(),
+        processes,
+    );
+    let supported = shell_pid.is_none_or(|_| shell_generation_raw.is_some())
+        && foreground_process_group_id.is_none_or(|_| foreground_generation_raw.is_some())
+        && processes
+            .iter()
+            .all(|process| process.generation.len() == 64);
+    (
+        PaneProcessObservation {
+            fingerprint_version: PANE_PROCESS_OBSERVATION_VERSION,
+            pane_id: pane_id.to_string(),
+            terminal_id: terminal_id.to_string(),
+            revision,
+            process_generation,
+            shell_pid,
+            shell_generation,
+            foreground_process_group_id,
+            foreground_process_generation: foreground_generation,
+            process_fingerprint,
+        },
+        supported,
+    )
+}
+
+impl App {
+    fn current_pane_process_info(
+        &self,
+        ws_idx: usize,
+        pane_id: PaneId,
+    ) -> Option<(PaneProcessInfo, bool)> {
+        let (runtime, _workspace_id) = self.lookup_runtime(ws_idx, pane_id)?;
+        let public_pane_id = self.public_pane_id(ws_idx, pane_id)?;
+        let terminal_id = self
+            .state
+            .terminal_id_for_pane(ws_idx, pane_id)?
+            .to_string();
+        let revision = self.pane_info(ws_idx, pane_id)?.revision;
+        let shell_pid = runtime.child_pid();
+        let foreground_job = shell_pid.and_then(crate::detect::foreground_job);
+        let foreground_process_group_id = foreground_job.as_ref().map(|job| job.process_group_id);
+        let mut supported = shell_pid.is_none() || foreground_job.is_some();
+        let foreground_processes = foreground_job
+            .map(|job| {
+                if job.processes.len() > MAX_PROCESS_EVIDENCE {
+                    supported = false;
+                    return Vec::new();
+                }
+                job.processes
+                    .into_iter()
+                    .filter_map(|process| {
+                        let generation = crate::platform::process_generation(process.pid);
+                        let cwd = crate::platform::process_cwd(process.pid)
+                            .map(|cwd| cwd.display().to_string());
+                        let fields_ok = process.name.len() <= MAX_PROCESS_FIELD_BYTES
+                            && process
+                                .argv0
+                                .as_ref()
+                                .is_none_or(|v| v.len() <= MAX_PROCESS_FIELD_BYTES)
+                            && process.argv.as_ref().is_none_or(|argv| {
+                                argv.iter().all(|v| v.len() <= MAX_PROCESS_FIELD_BYTES)
+                            })
+                            && process
+                                .cmdline
+                                .as_ref()
+                                .is_none_or(|v| v.len() <= MAX_PROCESS_FIELD_BYTES)
+                            && cwd
+                                .as_ref()
+                                .is_none_or(|v| v.len() <= MAX_PROCESS_FIELD_BYTES);
+                        if !fields_ok {
+                            supported = false;
+                            return None;
+                        }
+                        if generation.is_none() {
+                            supported = false;
+                        }
+                        Some(PaneProcessInfoProcess {
+                            pid: process.pid,
+                            generation: generation_digest(generation.as_deref()),
+                            name: process.name,
+                            argv0: process.argv0,
+                            argv: process.argv,
+                            cmdline: process.cmdline,
+                            cwd,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let (observation, generation_supported) = pane_process_observation(
+            &public_pane_id,
+            &terminal_id,
+            revision,
+            shell_pid,
+            foreground_process_group_id,
+            &foreground_processes,
+        );
+        Some((
+            PaneProcessInfo {
+                pane_id: public_pane_id,
+                terminal_id,
+                revision,
+                observation,
+                shell_pid,
+                foreground_process_group_id,
+                tty: None,
+                foreground_processes,
+            },
+            supported && generation_supported && crate::platform::capabilities().pane_close_if,
+        ))
+    }
+}
 
 impl App {
     pub(super) fn handle_pane_split(&mut self, id: String, params: PaneSplitParams) -> String {
@@ -208,44 +459,106 @@ impl App {
         let Some((ws_idx, pane_id)) = self.resolve_optional_pane(params.pane_id.as_deref()) else {
             return encode_error(id, "pane_not_found", "pane not found");
         };
-        let Some((runtime, _workspace_id)) = self.lookup_runtime(ws_idx, pane_id) else {
+        let Some((process_info, _supported)) = self.current_pane_process_info(ws_idx, pane_id)
+        else {
             return encode_error(id, "pane_not_found", "pane not found");
         };
-        let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) else {
-            return encode_error(id, "pane_not_found", "pane not found");
-        };
-        let shell_pid = runtime.child_pid();
-        let foreground_job = shell_pid.and_then(crate::detect::foreground_job);
-        let foreground_process_group_id = foreground_job.as_ref().map(|job| job.process_group_id);
-        let foreground_processes = foreground_job
-            .map(|job| {
-                job.processes
-                    .into_iter()
-                    .map(|process| PaneProcessInfoProcess {
-                        pid: process.pid,
-                        name: process.name,
-                        argv0: process.argv0,
-                        argv: process.argv,
-                        cmdline: process.cmdline,
-                        cwd: crate::platform::process_cwd(process.pid)
-                            .map(|cwd| cwd.display().to_string()),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        encode_success(id, ResponseResult::PaneProcessInfo { process_info })
+    }
 
-        encode_success(
-            id,
-            ResponseResult::PaneProcessInfo {
-                process_info: PaneProcessInfo {
-                    pane_id: public_pane_id,
-                    shell_pid,
-                    foreground_process_group_id,
-                    tty: None,
-                    foreground_processes,
+    pub(super) fn handle_pane_close_if(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PaneCloseIfParams,
+    ) -> String {
+        if params.pane_id.len() > 256 {
+            return encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::NotFound {},
                 },
+            );
+        }
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::NotFound {},
+                },
+            );
+        };
+        let Some((process_info, supported)) = self.current_pane_process_info(ws_idx, pane_id)
+        else {
+            return encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::NotFound {},
+                },
+            );
+        };
+        if !supported {
+            return encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::Unsupported {},
+                },
+            );
+        }
+        let valid_digest = |value: &str| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        };
+        let observation_valid = !params.request_id.is_empty()
+            && params.request_id.len() <= 256
+            && params.observation.fingerprint_version == PANE_PROCESS_OBSERVATION_VERSION
+            && params.observation.pane_id.len() <= 256
+            && params.observation.terminal_id.len() <= 256
+            && valid_digest(&params.observation.process_generation)
+            && valid_digest(&params.observation.process_fingerprint)
+            && params
+                .observation
+                .shell_generation
+                .as_deref()
+                .is_none_or(valid_digest)
+            && params
+                .observation
+                .foreground_process_generation
+                .as_deref()
+                .is_none_or(valid_digest)
+            && params.observation == process_info.observation;
+        if !observation_valid {
+            return encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::PreconditionFailed {
+                        current: process_info.observation,
+                    },
+                },
+            );
+        }
+
+        let receipt = crate::api::schema::PaneCloseReceipt {
+            request_id: params.request_id.clone(),
+            pane_id: process_info.pane_id.clone(),
+            terminal_id: process_info.observation.terminal_id.clone(),
+            observation: process_info.observation.clone(),
+        };
+        match self.close_pane(
+            id.clone(),
+            &crate::api::schema::PaneTarget {
+                pane_id: params.pane_id,
             },
-        )
+        ) {
+            Ok(()) => encode_success(
+                id,
+                ResponseResult::PaneCloseIf {
+                    outcome: PaneCloseIfOutcome::Closed { receipt },
+                },
+            ),
+            Err(response) => response,
+        }
     }
 
     pub(super) fn handle_pane_neighbor(
@@ -1908,6 +2221,68 @@ mod tests {
         workspace::Workspace,
     };
 
+    #[test]
+    fn canonical_process_fingerprint_v1_vector_is_stable() {
+        let process = PaneProcessInfoProcess {
+            pid: 42,
+            generation: "gen".into(),
+            name: "sh".into(),
+            argv0: Some("sh".into()),
+            argv: Some(vec!["-c".into(), "echo".into()]),
+            cmdline: Some("sh -c echo".into()),
+            cwd: Some("/tmp".into()),
+        };
+        assert_eq!(
+            canonical_process_fingerprint(
+                "pane",
+                "term",
+                7,
+                Some(42),
+                Some("shell"),
+                Some(43),
+                Some("fg"),
+                &[process],
+            ),
+            "ed20b7d3f9b23ee99174237c2e9596c0ff6b87b97666816489d05a75b8a4e977"
+        );
+    }
+
+    #[test]
+    fn process_generation_replacement_changes_fingerprint() {
+        let base = PaneProcessInfoProcess {
+            pid: 7,
+            generation: "a".repeat(64),
+            name: "worker".into(),
+            argv0: Some("worker".into()),
+            argv: Some(vec!["worker".into()]),
+            cmdline: Some("worker".into()),
+            cwd: Some("/checkout".into()),
+        };
+        let mut replacement = base.clone();
+        replacement.generation = "b".repeat(64);
+        let first = canonical_process_fingerprint(
+            "pane",
+            "term",
+            1,
+            Some(1),
+            Some("shell"),
+            Some(7),
+            Some("group"),
+            &[base],
+        );
+        let second = canonical_process_fingerprint(
+            "pane",
+            "term",
+            1,
+            Some(1),
+            Some("shell"),
+            Some(7),
+            Some("group"),
+            &[replacement],
+        );
+        assert_ne!(first, second);
+    }
+
     fn app_with_test_workspace() -> (App, String) {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -2288,6 +2663,221 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn pane_process_observation_for(app: &mut App, pane_id: String) -> PaneProcessObservation {
+        let (ws_idx, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        let terminal_id = app
+            .state
+            .terminal_id_for_pane(ws_idx, internal_pane_id)
+            .unwrap()
+            .clone();
+        app.terminal_runtimes.insert(
+            terminal_id,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+        );
+
+        let response = app.handle_pane_process_info(
+            "observe".into(),
+            PaneProcessInfoParams {
+                pane_id: Some(pane_id),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneProcessInfo { process_info } = success.result else {
+            panic!("expected pane process info response");
+        };
+        process_info.observation
+    }
+
+    #[tokio::test]
+    async fn api_pane_close_if_exact_match_echoes_receipt_and_removes_pane() {
+        let (mut app, _) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let _other_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let public_pane_id = app.public_pane_id(0, target_pane).unwrap();
+        let observation = pane_process_observation_for(&mut app, public_pane_id.clone());
+
+        let response = app.handle_pane_close_if(
+            "close-if-request".into(),
+            crate::api::schema::PaneCloseIfParams {
+                pane_id: public_pane_id.clone(),
+                request_id: "close-if-attempt".into(),
+                observation: observation.clone(),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.id, "close-if-request");
+        let ResponseResult::PaneCloseIf {
+            outcome: PaneCloseIfOutcome::Closed { receipt },
+        } = success.result
+        else {
+            panic!("expected pane close_if closed response");
+        };
+        assert_eq!(receipt.request_id, "close-if-attempt");
+        assert_eq!(receipt.pane_id, public_pane_id);
+        assert_eq!(receipt.terminal_id, observation.terminal_id);
+        assert_eq!(receipt.observation, observation);
+        assert!(app.pane_info(0, target_pane).is_none());
+        assert!(app.state.workspaces[0]
+            .find_tab_index_for_pane(target_pane)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn api_pane_close_if_stale_observations_fail_with_current_without_mutation() {
+        let (mut app, _) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let _other_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let public_pane_id = app.public_pane_id(0, target_pane).unwrap();
+        let current = pane_process_observation_for(&mut app, public_pane_id.clone());
+
+        for mismatch in 0..4 {
+            let mut stale = current.clone();
+            match mismatch {
+                0 => stale.terminal_id = "stale-terminal".into(),
+                1 => stale.revision = stale.revision.saturating_add(1),
+                2 => stale.process_generation = "f".repeat(64),
+                3 => stale.process_fingerprint = "e".repeat(64),
+                _ => unreachable!(),
+            }
+
+            let response = app.handle_pane_close_if(
+                format!("stale-{mismatch}"),
+                crate::api::schema::PaneCloseIfParams {
+                    pane_id: public_pane_id.clone(),
+                    request_id: format!("stale-request-{mismatch}"),
+                    observation: stale,
+                },
+            );
+
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(success.id, format!("stale-{mismatch}"));
+            let ResponseResult::PaneCloseIf {
+                outcome: PaneCloseIfOutcome::PreconditionFailed { current: observed },
+            } = success.result
+            else {
+                panic!("expected pane close_if precondition failure for mismatch {mismatch}");
+            };
+            assert_eq!(observed, current);
+            assert!(app.pane_info(0, target_pane).is_some());
+            assert!(app.state.workspaces[0]
+                .find_tab_index_for_pane(target_pane)
+                .is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn api_pane_close_if_empty_request_id_fails_without_mutation() {
+        let (mut app, _) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let _other_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let public_pane_id = app.public_pane_id(0, target_pane).unwrap();
+        let observation = pane_process_observation_for(&mut app, public_pane_id.clone());
+
+        let response = app.handle_pane_close_if(
+            "empty-request-id".into(),
+            crate::api::schema::PaneCloseIfParams {
+                pane_id: public_pane_id,
+                request_id: String::new(),
+                observation: observation.clone(),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneCloseIf {
+            outcome: PaneCloseIfOutcome::PreconditionFailed { current },
+        } = success.result
+        else {
+            panic!("expected pane close_if precondition failure");
+        };
+        assert_eq!(current, observation);
+        assert!(app.pane_info(0, target_pane).is_some());
+        assert!(app.state.workspaces[0]
+            .find_tab_index_for_pane(target_pane)
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn api_pane_close_if_missing_pane_reports_not_found_without_mutation() {
+        let (mut app, _) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let public_pane_id = app.public_pane_id(0, target_pane).unwrap();
+        let observation = pane_process_observation_for(&mut app, public_pane_id);
+
+        let response = app.handle_pane_close_if(
+            "missing-close-if".into(),
+            crate::api::schema::PaneCloseIfParams {
+                pane_id: "not-a-pane".into(),
+                request_id: "missing-request".into(),
+                observation,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.id, "missing-close-if");
+        assert!(matches!(
+            success.result,
+            ResponseResult::PaneCloseIf {
+                outcome: PaneCloseIfOutcome::NotFound {}
+            }
+        ));
+        assert!(app.pane_info(0, target_pane).is_some());
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[tokio::test]
+    async fn api_pane_close_if_unsupported_reports_outcome_without_mutation() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let observation = pane_process_observation_for(&mut app, public_pane_id.clone());
+
+        let response = app.handle_pane_close_if(
+            "unsupported-close-if".into(),
+            crate::api::schema::PaneCloseIfParams {
+                pane_id: public_pane_id,
+                request_id: "unsupported-request".into(),
+                observation,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::PaneCloseIf {
+                outcome: PaneCloseIfOutcome::Unsupported {}
+            }
+        ));
+        assert!(app.pane_info(0, target_pane).is_some());
+    }
+
+    #[tokio::test]
+    async fn api_pane_close_legacy_still_closes_target_pane() {
+        let (mut app, _) = app_with_test_workspace();
+        let target_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let _other_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let public_pane_id = app.public_pane_id(0, target_pane).unwrap();
+
+        let response = app.handle_pane_close(
+            "legacy-close".into(),
+            PaneTarget {
+                pane_id: public_pane_id,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.id, "legacy-close");
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert!(app.pane_info(0, target_pane).is_none());
     }
 
     #[test]

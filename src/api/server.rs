@@ -66,6 +66,9 @@ pub fn start_server(
         Some(ServerCapabilities {
             live_handoff: crate::platform::capabilities().live_handoff,
             detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
+            conditional_mutations: crate::api::schema::ConditionalMutations {
+                pane_close: u32::from(crate::platform::capabilities().pane_close_if),
+            },
         }),
     )
 }
@@ -324,7 +327,12 @@ fn handle_request(
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
-                capabilities,
+                capabilities: capabilities.unwrap_or_default(),
+                build_identity: crate::api::schema::BuildIdentity {
+                    source_commit: crate::build_info::source_commit().map(str::to_string),
+                    executable_sha256: crate::build_info::executable_sha256(),
+                    release_manifest_digest: crate::build_info::release_manifest_digest(),
+                },
             },
         })
         .unwrap_or_else(|_| {
@@ -383,6 +391,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneSwap(_) => "pane.swap",
         Method::PaneMove(_) => "pane.move",
         Method::PaneZoom(_) => "pane.zoom",
+        Method::PaneCloseIf(_) => "pane.close_if",
         Method::PaneLayout(_) => "pane.layout",
         Method::PaneProcessInfo(_) => "pane.process_info",
         Method::LayoutExport(_) => "layout.export",
@@ -1037,6 +1046,7 @@ mod tests {
             Some(ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                conditional_mutations: crate::api::schema::ConditionalMutations { pane_close: 1 },
             }),
             None,
         );
@@ -1044,6 +1054,38 @@ mod tests {
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    #[test]
+    fn ping_exposes_versioned_capability_and_build_identity_keys() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let response = handle_request(
+            Request {
+                id: "req_identity".into(),
+                method: Method::Ping(crate::api::schema::PingParams::default()),
+            },
+            &tx,
+            Some(ServerCapabilities {
+                live_handoff: false,
+                detached_server_daemon: false,
+                conditional_mutations: crate::api::schema::ConditionalMutations { pane_close: 1 },
+            }),
+            None,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            value["result"]["capabilities"]["conditional_mutations"]["pane_close"],
+            1
+        );
+        assert!(value["result"]["build_identity"]
+            .get("source_commit")
+            .is_some());
+        assert!(value["result"]["build_identity"]
+            .get("executable_sha256")
+            .is_some());
+        assert!(value["result"]["build_identity"]
+            .get("release_manifest_digest")
+            .is_some());
     }
 
     #[test]

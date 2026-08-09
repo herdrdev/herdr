@@ -75,6 +75,7 @@ enum ServerRuntimeStatus {
         version: Option<String>,
         protocol: Option<u32>,
         capabilities: Option<crate::api::schema::ServerCapabilities>,
+        build_identity: Option<crate::api::schema::BuildIdentity>,
     },
     NotRunning,
 }
@@ -151,13 +152,13 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
         }
     }
 }
-
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
     match ApiClient::local().status() {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,
             capabilities: status.capabilities,
+            build_identity: status.build_identity,
         }),
         Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
             Ok(ServerRuntimeStatus::NotRunning)
@@ -192,13 +193,10 @@ fn compatibility_label(protocol: Option<u32>) -> &'static str {
 }
 
 fn restart_needed_label(server: &ServerRuntimeStatus) -> &'static str {
-    match server {
-        ServerRuntimeStatus::Running { version, .. } => match version.as_deref() {
-            Some(version) if version == crate::build_info::version() => "no",
-            Some(_) => "yes",
-            None => "unknown",
-        },
-        ServerRuntimeStatus::NotRunning => "no",
+    match restart_needed_bool(server) {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
     }
 }
 
@@ -216,6 +214,9 @@ struct ClientStatusJson {
     protocol: u32,
     binary: String,
     session: Option<String>,
+    source_commit: Option<String>,
+    executable_sha256: Option<String>,
+    release_manifest_digest: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -229,12 +230,21 @@ struct ServerStatusJson {
     socket: String,
     session: Option<String>,
     restart_needed: Option<bool>,
+    source_commit: Option<String>,
+    executable_sha256: Option<String>,
+    release_manifest_digest: Option<String>,
 }
 
 #[derive(Serialize)]
 struct ServerCapabilitiesJson {
     live_handoff: bool,
     detached_server_daemon: bool,
+    conditional_mutations: ConditionalMutationsJson,
+}
+
+#[derive(Serialize)]
+struct ConditionalMutationsJson {
+    pane_close: u32,
 }
 
 #[derive(Serialize)]
@@ -249,6 +259,9 @@ fn client_status_json() -> ClientStatusJson {
         protocol: crate::protocol::PROTOCOL_VERSION,
         binary: current_exe_label(),
         session: crate::session::active_name(),
+        source_commit: crate::build_info::source_commit().map(str::to_string),
+        executable_sha256: crate::build_info::executable_sha256(),
+        release_manifest_digest: crate::build_info::release_manifest_digest(),
     }
 }
 
@@ -258,6 +271,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             version,
             protocol,
             capabilities,
+            build_identity,
         } => ServerStatusJson {
             status: "running",
             running: true,
@@ -268,11 +282,23 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                 .map(|capabilities| ServerCapabilitiesJson {
                     live_handoff: capabilities.live_handoff,
                     detached_server_daemon: capabilities.detached_server_daemon,
+                    conditional_mutations: ConditionalMutationsJson {
+                        pane_close: capabilities.conditional_mutations.pane_close,
+                    },
                 }),
             compatible: protocol.map(|value| value == crate::protocol::PROTOCOL_VERSION),
             socket: api::socket_path().display().to_string(),
             session: crate::session::active_name(),
             restart_needed: restart_needed_bool(server),
+            source_commit: build_identity
+                .as_ref()
+                .and_then(|identity| identity.source_commit.clone()),
+            executable_sha256: build_identity
+                .as_ref()
+                .and_then(|identity| identity.executable_sha256.clone()),
+            release_manifest_digest: build_identity
+                .as_ref()
+                .and_then(|identity| identity.release_manifest_digest.clone()),
         },
         ServerRuntimeStatus::NotRunning => ServerStatusJson {
             status: "not_running",
@@ -284,6 +310,9 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             socket: api::socket_path().display().to_string(),
             session: crate::session::active_name(),
             restart_needed: Some(false),
+            source_commit: None,
+            executable_sha256: None,
+            release_manifest_digest: None,
         },
     }
 }
@@ -295,13 +324,123 @@ fn update_status_json(server: &ServerRuntimeStatus) -> UpdateStatusJson {
 }
 
 fn restart_needed_bool(server: &ServerRuntimeStatus) -> Option<bool> {
-    match server {
-        ServerRuntimeStatus::Running { version, .. } => match version.as_deref() {
-            Some(version) if version == crate::build_info::version() => Some(false),
-            Some(_) => Some(true),
-            None => None,
-        },
-        ServerRuntimeStatus::NotRunning => Some(false),
+    let ServerRuntimeStatus::Running {
+        version,
+        protocol,
+        capabilities,
+        build_identity,
+    } = server
+    else {
+        return Some(false);
+    };
+    if version.as_deref()? != crate::build_info::version()
+        || (*protocol)? != crate::protocol::PROTOCOL_VERSION
+    {
+        return Some(true);
+    }
+    let expected_pane_close = u32::from(crate::platform::capabilities().pane_close_if);
+    if capabilities
+        .as_ref()
+        .map(|value| value.conditional_mutations.pane_close)?
+        != expected_pane_close
+    {
+        return Some(true);
+    }
+    let server_executable = build_identity.as_ref()?.executable_sha256.as_deref()?;
+    let client_executable = crate::build_info::executable_sha256()?;
+    if server_executable != client_executable {
+        return Some(true);
+    }
+    if let (Some(server_manifest), Some(client_manifest)) = (
+        build_identity
+            .as_ref()
+            .and_then(|value| value.release_manifest_digest.as_deref()),
+        crate::build_info::release_manifest_digest(),
+    ) {
+        if server_manifest != client_manifest {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_status_json_keeps_absent_build_identity_keys_visible() {
+        let status = server_status_json(&ServerRuntimeStatus::Running {
+            version: Some("0.1.0".into()),
+            protocol: Some(crate::protocol::PROTOCOL_VERSION),
+            capabilities: Some(crate::api::schema::ServerCapabilities {
+                live_handoff: true,
+                detached_server_daemon: false,
+                conditional_mutations: crate::api::schema::ConditionalMutations { pane_close: 1 },
+            }),
+            build_identity: Some(crate::api::schema::BuildIdentity::default()),
+        });
+        let json = serde_json::to_value(status).unwrap();
+        assert!(json.get("source_commit").is_some());
+        assert!(json.get("executable_sha256").is_some());
+        assert!(json.get("release_manifest_digest").is_some());
+        assert!(json["source_commit"].is_null());
+    }
+
+    #[test]
+    fn restart_needed_bool_requires_a_full_runtime_match() {
+        let executable_sha256 =
+            crate::build_info::executable_sha256().expect("test executable has an identity");
+        let matching_capabilities = crate::api::schema::ServerCapabilities {
+            conditional_mutations: crate::api::schema::ConditionalMutations {
+                pane_close: u32::from(crate::platform::capabilities().pane_close_if),
+            },
+            ..Default::default()
+        };
+        let matching_identity = crate::api::schema::BuildIdentity {
+            executable_sha256: Some(executable_sha256.clone()),
+            ..Default::default()
+        };
+        let matching = ServerRuntimeStatus::Running {
+            version: Some(crate::build_info::version()),
+            protocol: Some(crate::protocol::PROTOCOL_VERSION),
+            capabilities: Some(matching_capabilities),
+            build_identity: Some(matching_identity),
+        };
+        assert_eq!(restart_needed_bool(&matching), Some(false));
+
+        let mut protocol_mismatch = matching.clone();
+        if let ServerRuntimeStatus::Running { protocol, .. } = &mut protocol_mismatch {
+            *protocol = Some(crate::protocol::PROTOCOL_VERSION + 1);
+        }
+        assert_eq!(restart_needed_bool(&protocol_mismatch), Some(true));
+
+        let mut capability_mismatch = matching.clone();
+        if let ServerRuntimeStatus::Running { capabilities, .. } = &mut capability_mismatch {
+            capabilities
+                .as_mut()
+                .unwrap()
+                .conditional_mutations
+                .pane_close += 1;
+        }
+        assert_eq!(restart_needed_bool(&capability_mismatch), Some(true));
+
+        let mut identity_mismatch = matching.clone();
+        if let ServerRuntimeStatus::Running { build_identity, .. } = &mut identity_mismatch {
+            build_identity.as_mut().unwrap().executable_sha256 =
+                Some(if executable_sha256 == "0".repeat(64) {
+                    "1".repeat(64)
+                } else {
+                    "0".repeat(64)
+                });
+        }
+        assert_eq!(restart_needed_bool(&identity_mismatch), Some(true));
+
+        let mut missing_identity = matching;
+        if let ServerRuntimeStatus::Running { build_identity, .. } = &mut missing_identity {
+            *build_identity = Some(crate::api::schema::BuildIdentity::default());
+        }
+        assert_eq!(restart_needed_bool(&missing_identity), None);
     }
 }
 

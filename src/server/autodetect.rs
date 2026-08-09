@@ -513,6 +513,14 @@ test "$sid" = "$$"
         let _ = handle.join();
         assert_eq!(status.version.as_deref(), Some("0.5.5"));
         assert_eq!(status.protocol, Some(2));
+        assert_eq!(
+            status.capabilities,
+            Some(crate::api::schema::ServerCapabilities::default())
+        );
+        assert_eq!(
+            status.build_identity,
+            Some(crate::api::schema::BuildIdentity::default())
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
