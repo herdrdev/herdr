@@ -214,8 +214,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
-        "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
-        _ if name.starts_with("muse") => Some(Agent::Muse),
+        "muse" | "muse-bin" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         _ => None,
     }
 }
@@ -773,6 +772,10 @@ mod tests {
         assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
         assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+        assert_eq!(identify_agent("muse"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-bin"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-code"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
     }
 
     #[test]
@@ -887,6 +890,9 @@ mod tests {
         assert_eq!(identify_agent("zsh"), None);
         assert_eq!(identify_agent("vim"), None);
         assert_eq!(identify_agent("node"), None);
+        assert_eq!(identify_agent("museum"), None);
+        assert_eq!(identify_agent("muse-helper"), None);
+        assert_eq!(identify_agent("muser"), None);
     }
 
     #[test]
