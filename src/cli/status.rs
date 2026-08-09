@@ -364,6 +364,23 @@ fn restart_needed_bool(server: &ServerRuntimeStatus) -> Option<bool> {
     Some(false)
 }
 
+fn print_json(value: &impl Serialize) -> std::io::Result<()> {
+    println!("{}", serde_json::to_string(value)?);
+    Ok(())
+}
+
+fn current_exe_label() -> String {
+    std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|err| format!("unknown ({err})"))
+}
+
+fn print_status_help() {
+    eprintln!("herdr status commands:");
+    eprintln!("  herdr status [--json]         show local client and running server status");
+    eprintln!("  herdr status server [--json]  show running server status");
+    eprintln!("  herdr status client [--json]  show local client binary status");
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,22 +459,4 @@ mod tests {
         }
         assert_eq!(restart_needed_bool(&missing_identity), None);
     }
-}
-
-fn print_json(value: &impl Serialize) -> std::io::Result<()> {
-    println!("{}", serde_json::to_string(value)?);
-    Ok(())
-}
-
-fn current_exe_label() -> String {
-    std::env::current_exe()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|err| format!("unknown ({err})"))
-}
-
-fn print_status_help() {
-    eprintln!("herdr status commands:");
-    eprintln!("  herdr status [--json]         show local client and running server status");
-    eprintln!("  herdr status server [--json]  show running server status");
-    eprintln!("  herdr status client [--json]  show local client binary status");
 }
