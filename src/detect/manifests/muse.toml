@@ -42,7 +42,7 @@ contains = ["Enter to select"]
 id = "working_esc_interrupt"
 state = "working"
 priority = 900
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
 visible_working = true
 contains = ["esc to interrupt"]
 not = [{ contains = ["Enter to select"] }]
@@ -51,7 +51,7 @@ not = [{ contains = ["Enter to select"] }]
 id = "blocked_approval"
 state = "blocked"
 priority = 850
-region = "whole_recent"
+region = "bottom_non_empty_lines(8)"
 visible_blocker = true
 any = [
   { contains = ["Do you want to proceed?"] },
@@ -67,7 +67,7 @@ state = "idle"
 priority = 700
 region = "bottom_non_empty_lines(5)"
 visible_idle = true
-line_regex = ['^\s*⟩']
+line_regex = ['^\s*⟩\s*$']
 not = [{ contains = ["esc to interrupt"] }]
 
 [[rules]]
