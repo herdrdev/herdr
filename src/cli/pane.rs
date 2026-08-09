@@ -31,6 +31,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "input" => pane_input(&args[1..]),
         "split" => pane_split(&args[1..]),
         "swap" => pane_swap(&args[1..]),
+        "move" => pane_move(&args[1..]),
         "close" => pane_close(&args[1..]),
         "close-if" => pane_close_if(&args[1..]),
         "send-text" => pane_send_text(&args[1..]),
