@@ -201,6 +201,28 @@ async fn publish_state_changed_event(
     }
 }
 
+async fn publish_agent_process_detected_event(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Agent,
+    observed_at: std::time::Instant,
+) {
+    if let Err(e) = state_events
+        .send(AppEvent::AgentProcessDetected {
+            pane_id,
+            agent,
+            observed_at,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver AgentProcessDetected event"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPublishUpdate {
     state: AgentState,
@@ -777,21 +799,17 @@ fn spawn_basic_detection_task(
                         // A new foreground agent must not inherit OSC
                         // title/progress evidence from the previous process.
                         terminal.clear_agent_osc_state();
-                        if agent.is_some() {
+                        if let Some(agent) = agent {
                             agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
-                            state = AgentState::Idle;
-                            last_visible_idle = true;
+                            state = AgentState::Unknown;
+                            last_visible_idle = false;
                             last_visible_blocker = false;
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
-                            publish_state_changed_event(
+                            publish_agent_process_detected_event(
                                 state_events.clone(),
                                 pane_id,
                                 agent,
-                                AgentState::Idle,
-                                false,
-                                false,
-                                false,
                                 now,
                             )
                             .await;
@@ -2272,22 +2290,18 @@ impl PaneRuntime {
                                     // A new foreground agent must not inherit OSC
                                     // title/progress evidence from the previous process.
                                     terminal.clear_agent_osc_state();
-                                    if agent.is_some() {
+                                    if let Some(agent) = agent {
                                         agent_startup_grace_until =
                                             Some(now + AGENT_STARTUP_GRACE_WINDOW);
-                                        state = AgentState::Idle;
-                                        last_visible_idle = true;
+                                        state = AgentState::Unknown;
+                                        last_visible_idle = false;
                                         last_visible_blocker = false;
                                         last_visible_working = false;
                                         last_visible_signal_refresh = None;
-                                        publish_state_changed_event(
+                                        publish_agent_process_detected_event(
                                             state_events.clone(),
                                             pane_id,
                                             agent,
-                                            AgentState::Idle,
-                                            false,
-                                            false,
-                                            false,
                                             now,
                                         )
                                         .await;

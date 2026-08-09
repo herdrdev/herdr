@@ -65,6 +65,7 @@ enum ManagedAgentPhase {
         deadline: Instant,
         observed_expected: bool,
     },
+    Blocked,
     Active,
 }
 
@@ -144,6 +145,7 @@ pub struct TerminalState {
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
+    agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
 }
 
@@ -177,8 +179,41 @@ impl TerminalState {
             launch_argv: None,
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
+            agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
+    }
+
+    pub fn set_detected_agent_process_at(
+        &mut self,
+        agent: Agent,
+        now: Instant,
+    ) -> TerminalStateMutation {
+        let starts_acquisition = !self
+            .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
+            && !self.detected_state_observed_before_release_suppression(Some(agent), now);
+        let mutation = self.set_detected_state_with_screen_signals_at(
+            Some(agent),
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            now,
+        );
+        if starts_acquisition {
+            self.agent_process_acquisition_pending = true;
+        }
+        mutation
+    }
+
+    pub(crate) fn finish_agent_process_acquisition(&mut self) -> bool {
+        let reached_idle = self.agent_process_acquisition_pending && self.state == AgentState::Idle;
+        let suppress_completion = reached_idle && self.recent_agent_process_exit.is_none();
+        if reached_idle {
+            self.agent_process_acquisition_pending = false;
+        }
+        suppress_completion
     }
 
     pub(crate) fn terminal_title_stripped(&self) -> Option<String> {
@@ -1818,8 +1853,12 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.managed_agent
-            .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Pending { .. }))
+        self.managed_agent.is_some_and(|managed| {
+            matches!(
+                managed.phase,
+                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+            )
+        })
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
@@ -1852,7 +1891,7 @@ impl TerminalState {
             ManagedAgentPhase::Pending {
                 observed_expected, ..
             } => observed_expected || known_agent == Some(managed.kind),
-            ManagedAgentPhase::Active => false,
+            ManagedAgentPhase::Blocked | ManagedAgentPhase::Active => false,
         };
         let clear = process_exited
             || known_agent.is_some_and(|agent| agent != managed.kind)
@@ -1863,20 +1902,35 @@ impl TerminalState {
             self.clear_agent_name();
             return true;
         }
+        if managed.phase == ManagedAgentPhase::Blocked {
+            if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
+                self.managed_agent = Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::Active,
+                });
+                return true;
+            }
+            return false;
+        }
         if let ManagedAgentPhase::Pending {
             ready_after,
             deadline,
             observed_expected: previous_observed_expected,
         } = managed.phase
         {
+            if known_agent == Some(managed.kind) && self.state == AgentState::Blocked {
+                self.managed_agent = Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::Blocked,
+                });
+                return true;
+            }
             if now >= deadline {
                 self.clear_agent_name();
                 return true;
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {
-                if known_agent == Some(managed.kind)
-                    && matches!(self.state, AgentState::Idle | AgentState::Blocked)
-                {
+                if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
                     self.managed_agent = Some(ManagedAgent {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
@@ -1944,6 +1998,7 @@ impl TerminalState {
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
+        self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();
     }
@@ -2084,7 +2139,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_activates_only_after_matching_settled_detection() {
+    fn managed_agent_readiness_tracks_detection_state() {
         let mut terminal = test_terminal();
         let now = Instant::now();
         terminal.begin_managed_agent(
@@ -2094,23 +2149,35 @@ mod tests {
             Duration::from_millis(100),
             Duration::from_secs(1),
         );
-        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Unknown);
 
         assert!(terminal.managed_agent_launch_pending());
         assert!(!terminal.managed_agent_interactive_ready());
         assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(100), false));
-        assert!(!terminal.managed_agent_launch_pending());
-        assert!(terminal.managed_agent_interactive_ready());
-        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert!(terminal.managed_agent_launch_pending());
 
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_millis(101), false));
+
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Blocked);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(102), false));
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
+        assert!(!terminal.managed_agent_launch_pending());
         assert!(terminal.managed_agent_interactive_ready());
 
         terminal.set_detected_state(None, AgentState::Unknown);
         assert!(terminal.managed_agent_interactive_ready());
-        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_millis(101), false));
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
         assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
-        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(102), true));
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), true));
         assert_eq!(terminal.agent_name, None);
     }
 
@@ -5235,6 +5302,7 @@ mod tests {
             session_ref: crate::agent_resume::AgentSessionRef::id("codex-session").unwrap(),
         });
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.set_detected_agent_process_at(Agent::Codex, Instant::now());
 
         terminal.clear_agent_runtime_identity_after_respawn();
 
@@ -5243,6 +5311,7 @@ mod tests {
         assert!(terminal.agent_name.is_none());
         assert!(terminal.persisted_agent_session.is_none());
         assert!(!terminal.respawn_shell_on_exit);
+        assert!(!terminal.finish_agent_process_acquisition());
     }
 
     #[test]

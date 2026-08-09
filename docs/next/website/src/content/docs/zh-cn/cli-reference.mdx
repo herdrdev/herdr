@@ -287,7 +287,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 `agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli` 和 `maki`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
 
-start 只有在预期智能体占用同一终端并可接受交互输入后才返回。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
+成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
 `agent prompt` 遵循当前的 bracketed paste 模式，即使智能体处于 working 也会原子地提交文本和编码后的 Enter。使用 `--wait` 时，从非 working 状态发送的提示必须在五秒内产生可观察的生命周期变化，否则 Herdr 返回 `agent_prompt_stalled`；调用方超时不超过五秒时，仍返回普通的 `timeout` 错误。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 

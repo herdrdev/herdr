@@ -1890,7 +1890,7 @@ impl HeadlessServer {
         let suppress_active_tab_notifications =
             self.active_tab_suppresses_notifications(is_active_tab);
 
-        if self.app.state.sound.allows(update.known_agent) {
+        if !update.suppress_completion && self.app.state.sound.allows(update.known_agent) {
             if let Some(sound) =
                 crate::app::actions::notification_sound_for_state_change_with_agent_labels(
                     suppress_active_tab_notifications,
@@ -2166,7 +2166,11 @@ impl HeadlessServer {
                 // Headless mode disables local sound playback separately from the
                 // sound policy so reloads can keep server-side notification policy live.
                 self.sync_foreground_client_state();
-                self.app.handle_internal_event(ev);
+                let suppress_completion = self
+                    .app
+                    .handle_internal_event_with_pane_updates(ev)
+                    .iter()
+                    .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
 
                 // Forward sound notification to clients when server-side sound policy allows it.
                 let is_active_tab = self
@@ -2185,7 +2189,8 @@ impl HeadlessServer {
                 let next_state = self.pane_effective_state(pane_id_val);
                 let next_agent_label = self.pane_effective_agent_label(pane_id_val);
 
-                if self.app.state.toast_config.delay_seconds == 0
+                if !suppress_completion
+                    && self.app.state.toast_config.delay_seconds == 0
                     && self.app.state.sound.allows(agent_val)
                 {
                     if let Some(sound) =
@@ -2205,7 +2210,8 @@ impl HeadlessServer {
                     }
                 }
 
-                let toast_msg = if self.app.state.toast_config.delay_seconds == 0
+                let toast_msg = if !suppress_completion
+                    && self.app.state.toast_config.delay_seconds == 0
                     && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
                 {
                     if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
@@ -2257,7 +2263,11 @@ impl HeadlessServer {
                 let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 self.sync_foreground_client_state();
-                self.app.handle_internal_event(ev);
+                let suppress_completion = self
+                    .app
+                    .handle_internal_event_with_pane_updates(ev)
+                    .iter()
+                    .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
 
                 // Forward sound notification based on the effective transition when
                 // server-side sound policy allows it.
@@ -2277,7 +2287,8 @@ impl HeadlessServer {
                 let next_state = self.pane_effective_state(pane_id_val);
                 let next_agent_label = self.pane_effective_agent_label(pane_id_val);
 
-                if self.app.state.toast_config.delay_seconds == 0
+                if !suppress_completion
+                    && self.app.state.toast_config.delay_seconds == 0
                     && self.app.state.sound.allows(agent_val)
                 {
                     if let Some(sound) =
@@ -2297,7 +2308,8 @@ impl HeadlessServer {
                     }
                 }
 
-                let toast_msg = if self.app.state.toast_config.delay_seconds == 0
+                let toast_msg = if !suppress_completion
+                    && self.app.state.toast_config.delay_seconds == 0
                     && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
                 {
                     if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
@@ -10622,6 +10634,65 @@ next_tab = ""
             }
             other => panic!("expected api sound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn startup_idle_does_not_forward_completion() {
+        let mut server = test_headless_server();
+        let workspace = crate::workspace::Workspace::test_new("active");
+        let pane_id = workspace.tabs[0].root_pane;
+        server.app.state.workspaces = vec![workspace];
+        server.app.state.ensure_test_terminals();
+        server.app.state.active = Some(0);
+        server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+        server.app.state.toast_config.delay_seconds = 0;
+        server.app.state.sound.enabled = true;
+
+        assert!(
+            server.handle_internal_event_with_forwarding(AppEvent::AgentProcessDetected {
+                pane_id,
+                agent: crate::detect::Agent::Pi,
+                observed_at: Instant::now(),
+            })
+        );
+
+        let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(false),
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(client_tx),
+            ),
+        );
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+        while client_control_rx
+            .recv_timeout(Duration::from_millis(20))
+            .is_ok()
+        {}
+
+        assert!(
+            server.handle_internal_event_with_forwarding(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(crate::detect::Agent::Pi),
+                state: crate::detect::AgentState::Idle,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: false,
+                observed_at: Instant::now(),
+            })
+        );
+        assert!(
+            client_control_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "startup readiness should not forward a completion notification"
+        );
     }
 
     #[test]

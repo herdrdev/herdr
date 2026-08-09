@@ -1,7 +1,7 @@
 use super::harness::*;
 
 #[test]
-fn agent_start_accepts_durable_readiness_during_detection_gap() {
+fn agent_start_waits_through_unknown_then_rejects_blocked() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
     let socket_path = base.join("herdr.sock");
@@ -55,6 +55,32 @@ fn agent_start_accepts_durable_readiness_during_detection_gap() {
         )
         .unwrap();
         get_stream.flush().unwrap();
+
+        let (mut get_stream, get_line) = accept_fake_cli_operation(&listener);
+        let get: serde_json::Value = serde_json::from_str(&get_line).unwrap();
+        assert_eq!(get["method"], "agent.get");
+        assert_eq!(get["params"]["target"], "reviewer");
+        writeln!(
+            get_stream,
+            "{}",
+            serde_json::json!({
+                "id": get["id"],
+                "result": {
+                    "type": "agent_info",
+                    "agent": {
+                        "agent": "opencode",
+                        "agent_status": "blocked",
+                        "interactive_ready": true,
+                        "launch_pending": false,
+                        "name": "reviewer",
+                        "pane_id": "w1:p1",
+                        "terminal_id": "term_1"
+                    }
+                }
+            })
+        )
+        .unwrap();
+        get_stream.flush().unwrap();
     });
 
     let started = run_cli(
@@ -63,17 +89,10 @@ fn agent_start_accepts_durable_readiness_during_detection_gap() {
             "agent", "start", "reviewer", "--kind", "opencode", "--pane", "w1:p1",
         ],
     );
-    assert!(
-        started.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&started.stderr)
-    );
-    let started: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    assert_eq!(started["result"]["type"], "agent_started");
-    assert_eq!(started["result"]["agent"]["name"], "reviewer");
-    assert!(started["result"]["agent"]["interactive_ready"]
-        .as_bool()
-        .unwrap());
+    assert_eq!(started.status.code(), Some(1));
+    assert!(started.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&started.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "agent_not_ready");
 
     server.join().unwrap();
     cleanup_test_base(&base);
