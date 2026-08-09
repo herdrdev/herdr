@@ -137,7 +137,15 @@ A binding may also be an array when one action needs multiple shortcuts:
 next_tab = ["prefix+n", "ctrl+alt+]"]
 ```
 
-Optional actions are unset by default. Bind them with `prefix+` for prefix-mode behavior, or use an explicit modified chord when you intentionally want a direct shortcut.
+Optional actions are unset by default. Bind them with `prefix+` for prefix-mode behavior, or use an explicit modified chord when you intentionally want a direct shortcut. For example, tmux-style one-keystroke pane resizing without entering resize mode:
+
+```toml
+[keys]
+resize_pane_left = "ctrl+shift+alt+left"
+resize_pane_down = "ctrl+shift+alt+down"
+resize_pane_up = "ctrl+shift+alt+up"
+resize_pane_right = "ctrl+shift+alt+right"
+```
 
 Key strings accept plain keys, modifier combinations such as `ctrl+a`, `shift+n`, `alt+1`, `cmd+k`, and special keys such as `enter`, `tab`, `esc`, `left`, `right`, `up`, and `down`. Named punctuation such as `minus`, `comma`, `ampersand`, `plus`, and `backtick` is also accepted. Plain direct printable keys such as `n` are unsafe because they intercept typing; use `prefix+n` unless you intentionally want a direct binding. The `navigate_workspace_*` and `navigate_pane_*` fields are navigate-mode-only and may use plain keys such as `j` or `k`; they must not use `prefix+`, `esc`, `enter`, `tab`, `shift+tab`, `left`, `right`, or unmodified `1` through `9`. Left and right arrows are permanent aliases for pane-left and pane-right navigation. These navigate-mode shortcuts are independent from general action bindings such as `focus_pane_down = "prefix+j"`; when both use the same key, the navigate-mode shortcut wins while navigate mode is open. Alt, Cmd/Super, and punctuation with modifiers depend on your terminal and tmux settings.
 

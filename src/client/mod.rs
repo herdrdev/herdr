@@ -606,7 +606,7 @@ fn restore_terminal_state(
         restore_windows_input_mode_value(mode);
     }
 
-    ratatui::restore();
+    let _ = ratatui::try_restore();
     let _ = write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
 
     #[cfg(windows)]

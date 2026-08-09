@@ -524,6 +524,30 @@
           "description": "Enter resize mode."
         },
         {
+          "key": "keys.resize_pane_left",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the left. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_down",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane downward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_up",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane upward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_right",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the right. Unset by default."
+        },
+        {
           "key": "keys.toggle_sidebar",
           "type": "keybinding",
           "default": "\"prefix+b\"",
