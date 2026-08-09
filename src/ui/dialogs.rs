@@ -47,13 +47,21 @@ pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
 /// reported by the focused pane, and composition lands behind the dialog.
 fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) {
     frame.render_widget(Clear, input_rect);
+
+    // The text stops one column short of the field so the clamped caret always
+    // lands on a blank cell: a host terminal inverts the cell under its cursor,
+    // and an IME composes there.
+    let text_rect = Rect {
+        width: input_rect.width.saturating_sub(1),
+        ..input_rect
+    };
     frame.render_widget(
         Paragraph::new(format!(" {}", app.name_input)).style(
             Style::default()
                 .fg(app.palette.text)
                 .bg(app.palette.surface0),
         ),
-        input_rect,
+        text_rect,
     );
 
     if input_rect.width == 0 {
@@ -1102,6 +1110,13 @@ mod tests {
             rename_overlay_caret(&"a".repeat(200)),
             Position::new(last_column, input.y)
         );
+
+        // The clamped cell has to stay blank as well, or the host cursor would
+        // sit on a glyph and the IME would compose over it.
+        let (caret, buffer) = rename_overlay_caret_in(Mode::RenameWorkspace, &"a".repeat(200));
+        assert_eq!(caret, Position::new(last_column, input.y));
+        assert_eq!(buffer[(caret.x, caret.y)].symbol(), " ");
+        assert_eq!(buffer[(caret.x - 1, caret.y)].symbol(), "a");
     }
 
     #[test]
