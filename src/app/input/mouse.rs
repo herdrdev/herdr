@@ -34,6 +34,10 @@ pub(super) enum MouseAction {
     FocusTab {
         tab_idx: usize,
     },
+    CloseTab {
+        ws_idx: usize,
+        tab_idx: usize,
+    },
     FocusPane {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
@@ -1066,6 +1070,17 @@ impl AppState {
                         list: MenuListState::new(0),
                     });
                     self.mode = Mode::ContextMenu;
+                }
+            }
+
+            MouseEventKind::Down(MouseButton::Middle)
+                if !self.mode_bar_covers_tab_row(mouse.column, mouse.row)
+                    && self.tab_at(mouse.column, mouse.row).is_some() =>
+            {
+                if let (Some(ws_idx), Some(tab_idx)) =
+                    (self.active, self.tab_at(mouse.column, mouse.row))
+                {
+                    return Some(MouseAction::CloseTab { ws_idx, tab_idx });
                 }
             }
 
