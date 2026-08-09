@@ -44,14 +44,14 @@ use super::{
     DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
     DROID_HOOK_EVENTS, DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
     GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
-    HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
-    HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
-    MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
-    OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
-    OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME,
-    QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME,
-    QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_INSTALL_NAME,
+    HERMES_PLUGIN_MANIFEST_ASSET, HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET,
+    KILO_PLUGIN_INSTALL_NAME, KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET,
+    MASTRACODE_HOOK_EVENTS, MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS,
+    MASTRACODE_REMOVED_HOOK_EVENTS, OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME,
+    OPENCODE_PLUGIN_ASSET, OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET,
+    PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS,
+    QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -488,7 +488,43 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
         )));
     }
 
-    let plugin_dir = hermes_plugin_dir()?;
+    let plugin_dir = install_hermes_plugin_for_home(&dir)?;
+    let config_path = enable_hermes_plugin_for_home(&dir)?;
+
+    let mut profile_plugin_dirs = Vec::new();
+    let mut profile_config_paths = Vec::new();
+    for profile_dir in hermes_profile_dirs(&dir)? {
+        profile_plugin_dirs.push(install_hermes_plugin_for_home(&profile_dir)?);
+        profile_config_paths.push(enable_hermes_plugin_for_home(&profile_dir)?);
+    }
+
+    Ok(HermesInstallPaths {
+        plugin_dir,
+        config_path,
+        profile_plugin_dirs,
+        profile_config_paths,
+    })
+}
+
+fn hermes_profile_dirs(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let profiles_dir = dir.join("profiles");
+    if !profiles_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut profiles = Vec::new();
+    for entry in fs::read_dir(profiles_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            profiles.push(entry.path());
+        }
+    }
+    profiles.sort();
+    Ok(profiles)
+}
+
+fn install_hermes_plugin_for_home(dir: &Path) -> io::Result<PathBuf> {
+    let plugin_dir = dir.join("plugins").join(HERMES_PLUGIN_INSTALL_NAME);
     fs::create_dir_all(&plugin_dir)?;
     fs::write(
         plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME),
@@ -498,7 +534,10 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
         plugin_dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME),
         HERMES_PLUGIN_INIT_ASSET,
     )?;
+    Ok(plugin_dir)
+}
 
+fn enable_hermes_plugin_for_home(dir: &Path) -> io::Result<PathBuf> {
     let config_path = dir.join("config.yaml");
     let existing_config = if config_path.is_file() {
         fs::read_to_string(&config_path)?
@@ -509,11 +548,7 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     if new_config != existing_config {
         fs::write(&config_path, new_config)?;
     }
-
-    Ok(HermesInstallPaths {
-        plugin_dir,
-        config_path,
-    })
+    Ok(config_path)
 }
 
 pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
@@ -838,11 +873,39 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
         }
     }
 
+    let mut profile_plugin_dirs = Vec::new();
+    let mut profile_config_paths = Vec::new();
+    let mut removed_profile_plugin_dirs = 0;
+    let mut updated_profile_configs = 0;
+    for profile_dir in hermes_profile_dirs(&dir)? {
+        let profile_plugin_dir = profile_dir.join("plugins").join(HERMES_PLUGIN_INSTALL_NAME);
+        let profile_config_path = profile_dir.join("config.yaml");
+
+        if remove_dir_all_if_exists(&profile_plugin_dir)? {
+            removed_profile_plugin_dirs += 1;
+        }
+        if profile_config_path.is_file() {
+            let existing_config = fs::read_to_string(&profile_config_path)?;
+            let new_config = remove_hermes_plugin_enabled(&existing_config);
+            if new_config != existing_config {
+                fs::write(&profile_config_path, new_config)?;
+                updated_profile_configs += 1;
+            }
+        }
+
+        profile_plugin_dirs.push(profile_plugin_dir);
+        profile_config_paths.push(profile_config_path);
+    }
+
     Ok(HermesUninstallResult {
         plugin_dir,
         config_path,
         removed_plugin_dir,
         updated_config,
+        profile_plugin_dirs,
+        profile_config_paths,
+        removed_profile_plugin_dirs,
+        updated_profile_configs,
     })
 }
 
