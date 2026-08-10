@@ -583,7 +583,10 @@ impl HeadlessServer {
                 crate::render_prof::event("render.request.signal");
             }
             let terminal_title_changed = self.app.sync_terminal_titles();
-            if terminal_title_changed && self.app.terminal_title_sidebar_configured() {
+            if terminal_title_changed
+                && (self.app.terminal_title_sidebar_configured()
+                    || self.app.window_title_uses_terminal_title())
+            {
                 needs_render = true;
                 needs_full_render = true;
                 crate::render_prof::event("full_render_cause.terminal_title");
@@ -704,9 +707,10 @@ impl HeadlessServer {
             self.stream_host_mouse_capture_mode();
             self.stream_host_keyboard_enhancement_flags();
 
-            // Anything that moves the window title also asks for a render, so
-            // an idle loop never pays for rendering the title.
-            if needs_render {
+            // Every input to the window title is app state, and app-state changes
+            // request a full render. Gating on that keeps hidden-pane PTY output,
+            // which only ever sets needs_render, off this path entirely.
+            if needs_full_render {
                 self.sync_window_title();
             }
 

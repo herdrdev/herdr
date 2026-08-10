@@ -35,6 +35,14 @@ impl App {
         self.window_title_template.is_some()
     }
 
+    /// Whether the title depends on the focused pane's own terminal title, which
+    /// is the one input that arrives through PTY parsing rather than app state.
+    pub(crate) fn window_title_uses_terminal_title(&self) -> bool {
+        self.window_title_template
+            .as_ref()
+            .is_some_and(|(template, _)| template.uses(WindowTitleToken::TerminalTitle))
+    }
+
     /// Renders the configured outer window title, or `None` when window titles
     /// are disabled or every token resolved empty.
     pub(crate) fn window_title(&self) -> Option<String> {
