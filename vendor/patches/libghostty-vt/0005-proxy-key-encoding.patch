@@ -1,0 +1,286 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Sun, 9 Aug 2026 00:00:00 +0000
+Subject: [PATCH] encode terminal proxy key events deterministically
+
+Add an explicit proxy-event mode that trusts semantic modifiers and generated
+text instead of applying input conventions from the encoder's host OS.
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/2514
+Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
+---
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/key/encoder.h b/vendor/libghostty-vt/include/ghostty/vt/key/encoder.h
+index 3aeec65..76246e1 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/key/encoder.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/key/encoder.h
+@@ -113,6 +113,12 @@ typedef enum GHOSTTY_ENUM_TYPED {
+      */
+     GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE = 7,
+ 
++    /** Input events originated in another terminal and already carry semantic
++     * modifiers and generated text (value: bool). This makes encoding
++     * independent of host OS input conventions.
++     */
++    GHOSTTY_KEY_ENCODER_OPT_PROXY_EVENTS = 8,
++
+     GHOSTTY_KEY_ENCODER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyKeyEncoderOption;
+ 
+diff --git a/vendor/libghostty-vt/src/input/key_encode.zig b/vendor/libghostty-vt/src/input/key_encode.zig
+index 60c1ec4..090bf2f 100644
+--- a/vendor/libghostty-vt/src/input/key_encode.zig
++++ b/vendor/libghostty-vt/src/input/key_encode.zig
+@@ -42,6 +42,11 @@ pub const Options = struct {
+     /// docs for a more detailed description of why this is needed.
+     macos_option_as_alt: OptionAsAlt = .false,
+ 
++    /// Input events originated in another terminal and already carry
++    /// semantic modifiers and generated text. This disables host OS input
++    /// reinterpretation so encoding is independent of the proxy's host.
++    proxy_events: bool = false,
++
+     pub const default: Options = .{
+         .cursor_key_application = false,
+         .keypad_key_application = false,
+@@ -50,6 +55,7 @@ pub const Options = struct {
+         .modify_other_keys_state_2 = false,
+         .kitty_flags = .disabled,
+         .macos_option_as_alt = .false,
++        .proxy_events = false,
+     };
+ 
+     /// Initialize our options from the terminal state.
+@@ -68,6 +74,7 @@ pub const Options = struct {
+ 
+             // These can't be known from the terminal state.
+             .macos_option_as_alt = .false,
++            .proxy_events = false,
+         };
+     }
+ };
+@@ -310,7 +317,7 @@ fn kitty(
+             // Determine if the Alt modifier should be treated as an actual
+             // modifier (in which case it prevents associated text) or as
+             // the macOS Option key, which does not prevent associated text.
+-            const alt_prevents_text = if (comptime builtin.os.tag == .macos)
++            const alt_prevents_text = if (builtin.os.tag == .macos and !opts.proxy_events)
+                 switch (opts.macos_option_as_alt) {
+                     .left => all_mods.sides.alt == .left,
+                     .right => all_mods.sides.alt == .right,
+@@ -416,7 +423,11 @@ fn legacy(
+     // alt-prefix handling of unshifted codepoints... so we process that.
+     const utf8 = event.utf8;
+     if (utf8.len == 0) {
+-        if (try legacyAltPrefix(
++        if (opts.proxy_events and proxyAltPrefixEnabled(binding_mods, opts)) {
++            if (std.math.cast(u8, event.unshifted_codepoint)) |byte| {
++                try writer.print("\x1B{c}", .{byte});
++            }
++        } else if (try legacyAltPrefix(
+             event,
+             binding_mods,
+             all_mods,
+@@ -444,7 +455,7 @@ fn legacy(
+         // super, alt unless it is actually option).
+         const mods = mods: {
+             var mods_binding = event.mods.binding();
+-            if (comptime builtin.target.os.tag.isDarwin()) alt: {
++            if (builtin.target.os.tag.isDarwin() and !opts.proxy_events) alt: {
+                 switch (opts.macos_option_as_alt) {
+                     .false => {},
+                     .true => break :alt,
+@@ -537,7 +548,12 @@ fn legacy(
+ 
+     // If we have alt-pressed and alt-esc-prefix is enabled, then
+     // we need to prefix the utf8 sequence with an esc.
+-    if (try legacyAltPrefix(
++    if (opts.proxy_events) {
++        if (proxyAltPrefixEnabled(binding_mods, opts)) {
++            try writer.writeByte(0x1B);
++            return try writer.writeAll(utf8);
++        }
++    } else if (try legacyAltPrefix(
+         event,
+         binding_mods,
+         all_mods,
+@@ -555,13 +571,17 @@ fn legacy(
+     // For Linux, we continue to encode text because it is typical.
+     // For example on Gnome Console Super+b will encode a "b" character
+     // with legacy encoding.
+-    if ((comptime builtin.os.tag == .macos) and all_mods.super) {
++    if (builtin.os.tag == .macos and !opts.proxy_events and all_mods.super) {
+         return;
+     }
+ 
+     return try writer.writeAll(utf8);
+ }
+ 
++fn proxyAltPrefixEnabled(binding_mods: key.Mods, opts: Options) bool {
++    return binding_mods.alt and opts.alt_esc_prefix;
++}
++
+ fn legacyAltPrefix(
+     event: key.KeyEvent,
+     binding_mods: key.Mods,
+@@ -1732,6 +1752,26 @@ test "kitty: left shift with report all" {
+     try testing.expectEqualStrings("\x1b[57441u", writer.buffered());
+ }
+ 
++test "kitty: proxy alt is a modifier for associated text" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try kitty(&writer, .{
++        .key = .key_w,
++        .mods = .{ .alt = true },
++        .utf8 = "∑",
++        .unshifted_codepoint = 119,
++    }, .{
++        .kitty_flags = .{
++            .disambiguate = true,
++            .report_all = true,
++            .report_alternates = true,
++            .report_associated = true,
++        },
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1b[119;3u", writer.buffered());
++}
++
+ test "kitty: report associated with alt text on macOS with option" {
+     if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+ 
+@@ -2025,6 +2065,93 @@ test "legacy: ctrl+alt+c" {
+     try testing.expectEqualStrings("\x1b\x03", writer.buffered());
+ }
+ 
++test "legacy: proxy alt without generated text ignores host option policy" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .key_c,
++        .mods = .{ .alt = true },
++        .unshifted_codepoint = 'c',
++    }, .{
++        .alt_esc_prefix = true,
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1bc", writer.buffered());
++}
++
++test "legacy: proxy super preserves semantic text" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .key_b,
++        .mods = .{ .super = true },
++        .utf8 = "b",
++        .unshifted_codepoint = 'b',
++    }, .{ .proxy_events = true });
++    try testing.expectEqualStrings("b", writer.buffered());
++}
++
++test "legacy: proxy alt with modify other keys preserves the modifier" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .key_e,
++        .mods = .{ .alt = true },
++        .utf8 = "é",
++        .unshifted_codepoint = 'e',
++    }, .{
++        .modify_other_keys_state_2 = true,
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1b[27;3;233~", writer.buffered());
++}
++
++test "legacy: alt+unicode prefixes the complete utf8 text" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .unidentified,
++        .mods = .{ .alt = true },
++        .utf8 = "é",
++        .unshifted_codepoint = 'é',
++    }, .{
++        .alt_esc_prefix = true,
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1bé", writer.buffered());
++}
++
++test "legacy: alt with invalid unshifted codepoint preserves utf8 text" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .unidentified,
++        .mods = .{ .alt = true },
++        .utf8 = "é",
++        .unshifted_codepoint = 0xD800,
++    }, .{
++        .alt_esc_prefix = true,
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1bé", writer.buffered());
++}
++
++test "legacy: alt+shift preserves shifted text" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .period,
++        .mods = .{ .alt = true, .shift = true },
++        .consumed_mods = .{ .shift = true },
++        .utf8 = ">",
++        .unshifted_codepoint = '.',
++    }, .{
++        .alt_esc_prefix = true,
++        .proxy_events = true,
++    });
++    try testing.expectEqualStrings("\x1b>", writer.buffered());
++}
++
+ test "legacy: alt+c" {
+     var buf: [128]u8 = undefined;
+     var writer: std.Io.Writer = .fixed(&buf);
+diff --git a/vendor/libghostty-vt/src/terminal/c/key_encode.zig b/vendor/libghostty-vt/src/terminal/c/key_encode.zig
+index f5d459f..4398c6e 100644
+--- a/vendor/libghostty-vt/src/terminal/c/key_encode.zig
++++ b/vendor/libghostty-vt/src/terminal/c/key_encode.zig
+@@ -57,6 +57,8 @@ pub const Option = enum(c_int) {
+     /// If `false` (the default), `backspace` emits 0x7f
+     /// If `true`, `backspace` emits 0x08
+     backarrow_key_mode = 7,
++    /// Events originated in another terminal and already have semantic input.
++    proxy_events = 8,
+ 
+     /// Input type expected for setting the option.
+     pub fn InType(comptime self: Option) type {
+@@ -67,6 +69,7 @@ pub const Option = enum(c_int) {
+             .alt_esc_prefix,
+             .modify_other_keys_state_2,
+             .backarrow_key_mode,
++            .proxy_events,
+             => bool,
+             .kitty_flags => u8,
+             .macos_option_as_alt => OptionAsAlt,
+@@ -121,6 +124,7 @@ fn setoptTyped(
+             opts.macos_option_as_alt = value.*;
+         },
+         .backarrow_key_mode => opts.backarrow_key_mode = value.*,
++        .proxy_events => opts.proxy_events = value.*,
+     }
+ }
+ 
+@@ -198,6 +202,9 @@ test "setopt bool" {
+ 
+     setopt(e, .keypad_key_application, &val_true);
+     try testing.expect(e.?.opts.keypad_key_application);
++
++    setopt(e, .proxy_events, &val_true);
++    try testing.expect(e.?.opts.proxy_events);
+ }
+ 
+ test "setopt kitty flags" {
+-- 
+2.50.1

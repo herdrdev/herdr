@@ -7832,7 +7832,7 @@ next_tab = ""
         }));
         assert_eq!(
             input_rx.try_recv().expect("forwarded press"),
-            Bytes::from_static(b"\x1b[106;1:1u")
+            Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             input_rx

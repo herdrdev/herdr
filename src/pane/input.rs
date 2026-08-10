@@ -1,7 +1,67 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GhosttyKeyEventAdapterError {
+    UnsupportedKey,
+    EventAllocation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PaneKeyEncodingPolicy {
+    pub(super) kitty_keyboard: bool,
+    pub(super) modify_other_keys_mode: Option<crate::input::ModifyOtherKeysMode>,
+}
+
+pub(super) fn normalize_terminal_key_for_pane(
+    mut key: crate::input::TerminalKey,
+    policy: PaneKeyEncodingPolicy,
+) -> crate::input::TerminalKey {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    if policy.kitty_keyboard {
+        return key;
+    }
+
+    if key.code == KeyCode::Tab && key.modifiers == KeyModifiers::CONTROL {
+        key.modifiers.remove(KeyModifiers::CONTROL);
+    }
+
+    if policy.modify_other_keys_mode != Some(crate::input::ModifyOtherKeysMode::Mode2)
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && ghostty_shift_is_consumed(&key)
+    {
+        if key.shifted_codepoint.is_none() {
+            if let KeyCode::Char(shifted) = key.code {
+                let unshifted = ghostty_unshifted_ascii_pair(shifted).or_else(|| {
+                    shifted
+                        .is_ascii_uppercase()
+                        .then(|| shifted.to_ascii_lowercase())
+                });
+                if let Some(unshifted) = unshifted {
+                    key.code = KeyCode::Char(unshifted);
+                    key.shifted_codepoint = Some(shifted as u32);
+                }
+            }
+        }
+        key.modifiers.remove(KeyModifiers::SHIFT);
+    }
+
+    if key.code == KeyCode::Char('-')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.is_windows_ctrl_minus_alias()
+    {
+        key.code = KeyCode::Char('_');
+    }
+
+    key
+}
+
 pub(super) fn ghostty_key_event_from_terminal_key(
     key: &crate::input::TerminalKey,
-) -> Option<crate::ghostty::KeyEvent> {
-    let mut event = crate::ghostty::KeyEvent::new().ok()?;
+) -> Result<crate::ghostty::KeyEvent, GhosttyKeyEventAdapterError> {
+    let ghostty_key =
+        ghostty_key_from_crossterm_key_code(key.code, key.shifted_codepoint, key.modifiers)
+            .ok_or(GhosttyKeyEventAdapterError::UnsupportedKey)?;
+    let mut event = crate::ghostty::KeyEvent::new()
+        .map_err(|_| GhosttyKeyEventAdapterError::EventAllocation)?;
     event.set_action(match key.kind {
         crossterm::event::KeyEventKind::Press => {
             crate::ghostty::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS
@@ -19,10 +79,8 @@ pub(super) fn ghostty_key_event_from_terminal_key(
         mods |= crate::ghostty::MOD_SHIFT;
     }
     event.set_mods(mods);
-    event.set_key(ghostty_key_from_crossterm_key_code(
-        key.code,
-        key.shifted_codepoint,
-    )?);
+    event.set_consumed_mods(ghostty_consumed_mods(key));
+    event.set_key(ghostty_key);
 
     if let Some(text) = ghostty_key_text(key) {
         event.set_utf8(&text);
@@ -33,12 +91,14 @@ pub(super) fn ghostty_key_event_from_terminal_key(
     if let Some(codepoint) = ghostty_unshifted_codepoint(key) {
         event.set_unshifted_codepoint(codepoint);
     }
+    if let Some(codepoint) = key.shifted_codepoint {
+        event.set_shifted_codepoint(codepoint);
+    }
+    if let Some(codepoint) = key.base_layout_codepoint {
+        event.set_base_layout_codepoint(codepoint);
+    }
 
-    Some(event)
-}
-
-pub(super) fn ghostty_prefers_herdr_text_encoding(key: &crate::input::TerminalKey) -> bool {
-    matches!(key.code, crossterm::event::KeyCode::Char(_))
+    Ok(event)
 }
 
 pub(super) fn ghostty_mods_from_key_modifiers(modifiers: crossterm::event::KeyModifiers) -> u16 {
@@ -55,7 +115,38 @@ pub(super) fn ghostty_mods_from_key_modifiers(modifiers: crossterm::event::KeyMo
     if modifiers.contains(crossterm::event::KeyModifiers::SUPER) {
         ghostty_mods |= crate::ghostty::MOD_SUPER;
     }
+    if modifiers.contains(crossterm::event::KeyModifiers::HYPER) {
+        ghostty_mods |= crate::ghostty::MOD_HYPER;
+    }
+    if modifiers.contains(crossterm::event::KeyModifiers::META) {
+        ghostty_mods |= crate::ghostty::MOD_META;
+    }
     ghostty_mods
+}
+
+fn ghostty_consumed_mods(key: &crate::input::TerminalKey) -> u16 {
+    if ghostty_shift_is_consumed(key) {
+        crate::ghostty::MOD_SHIFT
+    } else {
+        0
+    }
+}
+
+fn ghostty_shift_is_consumed(key: &crate::input::TerminalKey) -> bool {
+    let only_shift = key.modifiers == crossterm::event::KeyModifiers::SHIFT;
+    let has_generated_text = key
+        .generated_text
+        .as_ref()
+        .is_some_and(|text| !text.is_empty());
+    key.modifiers
+        .contains(crossterm::event::KeyModifiers::SHIFT)
+        && matches!(key.code, crossterm::event::KeyCode::Char(c) if
+            has_generated_text
+                || key.shifted_codepoint.and_then(char::from_u32).is_some()
+                || c.is_ascii_uppercase()
+                || (only_shift
+                    && (c.is_ascii_alphabetic()
+                        || ghostty_unshifted_ascii_pair(c).is_some())))
 }
 
 pub(super) fn ghostty_mouse_encoder_for_terminal(
@@ -194,10 +285,18 @@ pub(super) fn ghostty_mouse_event_from_wheel_kind(
 }
 
 fn ghostty_key_text(key: &crate::input::TerminalKey) -> Option<String> {
+    if let Some(text) = &key.generated_text {
+        return Some(text.clone());
+    }
     match key.code {
         crossterm::event::KeyCode::Char(c) => Some(
             key.shifted_codepoint
                 .and_then(char::from_u32)
+                .or_else(|| {
+                    (key.modifiers == crossterm::event::KeyModifiers::SHIFT)
+                        .then(|| c.is_ascii_lowercase().then(|| c.to_ascii_uppercase()))
+                        .flatten()
+                })
                 .unwrap_or(c)
                 .to_string(),
         ),
@@ -207,6 +306,14 @@ fn ghostty_key_text(key: &crate::input::TerminalKey) -> Option<String> {
 
 fn ghostty_unshifted_codepoint(key: &crate::input::TerminalKey) -> Option<u32> {
     match key.code {
+        crossterm::event::KeyCode::Char(c)
+            if key.shifted_codepoint.is_none()
+                && key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT) =>
+        {
+            Some(ghostty_unshifted_ascii_pair(c).unwrap_or_else(|| c.to_ascii_lowercase()) as u32)
+        }
         crossterm::event::KeyCode::Char(c) => Some(c as u32),
         _ => None,
     }
@@ -215,6 +322,7 @@ fn ghostty_unshifted_codepoint(key: &crate::input::TerminalKey) -> Option<u32> {
 fn ghostty_key_from_crossterm_key_code(
     code: crossterm::event::KeyCode,
     shifted_codepoint: Option<u32>,
+    modifiers: crossterm::event::KeyModifiers,
 ) -> Option<u32> {
     use crate::ghostty::ffi;
     use crossterm::event::KeyCode;
@@ -247,18 +355,47 @@ fn ghostty_key_from_crossterm_key_code(
             10 => ffi::GhosttyKey_GHOSTTY_KEY_F10,
             11 => ffi::GhosttyKey_GHOSTTY_KEY_F11,
             12 => ffi::GhosttyKey_GHOSTTY_KEY_F12,
+            13 => ffi::GhosttyKey_GHOSTTY_KEY_F13,
+            14 => ffi::GhosttyKey_GHOSTTY_KEY_F14,
+            15 => ffi::GhosttyKey_GHOSTTY_KEY_F15,
+            16 => ffi::GhosttyKey_GHOSTTY_KEY_F16,
+            17 => ffi::GhosttyKey_GHOSTTY_KEY_F17,
+            18 => ffi::GhosttyKey_GHOSTTY_KEY_F18,
+            19 => ffi::GhosttyKey_GHOSTTY_KEY_F19,
+            20 => ffi::GhosttyKey_GHOSTTY_KEY_F20,
+            21 => ffi::GhosttyKey_GHOSTTY_KEY_F21,
+            22 => ffi::GhosttyKey_GHOSTTY_KEY_F22,
+            23 => ffi::GhosttyKey_GHOSTTY_KEY_F23,
+            24 => ffi::GhosttyKey_GHOSTTY_KEY_F24,
+            25 => ffi::GhosttyKey_GHOSTTY_KEY_F25,
+            26 => ffi::GhosttyKey_GHOSTTY_KEY_F26,
+            27 => ffi::GhosttyKey_GHOSTTY_KEY_F27,
+            28 => ffi::GhosttyKey_GHOSTTY_KEY_F28,
+            29 => ffi::GhosttyKey_GHOSTTY_KEY_F29,
+            30 => ffi::GhosttyKey_GHOSTTY_KEY_F30,
+            31 => ffi::GhosttyKey_GHOSTTY_KEY_F31,
+            32 => ffi::GhosttyKey_GHOSTTY_KEY_F32,
+            33 => ffi::GhosttyKey_GHOSTTY_KEY_F33,
+            34 => ffi::GhosttyKey_GHOSTTY_KEY_F34,
+            35 => ffi::GhosttyKey_GHOSTTY_KEY_F35,
             _ => return None,
         }),
-        KeyCode::Char(c) => ghostty_key_from_char(c, shifted_codepoint),
+        KeyCode::Char(c) => ghostty_key_from_char(c, shifted_codepoint, modifiers),
         _ => None,
     }
 }
 
-fn ghostty_key_from_char(c: char, shifted_codepoint: Option<u32>) -> Option<u32> {
+fn ghostty_key_from_char(
+    c: char,
+    shifted_codepoint: Option<u32>,
+    modifiers: crossterm::event::KeyModifiers,
+) -> Option<u32> {
     use crate::ghostty::ffi;
 
-    let base = if let Some(shifted) = shifted_codepoint.and_then(char::from_u32) {
-        ghostty_unshifted_ascii_pair(shifted).unwrap_or(c)
+    let base = if shifted_codepoint.is_none()
+        && modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
+    {
+        ghostty_unshifted_ascii_pair(c).unwrap_or(c)
     } else {
         c
     };
@@ -312,7 +449,7 @@ fn ghostty_key_from_char(c: char, shifted_codepoint: Option<u32>) -> Option<u32>
         ';' => Some(ffi::GhosttyKey_GHOSTTY_KEY_SEMICOLON),
         '/' => Some(ffi::GhosttyKey_GHOSTTY_KEY_SLASH),
         ' ' => Some(ffi::GhosttyKey_GHOSTTY_KEY_SPACE),
-        _ => None,
+        _ => Some(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED),
     }
 }
 
@@ -341,4 +478,118 @@ fn ghostty_unshifted_ascii_pair(c: char) -> Option<char> {
         '~' => '`',
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::{ModifyOtherKeysMode, TerminalKey, WindowsKeyRecord};
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    const LEGACY: PaneKeyEncodingPolicy = PaneKeyEncodingPolicy {
+        kitty_keyboard: false,
+        modify_other_keys_mode: None,
+    };
+
+    #[test]
+    fn legacy_ctrl_tab_policy_only_downgrades_exact_ctrl_tab() {
+        let ctrl_tab = TerminalKey::new(KeyCode::Tab, KeyModifiers::CONTROL);
+        let normalized = normalize_terminal_key_for_pane(ctrl_tab.clone(), LEGACY);
+        assert_eq!(normalized.modifiers, KeyModifiers::empty());
+
+        for (key, policy) in [
+            (
+                TerminalKey::new(KeyCode::Tab, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+                LEGACY,
+            ),
+            (
+                ctrl_tab,
+                PaneKeyEncodingPolicy {
+                    kitty_keyboard: true,
+                    modify_other_keys_mode: None,
+                },
+            ),
+        ] {
+            let expected = key.clone();
+            assert_eq!(normalize_terminal_key_for_pane(key, policy), expected);
+        }
+    }
+
+    #[test]
+    fn consumed_shift_is_downgraded_only_for_legacy_control_encoding() {
+        let key = TerminalKey::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+
+        for mode in [None, Some(ModifyOtherKeysMode::Mode1)] {
+            let normalized = normalize_terminal_key_for_pane(
+                key.clone(),
+                PaneKeyEncodingPolicy {
+                    kitty_keyboard: false,
+                    modify_other_keys_mode: mode,
+                },
+            );
+            assert_eq!(normalized.code, KeyCode::Char('c'));
+            assert_eq!(normalized.shifted_codepoint, Some('C' as u32));
+            assert_eq!(normalized.modifiers, KeyModifiers::CONTROL);
+        }
+
+        for policy in [
+            PaneKeyEncodingPolicy {
+                kitty_keyboard: false,
+                modify_other_keys_mode: Some(ModifyOtherKeysMode::Mode2),
+            },
+            PaneKeyEncodingPolicy {
+                kitty_keyboard: true,
+                modify_other_keys_mode: None,
+            },
+        ] {
+            assert_eq!(normalize_terminal_key_for_pane(key.clone(), policy), key);
+        }
+    }
+
+    #[test]
+    fn windows_ctrl_minus_alias_requires_matching_console_provenance() {
+        const LEFT_CTRL_PRESSED: u32 = 0x0008;
+        let record = WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0xbd,
+            virtual_scan_code: 0x0c,
+            unicode: 0x1f,
+            control_key_state: LEFT_CTRL_PRESSED,
+        };
+        let windows_key =
+            TerminalKey::new(KeyCode::Char('-'), KeyModifiers::CONTROL).with_windows_record(record);
+        assert_eq!(
+            normalize_terminal_key_for_pane(windows_key.clone(), LEGACY).code,
+            KeyCode::Char('_')
+        );
+
+        let synthetic = TerminalKey::new(KeyCode::Char('-'), KeyModifiers::CONTROL);
+        assert_eq!(
+            normalize_terminal_key_for_pane(synthetic.clone(), LEGACY),
+            synthetic
+        );
+
+        let kitty = PaneKeyEncodingPolicy {
+            kitty_keyboard: true,
+            modify_other_keys_mode: None,
+        };
+        assert_eq!(
+            normalize_terminal_key_for_pane(windows_key.clone(), kitty),
+            windows_key
+        );
+
+        let non_alias = TerminalKey::new(KeyCode::Char('-'), KeyModifiers::CONTROL)
+            .with_windows_record(WindowsKeyRecord {
+                unicode: b'-' as u16,
+                ..record
+            });
+        assert_eq!(
+            normalize_terminal_key_for_pane(non_alias.clone(), LEGACY),
+            non_alias
+        );
+    }
 }

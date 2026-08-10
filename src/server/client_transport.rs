@@ -451,7 +451,7 @@ fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
                             .saturating_mul(usize::from((*repeat_count).max(1))),
                     );
                 }
-                if let crate::protocol::ClientKeySource::Vt { bytes } = source {
+                if let crate::protocol::ClientKeySource::Vt { bytes, .. } = source {
                     input_bytes = input_bytes.saturating_add(bytes.len());
                 }
             }

@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Sun, 9 Aug 2026 00:00:00 +0000
+Subject: [PATCH] support Kitty function keys through F35
+
+Extend the key model, Kitty map, and legacy xterm encoding through F35 while
+appending C ABI values so existing key constants remain stable.
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/2514
+Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
+---
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/key/event.h b/vendor/libghostty-vt/include/ghostty/vt/key/event.h
+index 5777209..be647e0 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/key/event.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/key/event.h
+@@ -301,6 +301,18 @@ typedef enum GHOSTTY_ENUM_TYPED {
+     GHOSTTY_KEY_COPY,
+     GHOSTTY_KEY_CUT,
+     GHOSTTY_KEY_PASTE,
++
++    // Kitty protocol extended function keys, appended for ABI stability.
++    GHOSTTY_KEY_F26,
++    GHOSTTY_KEY_F27,
++    GHOSTTY_KEY_F28,
++    GHOSTTY_KEY_F29,
++    GHOSTTY_KEY_F30,
++    GHOSTTY_KEY_F31,
++    GHOSTTY_KEY_F32,
++    GHOSTTY_KEY_F33,
++    GHOSTTY_KEY_F34,
++    GHOSTTY_KEY_F35,
+     GHOSTTY_KEY_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyKey;
+ 
+diff --git a/vendor/libghostty-vt/src/input/function_keys.zig b/vendor/libghostty-vt/src/input/function_keys.zig
+index bdcaaa9..0d89dcf 100644
+--- a/vendor/libghostty-vt/src/input/function_keys.zig
++++ b/vendor/libghostty-vt/src/input/function_keys.zig
+@@ -115,6 +115,16 @@ pub const keys = keys: {
+     result.set(.f23, pcStyleWithImplicitMods("\x1b[23;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[23;2~" }});
+     result.set(.f24, pcStyleWithImplicitMods("\x1b[24;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[24;2~" }});
+     result.set(.f25, pcStyleWithImplicitMods("\x1b[1;{}P", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5P" }});
++    result.set(.f26, pcStyleWithImplicitMods("\x1b[1;{}Q", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5Q" }});
++    result.set(.f27, pcStyleWithImplicitMods("\x1b[1;{}R", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5R" }});
++    result.set(.f28, pcStyleWithImplicitMods("\x1b[1;{}S", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5S" }});
++    result.set(.f29, pcStyleWithImplicitMods("\x1b[15;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[15;5~" }});
++    result.set(.f30, pcStyleWithImplicitMods("\x1b[17;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[17;5~" }});
++    result.set(.f31, pcStyleWithImplicitMods("\x1b[18;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[18;5~" }});
++    result.set(.f32, pcStyleWithImplicitMods("\x1b[19;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[19;5~" }});
++    result.set(.f33, pcStyleWithImplicitMods("\x1b[20;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[20;5~" }});
++    result.set(.f34, pcStyleWithImplicitMods("\x1b[21;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[21;5~" }});
++    result.set(.f35, pcStyleWithImplicitMods("\x1b[23;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[23;5~" }});
+ 
+     // Keypad keys
+     result.set(.numpad_0, kpKeys("p"));
+diff --git a/vendor/libghostty-vt/src/input/key.zig b/vendor/libghostty-vt/src/input/key.zig
+index a213980..12d6352 100644
+--- a/vendor/libghostty-vt/src/input/key.zig
++++ b/vendor/libghostty-vt/src/input/key.zig
+@@ -311,6 +311,18 @@ pub const Key = enum(c_int) {
+     cut,
+     paste,
+ 
++    // Kitty protocol extended function keys, appended for ABI stability.
++    f26,
++    f27,
++    f28,
++    f29,
++    f30,
++    f31,
++    f32,
++    f33,
++    f34,
++    f35,
++
+     /// Converts an ASCII character to a key, if possible. This returns
+     /// null if the character is unknown.
+     ///
+@@ -536,7 +548,7 @@ pub const Key = enum(c_int) {
+         return switch (self) {
+             inline else => |tag| {
+                 return comptime result: {
+-                    @setEvalBranchQuota(10_000);
++                    @setEvalBranchQuota(20_000);
+                     for (codepoint_map) |entry| {
+                         if (entry[1] == tag) break :result entry[0];
+                     }
+@@ -689,6 +701,16 @@ pub const Key = enum(c_int) {
+             .f23,
+             .f24,
+             .f25,
++            .f26,
++            .f27,
++            .f28,
++            .f29,
++            .f30,
++            .f31,
++            .f32,
++            .f33,
++            .f34,
++            .f35,
+             .intl_backslash,
+             .intl_ro,
+             .intl_yen,
+diff --git a/vendor/libghostty-vt/src/input/key_encode.zig b/vendor/libghostty-vt/src/input/key_encode.zig
+index 283ccca..fbd97f1 100644
+--- a/vendor/libghostty-vt/src/input/key_encode.zig
++++ b/vendor/libghostty-vt/src/input/key_encode.zig
+@@ -2543,6 +2543,8 @@ test "legacy: extended function keys" {
+         .{ key.Key.f13, "\x1b[1;2P" },
+         .{ key.Key.f24, "\x1b[24;2~" },
+         .{ key.Key.f25, "\x1b[1;5P" },
++        .{ key.Key.f26, "\x1b[1;5Q" },
++        .{ key.Key.f35, "\x1b[23;5~" },
+     };
+     inline for (cases) |case| {
+         var writer: std.Io.Writer = .fixed(&buf);
+diff --git a/vendor/libghostty-vt/src/input/kitty.zig b/vendor/libghostty-vt/src/input/kitty.zig
+index e5789cc..16809c2 100644
+--- a/vendor/libghostty-vt/src/input/kitty.zig
++++ b/vendor/libghostty-vt/src/input/kitty.zig
+@@ -87,6 +87,16 @@ const raw_entries: []const RawEntry = &.{
+     .{ .f23, 57386, 'u', false },
+     .{ .f24, 57387, 'u', false },
+     .{ .f25, 57388, 'u', false },
++    .{ .f26, 57389, 'u', false },
++    .{ .f27, 57390, 'u', false },
++    .{ .f28, 57391, 'u', false },
++    .{ .f29, 57392, 'u', false },
++    .{ .f30, 57393, 'u', false },
++    .{ .f31, 57394, 'u', false },
++    .{ .f32, 57395, 'u', false },
++    .{ .f33, 57396, 'u', false },
++    .{ .f34, 57397, 'u', false },
++    .{ .f35, 57398, 'u', false },
+ 
+     .{ .numpad_0, 57399, 'u', false },
+     .{ .numpad_1, 57400, 'u', false },
+-- 
+2.50.1

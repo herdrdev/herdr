@@ -2746,7 +2746,7 @@ mod tests {
 
         assert_eq!(
             rx.try_recv().expect("forwarded press"),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.try_recv().expect("forwarded release after pane move"),

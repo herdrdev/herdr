@@ -57,6 +57,8 @@ pub const Option = enum(c_int) {
     /// If `false` (the default), `backspace` emits 0x7f
     /// If `true`, `backspace` emits 0x08
     backarrow_key_mode = 7,
+    /// Events originated in another terminal and already have semantic input.
+    proxy_events = 8,
 
     /// Input type expected for setting the option.
     pub fn InType(comptime self: Option) type {
@@ -67,6 +69,7 @@ pub const Option = enum(c_int) {
             .alt_esc_prefix,
             .modify_other_keys_state_2,
             .backarrow_key_mode,
+            .proxy_events,
             => bool,
             .kitty_flags => u8,
             .macos_option_as_alt => OptionAsAlt,
@@ -121,6 +124,7 @@ fn setoptTyped(
             opts.macos_option_as_alt = value.*;
         },
         .backarrow_key_mode => opts.backarrow_key_mode = value.*,
+        .proxy_events => opts.proxy_events = value.*,
     }
 }
 
@@ -198,6 +202,9 @@ test "setopt bool" {
 
     setopt(e, .keypad_key_application, &val_true);
     try testing.expect(e.?.opts.keypad_key_application);
+
+    setopt(e, .proxy_events, &val_true);
+    try testing.expect(e.?.opts.proxy_events);
 }
 
 test "setopt kitty flags" {

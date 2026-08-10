@@ -140,6 +140,9 @@ pub enum ClientKeySource {
     Synthesized,
     Vt {
         bytes: Vec<u8>,
+        shifted_codepoint: Option<u32>,
+        base_layout_codepoint: Option<u32>,
+        text_commit: bool,
     },
     WindowsConsole {
         record: crate::input::WindowsKeyRecord,
@@ -308,9 +311,36 @@ impl ClientInputEvent {
                 )
                 .with_generated_text(generated_text.clone());
                 key = match source {
-                    ClientKeySource::Synthesized => key,
-                    ClientKeySource::Vt { bytes } => key.with_vt_bytes(bytes.clone()),
-                    ClientKeySource::WindowsConsole { record } => key.with_windows_record(*record),
+                    ClientKeySource::Synthesized => {
+                        if generated_text.is_some() {
+                            key.with_text_commit()
+                        } else {
+                            key
+                        }
+                    }
+                    ClientKeySource::Vt {
+                        bytes,
+                        shifted_codepoint,
+                        base_layout_codepoint,
+                        text_commit,
+                    } => {
+                        let key = key
+                            .with_vt_bytes(bytes.clone())
+                            .with_alternate_codepoints(*shifted_codepoint, *base_layout_codepoint);
+                        if *text_commit {
+                            key.with_text_commit()
+                        } else {
+                            key
+                        }
+                    }
+                    ClientKeySource::WindowsConsole { record } => {
+                        let key = key.with_windows_record(*record);
+                        if generated_text.is_some() {
+                            key.with_text_commit()
+                        } else {
+                            key
+                        }
+                    }
                 };
                 key = key
                     .with_repeat_count(*repeat_count)
@@ -1148,13 +1178,16 @@ mod tests {
                     source: crate::protocol::ClientKeySource::Synthesized,
                 },
                 ClientInputEvent::Key {
-                    code: ClientKeyCode::Backspace,
-                    modifiers: 0,
+                    code: ClientKeyCode::Char('l'),
+                    modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
                     kind: ClientKeyKind::Press,
                     repeat_count: 3,
-                    generated_text: None,
+                    generated_text: Some("L".to_owned()),
                     source: crate::protocol::ClientKeySource::Vt {
-                        bytes: b"\x1b[127;1u".to_vec(),
+                        bytes: b"\x1b[108:76:113;2;76u".to_vec(),
+                        shifted_codepoint: Some('L' as u32),
+                        base_layout_codepoint: Some('q' as u32),
+                        text_commit: false,
                     },
                 },
                 ClientInputEvent::Key {
@@ -1188,9 +1221,10 @@ mod tests {
         assert_eq!(
             encoded,
             vec![
-                7, 5, 0, 15, 78, 1, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 1, 8, 27, 91, 49, 50, 55, 59, 49,
-                117, 0, 14, 0, 2, 1, 0, 2, 0, 1, 27, 1, 27, 0, 1, 7, 228, 189, 160, 240, 159, 153,
-                130, 2, 0, 0, 3, 4, 0,
+                7, 5, 0, 15, 78, 1, 0, 1, 0, 0, 0, 15, 108, 1, 0, 3, 1, 1, 76, 1, 18, 27, 91, 49,
+                48, 56, 58, 55, 54, 58, 49, 49, 51, 59, 50, 59, 55, 54, 117, 1, 76, 1, 113, 0, 0,
+                14, 0, 2, 1, 0, 2, 0, 1, 27, 1, 27, 0, 1, 7, 228, 189, 160, 240, 159, 153, 130, 2,
+                0, 0, 3, 4, 0,
             ]
         );
         let (decoded, _): (ClientMessage, _) =
@@ -1217,6 +1251,54 @@ mod tests {
             }
             other => panic!("expected key event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn vt_client_input_preserves_alternate_codepoints() {
+        let event = ClientInputEvent::Key {
+            code: ClientKeyCode::Char('a'),
+            modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
+            kind: ClientKeyKind::Press,
+            repeat_count: 1,
+            generated_text: Some("A\u{301}".to_owned()),
+            source: ClientKeySource::Vt {
+                bytes: b"\x1b[97:65:113;;65:769u".to_vec(),
+                shifted_codepoint: Some('A' as u32),
+                base_layout_codepoint: Some('q' as u32),
+                text_commit: false,
+            },
+        };
+
+        let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
+            panic!("expected key event");
+        };
+        assert_eq!(key.shifted_codepoint, Some('A' as u32));
+        assert_eq!(key.base_layout_codepoint, Some('q' as u32));
+        assert_eq!(key.generated_text.as_deref(), Some("A\u{301}"));
+        assert!(!key.is_text_commit());
+    }
+
+    #[test]
+    fn vt_client_input_preserves_text_commit_semantics() {
+        let event = ClientInputEvent::Key {
+            code: ClientKeyCode::Char('A'),
+            modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
+            kind: ClientKeyKind::Press,
+            repeat_count: 1,
+            generated_text: Some("A".to_owned()),
+            source: ClientKeySource::Vt {
+                bytes: b"A".to_vec(),
+                shifted_codepoint: None,
+                base_layout_codepoint: None,
+                text_commit: true,
+            },
+        };
+
+        let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
+            panic!("expected key event");
+        };
+        assert!(key.is_text_commit());
+        assert_eq!(key.generated_text.as_deref(), Some("A"));
     }
 
     #[test]

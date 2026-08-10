@@ -67,6 +67,8 @@ pub const GHOSTTY_MODS_ALT: u32 = 4;
 pub const GHOSTTY_MODS_SUPER: u32 = 8;
 pub const GHOSTTY_MODS_CAPS_LOCK: u32 = 16;
 pub const GHOSTTY_MODS_NUM_LOCK: u32 = 32;
+pub const GHOSTTY_MODS_HYPER: u32 = 1024;
+pub const GHOSTTY_MODS_META: u32 = 2048;
 pub const GHOSTTY_MODS_SHIFT_SIDE: u32 = 64;
 pub const GHOSTTY_MODS_CTRL_SIDE: u32 = 128;
 pub const GHOSTTY_MODS_ALT_SIDE: u32 = 256;
@@ -3818,6 +3820,16 @@ pub const GhosttyKey_GHOSTTY_KEY_WAKE_UP: GhosttyKey = 172;
 pub const GhosttyKey_GHOSTTY_KEY_COPY: GhosttyKey = 173;
 pub const GhosttyKey_GHOSTTY_KEY_CUT: GhosttyKey = 174;
 pub const GhosttyKey_GHOSTTY_KEY_PASTE: GhosttyKey = 175;
+pub const GhosttyKey_GHOSTTY_KEY_F26: GhosttyKey = 176;
+pub const GhosttyKey_GHOSTTY_KEY_F27: GhosttyKey = 177;
+pub const GhosttyKey_GHOSTTY_KEY_F28: GhosttyKey = 178;
+pub const GhosttyKey_GHOSTTY_KEY_F29: GhosttyKey = 179;
+pub const GhosttyKey_GHOSTTY_KEY_F30: GhosttyKey = 180;
+pub const GhosttyKey_GHOSTTY_KEY_F31: GhosttyKey = 181;
+pub const GhosttyKey_GHOSTTY_KEY_F32: GhosttyKey = 182;
+pub const GhosttyKey_GHOSTTY_KEY_F33: GhosttyKey = 183;
+pub const GhosttyKey_GHOSTTY_KEY_F34: GhosttyKey = 184;
+pub const GhosttyKey_GHOSTTY_KEY_F35: GhosttyKey = 185;
 pub const GhosttyKey_GHOSTTY_KEY_MAX_VALUE: GhosttyKey = 2147483647;
 #[doc = " Physical key codes.\n\n The set of key codes that Ghostty is aware of. These represent physical keys\n on the keyboard and are layout-independent. For example, the \"a\" key on a US\n keyboard is the same as the \"ф\" key on a Russian keyboard, but both will\n report the same key_a value.\n\n Layout-dependent strings are provided separately as UTF-8 text and are produced\n by the platform. These values are based on the W3C UI Events KeyboardEvent code\n standard. See: https://www.w3.org/TR/uievents-code\n\n @ingroup key"]
 pub type GhosttyKey = ::std::os::raw::c_uint;
@@ -3892,6 +3904,18 @@ unsafe extern "C" {
     pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
 }
 unsafe extern "C" {
+    pub fn ghostty_key_event_set_shifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+}
+unsafe extern "C" {
+    pub fn ghostty_key_event_get_shifted_codepoint(event: GhosttyKeyEvent) -> u32;
+}
+unsafe extern "C" {
+    pub fn ghostty_key_event_set_base_layout_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+}
+unsafe extern "C" {
+    pub fn ghostty_key_event_get_base_layout_codepoint(event: GhosttyKeyEvent) -> u32;
+}
+unsafe extern "C" {
     #[doc = " Get the unshifted Unicode codepoint.\n\n @param event The key event handle, must not be NULL\n @return The unshifted Unicode codepoint\n\n @ingroup key"]
     pub fn ghostty_key_event_get_unshifted_codepoint(event: GhosttyKeyEvent) -> u32;
 }
@@ -3939,7 +3963,9 @@ pub const GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT:
 #[doc = " Backarrow key mode (value: bool)\n See https://vt100.net/dec/ek-vt3xx-tp-002.pdf page 170\n If `false` (the default), `backspace` emits 0x7f\n If `true`, `backspace` emits 0x08"]
 pub const GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE:
     GhosttyKeyEncoderOption = 7;
-#[doc = " Backarrow key mode (value: bool)\n See https://vt100.net/dec/ek-vt3xx-tp-002.pdf page 170\n If `false` (the default), `backspace` emits 0x7f\n If `true`, `backspace` emits 0x08"]
+#[doc = " Input events originated in another terminal and already carry semantic\n modifiers and generated text (value: bool). This makes encoding\n independent of host OS input conventions."]
+pub const GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_PROXY_EVENTS: GhosttyKeyEncoderOption = 8;
+#[doc = " Input events originated in another terminal and already carry semantic\n modifiers and generated text (value: bool). This makes encoding\n independent of host OS input conventions."]
 pub const GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MAX_VALUE: GhosttyKeyEncoderOption =
     2147483647;
 #[doc = " Key encoder option identifiers.\n\n These values are used with ghostty_key_encoder_setopt() to configure\n the behavior of the key encoder.\n\n @ingroup key"]

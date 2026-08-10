@@ -42,6 +42,11 @@ pub const Options = struct {
     /// docs for a more detailed description of why this is needed.
     macos_option_as_alt: OptionAsAlt = .false,
 
+    /// Input events originated in another terminal and already carry
+    /// semantic modifiers and generated text. This disables host OS input
+    /// reinterpretation so encoding is independent of the proxy's host.
+    proxy_events: bool = false,
+
     pub const default: Options = .{
         .cursor_key_application = false,
         .keypad_key_application = false,
@@ -50,6 +55,7 @@ pub const Options = struct {
         .modify_other_keys_state_2 = false,
         .kitty_flags = .disabled,
         .macos_option_as_alt = .false,
+        .proxy_events = false,
     };
 
     /// Initialize our options from the terminal state.
@@ -68,6 +74,7 @@ pub const Options = struct {
 
             // These can't be known from the terminal state.
             .macos_option_as_alt = .false,
+            .proxy_events = false,
         };
     }
 };
@@ -198,7 +205,8 @@ fn kitty(
             // We don't send release events because those are specially encoded.
             if (event.utf8.len > 0 and
                 binding_mods.empty() and
-                event.action != .release)
+                (event.action == .press or
+                    (event.action == .repeat and !opts.kitty_flags.report_events)))
             plain_text: {
                 // We only do this for printable characters. We should
                 // inspect the real unicode codepoint properties here but
@@ -287,6 +295,20 @@ fn kitty(
                     if (base != seq.key) seq.alternates[1] = base;
                 }
             }
+
+            // Terminal proxies may know alternates that cannot be recovered
+            // from physical identity or multi-codepoint generated text.
+            if (event.shifted_codepoint > 0 and
+                event.shifted_codepoint != seq.key and
+                seq.mods.shift)
+            {
+                seq.alternates[0] = event.shifted_codepoint;
+            }
+            if (event.base_layout_codepoint > 0 and
+                event.base_layout_codepoint != seq.key)
+            {
+                seq.alternates[1] = event.base_layout_codepoint;
+            }
         }
 
         if (opts.kitty_flags.report_associated and
@@ -295,7 +317,7 @@ fn kitty(
             // Determine if the Alt modifier should be treated as an actual
             // modifier (in which case it prevents associated text) or as
             // the macOS Option key, which does not prevent associated text.
-            const alt_prevents_text = if (comptime builtin.os.tag == .macos)
+            const alt_prevents_text = if (builtin.os.tag == .macos and !opts.proxy_events)
                 switch (opts.macos_option_as_alt) {
                     .left => all_mods.sides.alt == .left,
                     .right => all_mods.sides.alt == .right,
@@ -401,7 +423,11 @@ fn legacy(
     // alt-prefix handling of unshifted codepoints... so we process that.
     const utf8 = event.utf8;
     if (utf8.len == 0) {
-        if (try legacyAltPrefix(
+        if (opts.proxy_events and proxyAltPrefixEnabled(binding_mods, opts)) {
+            if (std.math.cast(u8, event.unshifted_codepoint)) |byte| {
+                try writer.print("\x1B{c}", .{byte});
+            }
+        } else if (try legacyAltPrefix(
             event,
             binding_mods,
             all_mods,
@@ -429,7 +455,7 @@ fn legacy(
         // super, alt unless it is actually option).
         const mods = mods: {
             var mods_binding = event.mods.binding();
-            if (comptime builtin.target.os.tag.isDarwin()) alt: {
+            if (builtin.target.os.tag.isDarwin() and !opts.proxy_events) alt: {
                 switch (opts.macos_option_as_alt) {
                     .false => {},
                     .true => break :alt,
@@ -522,7 +548,12 @@ fn legacy(
 
     // If we have alt-pressed and alt-esc-prefix is enabled, then
     // we need to prefix the utf8 sequence with an esc.
-    if (try legacyAltPrefix(
+    if (opts.proxy_events) {
+        if (proxyAltPrefixEnabled(binding_mods, opts)) {
+            try writer.writeByte(0x1B);
+            return try writer.writeAll(utf8);
+        }
+    } else if (try legacyAltPrefix(
         event,
         binding_mods,
         all_mods,
@@ -540,11 +571,15 @@ fn legacy(
     // For Linux, we continue to encode text because it is typical.
     // For example on Gnome Console Super+b will encode a "b" character
     // with legacy encoding.
-    if ((comptime builtin.os.tag == .macos) and all_mods.super) {
+    if (builtin.os.tag == .macos and !opts.proxy_events and all_mods.super) {
         return;
     }
 
     return try writer.writeAll(utf8);
+}
+
+fn proxyAltPrefixEnabled(binding_mods: key.Mods, opts: Options) bool {
+    return binding_mods.alt and opts.alt_esc_prefix;
 }
 
 fn legacyAltPrefix(
@@ -918,6 +953,8 @@ const KittyMods = packed struct(u8) {
             .alt = mods.alt,
             .ctrl = mods.ctrl,
             .super = mods.super,
+            .hyper = mods.hyper,
+            .meta = mods.meta,
             .caps_lock = mods.caps_lock,
             .num_lock = mods.num_lock,
         };
@@ -1246,6 +1283,21 @@ test "kitty: repeat with just disambiguate" {
         .kitty_flags = .{ .disambiguate = true },
     });
     try testing.expectEqualStrings("a", writer.buffered());
+}
+
+test "kitty: repeat with event reporting" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try kitty(&writer, .{
+        .key = .key_a,
+        .action = .repeat,
+        .mods = .{},
+        .utf8 = "a",
+        .unshifted_codepoint = 'a',
+    }, .{
+        .kitty_flags = .{ .disambiguate = true, .report_events = true },
+    });
+    try testing.expectEqualStrings("\x1b[97;1:2u", writer.buffered());
 }
 //
 test "kitty: enter, backspace, tab" {
@@ -1700,6 +1752,26 @@ test "kitty: left shift with report all" {
     try testing.expectEqualStrings("\x1b[57441u", writer.buffered());
 }
 
+test "kitty: proxy alt is a modifier for associated text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try kitty(&writer, .{
+        .key = .key_w,
+        .mods = .{ .alt = true },
+        .utf8 = "∑",
+        .unshifted_codepoint = 119,
+    }, .{
+        .kitty_flags = .{
+            .disambiguate = true,
+            .report_all = true,
+            .report_alternates = true,
+            .report_associated = true,
+        },
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1b[119;3u", writer.buffered());
+}
+
 test "kitty: report associated with alt text on macOS with option" {
     if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
 
@@ -1991,6 +2063,93 @@ test "legacy: ctrl+alt+c" {
         .utf8 = "c",
     }, .{});
     try testing.expectEqualStrings("\x1b\x03", writer.buffered());
+}
+
+test "legacy: proxy alt without generated text ignores host option policy" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .key_c,
+        .mods = .{ .alt = true },
+        .unshifted_codepoint = 'c',
+    }, .{
+        .alt_esc_prefix = true,
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1bc", writer.buffered());
+}
+
+test "legacy: proxy super preserves semantic text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .key_b,
+        .mods = .{ .super = true },
+        .utf8 = "b",
+        .unshifted_codepoint = 'b',
+    }, .{ .proxy_events = true });
+    try testing.expectEqualStrings("b", writer.buffered());
+}
+
+test "legacy: proxy alt with modify other keys preserves the modifier" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .key_e,
+        .mods = .{ .alt = true },
+        .utf8 = "é",
+        .unshifted_codepoint = 'e',
+    }, .{
+        .modify_other_keys_state_2 = true,
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1b[27;3;233~", writer.buffered());
+}
+
+test "legacy: alt+unicode prefixes the complete utf8 text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .unidentified,
+        .mods = .{ .alt = true },
+        .utf8 = "é",
+        .unshifted_codepoint = 'é',
+    }, .{
+        .alt_esc_prefix = true,
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1bé", writer.buffered());
+}
+
+test "legacy: alt with invalid unshifted codepoint preserves utf8 text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .unidentified,
+        .mods = .{ .alt = true },
+        .utf8 = "é",
+        .unshifted_codepoint = 0xD800,
+    }, .{
+        .alt_esc_prefix = true,
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1bé", writer.buffered());
+}
+
+test "legacy: alt+shift preserves shifted text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .period,
+        .mods = .{ .alt = true, .shift = true },
+        .consumed_mods = .{ .shift = true },
+        .utf8 = ">",
+        .unshifted_codepoint = '.',
+    }, .{
+        .alt_esc_prefix = true,
+        .proxy_events = true,
+    });
+    try testing.expectEqualStrings("\x1b>", writer.buffered());
 }
 
 test "legacy: alt+c" {
@@ -2369,7 +2528,7 @@ test "legacy: f1" {
             .mods = .{ .ctrl = true },
             .consumed_mods = .{},
         }, .{});
-        try testing.expectEqualStrings("\x1b[13;5~", writer.buffered());
+        try testing.expectEqualStrings("\x1b[1;5R", writer.buffered());
     }
 
     // F4
@@ -2393,6 +2552,30 @@ test "legacy: f1" {
         }, .{});
         try testing.expectEqualStrings("\x1b[15;5~", writer.buffered());
     }
+}
+
+test "legacy: extended function keys" {
+    var buf: [128]u8 = undefined;
+
+    const cases = .{
+        .{ key.Key.f13, "\x1b[1;2P" },
+        .{ key.Key.f24, "\x1b[24;2~" },
+        .{ key.Key.f25, "\x1b[1;5P" },
+        .{ key.Key.f26, "\x1b[1;5Q" },
+        .{ key.Key.f35, "\x1b[23;5~" },
+    };
+    inline for (cases) |case| {
+        var writer: std.Io.Writer = .fixed(&buf);
+        try legacy(&writer, .{ .key = case[0] }, .{});
+        try testing.expectEqualStrings(case[1], writer.buffered());
+    }
+
+    var writer: std.Io.Writer = .fixed(&buf);
+    try legacy(&writer, .{
+        .key = .f13,
+        .mods = .{ .ctrl = true },
+    }, .{});
+    try testing.expectEqualStrings("\x1b[1;6P", writer.buffered());
 }
 
 test "legacy: left_shift+tab" {

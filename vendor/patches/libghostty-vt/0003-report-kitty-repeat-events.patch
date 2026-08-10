@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Sun, 9 Aug 2026 00:00:00 +0000
+Subject: [PATCH] report kitty repeat events
+
+Do not collapse repeat events into plain text when Kitty event-type reporting
+is active. Applications need the CSI-u event suffix to distinguish a repeat
+from a press.
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/2514
+Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
+---
+diff --git a/vendor/libghostty-vt/src/input/key_encode.zig b/vendor/libghostty-vt/src/input/key_encode.zig
+index 08f56b04..d04e4f37 100644
+--- a/vendor/libghostty-vt/src/input/key_encode.zig
++++ b/vendor/libghostty-vt/src/input/key_encode.zig
+@@ -198,7 +198,8 @@ fn kitty(
+             // We don't send release events because those are specially encoded.
+             if (event.utf8.len > 0 and
+                 binding_mods.empty() and
+-                event.action != .release)
++                (event.action == .press or
++                    (event.action == .repeat and !opts.kitty_flags.report_events)))
+             plain_text: {
+                 // We only do this for printable characters. We should
+                 // inspect the real unicode codepoint properties here but
+@@ -1263,6 +1264,21 @@ test "kitty: repeat with just disambiguate" {
+     });
+     try testing.expectEqualStrings("a", writer.buffered());
+ }
++
++test "kitty: repeat with event reporting" {
++    var buf: [128]u8 = undefined;
++    var writer: std.Io.Writer = .fixed(&buf);
++    try kitty(&writer, .{
++        .key = .key_a,
++        .action = .repeat,
++        .mods = .{},
++        .utf8 = "a",
++        .unshifted_codepoint = 'a',
++    }, .{
++        .kitty_flags = .{ .disambiguate = true, .report_events = true },
++    });
++    try testing.expectEqualStrings("\x1b[97;1:2u", writer.buffered());
++}
+ //
+ test "kitty: enter, backspace, tab" {
+     var buf: [128]u8 = undefined;

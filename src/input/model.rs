@@ -72,7 +72,9 @@ pub struct TerminalKey {
     pub kind: crossterm::event::KeyEventKind,
     pub repeat_count: u16,
     pub shifted_codepoint: Option<u32>,
+    pub base_layout_codepoint: Option<u32>,
     pub generated_text: Option<String>,
+    text_commit: bool,
     source: KeySource,
 }
 
@@ -84,7 +86,9 @@ impl TerminalKey {
             kind: crossterm::event::KeyEventKind::Press,
             repeat_count: 1,
             shifted_codepoint: None,
+            base_layout_codepoint: None,
             generated_text: None,
+            text_commit: false,
             source: KeySource::Synthesized,
         }
     }
@@ -93,6 +97,7 @@ impl TerminalKey {
         if kind == crossterm::event::KeyEventKind::Release {
             self.repeat_count = 1;
             self.generated_text = None;
+            self.text_commit = false;
         }
         self.kind = kind;
         self
@@ -107,14 +112,23 @@ impl TerminalKey {
         self
     }
 
-    pub(crate) fn with_modifiers(mut self, modifiers: KeyModifiers) -> Self {
-        self.modifiers = modifiers;
+    pub fn with_shifted_codepoint(mut self, shifted_codepoint: u32) -> Self {
+        self.shifted_codepoint = Some(shifted_codepoint);
         self
     }
 
-    #[allow(dead_code)] // Reserved for the upcoming raw input parser to preserve shifted/base key pairs.
-    pub fn with_shifted_codepoint(mut self, shifted_codepoint: u32) -> Self {
-        self.shifted_codepoint = Some(shifted_codepoint);
+    pub fn with_base_layout_codepoint(mut self, base_layout_codepoint: u32) -> Self {
+        self.base_layout_codepoint = Some(base_layout_codepoint);
+        self
+    }
+
+    pub(crate) fn with_alternate_codepoints(
+        mut self,
+        shifted_codepoint: Option<u32>,
+        base_layout_codepoint: Option<u32>,
+    ) -> Self {
+        self.shifted_codepoint = shifted_codepoint;
+        self.base_layout_codepoint = base_layout_codepoint;
         self
     }
 
@@ -161,6 +175,15 @@ impl TerminalKey {
         }
     }
 
+    pub(crate) fn is_windows_ctrl_minus_alias(&self) -> bool {
+        const CTRL_PRESSED: u32 = 0x0004 | 0x0008;
+        matches!(
+            self.source,
+            KeySource::WindowsConsole { record, .. }
+                if record.unicode == 0x1f && record.control_key_state & CTRL_PRESSED != 0
+        )
+    }
+
     pub(crate) fn identity(&self) -> KeyIdentity {
         match self.source {
             KeySource::WindowsConsole {
@@ -185,6 +208,10 @@ impl TerminalKey {
         )
     }
 
+    pub(crate) fn is_text_commit(&self) -> bool {
+        self.text_commit
+    }
+
     pub fn with_text_commit(mut self) -> Self {
         let has_text_only_modifiers = match self.code {
             KeyCode::Char(ch) if ch.is_uppercase() => {
@@ -198,6 +225,7 @@ impl TerminalKey {
                 KeyCode::Char(ch) => Some(ch.to_string()),
                 _ => None,
             };
+            self.text_commit = self.generated_text.is_some();
         }
         self
     }
@@ -222,7 +250,7 @@ pub fn ime_compatible_keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModifyOtherKeysMode {
     Mode1,
     Mode2,
@@ -389,8 +417,10 @@ mod tests {
             .with_generated_text(Some("ignored".to_owned()));
 
         assert_eq!(release.generated_text, None);
+        assert!(!release.is_text_commit());
         assert_eq!(release.repeat_count, 1);
         assert_eq!(regrouped_release.generated_text, None);
+        assert!(!regrouped_release.is_text_commit());
         assert_eq!(regrouped_release.repeat_count, 1);
     }
 
@@ -399,6 +429,7 @@ mod tests {
         let key = TerminalKey::new(KeyCode::Char('É'), KeyModifiers::SHIFT).with_text_commit();
 
         assert_eq!(key.generated_text.as_deref(), Some("É"));
+        assert!(key.is_text_commit());
     }
 
     #[test]

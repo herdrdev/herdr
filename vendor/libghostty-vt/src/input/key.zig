@@ -47,6 +47,12 @@ pub const KeyEvent = struct {
     /// shift+a is "A" in UTF-8 but unshifted would provide 'a'.
     unshifted_codepoint: u21 = 0,
 
+    /// Explicit Kitty shifted alternate supplied by a terminal proxy.
+    shifted_codepoint: u21 = 0,
+
+    /// Explicit Kitty base-layout alternate supplied by a terminal proxy.
+    base_layout_codepoint: u21 = 0,
+
     /// Returns the effective modifiers for this event. The effective
     /// modifiers are the mods that should be considered for keybindings.
     pub fn effectiveMods(self: KeyEvent) Mods {
@@ -305,6 +311,18 @@ pub const Key = enum(c_int) {
     cut,
     paste,
 
+    // Kitty protocol extended function keys, appended for ABI stability.
+    f26,
+    f27,
+    f28,
+    f29,
+    f30,
+    f31,
+    f32,
+    f33,
+    f34,
+    f35,
+
     /// Converts an ASCII character to a key, if possible. This returns
     /// null if the character is unknown.
     ///
@@ -530,7 +548,7 @@ pub const Key = enum(c_int) {
         return switch (self) {
             inline else => |tag| {
                 return comptime result: {
-                    @setEvalBranchQuota(10_000);
+                    @setEvalBranchQuota(20_000);
                     for (codepoint_map) |entry| {
                         if (entry[1] == tag) break :result entry[0];
                     }
@@ -683,6 +701,16 @@ pub const Key = enum(c_int) {
             .f23,
             .f24,
             .f25,
+            .f26,
+            .f27,
+            .f28,
+            .f29,
+            .f30,
+            .f31,
+            .f32,
+            .f33,
+            .f34,
+            .f35,
             .intl_backslash,
             .intl_ro,
             .intl_yen,

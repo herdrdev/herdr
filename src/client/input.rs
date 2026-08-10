@@ -365,7 +365,7 @@ fn windows_crossterm_reader_loop(
             Err(_) => break,
         };
 
-        let raw_sequence_pending = framer.has_pending_input();
+        let raw_sequence_pending = framer.requires_raw_continuation();
         if let Some(bytes) = windows_key_raw_bytes(&event, raw_sequence_pending) {
             tracing::debug!(
                 bytes = ?bytes,
@@ -521,6 +521,9 @@ fn windows_client_input_event_from_raw(
             let source = if let Some(bytes) = key.vt_bytes() {
                 crate::protocol::ClientKeySource::Vt {
                     bytes: bytes.to_vec(),
+                    shifted_codepoint: key.shifted_codepoint,
+                    base_layout_codepoint: key.base_layout_codepoint,
+                    text_commit: key.is_text_commit(),
                 }
             } else if let Some(record) = key.windows_record() {
                 crate::protocol::ClientKeySource::WindowsConsole { record }
@@ -749,6 +752,25 @@ mod windows_tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
+    fn windows_oversized_csi_final_is_routed_through_discard_state() {
+        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut oversized = b"\x1b[".to_vec();
+        oversized.extend(std::iter::repeat_n(b'1', 4096));
+
+        assert!(framer.push(&oversized).is_empty());
+        assert!(framer.requires_raw_continuation());
+
+        let final_key = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::empty()));
+        let final_bytes = windows_key_raw_bytes(&final_key, framer.requires_raw_continuation())
+            .expect("discard continuation routes through raw framer");
+        assert!(framer.push(&final_bytes).is_empty());
+        assert!(!framer.requires_raw_continuation());
+
+        let following_key = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
+        assert_eq!(windows_key_raw_bytes(&following_key, false), None);
+    }
+
+    #[test]
     fn windows_control_chars_are_reframed_as_raw_bytes() {
         let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
         assert_eq!(
@@ -776,18 +798,23 @@ mod windows_tests {
     #[test]
     fn windows_crossterm_printable_press_keeps_key_semantics_and_text() {
         let event = Event::Key(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::empty()));
+        let event = windows_crossterm_input_event(event).expect("printable key converts");
 
         assert_eq!(
-            windows_crossterm_input_event(event),
-            Some(crate::protocol::ClientInputEvent::Key {
+            event,
+            crate::protocol::ClientInputEvent::Key {
                 code: crate::protocol::ClientKeyCode::Char('你'),
                 modifiers: 0,
                 kind: crate::protocol::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: Some("你".to_string()),
                 source: crate::protocol::ClientKeySource::Synthesized,
-            })
+            }
         );
+        let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
+            panic!("expected key event");
+        };
+        assert!(key.is_text_commit());
     }
 
     #[test]
@@ -825,9 +852,8 @@ mod windows_tests {
         assert_eq!(windows_key_raw_bytes(&ctrl_shift_bracket, false), None);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_ctrl_d_semantic_event_encodes_to_eot() {
+    #[tokio::test]
+    async fn windows_ctrl_d_reaches_the_pane_as_eot() {
         let event = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
         assert_eq!(windows_key_raw_bytes(&event, false), None);
 
@@ -839,10 +865,12 @@ mod windows_tests {
         };
         assert_eq!(key.code, KeyCode::Char('d'));
         assert_eq!(key.modifiers, KeyModifiers::CONTROL);
-        assert_eq!(
-            crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-            b"\x04"
-        );
+
+        let (runtime, _rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 1,
+            );
+        assert_eq!(runtime.encode_terminal_key(key), b"\x04");
     }
 
     #[test]
@@ -883,7 +911,12 @@ mod windows_tests {
                 kind: crate::protocol::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![4] },
+                source: crate::protocol::ClientKeySource::Vt {
+                    bytes: vec![4],
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
+                },
             }
         );
     }
@@ -907,10 +940,39 @@ mod windows_tests {
                 repeat_count: 1,
                 generated_text: None,
                 source: crate::protocol::ClientKeySource::Vt {
-                    bytes: b"\x1b[A".to_vec()
+                    bytes: b"\x1b[A".to_vec(),
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
                 },
             }
         );
+    }
+
+    #[test]
+    fn windows_raw_kitty_input_preserves_alternate_codepoints() {
+        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut events = framer.push(b"\x1b[97:65:113;;65:769u");
+        assert_eq!(events.len(), 1);
+
+        let event =
+            windows_client_input_event_from_raw(events.remove(0)).expect("raw key converts");
+        let crate::protocol::ClientInputEvent::Key {
+            generated_text,
+            source:
+                crate::protocol::ClientKeySource::Vt {
+                    shifted_codepoint,
+                    base_layout_codepoint,
+                    ..
+                },
+            ..
+        } = event
+        else {
+            panic!("expected VT key event");
+        };
+        assert_eq!(generated_text.as_deref(), Some("A\u{301}"));
+        assert_eq!(shifted_codepoint, Some('A' as u32));
+        assert_eq!(base_layout_codepoint, Some('q' as u32));
     }
 
     #[test]
@@ -930,7 +992,12 @@ mod windows_tests {
                 kind: crate::protocol::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                source: crate::protocol::ClientKeySource::Vt {
+                    bytes: vec![0x1b],
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
+                },
             }
         );
     }

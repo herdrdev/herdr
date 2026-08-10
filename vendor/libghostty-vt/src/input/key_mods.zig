@@ -36,7 +36,9 @@ pub const Mods = packed struct(Mods.Backing) {
     caps_lock: bool = false,
     num_lock: bool = false,
     sides: Side = .{},
-    _padding: u6 = 0,
+    hyper: bool = false,
+    meta: bool = false,
+    _padding: u4 = 0,
 
     /// The standard modifier keys only. Does not include the lock keys,
     /// only standard bindable keys.
@@ -109,6 +111,8 @@ pub const Mods = packed struct(Mods.Backing) {
             .ctrl = self.ctrl,
             .alt = self.alt,
             .super = self.super,
+            .hyper = self.hyper,
+            .meta = self.meta,
         };
     }
 
@@ -163,6 +167,14 @@ pub const Mods = packed struct(Mods.Backing) {
         try testing.expectEqual(
             @as(Backing, @bitCast(Mods{ .shift = true })),
             @as(Backing, 0b0000_0001),
+        );
+        try testing.expectEqual(
+            @as(Backing, @bitCast(Mods{ .hyper = true })),
+            @as(Backing, 1 << 10),
+        );
+        try testing.expectEqual(
+            @as(Backing, @bitCast(Mods{ .meta = true })),
+            @as(Backing, 1 << 11),
         );
     }
 

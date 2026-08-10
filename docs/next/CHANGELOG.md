@@ -18,7 +18,7 @@
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
-- Fish `Ctrl+Alt` keybindings now work in panes after legacy Alt-prefixed control bytes are decoded with both modifiers. (#2514)
+- Pane key forwarding now uses one state-aware encoder, fixing Fish `Ctrl+Alt` bindings and preserving Kitty alternate and associated text, extended modifiers, repeats and releases, F13–F25, and `modifyOtherKeys` state through handoff. (#2514)
 - `herdr config check` now reports unknown built-in theme names instead of silently accepting them. (#2452)
 - macOS `herdr --remote` clients now keep the accepted bridge socket blocking, preventing an immediate disconnect after the protocol handshake. (#2478, thanks @mathijshenquet)
 - Prefix keybindings now preserve Shift in WezTerm Kitty keyboard mode, so commands such as config reload no longer trigger their unshifted action. (#2435)

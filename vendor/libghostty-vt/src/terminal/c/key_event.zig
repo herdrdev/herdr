@@ -121,6 +121,26 @@ pub fn get_unshifted_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
     return event.unshifted_codepoint;
 }
 
+pub fn set_shifted_codepoint(event_: Event, codepoint: u32) callconv(lib.calling_conv) void {
+    const event: *key.KeyEvent = &event_.?.event;
+    event.shifted_codepoint = @truncate(codepoint);
+}
+
+pub fn get_shifted_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
+    const event: *key.KeyEvent = &event_.?.event;
+    return event.shifted_codepoint;
+}
+
+pub fn set_base_layout_codepoint(event_: Event, codepoint: u32) callconv(lib.calling_conv) void {
+    const event: *key.KeyEvent = &event_.?.event;
+    event.base_layout_codepoint = @truncate(codepoint);
+}
+
+pub fn get_base_layout_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
+    const event: *key.KeyEvent = &event_.?.event;
+    return event.base_layout_codepoint;
+}
+
 test "alloc" {
     const testing = std.testing;
     var e: Event = undefined;
@@ -176,6 +196,10 @@ test "set" {
     // Test unshifted codepoint
     set_unshifted_codepoint(e, 'a');
     try testing.expectEqual(@as(u21, 'a'), e.?.event.unshifted_codepoint);
+    set_shifted_codepoint(e, 'A');
+    try testing.expectEqual(@as(u21, 'A'), e.?.event.shifted_codepoint);
+    set_base_layout_codepoint(e, 'q');
+    try testing.expectEqual(@as(u21, 'q'), e.?.event.base_layout_codepoint);
 }
 
 test "get" {
@@ -203,6 +227,8 @@ test "get" {
     set_utf8(e, text.ptr, text.len);
 
     set_unshifted_codepoint(e, 'z');
+    set_shifted_codepoint(e, 'Z');
+    set_base_layout_codepoint(e, 'y');
 
     // Get them back
     try testing.expectEqual(key.Action.repeat, get_action(e));
@@ -225,6 +251,8 @@ test "get" {
     try testing.expectEqualStrings("test", got_utf8.?[0..utf8_len]);
 
     try testing.expectEqual(@as(u32, 'z'), get_unshifted_codepoint(e));
+    try testing.expectEqual(@as(u32, 'Z'), get_shifted_codepoint(e));
+    try testing.expectEqual(@as(u32, 'y'), get_base_layout_codepoint(e));
 }
 
 test "complete key event" {

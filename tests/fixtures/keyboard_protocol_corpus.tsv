@@ -1,40 +1,145 @@
-# family	bytes_hex	code	modifiers	kind	shifted_codepoint
-legacy_ctrl_b	02	char:b	control	press	
-legacy_ctrl_z	1a	char:z	control	press	
-legacy_enter	0d	enter	-	press	
-legacy_tab	09	tab	-	press	
-legacy_backspace	7f	backspace	-	press	
-legacy_alt_backspace	1b7f	backspace	alt	press
-legacy_up	1b5b41	up	-	press	
-legacy_home	1b5b48	home	-	press	
-xterm_alt_up	1b5b313b3341	up	alt	press	
-xterm_ctrl_left	1b5b313b3544	left	control	press	
-xterm_shift_pageup	1b5b353b327e	pageup	shift	press	
-ghostty_enhanced_up_press	1b5b313b313a3141	up	-	press	
-ghostty_enhanced_up_release	1b5b313b313a3341	up	-	release	
-modify_other_keys_ctrl_shift_l	1b5b32373b363b3130387e	char:l	control+shift	press	
-kitty_alt_backspace	1b5b3132373b3375	backspace	alt	press
-kitty_shift_letter	1b5b3130383a37363b323a3175	char:l	shift	press	76
-kitty_shift_symbol	1b5b34393a33333b323a3175	char:1	shift	press	33
-kitty_omitted_shift_modifier	1b5b3131343a38323b3175	char:r	shift	press	82
-kitty_release_letter	1b5b3130383a37363b323a3375	char:l	shift	release	76
-kitty_keypad_0	1b5b35373339393b3175	char:0	-	press
-kitty_keypad_1	1b5b35373430303b3175	char:1	-	press
-kitty_keypad_2	1b5b35373430313b3175	char:2	-	press
-kitty_keypad_3	1b5b35373430323b3175	char:3	-	press
-kitty_keypad_4	1b5b35373430333b3175	char:4	-	press
-kitty_keypad_5	1b5b35373430343b3175	char:5	-	press
-kitty_keypad_6	1b5b35373430353b3175	char:6	-	press
-kitty_keypad_7	1b5b35373430363b3175	char:7	-	press
-kitty_keypad_8	1b5b35373430373b3175	char:8	-	press
-kitty_keypad_9	1b5b35373430383b3175	char:9	-	press
-kitty_keypad_decimal	1b5b35373430393b3175	char:.	-	press
-kitty_keypad_divide	1b5b35373431303b3175	char:/	-	press
-kitty_keypad_multiply	1b5b35373431313b3175	char:*	-	press
-kitty_keypad_subtract	1b5b35373431323b3175	char:-	-	press
-kitty_keypad_add	1b5b35373431333b3175	char:+	-	press
-kitty_keypad_enter	1b5b35373431343b3175	enter	-	press
-kitty_keypad_equal	1b5b35373431353b3175	char:=	-	press
-kitty_keypad_separator	1b5b35373431363b3175	char:,	-	press
-kitty_functional_up	1b5b35373431393b3175	up	-	press	
-kitty_functional_home	1b5b35373432333b3175	home	-	press	
+# family	bytes_hex	code	modifiers	kind	shifted_codepoint	generated_text_hex	pane_profile	pane_bytes_hex	base_layout_codepoint(optional)
+legacy_ctrl_space	00	char: 	control	press		-	legacy	00
+legacy_ctrl_a	01	char:a	control	press		-	legacy	01
+legacy_ctrl_b	02	char:b	control	press		-	legacy	02
+legacy_ctrl_c	03	char:c	control	press		-	legacy	03
+legacy_ctrl_d	04	char:d	control	press		-	legacy	04
+legacy_ctrl_e	05	char:e	control	press		-	legacy	05
+legacy_ctrl_f	06	char:f	control	press		-	legacy	06
+legacy_ctrl_g	07	char:g	control	press		-	legacy	07
+legacy_backspace_ctrl_h_alias	08	char:h	control	press		-	legacy	08
+legacy_tab	09	tab	-	press		-	legacy	09
+legacy_ctrl_j	0a	char:j	control	press		-	legacy	0a
+legacy_ctrl_k	0b	char:k	control	press		-	legacy	0b
+legacy_ctrl_l	0c	char:l	control	press		-	legacy	0c
+legacy_enter	0d	enter	-	press		-	legacy	0d
+legacy_ctrl_n	0e	char:n	control	press		-	legacy	0e
+legacy_ctrl_o	0f	char:o	control	press		-	legacy	0f
+legacy_ctrl_p	10	char:p	control	press		-	legacy	10
+legacy_ctrl_q	11	char:q	control	press		-	legacy	11
+legacy_ctrl_r	12	char:r	control	press		-	legacy	12
+legacy_ctrl_s	13	char:s	control	press		-	legacy	13
+legacy_ctrl_t	14	char:t	control	press		-	legacy	14
+legacy_ctrl_u	15	char:u	control	press		-	legacy	15
+legacy_ctrl_v	16	char:v	control	press		-	legacy	16
+legacy_ctrl_w	17	char:w	control	press		-	legacy	17
+legacy_ctrl_x	18	char:x	control	press		-	legacy	18
+legacy_ctrl_y	19	char:y	control	press		-	legacy	19
+legacy_ctrl_z	1a	char:z	control	press		-	legacy	1a
+legacy_escape	1b	esc	-	press		-	legacy	1b
+legacy_ctrl_backslash	1c	char:\	control	press		-	legacy	1c
+legacy_ctrl_right_bracket	1d	char:]	control	press		-	legacy	1d
+legacy_ctrl_caret	1e	char:^	control	press		-	legacy	1e
+legacy_ctrl_underscore	1f	char:_	control	press		-	legacy	1f
+legacy_alt_ctrl_space	1b00	char: 	control+alt	press		-	legacy	1b00
+legacy_alt_ctrl_a	1b01	char:a	control+alt	press		-	legacy	1b01
+legacy_alt_ctrl_b	1b02	char:b	control+alt	press		-	legacy	1b02
+legacy_alt_ctrl_c	1b03	char:c	control+alt	press		-	legacy	1b03
+legacy_alt_ctrl_d	1b04	char:d	control+alt	press		-	legacy	1b04
+legacy_alt_ctrl_e	1b05	char:e	control+alt	press		-	legacy	1b05
+legacy_alt_ctrl_f	1b06	char:f	control+alt	press		-	legacy	1b06
+legacy_alt_ctrl_g	1b07	char:g	control+alt	press		-	legacy	1b07
+legacy_alt_ctrl_h	1b08	char:h	control+alt	press		-	legacy	1b08
+legacy_alt_tab	1b09	tab	alt	press		-	legacy	1b09
+legacy_alt_ctrl_j	1b0a	char:j	control+alt	press		-	legacy	1b0a
+legacy_alt_ctrl_k	1b0b	char:k	control+alt	press		-	legacy	1b0b
+legacy_alt_ctrl_l	1b0c	char:l	control+alt	press		-	legacy	1b0c
+legacy_alt_enter	1b0d	enter	alt	press		-	legacy	1b0d
+legacy_alt_ctrl_n	1b0e	char:n	control+alt	press		-	legacy	1b0e
+legacy_alt_ctrl_o	1b0f	char:o	control+alt	press		-	legacy	1b0f
+legacy_alt_ctrl_p	1b10	char:p	control+alt	press		-	legacy	1b10
+legacy_alt_ctrl_q	1b11	char:q	control+alt	press		-	legacy	1b11
+legacy_alt_ctrl_r	1b12	char:r	control+alt	press		-	legacy	1b12
+legacy_alt_ctrl_s	1b13	char:s	control+alt	press		-	legacy	1b13
+legacy_alt_ctrl_t	1b14	char:t	control+alt	press		-	legacy	1b14
+legacy_alt_ctrl_u	1b15	char:u	control+alt	press		-	legacy	1b15
+legacy_alt_ctrl_v	1b16	char:v	control+alt	press		-	legacy	1b16
+legacy_alt_ctrl_w	1b17	char:w	control+alt	press		-	legacy	1b17
+legacy_alt_ctrl_x	1b18	char:x	control+alt	press		-	legacy	1b18
+legacy_alt_ctrl_y	1b19	char:y	control+alt	press		-	legacy	1b19
+legacy_alt_ctrl_z	1b1a	char:z	control+alt	press		-	legacy	1b1a
+legacy_alt_ctrl_backslash	1b1c	char:\	control+alt	press		-	legacy	1b1c
+legacy_alt_ctrl_right_bracket	1b1d	char:]	control+alt	press		-	legacy	1b1d
+legacy_alt_ctrl_caret	1b1e	char:^	control+alt	press		-	legacy	1b1e
+legacy_alt_ctrl_underscore	1b1f	char:_	control+alt	press		-	legacy	1b1f
+legacy_backspace	7f	backspace	-	press		-	legacy	7f
+legacy_alt_backspace	1b7f	backspace	alt	press		-	legacy	1b7f
+legacy_up	1b5b41	up	-	press		-	legacy	1b5b41
+legacy_home	1b5b48	home	-	press		-	legacy	1b5b48
+xterm_alt_up	1b5b313b3341	up	alt	press		-	legacy	1b5b313b3341
+xterm_ctrl_left	1b5b313b3544	left	control	press		-	legacy	1b5b313b3544
+xterm_shift_pageup	1b5b353b327e	pageup	shift	press		-	legacy	1b5b353b327e
+ghostty_enhanced_up_press	1b5b313b313a3141	up	-	press		-	legacy	1b5b41
+ghostty_enhanced_up_release	1b5b313b313a3341	up	-	release		-	legacy	empty
+modify_other_keys_ctrl_shift_l	1b5b32373b363b3130387e	char:l	control+shift	press		-	legacy	0c
+kitty_alt_backspace	1b5b3132373b3375	backspace	alt	press		-	legacy	1b7f
+kitty_shift_letter	1b5b3130383a37363b323a3175	char:l	shift	press	76	-	legacy	4c
+kitty_shift_symbol	1b5b34393a33333b323a3175	char:1	shift	press	33	-	legacy	21
+kitty_omitted_shift_modifier	1b5b3131343a38323b3175	char:r	shift	press	82	-	legacy	52
+kitty_release_letter	1b5b3130383a37363b323a3375	char:l	shift	release	76	-	legacy	empty
+kitty_keypad_0	1b5b35373339393b3175	char:0	-	press		-	legacy	30
+kitty_keypad_1	1b5b35373430303b3175	char:1	-	press		-	legacy	31
+kitty_keypad_2	1b5b35373430313b3175	char:2	-	press		-	legacy	32
+kitty_keypad_3	1b5b35373430323b3175	char:3	-	press		-	legacy	33
+kitty_keypad_4	1b5b35373430333b3175	char:4	-	press		-	legacy	34
+kitty_keypad_5	1b5b35373430343b3175	char:5	-	press		-	legacy	35
+kitty_keypad_6	1b5b35373430353b3175	char:6	-	press		-	legacy	36
+kitty_keypad_7	1b5b35373430363b3175	char:7	-	press		-	legacy	37
+kitty_keypad_8	1b5b35373430373b3175	char:8	-	press		-	legacy	38
+kitty_keypad_9	1b5b35373430383b3175	char:9	-	press		-	legacy	39
+kitty_keypad_decimal	1b5b35373430393b3175	char:.	-	press		-	legacy	2e
+kitty_keypad_divide	1b5b35373431303b3175	char:/	-	press		-	legacy	2f
+kitty_keypad_multiply	1b5b35373431313b3175	char:*	-	press		-	legacy	2a
+kitty_keypad_subtract	1b5b35373431323b3175	char:-	-	press		-	legacy	2d
+kitty_keypad_add	1b5b35373431333b3175	char:+	-	press		-	legacy	2b
+kitty_keypad_enter	1b5b35373431343b3175	enter	-	press		-	legacy	0d
+kitty_keypad_equal	1b5b35373431353b3175	char:=	-	press		-	legacy	3d
+kitty_keypad_separator	1b5b35373431363b3175	char:,	-	press		-	legacy	2c
+kitty_functional_up	1b5b35373431393b3175	up	-	press		-	legacy	1b5b41
+kitty_functional_home	1b5b35373432333b3175	home	-	press		-	legacy	1b5b48
+legacy_up_application_cursor	1b5b41	up	-	press		-	application_cursor	1b4f41
+kitty_shift_enter_modify_other_keys_1	1b5b31333b3275	enter	shift	press		-	modify_other_keys_1	1b5b32373b323b31337e
+kitty_shift_enter_modify_other_keys_2	1b5b31333b3275	enter	shift	press		-	modify_other_keys_2	1b5b32373b323b31337e
+kitty_shift_backspace_modify_other_keys_1	1b5b3132373b3275	backspace	shift	press		-	modify_other_keys_1	7f
+kitty_shift_backspace_modify_other_keys_2	1b5b3132373b3275	backspace	shift	press		-	modify_other_keys_2	1b5b32373b323b3132377e
+legacy_alt_backspace_kitty_1	1b7f	backspace	alt	press		-	kitty_1	1b5b3132373b3375
+kitty_release_letter_kitty_3	1b5b3130383a37363b323a3375	char:l	shift	release	76	-	kitty_3	1b5b3130383b323a3375
+kitty_shift_letter_kitty_7	1b5b3130383a37363b323a3175	char:l	shift	press	76	-	kitty_7	4c
+kitty_ambiguous_shift_digit_kitty_7	1b5b34393b3275	char:1	shift	press		-	kitty_7	1b5b34393b3275
+kitty_shift_letter_kitty_15	1b5b3130383a37363b323a3175	char:l	shift	press	76	-	kitty_15	1b5b3130383a37363b3275
+kitty_shift_letter_kitty_31	1b5b3130383a37363b323a3175	char:l	shift	press	76	-	kitty_31	1b5b3130383a37363b323b373675
+kitty_ctrl_shift_letter_kitty_5	1b5b3130383a37363b363a3175	char:l	control+shift	press	76	-	kitty_5	1b5b3130383a37363b3675
+kitty_shift_letter_kitty_25	1b5b3130383a37363b323a3175	char:l	shift	press	76	-	kitty_25	1b5b3130383b323b373675
+legacy_plain_a	61	char:a	-	press		61	legacy	61
+legacy_alt_b	1b62	char:b	alt	press		-	legacy	1b62
+legacy_alt_e_acute	1bc3a9	char:é	alt	press		-	legacy	1bc3a9
+legacy_shift_a	41	char:A	shift	press		41	legacy	41
+legacy_shift_a_kitty_13	41	char:A	shift	press		41	kitty_13	41
+legacy_bang_kitty_13	21	char:!	-	press		21	kitty_13	21
+legacy_unicode_e_acute	c3a9	char:é	-	press		c3a9	legacy	c3a9
+legacy_f1	1b4f50	f:1	-	press		-	legacy	1b4f50
+legacy_ctrl_f3	1b5b313b3552	f:3	control	press		-	legacy	1b5b313b3552
+kitty_f13_legacy	1b5b35373337363b3175	f:13	-	press		-	legacy	1b5b313b3250
+kitty_f24_legacy	1b5b35373338373b3175	f:24	-	press		-	legacy	1b5b32343b327e
+kitty_f25_legacy	1b5b35373338383b3175	f:25	-	press		-	legacy	1b5b313b3550
+kitty_f26_legacy	1b5b35373338393b3175	f:26	-	press		-	legacy	1b5b313b3551
+kitty_f35_legacy	1b5b35373339383b3175	f:35	-	press		-	legacy	1b5b32333b357e
+kitty_f13_kitty_1	1b5b35373337363b3175	f:13	-	press		-	kitty_1	1b5b353733373675
+kitty_f35_kitty_1	1b5b35373339383b3175	f:35	-	press		-	kitty_1	1b5b353733393875
+legacy_backspace_backarrow	7f	backspace	-	press		-	backarrow	08
+kitty_keypad_1_application_keypad_characterized	1b5b35373430303b3175	char:1	-	press		-	application_keypad	31
+kitty_ctrl_a_legacy	1b5b39373b3575	char:a	control	press		-	legacy	01
+kitty_ctrl_a_kitty_1	1b5b39373b3575	char:a	control	press		-	kitty_1	1b5b39373b3575
+kitty_hyper_a_kitty_1	1b5b39373b313775	char:a	hyper	press		-	kitty_1	1b5b39373b313775
+kitty_meta_a_kitty_1	1b5b39373b333375	char:a	meta	press		-	kitty_1	1b5b39373b333375
+kitty_hyper_enter_kitty_1	1b5b31333b313775	enter	hyper	press		-	kitty_1	1b5b31333b313775
+kitty_meta_enter_kitty_1	1b5b31333b333375	enter	meta	press		-	kitty_1	1b5b31333b333375
+kitty_repeat_a_kitty_3	1b5b39373b313a3275	char:a	-	repeat		-	kitty_3	1b5b39373b313a3275
+kitty_repeat_a_kitty_11	1b5b39373b313a3275	char:a	-	repeat		-	kitty_11	1b5b39373b313a3275
+kitty_super_a_kitty_31	1b5b39373b3975	char:a	super	press		-	kitty_31	1b5b39373b3975
+kitty_hyper_a_kitty_31	1b5b39373b313775	char:a	hyper	press		-	kitty_31	1b5b39373b313775
+kitty_meta_a_kitty_31	1b5b39373b333375	char:a	meta	press		-	kitty_31	1b5b39373b333375
+kitty_full_alternates_kitty_13	1b5b39373a36353a3131333b3275	char:a	shift	press	65	-	kitty_13	1b5b39373a36353a3131333b3275	113
+kitty_full_alternates_associated_text	1b5b39373a36353a3131333b3b36353a37363975	char:a	shift	press	65	41cc81	legacy	41cc81	113
+kitty_full_alternates_associated_text_kitty_31	1b5b39373a36353a3131333b3b36353a37363975	char:a	shift	press	65	41cc81	kitty_31	1b5b39373a36353a3131333b323b36353a37363975	113
+kitty_ctrl_tab_legacy	1b5b393b3575	tab	control	press		-	legacy	09

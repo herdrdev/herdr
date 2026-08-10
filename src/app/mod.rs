@@ -3673,7 +3673,7 @@ mod tests {
 
         assert_eq!(
             rx.recv().await.unwrap(),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.recv().await.unwrap(),
@@ -5356,7 +5356,10 @@ last_pane = "prefix+tab"
 
         app.route_client_input(b"\x1b[106;1:1u\x1b[106;1:2u\x1b[106;1:3u".to_vec());
         assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
-        assert_eq!(rx.recv().await.unwrap(), bytes::Bytes::from_static(b"j"));
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            bytes::Bytes::from_static(b"\x1b[106;1:2u")
+        );
         assert_eq!(
             rx.recv().await.unwrap(),
             bytes::Bytes::from_static(b"\x1b[106;1:3u")
@@ -5443,7 +5446,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.recv().await.unwrap(),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.recv().await.unwrap(),
@@ -5541,7 +5544,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.try_recv().expect("physical press"),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.try_recv().expect("committed text"),
@@ -5581,7 +5584,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.try_recv().expect("forwarded press"),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.try_recv().expect("synthetic release on focus loss"),
@@ -5616,7 +5619,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.try_recv().expect("forwarded press"),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             rx.try_recv().expect("synthetic release on disconnect"),
@@ -5698,7 +5701,7 @@ last_pane = "prefix+tab"
         );
 
         for expected in [
-            b"\x1b[97;1:1u".as_slice(),
+            b"\x1b[97u".as_slice(),
             b"\x1b[97;1:2u".as_slice(),
             b"\x1b[97;1:2u".as_slice(),
             b"\x1b[97;1:3u".as_slice(),
@@ -5761,7 +5764,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.try_recv().expect("grouped press"),
-            bytes::Bytes::from_static(b"\x1b[97;1:1u\x1b[97;1:2u\x1b[97;1:2u")
+            bytes::Bytes::from_static(b"\x1b[97u\x1b[97;1:2u\x1b[97;1:2u")
         );
         assert_eq!(
             rx.try_recv()
@@ -5799,7 +5802,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             pressed_rx.recv().await.unwrap(),
-            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+            bytes::Bytes::from_static(b"\x1b[106u")
         );
         assert_eq!(
             pressed_rx.recv().await.unwrap(),
@@ -5874,7 +5877,7 @@ last_pane = "prefix+tab"
         for rx in [&mut first_rx, &mut second_rx] {
             assert_eq!(
                 rx.recv().await.unwrap(),
-                bytes::Bytes::from_static(b"\x1b[106;1:1u")
+                bytes::Bytes::from_static(b"\x1b[106u")
             );
             assert_eq!(
                 rx.recv().await.unwrap(),
@@ -5901,7 +5904,7 @@ last_pane = "prefix+tab"
 
         assert_eq!(
             rx.recv().await.unwrap(),
-            bytes::Bytes::from_static(b"\x1b[106:74;2:1u")
+            bytes::Bytes::from_static(b"\x1b[106:74;2u")
         );
         assert_eq!(
             rx.recv().await.unwrap(),

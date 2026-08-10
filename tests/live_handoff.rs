@@ -1035,7 +1035,7 @@ pathlib.Path({received:?}).write_text(data.hex())
 }
 
 #[test]
-fn live_handoff_preserves_modify_other_keys_for_client_input() {
+fn live_handoff_preserves_modify_other_keys_mode_one_for_client_input() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1056,7 +1056,7 @@ import select
 import sys
 import tty
 
-sys.stdout.buffer.write(b"\x1b[>4;2m")
+sys.stdout.buffer.write(b"\x1b[>4;1m")
 sys.stdout.flush()
 pathlib.Path({ready:?}).write_text("ready")
 tty.setraw(sys.stdin.fileno())
@@ -1114,13 +1114,9 @@ pathlib.Path({received:?}).write_text(data.hex())
     let (server_protocol, error) = client_handshake(&mut client_stream, protocol, 80, 24).unwrap();
     assert_eq!(server_protocol, protocol);
     assert!(error.is_none(), "client handshake failed: {error:?}");
-    send_input(&mut client_stream, b"\x1b[13;2u").unwrap();
+    send_input(&mut client_stream, b"\x1b[127;2u").unwrap();
 
-    wait_for_file_contains(
-        &received_marker,
-        "1b5b32373b323b31337e",
-        Duration::from_secs(5),
-    );
+    wait_for_file_contains(&received_marker, "7f", Duration::from_secs(5));
 
     let _ = request(
         &api_socket,

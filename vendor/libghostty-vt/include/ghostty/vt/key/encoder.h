@@ -113,6 +113,12 @@ typedef enum GHOSTTY_ENUM_TYPED {
      */
     GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE = 7,
 
+    /** Input events originated in another terminal and already carry semantic
+     * modifiers and generated text (value: bool). This makes encoding
+     * independent of host OS input conventions.
+     */
+    GHOSTTY_KEY_ENCODER_OPT_PROXY_EVENTS = 8,
+
     GHOSTTY_KEY_ENCODER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyKeyEncoderOption;
 

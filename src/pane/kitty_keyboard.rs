@@ -3,8 +3,7 @@ pub(crate) struct KittyKeyboardTracker {
     pending: Vec<u8>,
     stack: Vec<u16>,
     flags: u16,
-    #[cfg(windows)]
-    modify_other_keys: bool,
+    modify_other_keys_mode: Option<crate::input::ModifyOtherKeysMode>,
 }
 
 impl KittyKeyboardTracker {
@@ -23,7 +22,7 @@ impl KittyKeyboardTracker {
             &combined
         };
         let mut index = 0;
-        while index < bytes.len() {
+        'scan: while index < bytes.len() {
             if bytes[index] != 0x1b {
                 index += 1;
                 continue;
@@ -32,9 +31,8 @@ impl KittyKeyboardTracker {
                 self.store_pending(&bytes[index..]);
                 break;
             }
-            #[cfg(windows)]
             if bytes[index + 1] == b'c' {
-                self.modify_other_keys = false;
+                self.modify_other_keys_mode = None;
             }
             if bytes[index + 1] != b'[' {
                 index += 1;
@@ -43,6 +41,10 @@ impl KittyKeyboardTracker {
 
             let mut end = index + 2;
             while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                if bytes[end] == 0x1b {
+                    index = end;
+                    continue 'scan;
+                }
                 end += 1;
             }
             if end >= bytes.len() {
@@ -52,16 +54,14 @@ impl KittyKeyboardTracker {
 
             match bytes[end] {
                 b'u' => self.observe_csi_u(&bytes[index + 2..end]),
-                #[cfg(windows)]
                 b'm' => self.observe_modify_other_keys(&bytes[index + 2..end]),
-                #[cfg(windows)]
                 b'n' if bytes[index + 2..end]
                     .strip_prefix(b">")
                     .is_some_and(|params| {
                         !params.contains(&b';') && parse_kitty_keyboard_flags(params) == 4
                     }) =>
                 {
-                    self.modify_other_keys = false;
+                    self.modify_other_keys_mode = None;
                 }
                 _ => {}
             }
@@ -69,18 +69,21 @@ impl KittyKeyboardTracker {
         }
     }
 
-    #[cfg(windows)]
-    pub(crate) fn modify_other_keys_enabled(&self) -> bool {
-        self.modify_other_keys
+    pub(crate) fn modify_other_keys_mode(&self) -> Option<crate::input::ModifyOtherKeysMode> {
+        self.modify_other_keys_mode
     }
 
     #[cfg(windows)]
+    pub(crate) fn modify_other_keys_enabled(&self) -> bool {
+        self.modify_other_keys_mode.is_some()
+    }
+
     fn observe_modify_other_keys(&mut self, params: &[u8]) {
         let Some(params) = params.strip_prefix(b">") else {
             return;
         };
         if params.is_empty() {
-            self.modify_other_keys = false;
+            self.modify_other_keys_mode = None;
             return;
         }
 
@@ -90,10 +93,18 @@ impl KittyKeyboardTracker {
         if parts.next().is_some() {
             return;
         }
-        if parse_kitty_keyboard_flags(resource) == 4 {
-            self.modify_other_keys =
-                value.is_some_and(|value| parse_kitty_keyboard_flags(value) != 0);
+        if parse_kitty_keyboard_flags(resource) != 4 {
+            return;
         }
+        self.modify_other_keys_mode = match value {
+            None | Some([]) => None,
+            Some(value) => match parse_decimal(value) {
+                Some(0) => None,
+                Some(1) => Some(crate::input::ModifyOtherKeysMode::Mode1),
+                Some(2) => Some(crate::input::ModifyOtherKeysMode::Mode2),
+                Some(_) | None => return,
+            },
+        };
     }
 
     fn store_pending(&mut self, bytes: &[u8]) {
@@ -146,15 +157,63 @@ impl KittyKeyboardTracker {
 
 fn parse_kitty_keyboard_flags(bytes: &[u8]) -> u16 {
     let first_param = bytes.split(|byte| *byte == b';').next().unwrap_or_default();
-    std::str::from_utf8(first_param)
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(0)
+    parse_decimal(first_param).unwrap_or(0)
+}
+
+fn parse_decimal(bytes: &[u8]) -> Option<u16> {
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracks_exact_modify_other_keys_mode() {
+        let mut tracker = KittyKeyboardTracker::default();
+
+        tracker.observe(b"\x1b[>4;1m");
+        assert_eq!(
+            tracker.modify_other_keys_mode(),
+            Some(crate::input::ModifyOtherKeysMode::Mode1)
+        );
+        tracker.observe(b"\x1b[>4;2m");
+        assert_eq!(
+            tracker.modify_other_keys_mode(),
+            Some(crate::input::ModifyOtherKeysMode::Mode2)
+        );
+        for malformed in [
+            b"\x1b[>4;999999m".as_slice(),
+            b"\x1b[>4;+1m",
+            b"\x1b[>+4;1m",
+        ] {
+            tracker.observe(malformed);
+            assert_eq!(
+                tracker.modify_other_keys_mode(),
+                Some(crate::input::ModifyOtherKeysMode::Mode2)
+            );
+        }
+        tracker.observe(b"\x1b[>4;0m");
+        assert_eq!(tracker.modify_other_keys_mode(), None);
+    }
+
+    #[test]
+    fn interrupted_split_csi_does_not_hide_following_reset_or_mode() {
+        let mut tracker = KittyKeyboardTracker::default();
+        tracker.observe(b"\x1b[>4;2m\x1b[>4;");
+
+        tracker.observe(b"\x1bc");
+        assert_eq!(tracker.modify_other_keys_mode(), None);
+
+        tracker.observe(b"\x1b[>4;\x1b[>4;1m");
+        assert_eq!(
+            tracker.modify_other_keys_mode(),
+            Some(crate::input::ModifyOtherKeysMode::Mode1)
+        );
+    }
 
     #[test]
     fn buffers_split_csi_sequences() {
@@ -166,13 +225,16 @@ mod tests {
 
         assert_eq!(tracker.flags, 1);
         assert_eq!(tracker.stack, vec![0]);
-        #[cfg(windows)]
-        {
-            assert!(tracker.modify_other_keys_enabled());
-            tracker.observe(b"\x1b[>1m");
-            assert!(tracker.modify_other_keys_enabled());
-            tracker.observe(b"\x1b[>04n");
-            assert!(!tracker.modify_other_keys_enabled());
-        }
+        assert_eq!(
+            tracker.modify_other_keys_mode(),
+            Some(crate::input::ModifyOtherKeysMode::Mode1)
+        );
+        tracker.observe(b"\x1b[>1m");
+        assert_eq!(
+            tracker.modify_other_keys_mode(),
+            Some(crate::input::ModifyOtherKeysMode::Mode1)
+        );
+        tracker.observe(b"\x1b[>04n");
+        assert_eq!(tracker.modify_other_keys_mode(), None);
     }
 }

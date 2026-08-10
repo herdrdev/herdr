@@ -1467,7 +1467,12 @@ mod tests {
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                source: crate::protocol::ClientKeySource::Vt {
+                    bytes: vec![0x1b],
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
+                },
             }]
         );
     }
@@ -1487,7 +1492,12 @@ mod tests {
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                source: crate::protocol::ClientKeySource::Vt {
+                    bytes: vec![0x1b],
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
+                },
             }]
         );
     }
@@ -2201,7 +2211,12 @@ mod tests {
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                source: crate::protocol::ClientKeySource::Vt {
+                    bytes: vec![0x1b],
+                    shifted_codepoint: None,
+                    base_layout_codepoint: None,
+                    text_commit: false,
+                },
             }]
         );
     }
@@ -2220,7 +2235,12 @@ mod tests {
 
                     repeat_count: 1,
                     generated_text: None,
-                    source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                    source: crate::protocol::ClientKeySource::Vt {
+                        bytes: vec![0x1b],
+                        shifted_codepoint: None,
+                        base_layout_codepoint: None,
+                        text_commit: false,
+                    },
                 },
                 crate::protocol::ClientInputEvent::Key {
                     code: crate::protocol::ClientKeyCode::Enter,

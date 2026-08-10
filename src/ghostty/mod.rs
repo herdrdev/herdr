@@ -138,6 +138,8 @@ pub const MOD_SHIFT: u16 = ffi::GHOSTTY_MODS_SHIFT as u16;
 pub const MOD_CTRL: u16 = ffi::GHOSTTY_MODS_CTRL as u16;
 pub const MOD_ALT: u16 = ffi::GHOSTTY_MODS_ALT as u16;
 pub const MOD_SUPER: u16 = ffi::GHOSTTY_MODS_SUPER as u16;
+pub const MOD_HYPER: u16 = ffi::GHOSTTY_MODS_HYPER as u16;
+pub const MOD_META: u16 = ffi::GHOSTTY_MODS_META as u16;
 
 pub const KEY_ENTER: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ENTER;
 pub const KEY_UP: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP;
@@ -2557,13 +2559,17 @@ impl Drop for RenderState {
 
 pub struct KeyEvent {
     raw: ffi::GhosttyKeyEvent,
+    utf8: String,
 }
 
 impl KeyEvent {
     pub fn new() -> Result<Self, Error> {
         let mut raw = ptr::null_mut();
         unsafe { ffi::ghostty_key_event_new(ptr::null(), &mut raw).into_result()? };
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            utf8: String::new(),
+        })
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyKeyAction) {
@@ -2578,14 +2584,32 @@ impl KeyEvent {
         unsafe { ffi::ghostty_key_event_set_mods(self.raw, mods) }
     }
 
+    pub fn set_consumed_mods(&mut self, mods: u16) {
+        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw, mods) }
+    }
+
     pub fn set_utf8(&mut self, text: &str) {
-        unsafe {
-            ffi::ghostty_key_event_set_utf8(self.raw, text.as_ptr().cast::<c_char>(), text.len())
-        }
+        self.utf8.clear();
+        self.utf8.push_str(text);
+        let bytes = self.utf8.as_bytes();
+        let data = if bytes.is_empty() {
+            ptr::null()
+        } else {
+            bytes.as_ptr().cast::<c_char>()
+        };
+        unsafe { ffi::ghostty_key_event_set_utf8(self.raw, data, bytes.len()) }
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {
         unsafe { ffi::ghostty_key_event_set_unshifted_codepoint(self.raw, codepoint) }
+    }
+
+    pub fn set_shifted_codepoint(&mut self, codepoint: u32) {
+        unsafe { ffi::ghostty_key_event_set_shifted_codepoint(self.raw, codepoint) }
+    }
+
+    pub fn set_base_layout_codepoint(&mut self, codepoint: u32) {
+        unsafe { ffi::ghostty_key_event_set_base_layout_codepoint(self.raw, codepoint) }
     }
 }
 
@@ -2608,6 +2632,17 @@ impl KeyEncoder {
 
     pub fn set_from_terminal(&mut self, terminal: &Terminal) {
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.raw, terminal.raw()) }
+
+        // Pane input originated in another terminal and is already semantic.
+        // Keep encoding independent of the server's host OS conventions.
+        let proxy_events = true;
+        unsafe {
+            ffi::ghostty_key_encoder_setopt(
+                self.raw,
+                ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_PROXY_EVENTS,
+                ptr::from_ref(&proxy_events).cast(),
+            )
+        }
     }
 
     pub fn encode(&mut self, event: &KeyEvent) -> Result<Vec<u8>, Error> {
@@ -3564,6 +3599,16 @@ mod tests {
         assert!(!output.is_empty());
         assert!(String::from_utf8_lossy(&output).contains("R"));
         assert_eq!(terminal.take_pwd_changes(), [b"file:///tmp/herdr".to_vec()]);
+    }
+
+    #[test]
+    fn key_event_retains_utf8_text_for_its_lifetime() {
+        let mut event = KeyEvent::new().unwrap();
+        let text = String::from("A");
+        event.set_utf8(&text);
+        drop(text);
+
+        assert_eq!(event.utf8, "A");
     }
 
     #[test]

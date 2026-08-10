@@ -89,10 +89,10 @@ pub const keys = keys: {
     result.set(.page_up, pcStyle("\x1b[5;{}~") ++ .{Entry{ .sequence = "\x1B[5~" }});
     result.set(.page_down, pcStyle("\x1b[6;{}~") ++ .{Entry{ .sequence = "\x1B[6~" }});
 
-    // Function Keys. todo: f13-f35 but we need to add to input.Key
+    // Function Keys.
     result.set(.f1, pcStyle("\x1b[1;{}P") ++ .{Entry{ .sequence = "\x1BOP" }});
     result.set(.f2, pcStyle("\x1b[1;{}Q") ++ .{Entry{ .sequence = "\x1BOQ" }});
-    result.set(.f3, pcStyle("\x1b[13;{}~") ++ .{Entry{ .sequence = "\x1BOR" }});
+    result.set(.f3, pcStyle("\x1b[1;{}R") ++ .{Entry{ .sequence = "\x1BOR" }});
     result.set(.f4, pcStyle("\x1b[1;{}S") ++ .{Entry{ .sequence = "\x1BOS" }});
     result.set(.f5, pcStyle("\x1b[15;{}~") ++ .{Entry{ .sequence = "\x1B[15~" }});
     result.set(.f6, pcStyle("\x1b[17;{}~") ++ .{Entry{ .sequence = "\x1B[17~" }});
@@ -102,6 +102,29 @@ pub const keys = keys: {
     result.set(.f10, pcStyle("\x1b[21;{}~") ++ .{Entry{ .sequence = "\x1B[21~" }});
     result.set(.f11, pcStyle("\x1b[23;{}~") ++ .{Entry{ .sequence = "\x1B[23~" }});
     result.set(.f12, pcStyle("\x1b[24;{}~") ++ .{Entry{ .sequence = "\x1B[24~" }});
+    result.set(.f13, pcStyleWithImplicitMods("\x1b[1;{}P", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2P" }});
+    result.set(.f14, pcStyleWithImplicitMods("\x1b[1;{}Q", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2Q" }});
+    result.set(.f15, pcStyleWithImplicitMods("\x1b[1;{}R", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2R" }});
+    result.set(.f16, pcStyleWithImplicitMods("\x1b[1;{}S", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2S" }});
+    result.set(.f17, pcStyleWithImplicitMods("\x1b[15;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[15;2~" }});
+    result.set(.f18, pcStyleWithImplicitMods("\x1b[17;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[17;2~" }});
+    result.set(.f19, pcStyleWithImplicitMods("\x1b[18;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[18;2~" }});
+    result.set(.f20, pcStyleWithImplicitMods("\x1b[19;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[19;2~" }});
+    result.set(.f21, pcStyleWithImplicitMods("\x1b[20;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[20;2~" }});
+    result.set(.f22, pcStyleWithImplicitMods("\x1b[21;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[21;2~" }});
+    result.set(.f23, pcStyleWithImplicitMods("\x1b[23;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[23;2~" }});
+    result.set(.f24, pcStyleWithImplicitMods("\x1b[24;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[24;2~" }});
+    result.set(.f25, pcStyleWithImplicitMods("\x1b[1;{}P", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5P" }});
+    result.set(.f26, pcStyleWithImplicitMods("\x1b[1;{}Q", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5Q" }});
+    result.set(.f27, pcStyleWithImplicitMods("\x1b[1;{}R", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5R" }});
+    result.set(.f28, pcStyleWithImplicitMods("\x1b[1;{}S", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5S" }});
+    result.set(.f29, pcStyleWithImplicitMods("\x1b[15;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[15;5~" }});
+    result.set(.f30, pcStyleWithImplicitMods("\x1b[17;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[17;5~" }});
+    result.set(.f31, pcStyleWithImplicitMods("\x1b[18;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[18;5~" }});
+    result.set(.f32, pcStyleWithImplicitMods("\x1b[19;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[19;5~" }});
+    result.set(.f33, pcStyleWithImplicitMods("\x1b[20;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[20;5~" }});
+    result.set(.f34, pcStyleWithImplicitMods("\x1b[21;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[21;5~" }});
+    result.set(.f35, pcStyleWithImplicitMods("\x1b[23;{}~", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[23;5~" }});
 
     // Keypad keys
     result.set(.numpad_0, kpKeys("p"));
@@ -290,6 +313,25 @@ fn pcStyle(comptime fmt: []const u8) []Entry {
             };
         }
 
+        return &entries;
+    }
+}
+
+fn pcStyleWithImplicitMods(comptime fmt: []const u8, comptime implicit: key.Mods) []Entry {
+    comptime {
+        @setEvalBranchQuota(500_000);
+        var entries: [modifiers.len]Entry = undefined;
+        for (modifiers, 0..) |mods, i| {
+            const code: u8 = 1 +
+                @as(u8, @intFromBool(mods.shift or implicit.shift)) +
+                2 * @as(u8, @intFromBool(mods.alt or implicit.alt)) +
+                4 * @as(u8, @intFromBool(mods.ctrl or implicit.ctrl)) +
+                8 * @as(u8, @intFromBool(mods.super or implicit.super));
+            entries[i] = .{
+                .mods = mods,
+                .sequence = std.fmt.comptimePrint(fmt, .{code}),
+            };
+        }
         return &entries;
     }
 }

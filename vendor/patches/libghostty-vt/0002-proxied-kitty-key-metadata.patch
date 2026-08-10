@@ -1,0 +1,227 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Sun, 9 Aug 2026 00:00:00 +0000
+Subject: [PATCH] preserve proxied kitty key metadata
+
+Extend the lib-vt key event C API so terminal proxies can preserve explicit
+Kitty alternate codepoints and Hyper/Meta modifiers that cannot be derived
+from local physical-key or layout state.
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/2514
+Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
+---
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/key/event.h b/vendor/libghostty-vt/include/ghostty/vt/key/event.h
+index eba433c6..5777209a 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/key/event.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/key/event.h
+@@ -68,6 +68,10 @@ typedef uint16_t GhosttyMods;
+ #define GHOSTTY_MODS_CAPS_LOCK (1 << 4)
+ /** Num Lock is active */
+ #define GHOSTTY_MODS_NUM_LOCK (1 << 5)
++/** Hyper key is pressed */
++#define GHOSTTY_MODS_HYPER (1 << 10)
++/** Meta key is pressed */
++#define GHOSTTY_MODS_META (1 << 11)
+ 
+ /**
+  * Right shift is pressed (0 = left, 1 = right).
+@@ -479,4 +483,16 @@ GHOSTTY_API void ghostty_key_event_set_unshifted_codepoint(GhosttyKeyEvent event
+  */
+ GHOSTTY_API uint32_t ghostty_key_event_get_unshifted_codepoint(GhosttyKeyEvent event);
+ 
++/** Set an explicit Kitty shifted alternate codepoint. */
++GHOSTTY_API void ghostty_key_event_set_shifted_codepoint(GhosttyKeyEvent event, uint32_t codepoint);
++
++/** Get the explicit Kitty shifted alternate codepoint, or zero when absent. */
++GHOSTTY_API uint32_t ghostty_key_event_get_shifted_codepoint(GhosttyKeyEvent event);
++
++/** Set an explicit Kitty base-layout alternate codepoint. */
++GHOSTTY_API void ghostty_key_event_set_base_layout_codepoint(GhosttyKeyEvent event, uint32_t codepoint);
++
++/** Get the explicit Kitty base-layout alternate codepoint, or zero when absent. */
++GHOSTTY_API uint32_t ghostty_key_event_get_base_layout_codepoint(GhosttyKeyEvent event);
++
+ #endif /* GHOSTTY_VT_KEY_EVENT_H */
+diff --git a/vendor/libghostty-vt/src/input/key.zig b/vendor/libghostty-vt/src/input/key.zig
+index 9c04f01e..a2139805 100644
+--- a/vendor/libghostty-vt/src/input/key.zig
++++ b/vendor/libghostty-vt/src/input/key.zig
+@@ -47,6 +47,12 @@ pub const KeyEvent = struct {
+     /// shift+a is "A" in UTF-8 but unshifted would provide 'a'.
+     unshifted_codepoint: u21 = 0,
+ 
++    /// Explicit Kitty shifted alternate supplied by a terminal proxy.
++    shifted_codepoint: u21 = 0,
++
++    /// Explicit Kitty base-layout alternate supplied by a terminal proxy.
++    base_layout_codepoint: u21 = 0,
++
+     /// Returns the effective modifiers for this event. The effective
+     /// modifiers are the mods that should be considered for keybindings.
+     pub fn effectiveMods(self: KeyEvent) Mods {
+diff --git a/vendor/libghostty-vt/src/input/key_encode.zig b/vendor/libghostty-vt/src/input/key_encode.zig
+index 6ab5a4cc..08f56b04 100644
+--- a/vendor/libghostty-vt/src/input/key_encode.zig
++++ b/vendor/libghostty-vt/src/input/key_encode.zig
+@@ -287,6 +287,20 @@ fn kitty(
+                     if (base != seq.key) seq.alternates[1] = base;
+                 }
+             }
++
++            // Terminal proxies may know alternates that cannot be recovered
++            // from physical identity or multi-codepoint generated text.
++            if (event.shifted_codepoint > 0 and
++                event.shifted_codepoint != seq.key and
++                seq.mods.shift)
++            {
++                seq.alternates[0] = event.shifted_codepoint;
++            }
++            if (event.base_layout_codepoint > 0 and
++                event.base_layout_codepoint != seq.key)
++            {
++                seq.alternates[1] = event.base_layout_codepoint;
++            }
+         }
+ 
+         if (opts.kitty_flags.report_associated and
+@@ -918,6 +932,8 @@ const KittyMods = packed struct(u8) {
+             .alt = mods.alt,
+             .ctrl = mods.ctrl,
+             .super = mods.super,
++            .hyper = mods.hyper,
++            .meta = mods.meta,
+             .caps_lock = mods.caps_lock,
+             .num_lock = mods.num_lock,
+         };
+diff --git a/vendor/libghostty-vt/src/input/key_mods.zig b/vendor/libghostty-vt/src/input/key_mods.zig
+index 35e1c103..d89e2674 100644
+--- a/vendor/libghostty-vt/src/input/key_mods.zig
++++ b/vendor/libghostty-vt/src/input/key_mods.zig
+@@ -36,7 +36,9 @@ pub const Mods = packed struct(Mods.Backing) {
+     caps_lock: bool = false,
+     num_lock: bool = false,
+     sides: Side = .{},
+-    _padding: u6 = 0,
++    hyper: bool = false,
++    meta: bool = false,
++    _padding: u4 = 0,
+ 
+     /// The standard modifier keys only. Does not include the lock keys,
+     /// only standard bindable keys.
+@@ -109,6 +111,8 @@ pub const Mods = packed struct(Mods.Backing) {
+             .ctrl = self.ctrl,
+             .alt = self.alt,
+             .super = self.super,
++            .hyper = self.hyper,
++            .meta = self.meta,
+         };
+     }
+ 
+@@ -159,9 +163,17 @@ pub const Mods = packed struct(Mods.Backing) {
+     // For our own understanding
+     test {
+         const testing = std.testing;
+         try testing.expectEqual(@as(Backing, @bitCast(Mods{})), @as(Backing, 0b0));
+         try testing.expectEqual(
+             @as(Backing, @bitCast(Mods{ .shift = true })),
+             @as(Backing, 0b0000_0001),
+         );
++        try testing.expectEqual(
++            @as(Backing, @bitCast(Mods{ .hyper = true })),
++            @as(Backing, 1 << 10),
++        );
++        try testing.expectEqual(
++            @as(Backing, @bitCast(Mods{ .meta = true })),
++            @as(Backing, 1 << 11),
++        );
+     }
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index e01cdbb8..096f1a87 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -162,6 +162,10 @@ comptime {
+         @export(&c.key_event_get_utf8, .{ .name = "ghostty_key_event_get_utf8" });
+         @export(&c.key_event_set_unshifted_codepoint, .{ .name = "ghostty_key_event_set_unshifted_codepoint" });
+         @export(&c.key_event_get_unshifted_codepoint, .{ .name = "ghostty_key_event_get_unshifted_codepoint" });
++        @export(&c.key_event_set_shifted_codepoint, .{ .name = "ghostty_key_event_set_shifted_codepoint" });
++        @export(&c.key_event_get_shifted_codepoint, .{ .name = "ghostty_key_event_get_shifted_codepoint" });
++        @export(&c.key_event_set_base_layout_codepoint, .{ .name = "ghostty_key_event_set_base_layout_codepoint" });
++        @export(&c.key_event_get_base_layout_codepoint, .{ .name = "ghostty_key_event_get_base_layout_codepoint" });
+         @export(&c.key_encoder_new, .{ .name = "ghostty_key_encoder_new" });
+         @export(&c.key_encoder_free, .{ .name = "ghostty_key_encoder_free" });
+         @export(&c.key_encoder_setopt, .{ .name = "ghostty_key_encoder_setopt" });
+diff --git a/vendor/libghostty-vt/src/terminal/c/key_event.zig b/vendor/libghostty-vt/src/terminal/c/key_event.zig
+index 1feac9ac..f2e71f65 100644
+--- a/vendor/libghostty-vt/src/terminal/c/key_event.zig
++++ b/vendor/libghostty-vt/src/terminal/c/key_event.zig
+@@ -121,6 +121,26 @@ pub fn get_unshifted_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
+     return event.unshifted_codepoint;
+ }
+ 
++pub fn set_shifted_codepoint(event_: Event, codepoint: u32) callconv(lib.calling_conv) void {
++    const event: *key.KeyEvent = &event_.?.event;
++    event.shifted_codepoint = @truncate(codepoint);
++}
++
++pub fn get_shifted_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
++    const event: *key.KeyEvent = &event_.?.event;
++    return event.shifted_codepoint;
++}
++
++pub fn set_base_layout_codepoint(event_: Event, codepoint: u32) callconv(lib.calling_conv) void {
++    const event: *key.KeyEvent = &event_.?.event;
++    event.base_layout_codepoint = @truncate(codepoint);
++}
++
++pub fn get_base_layout_codepoint(event_: Event) callconv(lib.calling_conv) u32 {
++    const event: *key.KeyEvent = &event_.?.event;
++    return event.base_layout_codepoint;
++}
++
+ test "alloc" {
+     const testing = std.testing;
+     var e: Event = undefined;
+@@ -176,6 +196,10 @@ test "set" {
+     // Test unshifted codepoint
+     set_unshifted_codepoint(e, 'a');
+     try testing.expectEqual(@as(u21, 'a'), e.?.event.unshifted_codepoint);
++    set_shifted_codepoint(e, 'A');
++    try testing.expectEqual(@as(u21, 'A'), e.?.event.shifted_codepoint);
++    set_base_layout_codepoint(e, 'q');
++    try testing.expectEqual(@as(u21, 'q'), e.?.event.base_layout_codepoint);
+ }
+ 
+ test "get" {
+@@ -203,6 +227,8 @@ test "get" {
+     set_utf8(e, text.ptr, text.len);
+ 
+     set_unshifted_codepoint(e, 'z');
++    set_shifted_codepoint(e, 'Z');
++    set_base_layout_codepoint(e, 'y');
+ 
+     // Get them back
+     try testing.expectEqual(key.Action.repeat, get_action(e));
+@@ -225,6 +251,8 @@ test "get" {
+     try testing.expectEqualStrings("test", got_utf8.?[0..utf8_len]);
+ 
+     try testing.expectEqual(@as(u32, 'z'), get_unshifted_codepoint(e));
++    try testing.expectEqual(@as(u32, 'Z'), get_shifted_codepoint(e));
++    try testing.expectEqual(@as(u32, 'y'), get_base_layout_codepoint(e));
+ }
+ 
+ test "complete key event" {
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index 37dc5768..e45a499b 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -130,6 +130,10 @@ pub const key_event_set_utf8 = key_event.set_utf8;
+ pub const key_event_get_utf8 = key_event.get_utf8;
+ pub const key_event_set_unshifted_codepoint = key_event.set_unshifted_codepoint;
+ pub const key_event_get_unshifted_codepoint = key_event.get_unshifted_codepoint;
++pub const key_event_set_shifted_codepoint = key_event.set_shifted_codepoint;
++pub const key_event_get_shifted_codepoint = key_event.get_shifted_codepoint;
++pub const key_event_set_base_layout_codepoint = key_event.set_base_layout_codepoint;
++pub const key_event_get_base_layout_codepoint = key_event.get_base_layout_codepoint;
+ 
+ pub const key_encoder_new = key_encode.new;
+ pub const key_encoder_free = key_encode.free;

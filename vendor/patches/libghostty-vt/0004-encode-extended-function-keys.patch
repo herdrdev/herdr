@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Sun, 9 Aug 2026 00:00:00 +0000
+Subject: [PATCH] encode extended function keys
+
+Encode F13-F25 in legacy panes using the standard xterm/terminfo sequences,
+including composition with additional modifiers.
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/2514
+Vendored base: c5a21edfcbc2d5b46540ad91b7980aca31f5f1f3
+---
+diff --git a/vendor/libghostty-vt/src/input/function_keys.zig b/vendor/libghostty-vt/src/input/function_keys.zig
+index 66ab4bc4..b1a0f0a5 100644
+--- a/vendor/libghostty-vt/src/input/function_keys.zig
++++ b/vendor/libghostty-vt/src/input/function_keys.zig
+@@ -89,10 +89,10 @@ pub const keys = keys: {
+     result.set(.page_up, pcStyle("\x1b[5;{}~") ++ .{Entry{ .sequence = "\x1B[5~" }});
+     result.set(.page_down, pcStyle("\x1b[6;{}~") ++ .{Entry{ .sequence = "\x1B[6~" }});
+ 
+-    // Function Keys. todo: f13-f35 but we need to add to input.Key
++    // Function Keys.
+     result.set(.f1, pcStyle("\x1b[1;{}P") ++ .{Entry{ .sequence = "\x1BOP" }});
+     result.set(.f2, pcStyle("\x1b[1;{}Q") ++ .{Entry{ .sequence = "\x1BOQ" }});
+-    result.set(.f3, pcStyle("\x1b[13;{}~") ++ .{Entry{ .sequence = "\x1BOR" }});
++    result.set(.f3, pcStyle("\x1b[1;{}R") ++ .{Entry{ .sequence = "\x1BOR" }});
+     result.set(.f4, pcStyle("\x1b[1;{}S") ++ .{Entry{ .sequence = "\x1BOS" }});
+     result.set(.f5, pcStyle("\x1b[15;{}~") ++ .{Entry{ .sequence = "\x1B[15~" }});
+     result.set(.f6, pcStyle("\x1b[17;{}~") ++ .{Entry{ .sequence = "\x1B[17~" }});
+@@ -102,6 +102,19 @@ pub const keys = keys: {
+     result.set(.f10, pcStyle("\x1b[21;{}~") ++ .{Entry{ .sequence = "\x1B[21~" }});
+     result.set(.f11, pcStyle("\x1b[23;{}~") ++ .{Entry{ .sequence = "\x1B[23~" }});
+     result.set(.f12, pcStyle("\x1b[24;{}~") ++ .{Entry{ .sequence = "\x1B[24~" }});
++    result.set(.f13, pcStyleWithImplicitMods("\x1b[1;{}P", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2P" }});
++    result.set(.f14, pcStyleWithImplicitMods("\x1b[1;{}Q", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2Q" }});
++    result.set(.f15, pcStyleWithImplicitMods("\x1b[1;{}R", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2R" }});
++    result.set(.f16, pcStyleWithImplicitMods("\x1b[1;{}S", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;2S" }});
++    result.set(.f17, pcStyleWithImplicitMods("\x1b[15;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[15;2~" }});
++    result.set(.f18, pcStyleWithImplicitMods("\x1b[17;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[17;2~" }});
++    result.set(.f19, pcStyleWithImplicitMods("\x1b[18;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[18;2~" }});
++    result.set(.f20, pcStyleWithImplicitMods("\x1b[19;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[19;2~" }});
++    result.set(.f21, pcStyleWithImplicitMods("\x1b[20;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[20;2~" }});
++    result.set(.f22, pcStyleWithImplicitMods("\x1b[21;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[21;2~" }});
++    result.set(.f23, pcStyleWithImplicitMods("\x1b[23;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[23;2~" }});
++    result.set(.f24, pcStyleWithImplicitMods("\x1b[24;{}~", .{ .shift = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[24;2~" }});
++    result.set(.f25, pcStyleWithImplicitMods("\x1b[1;{}P", .{ .ctrl = true }) ++ .{Entry{ .mods_empty_is_any = false, .sequence = "\x1b[1;5P" }});
+ 
+     // Keypad keys
+     result.set(.numpad_0, kpKeys("p"));
+@@ -294,6 +307,25 @@ fn pcStyle(comptime fmt: []const u8) []Entry {
+     }
+ }
+ 
++fn pcStyleWithImplicitMods(comptime fmt: []const u8, comptime implicit: key.Mods) []Entry {
++    comptime {
++        @setEvalBranchQuota(500_000);
++        var entries: [modifiers.len]Entry = undefined;
++        for (modifiers, 0..) |mods, i| {
++            const code: u8 = 1 +
++                @as(u8, @intFromBool(mods.shift or implicit.shift)) +
++                2 * @as(u8, @intFromBool(mods.alt or implicit.alt)) +
++                4 * @as(u8, @intFromBool(mods.ctrl or implicit.ctrl)) +
++                8 * @as(u8, @intFromBool(mods.super or implicit.super));
++            entries[i] = .{
++                .mods = mods,
++                .sequence = std.fmt.comptimePrint(fmt, .{code}),
++            };
++        }
++        return &entries;
++    }
++}
++
+ test "keys" {
+     const testing = std.testing;
+     switch (@import("terminal_options").artifact) {
+diff --git a/vendor/libghostty-vt/src/input/key_encode.zig b/vendor/libghostty-vt/src/input/key_encode.zig
+index d04e4f37..a3074601 100644
+--- a/vendor/libghostty-vt/src/input/key_encode.zig
++++ b/vendor/libghostty-vt/src/input/key_encode.zig
+@@ -2409,10 +2409,10 @@ test "legacy: f1" {
+     // F3
+     {
+         var writer: std.Io.Writer = .fixed(&buf);
+         try legacy(&writer, .{
+             .key = .f3,
+             .mods = .{ .ctrl = true },
+             .consumed_mods = .{},
+         }, .{});
+-        try testing.expectEqualStrings("\x1b[13;5~", writer.buffered());
++        try testing.expectEqualStrings("\x1b[1;5R", writer.buffered());
+     }
+@@ -2427,6 +2427,28 @@ test "legacy: f1" {
+     }
+ }
+ 
++test "legacy: extended function keys" {
++    var buf: [128]u8 = undefined;
++
++    const cases = .{
++        .{ key.Key.f13, "\x1b[1;2P" },
++        .{ key.Key.f24, "\x1b[24;2~" },
++        .{ key.Key.f25, "\x1b[1;5P" },
++    };
++    inline for (cases) |case| {
++        var writer: std.Io.Writer = .fixed(&buf);
++        try legacy(&writer, .{ .key = case[0] }, .{});
++        try testing.expectEqualStrings(case[1], writer.buffered());
++    }
++
++    var writer: std.Io.Writer = .fixed(&buf);
++    try legacy(&writer, .{
++        .key = .f13,
++        .mods = .{ .ctrl = true },
++    }, .{});
++    try testing.expectEqualStrings("\x1b[1;6P", writer.buffered());
++}
++
+ test "legacy: left_shift+tab" {
+     var buf: [128]u8 = undefined;
+     var writer: std.Io.Writer = .fixed(&buf);
