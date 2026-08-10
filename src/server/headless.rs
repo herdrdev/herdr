@@ -2178,6 +2178,17 @@ impl HeadlessServer {
             self.sent_window_title = None;
             return false;
         };
+        // A detached client keeps its entry with no writer, and a targeted send
+        // to one reports success without queuing anything. Caching the title
+        // against that client would skip the send once it attaches again.
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.writer.is_some())
+        {
+            self.sent_window_title = None;
+            return false;
+        }
         let sent = self.send_to_client(
             client_id,
             ServerMessage::WindowTitle {
@@ -5692,6 +5703,33 @@ mod tests {
         assert_eq!(
             next_window_title(&control_rx),
             Some(Some("herd/build".to_string()))
+        );
+
+        shutdown_test_runtimes(&mut server);
+    }
+
+    #[test]
+    fn a_foreground_client_without_a_writer_does_not_cache_the_window_title() {
+        let (mut server, _control_rx) = window_title_test_server();
+        server.app.configure_window_title("{workspace}");
+
+        // A detached client keeps its entry but loses its writer, so nothing
+        // reaches a terminal even though the targeted send reports success.
+        if let Some(client) = server.clients.get_mut(&1) {
+            client.writer = None;
+        }
+        server.sync_window_title();
+        assert!(server.sent_window_title.is_none());
+
+        // Attaching again has to deliver the title rather than skip it as sent.
+        let (client_tx, control_rx, _render_rx) = test_client_writer();
+        if let Some(client) = server.clients.get_mut(&1) {
+            client.writer = Some(client_tx);
+        }
+        server.sync_window_title();
+        assert_eq!(
+            next_window_title(&control_rx),
+            Some(Some("herd".to_string()))
         );
 
         shutdown_test_runtimes(&mut server);
