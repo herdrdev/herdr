@@ -183,6 +183,42 @@ fn active_pending_release(
     }
 }
 
+/// Report the options a probed agent process was started with, once per change.
+/// `last_reported` keeps the detector from resending the same options on every probe.
+async fn publish_changed_agent_launch_args(
+    last_reported: &mut Option<(Agent, Vec<String>)>,
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    args: Option<Vec<String>>,
+) {
+    let (Some(agent), Some(args)) = (agent, args) else {
+        return;
+    };
+    if last_reported
+        .as_ref()
+        .is_some_and(|(last_agent, last_args)| *last_agent == agent && *last_args == args)
+    {
+        return;
+    }
+    *last_reported = Some((agent, args.clone()));
+
+    if let Err(e) = state_events
+        .send(AppEvent::AgentLaunchArgsDetected {
+            pane_id,
+            agent,
+            args,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver AgentLaunchArgsDetected event"
+        );
+    }
+}
+
 async fn publish_state_changed_event(
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
@@ -507,6 +543,9 @@ struct ProcessProbeResult {
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
     process_name: Option<String>,
+    /// Options the detected agent was started with, without the executable.
+    /// Herdr replays them when it resumes the agent's session.
+    agent_launch_args: Option<Vec<String>>,
 }
 
 fn agent_hint_for_foreground_job_members(
@@ -552,6 +591,7 @@ fn process_probe_result(
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
         process_name: Some(process_name),
+        agent_launch_args: crate::detect::agent_launch_args_in_job(job, agent),
     }
 }
 
@@ -612,6 +652,9 @@ fn probe_foreground_process_from_jobs(
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
             agent: identified.as_ref().map(|(agent, _)| *agent),
+            agent_launch_args: identified
+                .as_ref()
+                .and_then(|(agent, _)| crate::detect::agent_launch_args_in_job(job, *agent)),
             process_name: identified.map(|(_, process_name)| process_name),
         };
     }
@@ -621,6 +664,7 @@ fn probe_foreground_process_from_jobs(
         foreground_is_pane_shell: false,
         agent: None,
         process_name: None,
+        agent_launch_args: None,
     }
 }
 
@@ -671,6 +715,7 @@ fn spawn_basic_detection_task(
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
+        let mut last_agent_launch_args: Option<(Agent, Vec<String>)> = None;
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -699,6 +744,7 @@ fn spawn_basic_detection_task(
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
                     pending_idle.clear();
+                    last_agent_launch_args = None;
                 }
             }
 
@@ -756,6 +802,14 @@ fn spawn_basic_detection_task(
                         *pending_release = None;
                     }
                 }
+                publish_changed_agent_launch_args(
+                    &mut last_agent_launch_args,
+                    &state_events,
+                    pane_id,
+                    new_agent,
+                    probe.agent_launch_args.clone(),
+                )
+                .await;
                 let previous_agent = agent_presence.current_agent();
                 let foreground_action = foreground_shell_agent_action(
                     previous_agent,
@@ -2147,6 +2201,7 @@ impl PaneRuntime {
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                let mut last_agent_launch_args: Option<(detect::Agent, Vec<String>)> = None;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2185,6 +2240,7 @@ impl PaneRuntime {
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
                             pending_idle.clear();
+                            last_agent_launch_args = None;
                         }
                     }
 
@@ -2249,6 +2305,15 @@ impl PaneRuntime {
                                     *pending_release = None;
                                 }
                             }
+
+                            publish_changed_agent_launch_args(
+                                &mut last_agent_launch_args,
+                                &state_events,
+                                pane_id,
+                                new_agent,
+                                probe.agent_launch_args,
+                            )
+                            .await;
 
                             let previous_agent = agent_presence.current_agent();
                             let foreground_action = foreground_shell_agent_action(
@@ -3759,6 +3824,48 @@ mod tests {
 
         assert_eq!(result.agent, Some(Agent::Claude));
         assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn process_probe_reads_the_options_the_agent_was_started_with() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 99,
+                name: "claude".to_string(),
+                argv0: None,
+                argv: Some(vec![
+                    "claude".to_string(),
+                    "--permission-mode".to_string(),
+                    "bypassPermissions".to_string(),
+                ]),
+                cmdline: None,
+            }],
+        };
+
+        let result = probe_foreground_process_from_jobs(42, Some(99), Some(job), || None, |_| None);
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(
+            result.agent_launch_args,
+            Some(vec![
+                "--permission-mode".to_string(),
+                "bypassPermissions".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn process_probe_has_no_options_without_an_agent() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![foreground_process(99, "bash")],
+        };
+
+        let result = probe_foreground_process_from_jobs(42, Some(99), None, || Some(job), |_| None);
+
+        assert_eq!(result.agent, None);
+        assert_eq!(result.agent_launch_args, None);
     }
 
     fn process_probe_input() -> ProcessProbeInput {

@@ -107,6 +107,16 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_launch: Option<PaneAgentLaunchSnapshot>,
+}
+
+/// The options an agent was started with, replayed when Herdr resumes its
+/// session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneAgentLaunchSnapshot {
+    pub agent: String,
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +348,16 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let agent_launch = terminal.and_then(|terminal| {
+            terminal
+                .agent_launch_args
+                .as_ref()
+                .filter(|launch| !launch.args.is_empty())
+                .map(|launch| PaneAgentLaunchSnapshot {
+                    agent: launch.agent.clone(),
+                    args: launch.args.clone(),
+                })
+        });
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -368,6 +388,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                agent_launch,
             },
         );
     }
@@ -648,6 +669,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_launch: None,
             },
         );
         panes.insert(
@@ -659,6 +681,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_launch: None,
             },
         );
 
@@ -1100,6 +1123,40 @@ mod tests {
     }
 
     #[test]
+    fn capture_contract_tracks_agent_launch_options() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        assert!(snapshot_agent_launch(&state, root).is_none());
+
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_launch_args(
+            "claude",
+            vec!["--permission-mode".into(), "bypassPermissions".into()],
+        );
+
+        let launch = snapshot_agent_launch(&state, root).expect("options should be captured");
+        assert_eq!(launch.agent, "claude");
+        assert_eq!(launch.args, vec!["--permission-mode", "bypassPermissions"]);
+
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_launch_args("claude", Vec::new());
+        assert!(snapshot_agent_launch(&state, root).is_none());
+    }
+
+    fn snapshot_agent_launch(
+        state: &crate::app::AppState,
+        pane: crate::layout::PaneId,
+    ) -> Option<PaneAgentLaunchSnapshot> {
+        capture_from_state(state).workspaces[0].tabs[0].panes[&pane.raw()]
+            .agent_launch
+            .clone()
+    }
+
+    #[test]
     fn capture_contract_tracks_hook_authority_agent_session() {
         let mut state = state_with_workspaces(&["one"]);
         let session_path = test_session_path("pi-session.jsonl");
@@ -1207,6 +1264,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_launch: None,
             },
         );
         panes.insert(
@@ -1220,6 +1278,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_launch: None,
             },
         );
 
