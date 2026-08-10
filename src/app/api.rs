@@ -64,6 +64,15 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::TabBarCommandFinished {
+                generation,
+                segment_index,
+                result,
+            } => self.handle_tab_bar_command_finished(generation, segment_index, result),
+            ev @ AppEvent::TerminalBell { .. } => {
+                self.handle_internal_event(ev);
+                false
+            }
             ev => {
                 self.handle_internal_event(ev);
                 true
@@ -97,6 +106,15 @@ impl App {
     }
 
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
+        if let AppEvent::TerminalBell { count, .. } = ev {
+            if let Err(err) =
+                crate::terminal_effects::write_terminal_bells(&mut std::io::stdout(), count)
+            {
+                tracing::warn!(err = %err, "failed to emit terminal bell");
+            }
+            return;
+        }
+
         if let AppEvent::ClipboardWrite { content } = ev {
             #[cfg(not(test))]
             crate::selection::write_osc52_bytes(&content);
@@ -128,6 +146,16 @@ impl App {
         } = ev
         {
             self.handle_git_status_refreshed(results, cache_updates);
+            return;
+        }
+
+        if let AppEvent::TabBarCommandFinished {
+            generation,
+            segment_index,
+            result,
+        } = ev
+        {
+            let _ = self.handle_tab_bar_command_finished(generation, segment_index, result);
             return;
         }
 
@@ -1067,6 +1095,7 @@ impl App {
             Method::PaneCurrent(params) => return self.handle_pane_current(request.id, params),
             Method::PaneGet(target) => return self.handle_pane_get(request.id, target),
             Method::PaneFocus(target) => return self.handle_pane_focus(request.id, target),
+            Method::PaneInputSet(params) => return self.handle_pane_input_set(request.id, params),
             Method::PaneRename(params) => return self.handle_pane_rename(request.id, params),
             Method::PaneRead(params) => return self.handle_pane_read(request.id, params),
             Method::PaneGraphicsSet(params) => {
@@ -1087,6 +1116,9 @@ impl App {
             }
             Method::PaneGraphicsStreamSet(params) => {
                 return self.handle_pane_graphics_stream_set(request.id, params);
+            }
+            Method::PaneGraphicsStreamDirect(params) => {
+                return self.handle_pane_graphics_stream_direct(request.id, params);
             }
             Method::PaneGraphicsStreamOpen(params) => {
                 return self.handle_pane_graphics_stream_open(request.id, params);

@@ -75,10 +75,11 @@ Process:
    - `nix/package.nix` imports `Cargo.lock` through `cargoLock.lockFile`; normal version and lockfile updates do not require a separate cargo hash refresh. If git dependencies are introduced, verify the required `cargoLock.outputHashes` entries.
    - Run or recommend:
      ```bash
-     just release-docs-check
+     just pre-release-check
      ```
-   - This check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
-   - Do not run `just release` unless the working tree is clean and the docs check passes.
+   - The docs check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
+   - The render benchmark has no automatic timing threshold, but reviewing it is a required release checkpoint. Record the 1, 15, and 50-count median and p95 results for background-workspace resize/layout and active panes, compare their scaling ratios, and treat a material regression as a release blocker until investigated rather than relying on absolute timing across machines.
+   - Do not run `just release` unless the working tree is clean, the docs check passes, and the render-scale result has been reviewed.
 
 9. Apply changes only when asked.
    - Do not edit files during the audit unless the user explicitly asks you to apply fixes.
@@ -117,6 +118,9 @@ Root docs finalized: YES | NO
 
 Nix Cargo lock integration: OK | NEEDS ATTENTION | NOT CHECKED
 <result of nix flake check or any required cargoLock.outputHashes status>
+
+Render scaling: OK | NEEDS ATTENTION | NOT CHECKED
+<1, 15, and 50-count median/p95 results and ratios for background-workspace resize/layout and active panes>
 
 Required before release:
 1. <short action>

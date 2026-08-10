@@ -493,15 +493,17 @@ impl App {
             self.close_popup_pane();
             return;
         };
-        let column = mouse.column.saturating_sub(inner.x);
-        let row = mouse.row.saturating_sub(inner.y);
+        let position = crate::input::mouse::Position::Cell {
+            column: mouse.column.saturating_sub(inner.x),
+            row: mouse.row.saturating_sub(inner.y),
+        };
         let bytes = match mouse.kind {
             MouseEventKind::ScrollUp
             | MouseEventKind::ScrollDown
             | MouseEventKind::ScrollLeft
             | MouseEventKind::ScrollRight => match rt.wheel_routing() {
                 Some(crate::pane::WheelRouting::MouseReport) => {
-                    rt.encode_mouse_wheel(mouse.kind, column, row, mouse.modifiers)
+                    rt.encode_mouse_wheel(mouse.kind, position, mouse.modifiers)
                 }
                 Some(crate::pane::WheelRouting::AlternateScroll) => {
                     rt.encode_alternate_scroll(mouse.kind)
@@ -517,11 +519,9 @@ impl App {
                 }
             },
             MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
-                rt.encode_mouse_button(mouse.kind, column, row, mouse.modifiers)
+                rt.encode_mouse_button(mouse.kind, position, mouse.modifiers)
             }
-            MouseEventKind::Moved => {
-                rt.encode_mouse_motion(mouse.kind, column, row, mouse.modifiers)
-            }
+            MouseEventKind::Moved => rt.encode_mouse_motion(mouse.kind, position, mouse.modifiers),
         };
         let Some(bytes) = bytes else {
             return;

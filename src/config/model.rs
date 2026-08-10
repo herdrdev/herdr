@@ -5,8 +5,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
     ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
-    DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
+    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -393,6 +393,10 @@ pub struct KeysConfig {
     pub previous_tab: BindingConfig,
     /// Select the next tab. Default: "prefix+n".
     pub next_tab: BindingConfig,
+    /// Move the active tab one position toward the front. Unset by default.
+    pub move_tab_previous: BindingConfig,
+    /// Move the active tab one position toward the back. Unset by default.
+    pub move_tab_next: BindingConfig,
     /// Switch to tab 1-9. Default: "prefix+1..9".
     pub switch_tab: BindingConfig,
     /// Switch to workspace 1-9 from prefix mode. Unset by default.
@@ -438,6 +442,14 @@ pub struct KeysConfig {
     pub zoom: BindingConfig,
     /// Enter resize mode. Default: "prefix+r"
     pub resize_mode: BindingConfig,
+    /// Resize the focused pane toward the left. Unset by default.
+    pub resize_pane_left: BindingConfig,
+    /// Resize the focused pane downward. Unset by default.
+    pub resize_pane_down: BindingConfig,
+    /// Resize the focused pane upward. Unset by default.
+    pub resize_pane_up: BindingConfig,
+    /// Resize the focused pane toward the right. Unset by default.
+    pub resize_pane_right: BindingConfig,
     /// Toggle sidebar collapse. Default: "prefix+b"
     pub toggle_sidebar: BindingConfig,
     /// Optional indexed shortcuts expanded over number keys 1-9.
@@ -513,6 +525,10 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     next_tab: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    move_tab_previous: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    move_tab_next: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     switch_tab: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     switch_workspace: Option<BindingConfig>,
@@ -556,6 +572,14 @@ pub(crate) struct KeysConfigOverlay {
     zoom: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resize_mode: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resize_pane_left: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resize_pane_down: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resize_pane_up: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resize_pane_right: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     toggle_sidebar: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -611,6 +635,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(rename_tab);
         apply_field!(previous_tab);
         apply_field!(next_tab);
+        apply_field!(move_tab_previous);
+        apply_field!(move_tab_next);
         apply_field!(switch_tab);
         apply_field!(switch_workspace);
         apply_field!(close_tab);
@@ -633,6 +659,10 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(close_pane);
         apply_field!(zoom);
         apply_field!(resize_mode);
+        apply_field!(resize_pane_left);
+        apply_field!(resize_pane_down);
+        apply_field!(resize_pane_up);
+        apply_field!(resize_pane_right);
         apply_field!(toggle_sidebar);
         apply_field!(indexed);
         apply_field!(command);
@@ -709,6 +739,8 @@ impl KeysConfig {
         copy_effective_action_field!(rename_tab, keybinds.rename_tab);
         copy_effective_action_field!(previous_tab, keybinds.previous_tab);
         copy_effective_action_field!(next_tab, keybinds.next_tab);
+        copy_effective_action_field!(move_tab_previous, keybinds.move_tab_previous);
+        copy_effective_action_field!(move_tab_next, keybinds.move_tab_next);
         copy_effective_indexed_field!(switch_tab, keybinds.switch_tab);
         copy_effective_indexed_field!(switch_workspace, keybinds.switch_workspace);
         copy_effective_action_field!(close_tab, keybinds.close_tab);
@@ -731,6 +763,10 @@ impl KeysConfig {
         copy_effective_action_field!(close_pane, keybinds.close_pane);
         copy_effective_action_field!(zoom, keybinds.zoom);
         copy_effective_action_field!(resize_mode, keybinds.resize_mode);
+        copy_effective_action_field!(resize_pane_left, keybinds.resize_pane_left);
+        copy_effective_action_field!(resize_pane_down, keybinds.resize_pane_down);
+        copy_effective_action_field!(resize_pane_up, keybinds.resize_pane_up);
+        copy_effective_action_field!(resize_pane_right, keybinds.resize_pane_right);
         copy_effective_action_field!(toggle_sidebar, keybinds.toggle_sidebar);
         copy_user_field!(indexed);
 
@@ -838,6 +874,8 @@ pub struct UiConfig {
     pub prompt_new_workspace_name: bool,
     /// Draw borders around split panes. Default: true.
     pub pane_borders: bool,
+    /// Draw borders along the outside edge of the pane area. Default: true.
+    pub pane_outer_borders: bool,
     /// Draw interactive scrollbars beside terminal panes. Default: true.
     pub pane_scrollbars: bool,
     /// Keep split panes visually separated instead of sharing divider borders. Default: true.
@@ -848,6 +886,10 @@ pub struct UiConfig {
     pub hide_tab_bar_when_single_tab: bool,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
+    /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
+    pub tab_bar_right: Vec<TabBarRightEntryConfig>,
+    /// Text inserted between visible right-side tab bar entries. Default: one space.
+    pub tab_bar_right_separator: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Retired setting that Herdr wrote before the workspace filter was removed.
@@ -995,6 +1037,8 @@ impl Default for KeysConfig {
             rename_tab: BindingConfig::one("prefix+shift+t"),
             previous_tab: BindingConfig::one("prefix+p"),
             next_tab: BindingConfig::one("prefix+n"),
+            move_tab_previous: BindingConfig::empty(),
+            move_tab_next: BindingConfig::empty(),
             switch_tab: BindingConfig::one("prefix+1..9"),
             switch_workspace: BindingConfig::empty(),
             close_tab: BindingConfig::one("prefix+shift+x"),
@@ -1017,6 +1061,10 @@ impl Default for KeysConfig {
             close_pane: BindingConfig::one("prefix+x"),
             zoom: BindingConfig::one("prefix+z"),
             resize_mode: BindingConfig::one("prefix+r"),
+            resize_pane_left: BindingConfig::empty(),
+            resize_pane_down: BindingConfig::empty(),
+            resize_pane_up: BindingConfig::empty(),
+            resize_pane_right: BindingConfig::empty(),
             toggle_sidebar: BindingConfig::one("prefix+b"),
             indexed: IndexedKeysConfig::default(),
             command: Vec::new(),
@@ -1052,11 +1100,14 @@ impl Default for UiConfig {
             prompt_new_tab_name: true,
             prompt_new_workspace_name: false,
             pane_borders: true,
+            pane_outer_borders: true,
             pane_scrollbars: true,
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
+            tab_bar_right: Vec::new(),
+            tab_bar_right_separator: " ".into(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
@@ -1304,6 +1355,7 @@ status_indicators = "symbols"
     fn pane_appearance_defaults_and_parse() {
         let default_config = Config::default();
         assert!(default_config.ui.pane_borders);
+        assert!(default_config.ui.pane_outer_borders);
         assert!(default_config.ui.pane_scrollbars);
         assert!(default_config.ui.pane_gaps);
         assert!(!default_config.ui.show_agent_labels_on_pane_borders);
@@ -1312,23 +1364,41 @@ status_indicators = "symbols"
             default_config.ui.tab_bar_position,
             TabBarPositionConfig::Top
         );
+        assert!(default_config.ui.tab_bar_right.is_empty());
+        assert_eq!(default_config.ui.tab_bar_right_separator, " ");
 
         let toml = r#"
 [ui]
 pane_borders = false
+pane_outer_borders = false
 pane_scrollbars = false
 pane_gaps = true
 show_agent_labels_on_pane_borders = true
 hide_tab_bar_when_single_tab = true
 tab_bar_position = "bottom"
+tab_bar_right = [
+  { type = "zoom" },
+  { type = "hostname" },
+  { type = "datetime", format = "%H:%M" },
+  { type = "text", text = "prod" },
+  { type = "command", command = "status.sh", interval_seconds = 10, timeout_seconds = 3 },
+]
+tab_bar_right_separator = " · "
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.ui.pane_borders);
+        assert!(!config.ui.pane_outer_borders);
         assert!(!config.ui.pane_scrollbars);
         assert!(config.ui.pane_gaps);
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(config.ui.hide_tab_bar_when_single_tab);
         assert_eq!(config.ui.tab_bar_position, TabBarPositionConfig::Bottom);
+        assert_eq!(config.ui.tab_bar_right.len(), 5);
+        assert!(matches!(
+            config.ui.tab_bar_right[1],
+            TabBarRightEntryConfig::Hostname
+        ));
+        assert_eq!(config.ui.tab_bar_right_separator, " · ");
     }
 
     #[test]

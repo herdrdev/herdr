@@ -23,7 +23,6 @@ use crate::ipc::{
 };
 
 mod pane_graphics_stream;
-pub(crate) use pane_graphics_stream::cancel_inactive_streams as cancel_inactive_pane_graphics_streams;
 
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -332,12 +331,7 @@ fn handle_request(
             r#"{"id":"","error":{"code":"internal_error","message":"failed to encode response"}}"#
                 .to_string()
         }),
-        _ => dispatch_to_app_with_timeout_and_write_completion(
-            request,
-            api_tx,
-            None,
-            response_write_complete,
-        ),
+        _ => dispatch_to_app(request, api_tx, None, response_write_complete, None),
     }
 }
 
@@ -402,6 +396,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneCurrent(_) => "pane.current",
         Method::PaneGet(_) => "pane.get",
         Method::PaneFocus(_) => "pane.focus",
+        Method::PaneInputSet(_) => "pane.input.set",
         Method::PaneRename(_) => "pane.rename",
         Method::PaneSendText(_) => "pane.send_text",
         Method::PaneSendKeys(_) => "pane.send_keys",
@@ -412,6 +407,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneGraphicsInfo(_) => "pane.graphics.info",
         Method::PaneGraphicsStream(_) => "pane.graphics.stream",
         Method::PaneGraphicsStreamSet(_) => "pane.graphics.stream.set",
+        Method::PaneGraphicsStreamDirect(_) => "pane.graphics.stream.direct",
         Method::PaneGraphicsStreamOpen(_) => "pane.graphics.stream.open",
         Method::PaneGraphicsStreamClose(_) => "pane.graphics.stream.close",
         Method::PaneReportAgent(_) => "pane.report_agent",
@@ -748,22 +744,51 @@ pub(super) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app_with_timeout_and_write_completion(request, api_tx, timeout, None)
+    dispatch_to_app(request, api_tx, timeout, None, None)
 }
 
-fn dispatch_to_app_with_timeout_and_write_completion(
+pub(super) fn dispatch_stream_open(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    timeout: Duration,
+    active: Arc<AtomicBool>,
+) -> String {
+    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active))
+}
+
+pub(super) fn dispatch_stream_frame(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    active: Arc<AtomicBool>,
+) -> String {
+    dispatch_to_app(
+        request,
+        api_tx,
+        Some(crate::app::pane_graphics::DIRECT_OUTER_TIMEOUT),
+        None,
+        Some(active),
+    )
+}
+
+fn dispatch_to_app(
     request: Request,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    stream_active: Option<Arc<AtomicBool>>,
 ) -> String {
     let request_id = request.id.clone();
+    let request_active = stream_active.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
         request,
         respond_to,
         response_write_complete,
+        stream_active,
     }) {
+        if let Some(active) = request_active {
+            active.store(false, Ordering::Release);
+        }
         return error_response_json(
             request_id,
             "server_unavailable",
@@ -792,11 +817,16 @@ fn dispatch_to_app_with_timeout_and_write_completion(
 
     match response {
         Ok(response) => response,
-        Err(err) => error_response_json(
-            request_id,
-            "server_unavailable",
-            format!("request handling failed: {err}"),
-        ),
+        Err(err) => {
+            if let Some(active) = request_active {
+                active.store(false, Ordering::Release);
+            }
+            error_response_json(
+                request_id,
+                "server_unavailable",
+                format!("request handling failed: {err}"),
+            )
+        }
     }
 }
 
@@ -1334,6 +1364,8 @@ mod pane_graphics_request_tests {
             id: "graphics-max".into(),
             method: Method::PaneGraphicsSet(crate::api::schema::PaneGraphicsSetParams {
                 pane_id: "pane_1".into(),
+                layer_id: None,
+                z_index: 0,
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Png,
                 image_width: 1,

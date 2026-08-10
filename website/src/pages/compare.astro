@@ -1,478 +1,265 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Compare Herdr — terminal-native agent multiplexer</title>
-        <meta
-            name="description"
-            content="Compare Herdr with tmux, Zellij, cmux, Warp, Solo, Conductor, Emdash, and Superset. See where terminal multiplexers, agent terminals, process dashboards, and worktree orchestrators differ."
-        />
-        <meta name="theme-color" content="#f0eee9" />
-        <link rel="canonical" href="https://herdr.dev/compare/" />
+---
+import SiteLayout from '../components/SiteLayout.astro';
+---
 
-        <meta property="og:type" content="website" />
-        <meta property="og:site_name" content="Herdr" />
-        <meta property="og:title" content="Compare Herdr — terminal-native agent multiplexer" />
-        <meta
-            property="og:description"
-            content="Herdr combines tmux-style persistence, real terminal panes, agent state, direct attach, SSH workflows, and an API agents can drive."
-        />
-        <meta property="og:url" content="https://herdr.dev/compare/" />
-        <meta property="og:image" content="https://herdr.dev/assets/og-card-v9.png" />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="Herdr — run them anywhere, leave them running." />
+<SiteLayout
+  title="Compare Herdr vs tmux, Zellij, cmux, Warp & agent managers"
+  description="Compare Herdr with tmux, Zellij, cmux, Warp, Solo, Conductor, Emdash, and Superset. Multiplexers persist terminals and apps manage agents. Herdr is the runtime agents live on, with clients on top."
+  canonicalPath="/compare/"
+>
+  <main>
+    <header class="ph ph-split">
+      <div>
+        <div class="hd-eyebrow"><s></s>compare</div>
+        <h1>Apps manage the herd. Herdr <em>runs</em> it.</h1>
+        <p>
+          Most tools Herdr gets compared to are apps: a window you open to
+          manage coding agents, and a window the work depends on. Herdr is a
+          different kind of thing: a runtime. A server holds real terminals
+          open on the machine, the agents live in those, and every UI, ours
+          included, is just a client that attaches. Keep that split in mind
+          and the matrix below mostly explains itself.
+        </p>
+      </div>
+      <aside class="ph-side">
+        <b>9</b>
+        <span>tools compared · one runtime</span>
+      </aside>
+    </header>
 
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Compare Herdr — terminal-native agent multiplexer" />
-        <meta
-            name="twitter:description"
-            content="Compare Herdr with tmux, Zellij, cmux, Warp, Solo, Conductor, Emdash, and Superset."
-        />
-        <meta name="twitter:image" content="https://herdr.dev/assets/og-card-v9.png" />
-        <meta name="twitter:image:alt" content="Herdr — run them anywhere, leave them running." />
+    <section class="cmp" id="matrix">
+      <div class="fighd">
+        <span>herdr against the field</span>
+        <span class="r">scrolls sideways on a phone</span>
+      </div>
+      <div class="cmp-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>capability</th>
+              <th class="h">herdr</th>
+              <th>tmux · zellij</th>
+              <th>cmux · warp</th>
+              <th>solo</th>
+              <th>conductor · emdash · superset</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Kind of thing</th>
+              <td class="h">runtime + clients</td>
+              <td>terminal multiplexer</td>
+              <td>terminal app</td>
+              <td>process dashboard</td>
+              <td>manager app</td>
+            </tr>
+            <tr>
+              <th scope="row">Work survives its own UI closing</th>
+              <td class="h">yes, the server owns the terminals</td>
+              <td>yes, detach</td>
+              <td>session restore</td>
+              <td>while the app is open</td>
+              <td>while the app is open</td>
+            </tr>
+            <tr>
+              <th scope="row">Runs inside your existing terminal</th>
+              <td class="h">yes</td>
+              <td>yes</td>
+              <td>replaces it</td>
+              <td class="no">no, desktop app</td>
+              <td class="no">no, desktop app</td>
+            </tr>
+            <tr>
+              <th scope="row">Semantic agent state</th>
+              <td class="h">blocked · working · done · idle</td>
+              <td class="no">—</td>
+              <td>attention cues</td>
+              <td>process status</td>
+              <td>workspace status</td>
+            </tr>
+            <tr>
+              <th scope="row">Detach, reattach, SSH in</th>
+              <td class="h">yes, any tty</td>
+              <td>yes</td>
+              <td>partial</td>
+              <td class="no">—</td>
+              <td>remote projects</td>
+            </tr>
+            <tr>
+              <th scope="row">Direct attach to one agent</th>
+              <td class="h">yes</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+              <td class="no">—</td>
+            </tr>
+            <tr>
+              <th scope="row">API agents drive themselves</th>
+              <td class="h">read · send · wait · split · attach</td>
+              <td>terminal scripting</td>
+              <td>app APIs</td>
+              <td>MCP for processes</td>
+              <td>workflow APIs</td>
+            </tr>
+            <tr>
+              <th scope="row">Worktree and diff review flow</th>
+              <td class="h">pairs with it</td>
+              <td class="no">—</td>
+              <td>partial</td>
+              <td class="no">—</td>
+              <td>yes, their core</td>
+            </tr>
+            <tr>
+              <th scope="row">Clients on the same runtime</th>
+              <td class="h">TUI · CLI · plain SSH, more coming</td>
+              <td>its own client</td>
+              <td>the app only</td>
+              <td>the app only</td>
+              <td>the app only</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="figcap">
+        The columns are categories, not enemies: Herdr pairs happily with a
+        worktree manager and runs fine inside a fancy terminal.
+        <b>The row that sorts the field is the second one:</b> what happens to
+        the agents when the thing you're looking at goes away.
+      </p>
+    </section>
 
-        <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon.png?v=14" />
-        <link rel="apple-touch-icon" href="/assets/logo.png" />
-        <link rel="preload" href="/assets/jbm.woff2" as="font" type="font/woff2" crossorigin />
-        <script>
-            (function () {
-                var saved = localStorage.getItem("herdr-palette");
-                var system = window.matchMedia("(prefers-color-scheme: dark)").matches
-                    ? "tokyo-night"
-                    : "tokyo-night-day";
-                document.documentElement.setAttribute("data-palette", saved || system);
-            })();
-        </script>
-        <link rel="stylesheet" href="/css/style.css?v=39" />
-    </head>
-    <body>
-        <header class="site-header">
-            <nav class="nav" aria-label="Primary navigation">
-                <a class="brand" href="/" aria-label="Herdr home">
-                    <span class="brand-logo" aria-hidden="true"></span>
-                    <span>herdr</span>
-                </a>
-                <details class="nav-menu">
-                    <summary class="nav-menu-button" aria-label="Open navigation">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </summary>
-                    <div class="nav-menu-panel">
-                        <a href="/">Home</a>
-                        <a href="/compare/" aria-current="page">Compare</a>
-                        <a href="/plugins/">Plugins</a>
-                        <a href="/blog/">Blog</a>
-                        <a href="/docs/quick-start/">Quick start</a>
-                        <a href="/docs/">Docs</a>
-                        <a href="/docs/socket-api/">API</a>
-                        <a href="/docs/install/">Install</a>
-                        <a href="https://github.com/herdrdev/herdr">GitHub</a>
-                    </div>
-                </details>
-                <div class="nav-links">
-                    <a href="/">Home</a>
-                    <a href="/compare/" aria-current="page">Compare</a>
-                    <a href="/plugins/">Plugins</a>
-                    <a href="/blog/">Blog</a>
-                    <a href="/docs/quick-start/">Quick start</a>
-                    <a href="/docs/">Docs</a>
-                    <a href="/docs/socket-api/">API</a>
-                </div>
-                <div class="nav-tools">
-                    <a class="nav-icon-link" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
-                        <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-                        </svg>
-                    </a>
-                    <a class="nav-icon-link" href="https://x.com/herdrdev" aria-label="Herdr on X">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" />
-                        </svg>
-                    </a>
-                    <a class="nav-cta" href="/docs/install/">Install</a>
-                </div>
-            </nav>
-        </header>
-
-        <main>
-            <section class="hero compare-hero">
-                <div class="hero-copy">
-                    <p class="eyebrow"><span class="status-dot dot-done"></span>Compare Herdr</p>
-                    <h1>The agent multiplexer that lives in your terminal.</h1>
-                    <p class="hero-lede">
-                        Herdr gives coding agents the thing tmux gave terminal users:
-                        persistent real panes, detach and reattach, remote access, and a
-                        control surface. Then it adds agent state and an API the agents can use.
-                    </p>
-                    <div class="hero-actions">
-                        <a class="button button-primary" href="/docs/quick-start/">Quick start</a>
-                        <a class="button button-secondary" href="#matrix">See the matrix</a>
-                    </div>
-                </div>
-                <div class="compare-claim-card" aria-label="Herdr positioning summary">
-                    <p class="section-kicker">Herdr combines</p>
-                    <h2>tmux persistence, agent awareness, no terminal replacement.</h2>
-                    <ul class="compare-checks">
-                        <li>Runs inside your existing terminal</li>
-                        <li>Owns persistent PTY sessions</li>
-                        <li>Attaches locally, over SSH, or directly to one agent</li>
-                        <li>Tracks blocked, working, done, and idle state</li>
-                        <li>Exposes CLI and socket APIs agents can drive</li>
-                    </ul>
-                </div>
-            </section>
-
-            <section class="section compare-stack-section" id="matrix">
-                <div class="section-heading-wide">
-                    <div>
-                        <p class="section-kicker">The stack</p>
-                        <h2>Pick the center of gravity.</h2>
-                    </div>
-                    <p>
-                        The question is not whether a tool can run a terminal. Most can.
-                        The question is whether it combines terminal-native persistence with
-                        agent state and agent-controlled automation.
-                    </p>
-                </div>
-
-                <div class="table-wrap comparison-matrix">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Capability</th>
-                                <th>Herdr</th>
-                                <th>tmux / Zellij</th>
-                                <th>cmux / Warp</th>
-                                <th>Solo</th>
-                                <th>Conductor / Emdash / Superset</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Runs inside your existing terminal</td>
-                                <td>yes</td>
-                                <td>yes</td>
-                                <td>no, terminal app</td>
-                                <td>no, desktop app</td>
-                                <td>no, app workspace</td>
-                            </tr>
-                            <tr>
-                                <td>Persistent PTY session runtime</td>
-                                <td>yes</td>
-                                <td>yes</td>
-                                <td>session/app restore</td>
-                                <td>managed processes</td>
-                                <td>embedded terminals</td>
-                            </tr>
-                            <tr>
-                                <td>Detach, reattach, and SSH in</td>
-                                <td>yes</td>
-                                <td>yes</td>
-                                <td>partial</td>
-                                <td>no</td>
-                                <td>remote projects</td>
-                            </tr>
-                            <tr>
-                                <td>Direct attach to one agent terminal</td>
-                                <td>yes</td>
-                                <td>no</td>
-                                <td>no</td>
-                                <td>no</td>
-                                <td>no</td>
-                            </tr>
-                            <tr>
-                                <td>Semantic agent state</td>
-                                <td>blocked / working / done / idle</td>
-                                <td>no</td>
-                                <td>attention or native-agent status</td>
-                                <td>process status</td>
-                                <td>workspace status</td>
-                            </tr>
-                            <tr>
-                                <td>Agent-shaped API</td>
-                                <td>read, send, wait, split, attach</td>
-                                <td>terminal scripting</td>
-                                <td>app APIs</td>
-                                <td>MCP for processes</td>
-                                <td>workflow APIs</td>
-                            </tr>
-                            <tr>
-                                <td>Git worktree and diff review flow</td>
-                                <td>pairs with it</td>
-                                <td>no</td>
-                                <td>partial</td>
-                                <td>no</td>
-                                <td>yes</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <section class="section compare-categories-section">
-                <div class="section-heading">
-                    <p class="section-kicker">How Herdr differs</p>
-                    <h2>The intersection other tools miss.</h2>
-                </div>
-                <div class="differ-grid">
-                    <article class="intersection-card">
-                        <span class="card-index">Herdr</span>
-                        <h3>Persistent terminal runtime, built for agents.</h3>
-                        <p>
-                            Herdr keeps real terminal panes alive like a multiplexer, but treats agents
-                            as first-class runtime objects. You can scan state, jump to blocked work,
-                            attach directly to one agent, and let agents read, send, split, and wait
-                            through the CLI/socket API.
-                        </p>
-                        <div class="intersection-pills" aria-label="Herdr strengths">
-                            <span>existing terminal</span>
-                            <span>persistent PTYs</span>
-                            <span>SSH attach</span>
-                            <span>direct agent attach</span>
-                            <span>agent state</span>
-                            <span>agent API</span>
-                        </div>
-                    </article>
-                    <div class="differ-list">
-                        <article>
-                            <span>tmux / Zellij</span>
-                            <h3>Classic multiplexers stop at terminals.</h3>
-                            <p>They own panes and persistence. They do not know which pane is blocked, working, done, or ready for an agent wait.</p>
-                        </article>
-                        <article>
-                            <span>cmux / Warp</span>
-                            <h3>Terminal apps replace the terminal.</h3>
-                            <p>They can add polished desktop UX, but the workflow moves into their app. Herdr stays inside the terminal you already use.</p>
-                        </article>
-                        <article>
-                            <span>Solo</span>
-                            <h3>Dashboards supervise processes.</h3>
-                            <p>Process health and auto-restart are useful, but Herdr is about persistent interactive agent panes, not dev-stack supervision.</p>
-                        </article>
-                        <article>
-                            <span>Conductor / Emdash / Superset</span>
-                            <h3>Worktree tools own review flow.</h3>
-                            <p>They are for branch isolation, diffs, and PRs. Herdr is the live terminal layer those agents can run inside or alongside.</p>
-                        </article>
-                    </div>
-                </div>
-            </section>
-
-            <section class="section compare-one-liners-section">
-                <div class="section-heading">
-                    <p class="section-kicker">One-line comparisons</p>
-                    <h2>Use this when deciding.</h2>
-                </div>
-                <div class="one-liner-list">
-                    <article><strong>Herdr vs tmux</strong><span>tmux persists terminals; Herdr persists agent workspaces and understands agent state.</span></article>
-                    <article><strong>Herdr vs Zellij</strong><span>Zellij is a modern terminal workspace; Herdr is an agent multiplexer with state, waits, and orchestration.</span></article>
-                    <article><strong>Herdr vs cmux</strong><span>cmux is a Mac terminal app for agents; Herdr is a terminal-native multiplexer that runs anywhere your terminal and SSH do.</span></article>
-                    <article><strong>Herdr vs Warp</strong><span>Warp is an agentic development platform; Herdr is the local terminal control layer for your existing agents.</span></article>
-                    <article><strong>Herdr vs OpenCode web</strong><span>OpenCode's web mode serves one agent over HTTP; Herdr is a terminal-native multiplexer for many agents and harnesses, reachable over plain SSH.</span></article>
-                    <article><strong>Herdr vs Solo</strong><span>Solo manages your dev stack; Herdr manages persistent interactive agent panes.</span></article>
-                    <article><strong>Herdr vs Conductor, Emdash, Superset</strong><span>They orchestrate isolated worktrees and review diffs; Herdr orchestrates live terminals and agent state.</span></article>
-                </div>
-            </section>
-
-            <section class="final-cta compare-final-cta">
-                <p class="section-kicker">Start with the multiplexer</p>
-                <h2>If your agents live in terminals, put the terminals in Herdr.</h2>
-                <p>
-                    Install Herdr, run two agents, split a pane, then detach once. The difference is obvious when the agents keep running.
-                </p>
-                <div class="hero-actions center">
-                    <a class="button button-primary" href="/docs/install/">Install Herdr</a>
-                    <a class="button button-secondary" href="/docs/quick-start/">Quick start</a>
-                </div>
-            </section>
-        </main>
-
-        <footer class="footer">
-            <a class="brand" href="/" aria-label="Herdr home">
-                <span class="brand-logo" aria-hidden="true"></span>
-                <span>herdr</span>
-            </a>
-            <div>
-                <a href="/compare/">Compare</a>
-                <a href="/docs/">Docs</a>
-                <a href="/docs/configuration/">Configuration</a>
-                <a href="/docs/socket-api/">API</a>
-                <a href="https://github.com/herdrdev/herdr/releases">Releases</a>
-                <a href="mailto:hey@herdr.dev">hey@herdr.dev</a>
-            </div>
-            <nav class="footer-social" aria-label="Social links">
-                <a href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub">
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-                    </svg>
-                </a>
-                <a href="https://x.com/herdrdev" aria-label="Herdr on X">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117Z" />
-                    </svg>
-                </a>
-            </nav>
-        </footer>
-
-        <div class="theme-hint" id="theme-hint" title="Press / or t to switch theme">
-            <span class="theme-hint-dot"></span>
-            <span class="theme-hint-label" id="theme-hint-label">light</span>
-            <span class="theme-hint-key">[/]</span>
+    <div class="caps">
+      <div class="cap cap-flat">
+        <div class="n"><span>01</span></div>
+        <div class="cap-in">
+          <h3>Herdr is the runtime.</h3>
+          <p>
+            A server owns the terminals; every UI is a client of it. The TUI in
+            the screenshots attaches, detaches and even crashes without the
+            agents noticing. Same for the CLI, plain SSH, and whatever
+            attaches next. The TUI is the first client, not the last.
+          </p>
         </div>
-
-        <div class="theme-overlay" id="theme-overlay" hidden>
-            <div class="theme-overlay-panel" role="dialog" aria-label="Theme switcher" aria-modal="true">
-                <div class="theme-overlay-title">settings</div>
-                <div class="theme-overlay-tabs"><span class="active">theme</span></div>
-                <div class="theme-overlay-list" id="theme-overlay-list" role="listbox" aria-label="Themes">
-                    <div class="theme-sep"><span>dark</span></div>
-                    <button type="button" role="option" data-value="catppuccin">catppuccin</button>
-                    <button type="button" role="option" data-value="terminal">terminal</button>
-                    <button type="button" role="option" data-value="tokyo-night">tokyo night</button>
-                    <button type="button" role="option" data-value="dracula">dracula</button>
-                    <button type="button" role="option" data-value="nord">nord</button>
-                    <button type="button" role="option" data-value="gruvbox">gruvbox</button>
-                    <button type="button" role="option" data-value="one-dark">one dark</button>
-                    <button type="button" role="option" data-value="solarized">solarized</button>
-                    <button type="button" role="option" data-value="kanagawa">kanagawa</button>
-                    <button type="button" role="option" data-value="rose-pine">rose pine</button>
-                    <button type="button" role="option" data-value="vesper">vesper</button>
-                    <div class="theme-sep"><span>light</span></div>
-                    <button type="button" role="option" data-value="catppuccin-latte">catppuccin latte</button>
-                    <button type="button" role="option" data-value="tokyo-night-day">tokyo day</button>
-                    <button type="button" role="option" data-value="gruvbox-light">gruvbox light</button>
-                    <button type="button" role="option" data-value="one-light">one light</button>
-                    <button type="button" role="option" data-value="solarized-light">solarized light</button>
-                    <button type="button" role="option" data-value="kanagawa-lotus">kanagawa lotus</button>
-                    <button type="button" role="option" data-value="rose-pine-dawn">rose pine dawn</button>
-                </div>
-                <div class="theme-overlay-footer">
-                    <span class="theme-overlay-hints"><span class="key">↑↓</span> select</span>
-                    <span class="theme-overlay-actions"><span class="theme-apply-btn">↵ apply</span><button class="theme-close-btn" type="button" id="theme-close-btn">esc close</button></span>
-                </div>
-            </div>
+        <div class="ev" aria-hidden="true">
+          <div class="ev-row"><span>herdr-server</span><b><i class="beat"></i>up</b></div>
+          <div class="ev-note">4 agents · 0 clients attached · still working</div>
         </div>
+      </div>
+      <div class="cap cap-flat">
+        <div class="n"><span>02</span></div>
+        <div class="cap-in">
+          <h3>Multiplexers persist terminals, not agents.</h3>
+          <p>
+            tmux gave humans persistence, and Herdr keeps that whole
+            inheritance: real PTYs, detach, SSH. What it adds is the part
+            multiplexers never had: knowing which pane is an agent, whether
+            it's blocked, and how to wait on it instead of polling it.
+          </p>
+        </div>
+        <div class="ev" aria-hidden="true">
+          <div class="ev-row"><span>tmux ls</span><b>3 sessions</b></div>
+          <div class="ev-note">which one is waiting on you? no idea</div>
+        </div>
+      </div>
+      <div class="cap cap-flat">
+        <div class="n"><span>03</span></div>
+        <div class="cap-in">
+          <h3>Terminal apps replace your terminal.</h3>
+          <p>
+            cmux and Warp can be genuinely polished, but the deal is that the
+            work moves into their window, with their renderer, on the machines
+            they support. Herdr changes nothing about your terminal. It runs
+            inside it, wherever a terminal and SSH already reach.
+          </p>
+        </div>
+        <div class="ev" aria-hidden="true">
+          <div class="ev-row"><span>ghostty · kitty · iterm · alacritty</span><b>kept</b></div>
+          <div class="ev-note">herdr runs in the one you already chose</div>
+        </div>
+      </div>
+      <div class="cap cap-flat">
+        <div class="n"><span>04</span></div>
+        <div class="cap-in">
+          <h3>Manager apps are clients without a runtime.</h3>
+          <p>
+            Conductor, Emdash and Superset manage a herd from a window:
+            worktrees, diffs, review queues. Useful, and Herdr pairs fine with
+            that flow. But a window that manages agents is not a place agents
+            live: quit the app and the herd goes with it.
+          </p>
+        </div>
+        <div class="ev" aria-hidden="true">
+          <div class="ev-row"><span>their app quits</span><b>agents stop</b></div>
+          <div class="ev-row"><span>every herdr client quits</span><b>agents keep going</b></div>
+        </div>
+      </div>
+      <div class="cap cap-flat">
+        <div class="n"><span>05</span></div>
+        <div class="cap-in">
+          <h3>Dashboards watch processes.</h3>
+          <p>
+            Solo supervises a dev stack: health, restarts, logs. Herdr's job
+            is different: interactive agent terminals that stay open, hold
+            scrollback and state, and stay yours whether or not anything is
+            watching them.
+          </p>
+        </div>
+        <div class="ev" aria-hidden="true">
+          <div class="ev-row"><span>process status</span><b>up / down</b></div>
+          <div class="ev-row"><span>agent state</span><b>blocked · working · idle</b></div>
+        </div>
+      </div>
+    </div>
 
-        <script>
-            (function () {
-                var overlay = document.getElementById("theme-overlay");
-                var list = document.getElementById("theme-overlay-list");
-                var hintLabel = document.getElementById("theme-hint-label");
-                if (!overlay || !list) return;
-                var options = Array.prototype.slice.call(list.querySelectorAll("[role='option']"));
-                var media = window.matchMedia("(prefers-color-scheme: dark)");
-                var saved = localStorage.getItem("herdr-palette") || "";
-                var committed = saved || defaultPalette();
+    <section class="vs">
+      <div class="fighd">
+        <span>one-liners, for deciding fast</span>
+      </div>
+      <div class="vs-list">
+        <article>
+          <b>herdr vs tmux</b>
+          <p>tmux keeps terminals alive; so does Herdr. The difference is Herdr knows which terminals are agents, what state each one is in, and how to wait on them. tmux sees panes.</p>
+        </article>
+        <article>
+          <b>herdr vs zellij</b>
+          <p>Zellij is a friendlier workspace for humans in terminals. Herdr is a runtime for agents in terminals: state, waits, direct attach, and an API.</p>
+        </article>
+        <article>
+          <b>herdr vs cmux</b>
+          <p>cmux is a Mac terminal app built around agents. Herdr isn't an app: it's the runtime underneath, in whatever terminal you already use, reachable over SSH.</p>
+        </article>
+        <article>
+          <b>herdr vs warp</b>
+          <p>Warp wants to be your terminal and your platform. Herdr keeps your terminal and owns what runs inside it.</p>
+        </article>
+        <article>
+          <b>herdr vs opencode web</b>
+          <p>opencode's web mode serves one agent over HTTP. Herdr runs the whole herd: any agent CLI, many at once, from any tty.</p>
+        </article>
+        <article>
+          <b>herdr vs solo</b>
+          <p>Solo is a dashboard that supervises your dev processes. Herdr holds interactive agent terminals open whether or not anything is watching them.</p>
+        </article>
+        <article>
+          <b>herdr vs conductor, emdash, superset</b>
+          <p>Manager apps put worktrees, diffs and review queues in a window. Herdr is the layer under that kind of window: quit their app and the agents stop; detach every Herdr client and they don't.</p>
+        </article>
+      </div>
+    </section>
 
-                function defaultPalette() {
-                    return media.matches ? "tokyo-night" : "tokyo-night-day";
-                }
-
-                function setPalette(value) {
-                    document.documentElement.setAttribute("data-palette", value || defaultPalette());
-                }
-
-                function updateUI(value) {
-                    var activeValue = value || defaultPalette();
-                    options.forEach(function (opt) {
-                        opt.setAttribute("aria-selected", String(opt.dataset.value === activeValue));
-                    });
-                    var active = options.find(function (opt) { return opt.dataset.value === activeValue; });
-                    if (hintLabel && active) hintLabel.textContent = active.textContent.trim();
-                }
-
-                function openOverlay() {
-                    overlay.hidden = false;
-                    document.body.style.overflow = "hidden";
-                    committed = localStorage.getItem("herdr-palette") || defaultPalette();
-                    updateUI(committed);
-                    var active = list.querySelector("[aria-selected='true']") || options[0];
-                    if (active) active.focus();
-                }
-
-                function closeOverlay() {
-                    overlay.hidden = true;
-                    document.body.style.overflow = "";
-                }
-
-                function toggleOverlay() {
-                    if (overlay.hidden) openOverlay();
-                    else closeOverlay();
-                }
-
-                function preview(index) {
-                    if (index < 0 || index >= options.length) return;
-                    setPalette(options[index].dataset.value);
-                    updateUI(options[index].dataset.value);
-                    options[index].focus();
-                }
-
-                function commit(value) {
-                    setPalette(value);
-                    localStorage.setItem("herdr-palette", value);
-                    updateUI(value);
-                    closeOverlay();
-                }
-
-                function revert() {
-                    setPalette(committed);
-                    updateUI(committed);
-                    closeOverlay();
-                }
-
-                media.addEventListener("change", function () {
-                    if (!localStorage.getItem("herdr-palette")) {
-                        setPalette("");
-                        updateUI("");
-                    }
-                });
-
-                options.forEach(function (opt, idx) {
-                    opt.addEventListener("click", function () { commit(opt.dataset.value); });
-                    opt.addEventListener("mouseenter", function () { preview(idx); });
-                });
-
-                document.addEventListener("keydown", function (e) {
-                    if ((e.key === "t" || e.key === "/") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                        var tag = document.activeElement && document.activeElement.tagName;
-                        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-                        e.preventDefault();
-                        toggleOverlay();
-                        return;
-                    }
-                    if (overlay.hidden) return;
-                    var idx = options.indexOf(document.activeElement);
-                    if (e.key === "ArrowDown") {
-                        e.preventDefault();
-                        preview(idx >= 0 ? Math.min(options.length - 1, idx + 1) : 0);
-                    } else if (e.key === "ArrowUp") {
-                        e.preventDefault();
-                        preview(idx >= 0 ? Math.max(0, idx - 1) : options.length - 1);
-                    } else if (e.key === "Enter" && idx >= 0) {
-                        e.preventDefault();
-                        commit(options[idx].dataset.value);
-                    } else if (e.key === "Escape") {
-                        e.preventDefault();
-                        revert();
-                    }
-                });
-
-                var themeHint = document.getElementById("theme-hint");
-                if (localStorage.getItem("herdr-theme-hint-seen") === "1") {
-                    themeHint.classList.add("is-seen");
-                }
-                themeHint.addEventListener("mouseenter", function () {
-                    localStorage.setItem("herdr-theme-hint-seen", "1");
-                    themeHint.classList.add("is-seen");
-                }, { once: true });
-                themeHint.addEventListener("click", toggleOverlay);
-                document.getElementById("theme-close-btn").addEventListener("click", revert);
-                setPalette(saved);
-                updateUI(saved);
-            })();
-        </script>
-    </body>
-</html>
+    <section class="end">
+      <span class="ram"></span>
+      <div class="in">
+        <h2>A runtime, not another window.</h2>
+        <p>
+          Install it and nothing about your setup changes: same terminal, same
+          agent CLIs. They just stop dying when a window does.
+        </p>
+        <div class="ph-actions">
+          <a class="btn-solid" href="/docs/install/">Install Herdr</a>
+          <a class="btn-ghost" href="/docs/quick-start/">Quick start</a>
+        </div>
+      </div>
+    </section>
+  </main>
+</SiteLayout>

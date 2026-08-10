@@ -22,9 +22,13 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
+pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
+    if let Ok(executable) = std::env::current_exe() {
+        cmd.env("HERDR_BIN_PATH", executable);
+    }
 }
 
 pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {
@@ -122,6 +126,24 @@ pub(crate) fn kilo_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn hermes_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(HERMES_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+
+    #[cfg(windows)]
+    {
+        let explicit_home = std::env::var_os("HOME").filter(|value| !value.is_empty());
+        let profile = std::env::var_os("USERPROFILE").filter(|value| !value.is_empty());
+        if let Some(home) = explicit_home.filter(|home| profile.as_ref() != Some(home)) {
+            return Ok(PathBuf::from(home).join(".hermes"));
+        }
+        if let Some(local_app_data) =
+            std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())
+        {
+            return Ok(PathBuf::from(local_app_data).join("hermes"));
+        }
+    }
+
     Ok(home_dir()?.join(".hermes"))
 }
 

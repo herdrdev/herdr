@@ -179,10 +179,11 @@ fn home_dir_uses_userprofile_when_home_is_missing() {
 fn windows_supports_portable_integrations() {
     use crate::api::schema::IntegrationTarget;
 
-    assert!(!integration_target_supported(IntegrationTarget::Hermes));
-    assert!(!integration_target_supported(IntegrationTarget::Cursor));
-    assert!(!integration_target_supported(IntegrationTarget::Devin));
-    assert!(!integration_target_supported(IntegrationTarget::Mastracode));
+    assert!(integration_target_supported(IntegrationTarget::Hermes));
+    assert!(integration_target_supported(IntegrationTarget::Cursor));
+    assert!(integration_target_supported(IntegrationTarget::Devin));
+    assert!(integration_target_supported(IntegrationTarget::Mastracode));
+    assert!(integration_target_supported(IntegrationTarget::Grok));
 
     assert!(integration_target_supported(IntegrationTarget::Pi));
     assert!(integration_target_supported(IntegrationTarget::Omp));
@@ -198,7 +199,7 @@ fn windows_supports_portable_integrations() {
 
 #[cfg(windows)]
 #[test]
-fn windows_availability_excludes_unsupported_integrations() {
+fn windows_availability_includes_native_integrations() {
     use crate::api::schema::IntegrationTarget;
 
     let _lock = integration_env_lock();
@@ -216,15 +217,17 @@ fn windows_availability_excludes_unsupported_integrations() {
     fs::write(bin.join("cursor-agent.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("devin.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("mastracode.cmd"), "@echo off\r\n").unwrap();
+    fs::write(bin.join("grok.cmd"), "@echo off\r\n").unwrap();
 
     assert!(integration_target_available(IntegrationTarget::Pi));
     assert!(integration_target_available(IntegrationTarget::Omp));
     assert!(integration_target_available(IntegrationTarget::Opencode));
     assert!(integration_target_available(IntegrationTarget::Kilo));
-    assert!(!integration_target_available(IntegrationTarget::Hermes));
-    assert!(!integration_target_available(IntegrationTarget::Cursor));
-    assert!(!integration_target_available(IntegrationTarget::Devin));
-    assert!(!integration_target_available(IntegrationTarget::Mastracode));
+    assert!(integration_target_available(IntegrationTarget::Hermes));
+    assert!(integration_target_available(IntegrationTarget::Cursor));
+    assert!(integration_target_available(IntegrationTarget::Devin));
+    assert!(integration_target_available(IntegrationTarget::Mastracode));
+    assert!(integration_target_available(IntegrationTarget::Grok));
 
     if let Some(path) = original_path {
         std::env::set_var("PATH", path);
@@ -232,41 +235,6 @@ fn windows_availability_excludes_unsupported_integrations() {
         std::env::remove_var("PATH");
     }
     let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_install_rejects_unsupported_integration_before_config_lookup() {
-    use crate::api::schema::IntegrationTarget;
-
-    let _lock = integration_env_lock();
-    let original_home = std::env::var_os("HOME");
-    let original_userprofile = std::env::var_os("USERPROFILE");
-    let original_homedrive = std::env::var_os("HOMEDRIVE");
-    let original_homepath = std::env::var_os("HOMEPATH");
-    std::env::remove_var("HOME");
-    std::env::remove_var("USERPROFILE");
-    std::env::remove_var("HOMEDRIVE");
-    std::env::remove_var("HOMEPATH");
-
-    let err = install_target(IntegrationTarget::Hermes).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "hermes integration is not supported on Windows"
-    );
-
-    if let Some(home) = original_home {
-        std::env::set_var("HOME", home);
-    }
-    if let Some(userprofile) = original_userprofile {
-        std::env::set_var("USERPROFILE", userprofile);
-    }
-    if let Some(homedrive) = original_homedrive {
-        std::env::set_var("HOMEDRIVE", homedrive);
-    }
-    if let Some(homepath) = original_homepath {
-        std::env::set_var("HOMEPATH", homepath);
-    }
 }
 
 #[test]
@@ -349,23 +317,37 @@ fn qodercli_availability_checks_windows_aliases() {
 
 #[test]
 #[cfg(windows)]
-fn hermes_layout_can_exist_without_making_unsupported_target_available() {
+fn hermes_layout_makes_target_available() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let local_app_data = base.join("local-app-data");
     let hermes_bin = local_app_data.join("hermes").join("bin");
     fs::create_dir_all(&hermes_bin).unwrap();
     fs::write(hermes_bin.join("hermes.exe"), "").unwrap();
+    let original_hermes_home = std::env::var_os(HERMES_HOME_ENV_VAR);
+    let original_home = std::env::var_os("HOME");
     let original_local_app_data = std::env::var_os("LOCALAPPDATA");
     let original_path = std::env::var_os("PATH");
+    std::env::remove_var(HERMES_HOME_ENV_VAR);
+    std::env::remove_var("HOME");
     std::env::set_var("LOCALAPPDATA", &local_app_data);
     std::env::set_var("PATH", "");
 
     assert!(hermes_install_layout_available());
-    assert!(!integration_target_available(
+    assert!(integration_target_available(
         crate::api::schema::IntegrationTarget::Hermes
     ));
 
+    if let Some(hermes_home) = original_hermes_home {
+        std::env::set_var(HERMES_HOME_ENV_VAR, hermes_home);
+    } else {
+        std::env::remove_var(HERMES_HOME_ENV_VAR);
+    }
+    if let Some(home) = original_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
     if let Some(local_app_data) = original_local_app_data {
         std::env::set_var("LOCALAPPDATA", local_app_data);
     } else {
@@ -3134,14 +3116,10 @@ fn install_cursor_writes_hook_and_updates_hooks_json() {
     let hooks = hooks_file.get("hooks").and_then(Value::as_object).unwrap();
     let session_start = hooks.get("sessionStart").and_then(Value::as_array).unwrap();
     assert_eq!(session_start.len(), 1);
-    assert!(session_start[0]
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| {
-            command.starts_with("bash ")
-                && command.contains("herdr-agent-state.sh")
-                && command.ends_with(" session")
-        }));
+    assert_eq!(
+        session_start[0].get("command").and_then(Value::as_str),
+        Some(hook_command(&installed.hook_path, Some("session")).as_str())
+    );
     assert!(hooks.get("beforeSubmitPrompt").is_none());
     assert!(hooks.get("beforeShellExecution").is_none());
     let stop = hooks.get("stop").and_then(Value::as_array).unwrap();
@@ -3308,9 +3286,10 @@ fn install_mastracode_writes_hook_and_updates_hooks_json() {
         let entries = hooks.get(event).and_then(Value::as_array).unwrap();
         assert_eq!(entries.len(), 1, "{event} should have one Herdr hook");
         let command = entries[0].get("command").and_then(Value::as_str).unwrap();
-        assert!(command.starts_with("bash "));
-        assert!(command.contains(MASTRACODE_HOOK_INSTALL_NAME));
-        assert!(command.ends_with(action));
+        assert_eq!(
+            command,
+            mastracode_hook_command(&installed.hook_path, action)
+        );
         assert_eq!(
             entries[0].get("type").and_then(Value::as_str),
             Some("command")
@@ -3369,9 +3348,14 @@ fn install_grok_writes_hook_and_config() {
     let session_start = config["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(session_start.len(), 1);
     let command = grok_session_command(&config);
-    assert!(command.starts_with("sh "));
-    assert!(command.contains("herdr-agent-state.sh"));
-    assert!(command.ends_with(" session"));
+    #[cfg(windows)]
+    assert_eq!(command, hook_command(&installed.hook_path, Some("session")));
+    #[cfg(not(windows))]
+    {
+        assert!(command.starts_with("sh "));
+        assert!(command.contains("herdr-agent-state.sh"));
+        assert!(command.ends_with(" session"));
+    }
 
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);
@@ -3392,12 +3376,12 @@ fn install_mastracode_removes_v1_lifecycle_hooks() {
         serde_json::to_string(&json!({
             "SessionStart": [{
                 "type": "command",
-                "command": format!("bash '{}' idle", hook_path.display()),
+                "command": hook_command(&hook_path, Some("idle")),
                 "timeout": MASTRACODE_HOOK_TIMEOUT_MS
             }],
             "SessionEnd": [{
                 "type": "command",
-                "command": format!("bash '{}' release", hook_path.display()),
+                "command": hook_command(&hook_path, Some("release")),
                 "timeout": MASTRACODE_HOOK_TIMEOUT_MS
             }]
         }))
@@ -3415,10 +3399,10 @@ fn install_mastracode_removes_v1_lifecycle_hooks() {
     assert!(!hooks.contains_key("SessionEnd"));
     let session_start = hooks["SessionStart"].as_array().unwrap();
     assert_eq!(session_start.len(), 1);
-    assert!(session_start[0]["command"]
-        .as_str()
-        .unwrap()
-        .ends_with("session"));
+    assert_eq!(
+        session_start[0]["command"].as_str().unwrap(),
+        mastracode_hook_command(&hook_path, "session")
+    );
 
     if let Some(home) = original_home {
         std::env::set_var("HOME", home);

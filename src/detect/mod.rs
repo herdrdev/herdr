@@ -144,7 +144,13 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Claude => "claude",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor-agent",
+        Agent::Cursor => {
+            if cfg!(windows) {
+                "cursor-agent.cmd"
+            } else {
+                "cursor-agent"
+            }
+        }
         Agent::Devin => "devin",
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
@@ -545,6 +551,11 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
             return Some(agent_label(Agent::Pi).to_string());
         }
     }
+    for window in components.windows(4) {
+        if window == ["node_modules", "mastracode", "dist", "cli"] {
+            return Some(agent_label(Agent::Mastracode).to_string());
+        }
+    }
     None
 }
 
@@ -743,7 +754,14 @@ mod tests {
             (Agent::Claude, "claude"),
             (Agent::Codex, "codex"),
             (Agent::Gemini, "gemini"),
-            (Agent::Cursor, "cursor-agent"),
+            (
+                Agent::Cursor,
+                if cfg!(windows) {
+                    "cursor-agent.cmd"
+                } else {
+                    "cursor-agent"
+                },
+            ),
             (Agent::Devin, "devin"),
             (Agent::Antigravity, "agy"),
             (Agent::Cline, "cline"),
@@ -967,6 +985,26 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Pi, "pi".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_mastracode_package_cli() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\mastracode\\dist\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Mastracode, "mastracode".to_string()))
         );
     }
 

@@ -1,6 +1,15 @@
 use super::App;
 
 impl App {
+    #[cfg(not(windows))]
+    pub(super) fn query_host_terminal_appearance(&self) {
+        use std::io::Write;
+
+        let _ = std::io::stdout()
+            .write_all(crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.as_bytes());
+        let _ = std::io::stdout().flush();
+    }
+
     pub(super) fn query_host_terminal_theme(&self) {
         use std::io::Write;
 
