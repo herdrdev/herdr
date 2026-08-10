@@ -145,12 +145,20 @@ like `ctrl+h`, `control+j`, `alt+x`, and `shift+tab`, function keys like
 {"id":"req_focus","method":"pane.focus_direction","params":{"direction":"right"}}
 {"id":"req_resize","method":"pane.resize","params":{"pane_id":"w1:p1","direction":"right","amount":0.1}}
 {"id":"req_zoom","method":"pane.zoom","params":{"pane_id":"w1:p1","mode":"toggle"}}
-{"id":"req_split","method":"pane.split","params":{"direction":"right","ratio":0.333,"env":{"HERDR_ROLE":"tests"}}}
+{"id":"req_input","method":"pane.input.set","params":{"pane_id":"w1:p1","right_click":"pane"}}
+{"id":"req_split","method":"pane.split","params":{"direction":"right","ratio":0.333,"right_click":"pane","env":{"HERDR_ROLE":"tests"}}}
 {"id":"req_process","method":"pane.process_info","params":{"pane_id":"w1:p1"}}
 ```
 
 `pane.current` returns a single `PaneInfo`. When `caller_pane_id` is present,
 Herdr returns that pane. When it is omitted, Herdr returns the active focused
+pane.
+
+`pane.input.set` sets `right_click` to `herdr` or `pane` for one pane. `herdr`
+is the default. `pane` forwards unmodified right-click hold and drag gestures
+when the application requests terminal mouse reporting; otherwise Herdr falls
+back to its pane menu. Right-clicking the pane frame always opens Herdr's menu.
+`pane.split` accepts the same optional `right_click` value for the newly created
 pane.
 
 `PaneInfo` includes `scroll` when terminal scroll metrics are available:
@@ -169,10 +177,20 @@ Clients can treat `offset_from_bottom == 0` as at-bottom state.
 
 Pane graphics let a plugin place image data over a pane. They are available
 only when `[experimental].kitty_graphics = true`; otherwise every pane graphics
-method returns `feature_disabled`. Calling `pane.graphics.info` returns the
-attached client's cell width and height in pixels without creating a graphics
-layer. `pane.graphics.set` accepts `png`, `rgb`, or `rgba` data in `data_base64`,
-and `pane.graphics.clear` removes the layer.
+method returns `feature_disabled`. Calling `pane.graphics.info` explicitly
+activates capability discovery and returns the attached client's cell size,
+file-frame options, pixel-mouse support, the 16-layer limit, and `pane_visible`.
+`pane_visible` is true only when the target is in the active workspace and tab
+and is not hidden by zoom. Short-lived UI modes do not change it.
+
+`pane.graphics.set`, `pane.graphics.clear`, and `pane.graphics.stream` accept an
+optional `layer_id` (default `primary`). Set and stream also accept `z_index`;
+layers are placed in stable `(z_index, layer_id)` order. Each stream exclusively owns its layer, and
+closing it removes that layer. Inline frames accept `png`, `rgb`, `rgba`, or
+`bgra`; BGRA is normalized once to owned RGBA. Herdr advances the host cache
+one image transaction per render pass, so arbitrary layer sets progress without
+an aggregate frame. Headless transport keeps each transaction within its 32 MiB
+wire limit; local monolithic rendering does not apply that transport limit.
 
 ```json
 {"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
@@ -182,13 +200,30 @@ and `pane.graphics.clear` removes the layer.
 
 For repeated frames, open a dedicated socket with `pane.graphics.stream`. After
 Herdr replies with `ok`, send one JSON header and then exactly `data_length` raw
-bytes per frame. A stream owns that pane's graphics layer until the socket
-closes; concurrent set, clear, or stream requests return `stream_conflict`.
+bytes per inline frame. Concurrent operations on that layer return
+`stream_conflict`.
 
 ```json
-{"id":"graphics_stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1"}}
+{"id":"graphics_stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1","z_index":0}}
 {"format":"png","image_width":800,"image_height":600,"data_length":12345,"placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}
 ```
+
+When `pane.graphics.info` advertises `file_frame_transport: "direct-kitty"`, an
+eligible local Ghostty, kitty, or WezTerm client may submit an immutable private
+`rgba` or `bgra` file with `file.path`, `sequence`, and `revision`. Direct Kitty
+file transport is reserved for the default `primary` page layer; named secondary
+layers use owned inline RGBA. BGRA is always copied, swizzled, and rendered
+inline. Herdr replies with a `pane_graphics_frame_ack` only after the terminal
+accepts the file, or after a safe owned inline fallback is installed. Confirmed
+file-transport failure disables direct files for that client connection without
+disabling exact pixel mouse. A timeout or client loss closes the stream without
+acknowledging source reuse. Monolithic `--no-session` mode advertises neither
+fast file transport nor exact pixel mouse and remains on owned inline fallback.
+
+Direct files are always complete canonical `width * height * 4` RGBA frames.
+`file_frame_damage: true` means Herdr accepts optional damage metadata for
+producer-side canonical-ring efficiency; it still copies or presents the full file.
+Resize and full redraw replay placements without retransmitting pixels.
 
 `pane.layout` returns the tab layout snapshot with `workspace_id`, `tab_id`,
 `zoomed`, outer `area`, `focused_pane_id`, pane rects, and split rects/ratios.

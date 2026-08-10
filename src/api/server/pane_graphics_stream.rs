@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::Stream as _;
@@ -14,9 +13,9 @@ use crate::api::ApiRequestSender;
 use crate::ipc::{is_connection_closed_error, LocalStream};
 
 use super::{
-    api_response_outcome, dispatch_to_app_with_timeout, write_json_line,
-    write_json_line_allow_disconnect, write_text_line_allow_disconnect, APP_RESPONSE_TIMEOUT,
-    CONNECTION_POLL_INTERVAL,
+    api_response_outcome, dispatch_stream_frame, dispatch_stream_open,
+    dispatch_to_app_with_timeout, write_json_line, write_json_line_allow_disconnect,
+    write_text_line_allow_disconnect, APP_RESPONSE_TIMEOUT, CONNECTION_POLL_INTERVAL,
 };
 
 const MAX_STREAM_FRAME_HEADER_BYTES: usize = 64 * 1024;
@@ -28,15 +27,25 @@ const STREAM_FRAME_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const STREAM_FALLBACK_FAST_POLLS: u8 = 32;
 static NEXT_PANE_GRAPHICS_STREAM_OWNER: AtomicU64 = AtomicU64::new(1);
-static REGISTERED_STREAM_COUNT: AtomicUsize = AtomicUsize::new(0);
-static REGISTERED_STREAMS: OnceLock<Mutex<HashMap<String, Weak<AtomicBool>>>> = OnceLock::new();
+
+#[derive(serde::Deserialize)]
+struct FrameFile {
+    path: String,
+}
 
 #[derive(serde::Deserialize)]
 struct FrameHeader {
     format: crate::api::schema::PaneGraphicsFormat,
     image_width: u32,
     image_height: u32,
-    data_length: usize,
+    #[serde(default)]
+    data_length: Option<usize>,
+    #[serde(default)]
+    file: Option<FrameFile>,
+    #[serde(default)]
+    sequence: u64,
+    #[serde(default)]
+    revision: u64,
     #[serde(default)]
     placement: crate::api::schema::PaneGraphicsPlacementParams,
 }
@@ -102,19 +111,24 @@ fn serve_with_timeouts(
     read_timeouts: ReadTimeouts,
 ) -> std::io::Result<()> {
     let pane_id = params.pane_id.clone();
+    let layer_id = params.layer_id.clone();
+    let z_index = params.z_index;
     let owner = next_owner();
     params.owner = owner.clone();
-    let open_response = dispatch_to_app_with_timeout(
+    let stream_active = Arc::new(AtomicBool::new(true));
+    let open_response = dispatch_stream_open(
         Request {
             id: request_id.clone(),
             method: Method::PaneGraphicsStreamOpen(params),
         },
         api_tx,
-        Some(open_timeout),
+        open_timeout,
+        Arc::clone(&stream_active),
     );
     if api_response_outcome(&open_response) != "ok" {
+        stream_active.store(false, Ordering::Release);
         let write_result = write_text_line_allow_disconnect(&mut stream, &open_response);
-        clear_layer(&pane_id, &owner, api_tx);
+        clear_layer(&pane_id, layer_id.as_deref(), z_index, &owner, api_tx);
         write_result?;
         return Ok(());
     }
@@ -126,27 +140,28 @@ fn serve_with_timeouts(
             result: ResponseResult::Ok {},
         },
     ) {
-        clear_layer(&pane_id, &owner, api_tx);
+        stream_active.store(false, Ordering::Release);
+        clear_layer(&pane_id, layer_id.as_deref(), z_index, &owner, api_tx);
         if is_connection_closed_error(&err) {
             return Ok(());
         }
         return Err(err);
     }
 
-    let stream_active = Arc::new(AtomicBool::new(true));
-    register_stream(&owner, &stream_active);
     let result = serve_frames(
         &mut stream,
         &request_id,
         &owner,
         &pane_id,
+        layer_id.as_deref(),
+        z_index,
         api_tx,
         running,
         &stream_active,
         read_timeouts,
     );
-    unregister_stream(&owner);
-    clear_layer(&pane_id, &owner, api_tx);
+    stream_active.store(false, Ordering::Release);
+    clear_layer(&pane_id, layer_id.as_deref(), z_index, &owner, api_tx);
     result
 }
 
@@ -155,6 +170,8 @@ fn serve_frames(
     request_id: &str,
     owner: &str,
     pane_id: &str,
+    layer_id: Option<&str>,
+    z_index: i32,
     api_tx: &ApiRequestSender,
     running: &Arc<AtomicBool>,
     stream_active: &Arc<AtomicBool>,
@@ -193,7 +210,67 @@ fn serve_frames(
                 return Ok(());
             }
         };
-        if header.data_length == 0 {
+        if let Some(file) = header.file {
+            if !matches!(
+                header.format,
+                crate::api::schema::PaneGraphicsFormat::Rgba
+                    | crate::api::schema::PaneGraphicsFormat::Bgra
+            ) {
+                write_json_line_allow_disconnect(
+                    stream,
+                    &ErrorResponse {
+                        id: request_id.to_string(),
+                        error: ErrorBody {
+                            code: "invalid_frame".into(),
+                            message: "file frames require rgba or bgra".into(),
+                        },
+                    },
+                )?;
+                return Ok(());
+            }
+            let response = dispatch_stream_frame(
+                Request {
+                    id: format!("{request_id}:file:{}", header.sequence),
+                    method: Method::PaneGraphicsStreamDirect(
+                        crate::api::schema::PaneGraphicsDirectParams {
+                            pane_id: pane_id.to_owned(),
+                            layer_id: layer_id.map(str::to_owned),
+                            z_index,
+                            owner: owner.to_owned(),
+                            image_width: header.image_width,
+                            image_height: header.image_height,
+                            format: header.format,
+                            path: file.path,
+                            sequence: header.sequence,
+                            revision: header.revision,
+                            placement: header.placement,
+                        },
+                    ),
+                },
+                api_tx,
+                Arc::clone(stream_active),
+            );
+            write_text_line_allow_disconnect(stream, &response)?;
+            if api_response_outcome(&response) != "ok" {
+                return Ok(());
+            }
+            continue;
+        }
+
+        let Some(data_length) = header.data_length else {
+            write_json_line_allow_disconnect(
+                stream,
+                &ErrorResponse {
+                    id: request_id.to_string(),
+                    error: ErrorBody {
+                        code: "invalid_frame".into(),
+                        message: "frame requires data_length or file".into(),
+                    },
+                },
+            )?;
+            return Ok(());
+        };
+        if data_length == 0 {
             write_json_line_allow_disconnect(
                 stream,
                 &ErrorResponse {
@@ -206,7 +283,7 @@ fn serve_frames(
             )?;
             return Ok(());
         }
-        if header.data_length > crate::api::schema::PANE_GRAPHICS_STREAM_MAX_BYTES {
+        if data_length > crate::api::schema::PANE_GRAPHICS_STREAM_MAX_BYTES {
             write_json_line_allow_disconnect(
                 stream,
                 &ErrorResponse {
@@ -222,7 +299,7 @@ fn serve_frames(
 
         let Some(data) = read_exact(
             stream,
-            header.data_length,
+            data_length,
             running,
             stream_active,
             timeouts.body_idle,
@@ -239,6 +316,8 @@ fn serve_frames(
                 id: frame_id,
                 method: Method::PaneGraphicsStreamSet(PaneGraphicsSetParams {
                     pane_id: pane_id.to_string(),
+                    layer_id: layer_id.map(str::to_owned),
+                    z_index,
                     owner: owner.to_string(),
                     format: header.format,
                     image_width: header.image_width,
@@ -260,52 +339,6 @@ fn serve_frames(
     Ok(())
 }
 
-fn stream_registry() -> &'static Mutex<HashMap<String, Weak<AtomicBool>>> {
-    REGISTERED_STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn register_stream(owner: &str, active: &Arc<AtomicBool>) {
-    let Ok(mut streams) = stream_registry().lock() else {
-        active.store(false, Ordering::Release);
-        return;
-    };
-    if streams
-        .insert(owner.to_string(), Arc::downgrade(active))
-        .is_none()
-    {
-        REGISTERED_STREAM_COUNT.fetch_add(1, Ordering::Release);
-    }
-}
-
-fn unregister_stream(owner: &str) {
-    let Ok(mut streams) = stream_registry().lock() else {
-        return;
-    };
-    if streams.remove(owner).is_some() {
-        REGISTERED_STREAM_COUNT.fetch_sub(1, Ordering::Release);
-    }
-}
-
-pub(crate) fn cancel_inactive_streams(mut is_active: impl FnMut(&str) -> bool) {
-    if REGISTERED_STREAM_COUNT.load(Ordering::Acquire) == 0 {
-        return;
-    }
-    let Ok(mut streams) = stream_registry().lock() else {
-        return;
-    };
-    let before = streams.len();
-    streams.retain(|owner, active| {
-        let keep = is_active(owner);
-        if !keep {
-            if let Some(active) = active.upgrade() {
-                active.store(false, Ordering::Release);
-            }
-        }
-        keep
-    });
-    REGISTERED_STREAM_COUNT.fetch_sub(before.saturating_sub(streams.len()), Ordering::Release);
-}
-
 fn stream_is_running(running: &AtomicBool, stream_active: &AtomicBool) -> bool {
     running.load(Ordering::Relaxed) && stream_active.load(Ordering::Acquire)
 }
@@ -315,12 +348,20 @@ fn next_owner() -> String {
     format!("pane.graphics.stream:{}:{id}", std::process::id())
 }
 
-fn clear_layer(pane_id: &str, owner: &str, api_tx: &ApiRequestSender) {
+fn clear_layer(
+    pane_id: &str,
+    layer_id: Option<&str>,
+    z_index: i32,
+    owner: &str,
+    api_tx: &ApiRequestSender,
+) {
     let _response = dispatch_to_app_with_timeout(
         Request {
             id: format!("pane.graphics.stream.clear:{pane_id}"),
             method: Method::PaneGraphicsStreamClose(PaneGraphicsStreamParams {
                 pane_id: pane_id.to_string(),
+                layer_id: layer_id.map(str::to_owned),
+                z_index,
                 owner: owner.to_string(),
             }),
         },
@@ -574,7 +615,9 @@ fn read_should_retry(err: &io::Error) -> bool {
 mod tests {
     use super::*;
     use crate::api::schema::{ErrorResponse, Method, ResponseResult, SuccessResponse};
-    use crate::api::{ApiRequestMessage, EventHub};
+    use crate::api::ApiRequestMessage;
+    #[cfg(unix)]
+    use crate::api::EventHub;
     use crate::ipc::LocalStream;
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{BufRead, BufReader, Write};
@@ -608,6 +651,42 @@ mod tests {
 
     fn assert_server_stream_owner(owner: &str) {
         assert!(owner.starts_with("pane.graphics.stream:"));
+    }
+
+    fn respond_ok(message: ApiRequestMessage) {
+        let response = serde_json::to_string(&SuccessResponse {
+            id: message.request.id,
+            result: ResponseResult::Ok {},
+        })
+        .unwrap();
+        message.respond_to.send(response).unwrap();
+    }
+
+    fn assert_close_and_respond(message: ApiRequestMessage, pane_id: &str, owner: &str) {
+        match &message.request.method {
+            Method::PaneGraphicsStreamClose(params) => {
+                assert_eq!(params.pane_id, pane_id);
+                assert_eq!(params.owner, owner);
+            }
+            other => panic!("unexpected close request: {other:?}"),
+        }
+        respond_ok(message);
+    }
+
+    #[test]
+    fn browser_file_header_accepts_damage_but_keeps_full_canonical_frame() {
+        let header: FrameHeader = serde_json::from_str(
+            r#"{"format":"rgba","image_width":2,"image_height":3,"sequence":7,"revision":8,"file":{"path":"/private/frame"},"damage":{"x":1,"y":1,"width":1,"height":1},"transport":"direct-kitty","placement":{"grid_cols":2,"grid_rows":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(header.data_length, None);
+        assert_eq!(header.file.unwrap().path, "/private/frame");
+        assert_eq!((header.sequence, header.revision), (7, 8));
+        assert_eq!((header.image_width, header.image_height), (2, 3));
+        assert_eq!(
+            (header.placement.grid_cols, header.placement.grid_rows),
+            (2, 3)
+        );
     }
 
     #[test]
@@ -650,15 +729,7 @@ mod tests {
             }
             other => panic!("unexpected open request: {other:?}"),
         };
-        open.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: open.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        respond_ok(open);
 
         let ack: SuccessResponse = serde_json::from_str(&read_response_line(&mut client)).unwrap();
         assert_eq!(ack.id, "stream_1");
@@ -687,36 +758,11 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
-        msg.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: msg.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        respond_ok(msg);
 
         drop(client);
         running.store(false, Ordering::Relaxed);
-        let clear = api_rx.blocking_recv().unwrap();
-        match &clear.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, stream_owner);
-            }
-            other => panic!("unexpected clear request: {other:?}"),
-        }
-        clear
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: clear.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        assert_close_and_respond(api_rx.blocking_recv().unwrap(), "pane_1", &stream_owner);
         assert!(server_thread.join().unwrap().is_ok());
     }
 
@@ -761,24 +807,7 @@ mod tests {
         assert_eq!(response.id, "stream_2");
         assert_eq!(response.error.code, "feature_disabled");
 
-        let close = api_rx.blocking_recv().unwrap();
-        match &close.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, stream_owner);
-            }
-            other => panic!("unexpected close request: {other:?}"),
-        }
-        close
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: close.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        assert_close_and_respond(api_rx.blocking_recv().unwrap(), "pane_1", &stream_owner);
 
         drop(client);
         running.store(false, Ordering::Relaxed);
@@ -798,6 +827,8 @@ mod tests {
                 "stream_timeout".into(),
                 PaneGraphicsStreamParams {
                     pane_id: "pane_1".into(),
+                    layer_id: None,
+                    z_index: 0,
                     owner: String::new(),
                 },
                 &api_tx,
@@ -823,24 +854,7 @@ mod tests {
         assert_eq!(response.error.code, "server_unavailable");
         assert!(response.error.message.contains("timed out"));
 
-        let close = api_rx.blocking_recv().unwrap();
-        match &close.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, stream_owner);
-            }
-            other => panic!("unexpected close request: {other:?}"),
-        }
-        close
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: close.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        assert_close_and_respond(api_rx.blocking_recv().unwrap(), "pane_1", &stream_owner);
 
         drop(open);
         drop(client);
@@ -879,15 +893,7 @@ mod tests {
         };
 
         drop(client);
-        open.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: open.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        respond_ok(open);
 
         let (close_tx, close_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -897,23 +903,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .unwrap();
-        match &close.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, stream_owner);
-            }
-            other => panic!("unexpected close request: {other:?}"),
-        }
-        close
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: close.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        assert_close_and_respond(close, "pane_1", &stream_owner);
 
         running.store(false, Ordering::Relaxed);
         assert!(server_thread.join().unwrap().is_ok());
@@ -942,75 +932,6 @@ mod tests {
 
         assert!(result.is_none());
         stopper.join().unwrap();
-    }
-
-    #[test]
-    fn inactive_owner_cancels_idle_stream_and_dispatches_close() {
-        let (mut client, server, _path) = local_stream_pair("graphics-owner-cancel");
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
-        let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let server_thread = std::thread::spawn(move || {
-            serve_with_timeouts(
-                server,
-                "stream-cancel".into(),
-                PaneGraphicsStreamParams {
-                    pane_id: "pane_1".into(),
-                    owner: String::new(),
-                },
-                &api_tx,
-                &server_running,
-                Duration::from_secs(1),
-                READ_TIMEOUTS,
-            )
-        });
-
-        let open = api_rx.blocking_recv().unwrap();
-        let owner = match &open.request.method {
-            Method::PaneGraphicsStreamOpen(params) => params.owner.clone(),
-            other => panic!("unexpected open request: {other:?}"),
-        };
-        open.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: open.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
-        let ack: SuccessResponse = serde_json::from_str(&read_response_line(&mut client)).unwrap();
-        assert_eq!(ack.id, "stream-cancel");
-
-        cancel_inactive_streams(|registered| registered != owner);
-
-        let (close_tx, close_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || close_tx.send(api_rx.blocking_recv()).unwrap());
-        let close = close_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("canceled idle stream should dispatch a close")
-            .expect("API request channel should remain open");
-        match &close.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, owner);
-            }
-            other => panic!("unexpected close request: {other:?}"),
-        }
-        close
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: close.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
-
-        drop(client);
-        running.store(false, Ordering::Relaxed);
-        assert!(server_thread.join().unwrap().is_ok());
     }
 
     #[test]
@@ -1102,6 +1023,8 @@ mod tests {
                 "stream-timeout".into(),
                 PaneGraphicsStreamParams {
                     pane_id: "pane_1".into(),
+                    layer_id: None,
+                    z_index: 0,
                     owner: String::new(),
                 },
                 &api_tx,
@@ -1121,15 +1044,7 @@ mod tests {
             Method::PaneGraphicsStreamOpen(params) => params.owner.clone(),
             other => panic!("unexpected open request: {other:?}"),
         };
-        open.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: open.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        respond_ok(open);
         let ack: SuccessResponse = serde_json::from_str(&read_response_line(&mut client)).unwrap();
         assert_eq!(ack.id, "stream-timeout");
         client.write_all(b"{").unwrap();
@@ -1141,23 +1056,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
-        match &close.request.method {
-            Method::PaneGraphicsStreamClose(params) => {
-                assert_eq!(params.pane_id, "pane_1");
-                assert_eq!(params.owner, owner);
-            }
-            other => panic!("unexpected close request: {other:?}"),
-        }
-        close
-            .respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: close.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
+        assert_close_and_respond(close, "pane_1", &owner);
 
         let error = server_thread.join().unwrap().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -1176,6 +1075,8 @@ mod tests {
                 "stream-oversized",
                 "owner-1",
                 "pane_1",
+                None,
+                0,
                 &api_tx,
                 &server_running,
                 &stream_active,

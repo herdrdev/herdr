@@ -1,11 +1,12 @@
 use crate::api::schema::{
     Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
-    PaneFocusDirectionParams, PaneLayoutParams, PaneListParams, PaneMoveDestination,
-    PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
+    PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
+    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
     PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneSendInputParams, PaneSendKeysParams,
-    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams,
-    PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request, SplitDirection,
+    PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
+    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
+    PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
+    SplitDirection,
 };
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
@@ -27,6 +28,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "zoom" => pane_zoom(&args[1..]),
         "read" => pane_read(&args[1..]),
         "rename" => pane_rename(&args[1..]),
+        "input" => pane_input(&args[1..]),
         "split" => pane_split(&args[1..]),
         "swap" => pane_swap(&args[1..]),
         "move" => pane_move(&args[1..]),
@@ -451,42 +453,55 @@ fn pane_rename(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_read(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-        return Ok(2);
+    let params = match parse_pane_read_args(args) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
     };
 
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+    let response = super::send_request(&Request {
+        id: "cli:pane:read".into(),
+        method: Method::PaneRead(params),
+    })?;
+
+    super::print_read_response(&response)
+}
+
+fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
+    const USAGE: &str = "usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
+
+    let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
+    let mut pane_id = None;
     let mut source = ReadSource::Recent;
     let mut lines = None;
     let mut format = ReadFormat::Text;
     let mut strip_ansi = true;
 
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--source" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
+                    return Err("missing value for --source".into());
                 };
-                source = super::parse_read_source(value)?;
+                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--lines" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
+                    return Err("missing value for --lines".into());
                 };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
+                lines =
+                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--format" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --format");
-                    return Ok(2);
+                    return Err("missing value for --format".into());
                 };
-                format = super::parse_read_format(value)?;
+                format = super::parse_read_format(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--ansi" => {
@@ -498,26 +513,111 @@ fn pane_read(args: &[String]) -> std::io::Result<i32> {
                 strip_ansi = false;
                 index += 1;
             }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
+            option if option.starts_with('-') => {
+                return Err(format!("unknown option: {option}"));
+            }
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
 
-    let response = super::send_request(&Request {
-        id: "cli:pane:read".into(),
-        method: Method::PaneRead(PaneReadParams {
-            pane_id,
-            source,
-            lines,
-            format,
-            strip_ansi,
-            intent: crate::api::schema::ReadIntent::Interactive,
-        }),
-    })?;
+    let Some(pane_id) = pane_id else {
+        return Err(USAGE.into());
+    };
 
-    super::print_read_response(&response)
+    Ok(PaneReadParams {
+        pane_id,
+        source,
+        lines,
+        format,
+        strip_ansi,
+        intent: crate::api::schema::ReadIntent::Interactive,
+    })
+}
+
+fn pane_input(args: &[String]) -> std::io::Result<i32> {
+    let env_pane_id = std::env::var("HERDR_PANE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let params = match parse_pane_input_args(args, env_pane_id.as_deref()) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+    };
+    super::runtime::pane_input_set(params)
+}
+
+fn parse_pane_input_args(
+    args: &[String],
+    env_pane_id: Option<&str>,
+) -> Result<PaneInputSetParams, String> {
+    const USAGE: &str =
+        "usage: herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
+
+    let args = super::expand_equals_args(args, &["--pane", "--right-click"]);
+    let mut pane_id = None;
+    let mut right_click = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--pane" => {
+                if pane_id.is_some() {
+                    return Err("provide only one pane selector".into());
+                }
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --pane".into());
+                };
+                pane_id = Some(super::normalize_pane_id(value));
+                index += 2;
+            }
+            "--current" => {
+                if pane_id.is_some() {
+                    return Err("provide only one pane selector".into());
+                }
+                pane_id = Some(
+                    env_pane_id
+                        .map(super::normalize_pane_id)
+                        .ok_or("--current requires HERDR_PANE_ID")?,
+                );
+                index += 1;
+            }
+            "--right-click" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --right-click".into());
+                };
+                right_click = Some(parse_right_click_target(value)?);
+                index += 2;
+            }
+            option if option.starts_with('-') => return Err(format!("unknown option: {option}")),
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
+            }
+        }
+    }
+
+    Ok(PaneInputSetParams {
+        pane_id: pane_id.ok_or(USAGE)?,
+        right_click: right_click.ok_or(USAGE)?,
+    })
+}
+
+fn parse_right_click_target(value: &str) -> Result<PaneRightClickTarget, String> {
+    match value {
+        "herdr" => Ok(PaneRightClickTarget::Herdr),
+        "pane" => Ok(PaneRightClickTarget::Pane),
+        _ => Err(format!("invalid right-click target: {value}")),
+    }
 }
 
 fn pane_split(args: &[String]) -> std::io::Result<i32> {
@@ -539,12 +639,14 @@ fn parse_pane_split_args(
     args: &[String],
     env_pane_id: Option<&str>,
 ) -> Result<PaneSplitParams, String> {
+    let args = super::expand_equals_args(args, &["--right-click"]);
     let mut env = std::collections::HashMap::new();
     let mut pane_id = None;
     let mut direction = None;
     let mut ratio = None;
     let mut cwd = None;
     let mut focus = false;
+    let mut right_click = PaneRightClickTarget::Herdr;
 
     let mut index = 0;
     if args
@@ -564,7 +666,11 @@ fn parse_pane_split_args(
                 index += 2;
             }
             "--current" => {
-                pane_id = env_pane_id.map(super::normalize_pane_id);
+                pane_id = Some(
+                    env_pane_id
+                        .map(super::normalize_pane_id)
+                        .ok_or("--current requires HERDR_PANE_ID")?,
+                );
                 index += 1;
             }
             "--direction" => {
@@ -595,6 +701,13 @@ fn parse_pane_split_args(
                 cwd = Some(value.clone());
                 index += 2;
             }
+            "--right-click" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --right-click".into());
+                };
+                right_click = parse_right_click_target(value)?;
+                index += 2;
+            }
             "--focus" => {
                 focus = true;
                 index += 1;
@@ -617,7 +730,7 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
+            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
                 .into(),
         );
     };
@@ -629,6 +742,7 @@ fn parse_pane_split_args(
         ratio,
         cwd,
         focus,
+        right_click,
         env,
     })
 }
@@ -946,28 +1060,42 @@ fn pane_run(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
-        return Ok(2);
+    let params = match parse_pane_wait_output_args(args) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
     };
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:pane:wait-output".into(),
+        method: Method::PaneWaitForOutput(params),
+    })?)
+}
+
+fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParams, String> {
+    const USAGE: &str = "usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
+
+    let args = super::expand_equals_args(
+        args,
+        &["--match", "--regex", "--source", "--lines", "--timeout"],
+    );
+    let mut pane_id = None;
     let mut source = ReadSource::Recent;
     let mut lines = None;
     let mut timeout_ms = None;
     let mut strip_ansi = true;
     let mut matcher = None;
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--match" | "--regex" => {
-                let option = args[index].as_str();
+            option @ ("--match" | "--regex") => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for {option}");
-                    return Ok(2);
+                    return Err(format!("missing value for {option}"));
                 };
                 if matcher.is_some() {
-                    eprintln!("--match and --regex are mutually exclusive");
-                    return Ok(2);
+                    return Err("--match and --regex are mutually exclusive".into());
                 }
                 matcher = Some(if option == "--regex" {
                     OutputMatch::Regex {
@@ -982,53 +1110,57 @@ fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
             }
             "--source" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
+                    return Err("missing value for --source".into());
                 };
-                source = super::parse_read_source(value)?;
+                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--lines" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
+                    return Err("missing value for --lines".into());
                 };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
+                lines =
+                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--timeout" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --timeout");
-                    return Ok(2);
+                    return Err("missing value for --timeout".into());
                 };
-                timeout_ms = Some(super::parse_u64_flag("--timeout", value)?);
+                timeout_ms =
+                    Some(super::parse_u64_flag("--timeout", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--raw" => {
                 strip_ansi = false;
                 index += 1;
             }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
+            option if option.starts_with('-') => {
+                return Err(format!("unknown option: {option}"));
+            }
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
-    let Some(matcher) = matcher else {
-        eprintln!("missing required --match or --regex");
-        return Ok(2);
+    let Some(pane_id) = pane_id else {
+        return Err(USAGE.into());
     };
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:wait-output".into(),
-        method: Method::PaneWaitForOutput(PaneWaitForOutputParams {
-            pane_id,
-            source,
-            lines,
-            r#match: matcher,
-            timeout_ms,
-            strip_ansi,
-        }),
-    })?)
+    let Some(matcher) = matcher else {
+        return Err("missing required --match or --regex".into());
+    };
+    Ok(PaneWaitForOutputParams {
+        pane_id,
+        source,
+        lines,
+        r#match: matcher,
+        timeout_ms,
+        strip_ansi,
+    })
 }
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
@@ -1509,8 +1641,9 @@ fn print_pane_help() {
     eprintln!("  herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
     eprintln!("  herdr pane rename <pane_id> <label>|--clear");
     eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+    eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
     eprintln!(
-        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
+        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
     );
     eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
     eprintln!("  herdr pane swap --source-pane ID --target-pane ID");
@@ -1547,6 +1680,56 @@ mod tests {
         assert_eq!(params.target_pane_id, Some("issue-1".into()));
         assert_eq!(params.direction, crate::api::schema::SplitDirection::Right);
         assert_eq!(params.ratio, Some(0.333));
+        assert_eq!(params.right_click, PaneRightClickTarget::Herdr);
+    }
+
+    #[test]
+    fn parse_pane_split_args_accepts_pane_right_click_target() {
+        let params = parse_pane_split_args(
+            &args(&["--direction", "right", "--right-click", "pane"]),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(params.right_click, PaneRightClickTarget::Pane);
+    }
+
+    #[test]
+    fn parse_pane_input_args_requires_and_uses_calling_pane() {
+        let params = parse_pane_input_args(
+            &args(&["--current", "--right-click", "pane"]),
+            Some("issue-1:p1"),
+        )
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1:p1");
+        assert_eq!(params.right_click, PaneRightClickTarget::Pane);
+        assert!(
+            parse_pane_input_args(&args(&["--current", "--right-click", "pane"]), None).is_err()
+        );
+    }
+
+    #[test]
+    fn parse_pane_input_args_rejects_conflicting_selectors() {
+        assert!(parse_pane_input_args(
+            &args(&["pane-a", "--pane", "pane-b", "--right-click", "pane"]),
+            None,
+        )
+        .is_err());
+        assert!(parse_pane_input_args(
+            &args(&["--pane", "pane-a", "--current", "--right-click", "pane",]),
+            Some("pane-b"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_pane_split_args_accepts_equals_right_click_target() {
+        let params =
+            parse_pane_split_args(&args(&["--direction", "right", "--right-click=pane"]), None)
+                .unwrap();
+
+        assert_eq!(params.right_click, PaneRightClickTarget::Pane);
     }
 
     #[test]
@@ -1562,12 +1745,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_pane_split_args_current_without_env_keeps_focused_fallback() {
-        let params =
-            parse_pane_split_args(&args(&["--direction", "down", "--current"]), None).unwrap();
-
-        assert_eq!(params.target_pane_id, None);
-        assert_eq!(params.direction, crate::api::schema::SplitDirection::Down);
+    fn parse_pane_split_args_current_without_env_is_rejected() {
+        assert!(parse_pane_split_args(&args(&["--direction", "down", "--current"]), None).is_err());
     }
 
     #[test]
@@ -1798,5 +1977,91 @@ mod tests {
         assert_eq!(params.pane_id, Some("issue-2".into()));
         assert_eq!(params.direction, PaneDirection::Left);
         assert_eq!(params.amount, Some(0.125));
+    }
+
+    #[test]
+    fn parse_pane_read_args_defaults_with_bare_pane_id() {
+        let params = parse_pane_read_args(&args(&["issue-1"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Recent);
+        assert_eq!(params.lines, None);
+        assert_eq!(params.format, ReadFormat::Text);
+        assert!(params.strip_ansi);
+    }
+
+    #[test]
+    fn parse_pane_read_args_accepts_space_separated_options() {
+        let params = parse_pane_read_args(&args(&[
+            "issue-1", "--source", "visible", "--lines", "5", "--ansi",
+        ]))
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Visible);
+        assert_eq!(params.lines, Some(5));
+        assert_eq!(params.format, ReadFormat::Ansi);
+    }
+
+    #[test]
+    fn parse_pane_read_args_accepts_reordered_equals_options() {
+        let params =
+            parse_pane_read_args(&args(&["--source=visible", "--lines=5", "issue-1"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Visible);
+        assert_eq!(params.lines, Some(5));
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_accepts_space_separated_options() {
+        let params = parse_pane_wait_output_args(&args(&[
+            "issue-1",
+            "--match",
+            "ready",
+            "--timeout",
+            "5000",
+        ]))
+        .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(
+            params.r#match,
+            OutputMatch::Substring {
+                value: "ready".into()
+            }
+        );
+        assert_eq!(params.timeout_ms, Some(5000));
+        assert_eq!(params.source, ReadSource::Recent);
+        assert!(params.strip_ansi);
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_accepts_reordered_equals_options() {
+        let params =
+            parse_pane_wait_output_args(&args(&["--match=a=b", "--timeout=100", "issue-1"]))
+                .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(
+            params.r#match,
+            OutputMatch::Substring {
+                value: "a=b".into()
+            }
+        );
+        assert_eq!(params.timeout_ms, Some(100));
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_requires_matcher() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1"])).unwrap_err();
+        assert!(err.contains("missing required --match or --regex"));
+    }
+
+    #[test]
+    fn parse_pane_wait_output_args_rejects_conflicting_matchers() {
+        let err = parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--regex", "b"]))
+            .unwrap_err();
+        assert!(err.contains("mutually exclusive"));
     }
 }

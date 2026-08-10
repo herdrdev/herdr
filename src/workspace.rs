@@ -1185,6 +1185,12 @@ impl Workspace {
         self.tabs.iter().find_map(|tab| tab.panes.get(&pane_id))
     }
 
+    pub fn pane_state_mut(&mut self, pane_id: PaneId) -> Option<&mut PaneState> {
+        self.tabs
+            .iter_mut()
+            .find_map(|tab| tab.panes.get_mut(&pane_id))
+    }
+
     pub fn terminal_id(&self, pane_id: PaneId) -> Option<&TerminalId> {
         self.tabs.iter().find_map(|tab| tab.terminal_id(pane_id))
     }

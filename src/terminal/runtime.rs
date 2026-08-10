@@ -311,8 +311,18 @@ impl TerminalRuntime {
         self.0.word_motion_target(row, col, motion)
     }
 
+    /// Collects the complete terminal input-mode snapshot.
+    ///
+    /// This performs multiple terminal queries and may format keyboard state.
+    /// Keep it out of render/layout and pane-scaled loops; add a narrow accessor
+    /// when only one terminal fact is needed.
     pub fn input_state(&self) -> Option<crate::pane::InputState> {
         self.0.input_state()
+    }
+
+    /// Reads only whether the alternate screen is active.
+    pub fn alternate_screen_active(&self) -> bool {
+        self.0.alternate_screen_active()
     }
 
     pub fn cursor_state(
@@ -465,31 +475,32 @@ impl TerminalRuntime {
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_button(kind, column, row, modifiers)
+        self.0.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_motion(kind, column, row, modifiers)
+        self.0.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_wheel(kind, column, row, modifiers)
+        self.0.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        self.0.pixel_size()
     }
 
     pub fn encode_alternate_scroll(

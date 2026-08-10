@@ -60,11 +60,38 @@ Herdr 以两种不同方式使用集成:
 | 生命周期权威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | 已安装且在为该窗格主动上报时,由钩子或插件事件决定 `idle`、`working` 和 `blocked`。对同一个生命周期权威,Herdr 不再使用屏幕清单兜底。 |
 | 会话身份 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | 集成上报用于恢复的原生会话引用。状态仍来自 Herdr 的屏幕清单检测。 |
 
-自定义 socket 集成在定义了原生终端 UI 中不可见的状态时,也可以上报状态。
+自定义集成在定义了原生终端 UI 中不可见的状态时,也可以上报状态。它们不需要内置到 Herdr 中,也不要求 Herdr 识别智能体的可执行文件。
+
+## 集成你自己的智能体
+
+在 Herdr 窗格中运行的智能体会继承 `HERDR_ENV`、`HERDR_PANE_ID`、`HERDR_BIN_PATH` 和 `HERDR_SOCKET_PATH`。如果智能体提供生命周期钩子,可从这些钩子通过 Herdr CLI 上报语义状态:
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source custom:my-agent \
+  --agent my-agent \
+  --state working
+```
+
+当智能体等待输入时上报 `idle`,需要用户决策时上报 `blocked`。用 `--message` 描述阻塞原因。智能体退出时,释放同一来源的生命周期权威:
+
+```bash
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+  --source custom:my-agent \
+  --agent my-agent
+```
+
+仅在 `HERDR_ENV=1` 且必要变量存在时上报,这样集成在 Herdr 外不会执行任何操作。保持 `--source` 稳定且对该集成唯一。如果上报可能乱序到达,请加入严格递增的 `--seq`;Herdr 会忽略同一来源的旧序列号。
+
+你可以在 `report-agent` 中加入 `--agent-session-id` 或 `--agent-session-path`,也可以在会话身份独立于状态变化时使用 `pane report-agent-session`。Herdr 会通过窗格和智能体 API 暴露该引用。自动恢复会话还要求 Herdr 知道如何启动该智能体并恢复所引用的会话。
+
+要实现可移植的集成,请使用 `HERDR_BIN_PATH` 和 CLI 包装命令。需要直接 IPC 的代码可以发送 [Socket API](/zh-cn/docs/socket-api/) 中说明的等效 `pane.report_agent`、`pane.report_agent_session` 和 `pane.release_agent` 请求。
+
+[Prime Agent 内置的 Herdr 上报器](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts)是一个真实实现示例。它只在 Herdr 中启用,将智能体事件映射为 `working`、`idle` 和 `blocked`,跨会话保持上报顺序,并在退出时释放权威。
 
 一些集成会上报智能体的原生会话引用。除非被 `[session] resume_agents_on_restore = false` 禁用,Herdr 会在服务器重启后使用官方会话引用恢复 Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode 和 Antigravity CLI 的窗格。
 
-原生会话恢复需要最新的 Herdr 集成: Pi 集成版本 `2`、OMP 版本 `3`、Claude Code 版本 `6`、Codex 版本 `5`、GitHub Copilot CLI 版本 `2`、Devin CLI 版本 `2`、Droid 版本 `2`、Kimi Code CLI 版本 `3`、Qoder CLI 版本 `2`、Cursor Agent CLI 版本 `1`、Grok CLI 版本 `1`、OpenCode 版本 `5`、Kilo Code CLI 版本 `1`、Hermes Agent 版本 `2`、MastraCode 版本 `1`、Antigravity CLI 版本 `1`。用 `herdr integration status` 查看已安装版本。
+原生会话恢复需要最新的 Herdr 集成: Pi 集成版本 `2`、OMP 版本 `3`、Claude Code 版本 `6`、Codex 版本 `5`、GitHub Copilot CLI 版本 `2`、Devin CLI 版本 `2`、Droid 版本 `2`、Kimi Code CLI 版本 `3`、Qoder CLI 版本 `2`、Cursor Agent CLI 版本 `1`、Grok CLI 版本 `1`、OpenCode 版本 `5`、Kilo Code CLI 版本 `1`、Hermes Agent 版本 `5`、MastraCode 版本 `1`、Antigravity CLI 版本 `1`。用 `herdr integration status` 查看已安装版本。
 
 ## Pi
 
@@ -148,7 +175,7 @@ herdr integration install devin
 
 该钩子从 Devin 的会话、提示、工具使用、权限和停止事件中上报原生会话身份。Devin 的状态仍来自 Herdr 的屏幕清单和 OSC 检测,因为 Devin 钩子不会在每次权限取消或用户中断后都发出可靠的状态转换。
 
-Herdr 默认使用 `~/.config/devin`,设置了 `XDG_CONFIG_HOME` 时使用 `$XDG_CONFIG_HOME/devin`。Devin 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`,并向 `config.json` 添加 Herdr 钩子条目。钩子在 Devin 运行期间刷新会话引用。卸载会从 `config.json` 中移除 Herdr 条目并删除钩子脚本。
+Herdr 默认使用 `~/.config/devin`,设置了 `XDG_CONFIG_HOME` 时使用 `$XDG_CONFIG_HOME/devin`。Devin 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`（Windows 上为 `herdr-agent-state.ps1`）,并向 `config.json` 添加 Herdr 钩子条目。钩子在 Devin 运行期间刷新会话引用。卸载会从 `config.json` 中移除 Herdr 条目并删除钩子脚本。
 
 Herdr 用 `devin --resume <id>` 恢复保存的 Devin 会话。无论钩子是否安装,屏幕清单检测始终是状态权威。
 
@@ -212,7 +239,7 @@ Herdr 把插件写入 `~/.config/kilo/plugin/herdr-agent-state.js`。Kilo 配置
 herdr integration install hermes
 ```
 
-Herdr 写入 `~/.hermes/plugins/herdr-agent-state/`,并在 `~/.hermes/config.yaml` 中启用 `herdr-agent-state`。Hermes 配置目录必须已经存在。安装后请重启 Hermes 以加载插件。卸载会删除插件目录,并从 `plugins.enabled` 中移除 `herdr-agent-state`。
+Herdr 写入 Hermes 主目录下的 `plugins/herdr-agent-state/`,并在 Hermes 主目录的 `config.yaml` 中启用 `herdr-agent-state`。`HERMES_HOME` 在 Unix 上默认为 `~/.hermes`,在 Windows 上默认为 `%LOCALAPPDATA%\hermes`。Hermes 配置目录必须已经存在。安装后请重启 Hermes 以加载插件。卸载会删除插件目录,并从 `plugins.enabled` 中移除 `herdr-agent-state`。
 
 该插件在 Hermes 运行于 Herdr 窗格内时上报可恢复的会话 id。Herdr 使用屏幕清单检测 `working`、`idle` 和 `blocked`,并可用上报的会话 id 通过 `hermes --resume <id>` 恢复该窗格。
 
@@ -242,7 +269,7 @@ herdr integration install cursor
 
 该钩子在 Cursor Agent CLI 运行于 Herdr 窗格内时,通过 Cursor 的 `sessionStart` 钩子上报会话身份。Cursor 的状态来自 Herdr 的屏幕清单检测。
 
-Herdr 默认使用 `~/.cursor`,设置了 `CURSOR_CONFIG_DIR` 时使用后者。Cursor 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`,并向 `hooks.json` 添加 Herdr 的 `sessionStart` 条目。卸载会移除匹配的钩子条目并删除钩子脚本。
+Herdr 默认使用 `~/.cursor`,设置了 `CURSOR_CONFIG_DIR` 时使用后者。Cursor 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`（Windows 上为 `herdr-agent-state.ps1`）,并向 `hooks.json` 添加 Herdr 的 `sessionStart` 条目。卸载会移除匹配的钩子条目并删除钩子脚本。
 
 在 Cursor 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `cursor-agent --resume <id>` 恢复该窗格。Herdr 恢复窗格时,`cursor-agent` 命令必须在 `PATH` 上;Herdr 不会启动通用的 `agent` 命令。
 
@@ -256,7 +283,7 @@ herdr integration install mastracode
 
 该钩子向 Herdr 上报 MastraCode 生命周期状态和线程身份,用于权威的 `idle`、`working`、`blocked` 状态和原生恢复。MastraCode 没有屏幕清单兜底;当 MastraCode 在 Herdr 窗格内运行时,状态来自该钩子。
 
-Herdr 使用 `~/.mastracode`。安装会写入 `hooks/herdr-agent-state.sh`,并把 Herdr 命令条目添加到 `hooks.json`;目录不存在时会创建。卸载会删除匹配的钩子条目和钩子脚本。
+Herdr 使用 `~/.mastracode`。安装会写入 `hooks/herdr-agent-state.sh`（Windows 上为 `hooks/herdr-agent-state.ps1`）,并把 Herdr 命令条目添加到 `hooks.json`;目录不存在时会创建。卸载会删除匹配的钩子条目和钩子脚本。
 
 Herdr 用 `mastracode --thread <id>` 恢复保存的 MastraCode 线程。
 
@@ -284,7 +311,7 @@ herdr integration install grok
 
 该钩子在 Grok CLI 运行于 Herdr 窗格内时,通过 Grok 的 `SessionStart` 钩子上报会话身份。Grok 的状态来自 Herdr 的屏幕清单检测。
 
-Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的所有 `hooks/*.json` 文件,因此安装会写入独立的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并同时写入 `hooks/herdr-agent-state.sh`;它不会修改其他钩子文件。卸载只会删除这两个由 Herdr 管理的文件。
+Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的所有 `hooks/*.json` 文件,因此安装会写入独立的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并同时写入 `hooks/herdr-agent-state.sh`（Windows 上为 `hooks/herdr-agent-state.ps1`）;它不会修改其他钩子文件。卸载只会删除这两个由 Herdr 管理的文件。
 
 Grok 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `grok --resume <id>` 恢复窗格。
 

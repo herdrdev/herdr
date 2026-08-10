@@ -16,6 +16,7 @@ modify_other_keys_ctrl_shift_l	1b5b32373b363b3130387e	char:l	control+shift	press
 kitty_alt_backspace	1b5b3132373b3375	backspace	alt	press
 kitty_shift_letter	1b5b3130383a37363b323a3175	char:l	shift	press	76
 kitty_shift_symbol	1b5b34393a33333b323a3175	char:1	shift	press	33
+kitty_omitted_shift_modifier	1b5b3131343a38323b3175	char:r	shift	press	82
 kitty_release_letter	1b5b3130383a37363b323a3375	char:l	shift	release	76
 kitty_keypad_0	1b5b35373339393b3175	char:0	-	press
 kitty_keypad_1	1b5b35373430303b3175	char:1	-	press

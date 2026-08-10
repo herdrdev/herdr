@@ -35,6 +35,31 @@ These instructions are layered.
 - **Screen detection is evidence-based.** When changing `src/detect/manifests/`, first capture the relevant bottom-buffer state with `herdr agent read <pane> --source detection --format text` and, when styling or alternate screen behavior matters, `--format ansi`. Decide which visible controls are invariant, which are alternatives, and encode them as explicit AND/OR gates. Do not match whole-pane incidental text, and do not use the user-visible viewport for agent status because users can scroll it.
 - **UI patterns should be reused.** Herdr is a mouse-first TUI. New dialogs, onboarding, settings, and post-update flows should follow the existing UI/UX language and interaction patterns instead of inventing one-off screens. Prefer reusing existing modal/screen structure, affordances, and close actions so the app feels consistent.
 
+### Multiplicative performance paths
+
+Treat work reachable from view computation, rendering, background-pane resizing,
+PTY parsing, detection, and client frame fanout as multiplicative. Before adding
+work, identify its frequency and cardinality: per byte, event, or render × panes,
+tabs, or workspaces × attached clients.
+
+Inside pane-scaled render and layout loops:
+
+- Use narrow terminal-state accessors. Do not collect aggregate input state,
+  format terminal snapshots, inspect process trees, perform filesystem I/O, or
+  allocate when one scalar fact is enough.
+- Keep terminal-core lock duration minimal.
+- Preserve hidden-source and retained-render early exits. Hidden panes still
+  parse output, but their output must not trigger presentation work merely to
+  keep terminal or detection state current.
+- When a change adds or widens work in one of these loops, profile fixed geometry
+  with 1 and at least 15 populated panes and report the scaling delta. Use
+  `just bench-render-scale` to exercise both background-workspace and active-pane
+  cardinality when applicable.
+
+Prefer deterministic operation or architecture tests to wall-clock CI limits.
+Performance benchmarks are supporting evidence, not substitutes for behavioral
+coverage.
+
 ### Runtime/client boundary guardrail
 
 Herdr is migrating toward a server-owned runtime protocol with the TUI as one client. New work should not deepen the current server/TUI coupling.
@@ -227,7 +252,7 @@ just check
 just release 0.x.y
 ```
 
-Before stable release, run `/pre-release-audit`, finalize `docs/next`, and let `just release-docs-check` validate the staged docs and website build. `just release` prepares the changelog and release commit, tags it, and pushes the tag. GitHub Actions builds binaries, creates the GitHub release, closes released issues, snapshots and promotes the tagged docs, and updates `website/latest.json`.
+Before stable release, run `/pre-release-audit`, finalize `docs/next`, and run `just pre-release-check` to validate the staged docs, website build, and render scaling. `just release` prepares the changelog and release commit, tags it, and pushes the tag. GitHub Actions builds binaries, creates the GitHub release, closes released issues, snapshots and promotes the tagged docs, and updates `website/latest.json`.
 
 The release workflows must publish these four assets:
 

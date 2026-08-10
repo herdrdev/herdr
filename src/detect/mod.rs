@@ -144,7 +144,13 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Claude => "claude",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor-agent",
+        Agent::Cursor => {
+            if cfg!(windows) {
+                "cursor-agent.cmd"
+            } else {
+                "cursor-agent"
+            }
+        }
         Agent::Devin => "devin",
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
@@ -350,11 +356,11 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
 
 fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) -> Option<String> {
     let argv = argv?;
-    let runtime = normalized_agent_lookup_name(path_basename(runtime));
+    let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
 
-    match runtime.as_str() {
+    match runtime_name.as_str() {
         "node" | "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
-        "python" | "python3" => script_arg_agent_name(argv, &["-c"], &["-m"]),
+        name if is_python_runtime(name) => script_arg_agent_name(argv, &["-c"], &["-m"]),
         "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
         "cmd" => windows_cmd_arg_agent_name(argv),
         "powershell" | "pwsh" => powershell_arg_agent_name(argv),
@@ -545,6 +551,11 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
             return Some(agent_label(Agent::Pi).to_string());
         }
     }
+    for window in components.windows(4) {
+        if window == ["node_modules", "mastracode", "dist", "cli"] {
+            return Some(agent_label(Agent::Mastracode).to_string());
+        }
+    }
     None
 }
 
@@ -594,20 +605,29 @@ fn process_priority(process: &crate::platform::ForegroundProcess, normalized_nam
 
 fn is_generic_runtime_or_shell(name: &str) -> bool {
     let name = normalized_agent_lookup_name(path_basename(name));
-    matches!(
-        name.as_str(),
-        "sh" | "bash"
-            | "zsh"
-            | "fish"
-            | "tmux"
-            | "node"
-            | "bun"
-            | "python"
-            | "python3"
-            | "cmd"
-            | "powershell"
-            | "pwsh"
-    )
+    is_python_runtime(&name)
+        || matches!(
+            name.as_str(),
+            "sh" | "bash"
+                | "zsh"
+                | "fish"
+                | "tmux"
+                | "node"
+                | "bun"
+                | "cmd"
+                | "powershell"
+                | "pwsh"
+        )
+}
+
+fn is_python_runtime(name: &str) -> bool {
+    name == "python"
+        || name.strip_prefix("python").is_some_and(|version| {
+            !version.is_empty()
+                && version
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +754,14 @@ mod tests {
             (Agent::Claude, "claude"),
             (Agent::Codex, "codex"),
             (Agent::Gemini, "gemini"),
-            (Agent::Cursor, "cursor-agent"),
+            (
+                Agent::Cursor,
+                if cfg!(windows) {
+                    "cursor-agent.cmd"
+                } else {
+                    "cursor-agent"
+                },
+            ),
             (Agent::Devin, "devin"),
             (Agent::Antigravity, "agy"),
             (Agent::Cline, "cline"),
@@ -852,6 +879,28 @@ mod tests {
     }
 
     #[test]
+    fn identify_agent_in_job_detects_python_version_wrapped_hermes() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "python3.12",
+                &[
+                    "/nix/store/example/bin/python3.12",
+                    "/nix/store/example/bin/hermes",
+                    "--resume",
+                    "session-id",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+    }
+
+    #[test]
     fn identify_agent_in_job_detects_nix_wrapped_codex_from_cmdline_argv0() {
         let job = crate::platform::ForegroundJob {
             process_group_id: 123,
@@ -936,6 +985,26 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Pi, "pi".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_mastracode_package_cli() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\mastracode\\dist\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Mastracode, "mastracode".to_string()))
         );
     }
 

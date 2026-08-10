@@ -317,6 +317,7 @@ pub enum MouseProtocolEncoding {
     Default,
     Utf8,
     Sgr,
+    SgrPixels,
 }
 
 #[cfg(test)]

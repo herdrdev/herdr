@@ -60,11 +60,38 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 | ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
 | セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
 
-カスタムソケットインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。
+カスタムインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。Herdr への組み込みや、認識済みのエージェント実行ファイルは必要ありません。
+
+## 独自エージェントを統合する
+
+Herdr ペイン内で動くエージェントは、`HERDR_ENV`、`HERDR_PANE_ID`、`HERDR_BIN_PATH`、`HERDR_SOCKET_PATH` を継承します。エージェントがライフサイクルフックを提供している場合は、そのフックから Herdr の CLI を使ってセマンティックな状態を報告します:
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source custom:my-agent \
+  --agent my-agent \
+  --state working
+```
+
+エージェントが入力待ちになったら `idle`、ユーザーの判断が必要になったら `blocked` を報告します。ブロックの説明には `--message` を使います。エージェントの終了時には、同じ source のライフサイクル権威を解放します:
+
+```bash
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+  --source custom:my-agent \
+  --agent my-agent
+```
+
+Herdr の外では何もしないように、`HERDR_ENV=1` で必要な変数が存在するときだけ報告してください。`--source` はインテグレーションごとに一意かつ固定にします。報告が順不同で届く可能性がある場合は、単調増加する `--seq` を含めてください。Herdr は同じ source から届いた古いシーケンス番号を無視します。
+
+`report-agent` に `--agent-session-id` または `--agent-session-path` を含めることも、セッション識別が状態とは独立して変わる場合に `pane report-agent-session` を使うこともできます。Herdr はその参照をペイン API とエージェント API で公開します。セッションの自動復元には、それに加えて、そのエージェントの起動方法と参照先セッションの再開方法を Herdr が把握している必要があります。
+
+移植可能なインテグレーションには `HERDR_BIN_PATH` と CLI ラッパーを使ってください。直接 IPC が必要なコードでは、[Socket API](/ja/docs/socket-api/) に記載された同等の `pane.report_agent`、`pane.report_agent_session`、`pane.release_agent` リクエストを送信できます。
+
+[Prime Agent の組み込み Herdr レポーター](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts)は実際の実装例です。Herdr 内でのみ有効になり、エージェントイベントを `working`、`idle`、`blocked` に対応付け、セッションをまたいで報告順序を維持し、終了時に権威を解放します。
 
 一部のインテグレーションは、エージェントのネイティブセッション参照を報告します。Herdr は公式のセッション参照を使って、`[session] resume_agents_on_restore = false` で無効化されていない限り、Herdr サーバーの再起動後に Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode、Antigravity CLI のペインを resume します。
 
-エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Cursor Agent CLI は `1`、Grok CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `2`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
+エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Cursor Agent CLI は `1`、Grok CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `5`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
 
 ## Pi
 
@@ -148,7 +175,7 @@ herdr integration install devin
 
 このフックは、Devin のセッション、プロンプト、ツール使用、許可、停止の各イベントからネイティブセッション識別を報告します。Devin のフックはすべての許可キャンセルやユーザー割り込みの後に信頼できる状態遷移を発行しないため、Devin の状態は引き続き Herdr のスクリーンマニフェストと OSC 検出から得られます。
 
-Herdr はデフォルトで `~/.config/devin` を使い、`XDG_CONFIG_HOME` が設定されていれば `$XDG_CONFIG_HOME/devin` を使います。Devin の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh` を書き込み、`config.json` に Herdr のフックエントリを追加します。フックは Devin の実行中にセッション参照を更新します。アンインストールは `config.json` から Herdr のエントリを削除し、フックスクリプトを削除します。
+Herdr はデフォルトで `~/.config/devin` を使い、`XDG_CONFIG_HOME` が設定されていれば `$XDG_CONFIG_HOME/devin` を使います。Devin の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh`（Windows では `herdr-agent-state.ps1`）を書き込み、`config.json` に Herdr のフックエントリを追加します。フックは Devin の実行中にセッション参照を更新します。アンインストールは `config.json` から Herdr のエントリを削除し、フックスクリプトを削除します。
 
 Herdr は保存された Devin セッションを `devin --resume <id>` で resume します。フックのインストール有無にかかわらず、スクリーンマニフェスト検出が状態の権威のままです。
 
@@ -212,7 +239,7 @@ Hermes Agent プラグインをインストールします:
 herdr integration install hermes
 ```
 
-Herdr は `~/.hermes/plugins/herdr-agent-state/` を書き込み、`~/.hermes/config.yaml` で `herdr-agent-state` を有効にします。Hermes の設定ディレクトリはあらかじめ存在している必要があります。プラグインを読み込ませるため、インストール後に Hermes を再起動してください。アンインストールはプラグインディレクトリを削除し、`plugins.enabled` から `herdr-agent-state` を削除します。
+Herdr は Hermes ホームディレクトリ内の `plugins/herdr-agent-state/` に書き込み、その `config.yaml` で `herdr-agent-state` を有効にします。`HERMES_HOME` のデフォルトは Unix では `~/.hermes`、Windows では `%LOCALAPPDATA%\hermes` です。Hermes の設定ディレクトリはあらかじめ存在している必要があります。プラグインを読み込ませるため、インストール後に Hermes を再起動してください。アンインストールはプラグインディレクトリを削除し、`plugins.enabled` から `herdr-agent-state` を削除します。
 
 このプラグインは、Hermes が Herdr のペイン内で動いている間、resume 可能なセッション id を報告します。Herdr は `working`、`idle`、`blocked` にスクリーンマニフェスト検出を使い、報告されたセッション id で `hermes --resume <id>` としてペインを resume できます。
 
@@ -242,7 +269,7 @@ herdr integration install cursor
 
 このフックは、Cursor Agent CLI が Herdr のペイン内で動いている間、Cursor の `sessionStart` フックを通じてセッション識別を報告します。Cursor の状態は Herdr のスクリーンマニフェスト検出から得られます。
 
-Herdr はデフォルトで `~/.cursor` を使い、`CURSOR_CONFIG_DIR` が設定されていればそちらを使います。Cursor の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh` を書き込み、`hooks.json` に Herdr の `sessionStart` エントリを追加します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
+Herdr はデフォルトで `~/.cursor` を使い、`CURSOR_CONFIG_DIR` が設定されていればそちらを使います。Cursor の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh`（Windows では `herdr-agent-state.ps1`）を書き込み、`hooks.json` に Herdr の `sessionStart` エントリを追加します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
 
 Cursor がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `cursor-agent --resume <id>` でペインを resume できます。Herdr がペインを復元するとき、`cursor-agent` コマンドが `PATH` にある必要があります。Herdr は汎用の `agent` コマンドを起動しません。
 
@@ -256,7 +283,7 @@ herdr integration install mastracode
 
 このフックは、MastraCode のライフサイクル状態とスレッド識別を Herdr に報告し、権威ある `idle`、`working`、`blocked` 状態とネイティブ復元を提供します。MastraCode にはスクリーンマニフェストのフォールバックはありません。MastraCode が Herdr ペイン内で動いている間、状態はフックから得られます。
 
-Herdr は `~/.mastracode` を使います。インストールは `hooks/herdr-agent-state.sh` を書き込み、`hooks.json` に Herdr のコマンドエントリを追加します。ディレクトリがなければ作成します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
+Herdr は `~/.mastracode` を使います。インストールは `hooks/herdr-agent-state.sh`（Windows では `hooks/herdr-agent-state.ps1`）を書き込み、`hooks.json` に Herdr のコマンドエントリを追加します。ディレクトリがなければ作成します。アンインストールは一致するフックエントリを削除し、フックスクリプトを削除します。
 
 Herdr は保存された MastraCode スレッドを `mastracode --thread <id>` で resume します。
 
@@ -284,7 +311,7 @@ herdr integration install grok
 
 このフックは、Grok CLI が Herdr のペイン内で動いている間、Grok の `SessionStart` フックを通じてセッション識別を報告します。Grok の状態は Herdr のスクリーンマニフェスト検出から得られます。
 
-Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh` を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
+Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh`（Windows では `hooks/herdr-agent-state.ps1`）を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
 
 Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
 
