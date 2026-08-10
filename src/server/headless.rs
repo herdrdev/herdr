@@ -4566,6 +4566,8 @@ impl HeadlessServer {
             changed = true;
         }
 
+        changed |= self.app.handle_tab_bar_status_tasks(now);
+
         if geometry_dirty {
             self.app.pending_agent_resume_deadline = None;
         } else {

@@ -311,10 +311,16 @@ impl TerminalRuntime {
         self.0.word_motion_target(row, col, motion)
     }
 
+    /// Collects the complete terminal input-mode snapshot.
+    ///
+    /// This performs multiple terminal queries and may format keyboard state.
+    /// Keep it out of render/layout and pane-scaled loops; add a narrow accessor
+    /// when only one terminal fact is needed.
     pub fn input_state(&self) -> Option<crate::pane::InputState> {
         self.0.input_state()
     }
 
+    /// Reads only whether the alternate screen is active.
     pub fn alternate_screen_active(&self) -> bool {
         self.0.alternate_screen_active()
     }

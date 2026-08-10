@@ -64,6 +64,11 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::TabBarCommandFinished {
+                generation,
+                segment_index,
+                result,
+            } => self.handle_tab_bar_command_finished(generation, segment_index, result),
             ev @ AppEvent::TerminalBell { .. } => {
                 self.handle_internal_event(ev);
                 false
@@ -149,6 +154,16 @@ impl App {
         {
             self.handle_git_status_refreshed(results, cache_updates);
             return Vec::new();
+        }
+
+        if let AppEvent::TabBarCommandFinished {
+            generation,
+            segment_index,
+            result,
+        } = ev
+        {
+            let _ = self.handle_tab_bar_command_finished(generation, segment_index, result);
+            return;
         }
 
         if let AppEvent::PluginCommandFinished {

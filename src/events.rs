@@ -152,6 +152,12 @@ pub enum AppEvent {
         results: Vec<WorkspaceGitStatus>,
         cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
     },
+    /// A configured tab bar status command finished.
+    TabBarCommandFinished {
+        generation: u64,
+        segment_index: usize,
+        result: Result<Option<String>, String>,
+    },
     /// A plugin action or event command finished.
     PluginCommandFinished {
         log_id: String,

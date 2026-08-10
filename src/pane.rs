@@ -54,6 +54,21 @@ const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::
 const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
 
+#[cfg(test)]
+thread_local! {
+    static AGGREGATE_INPUT_STATE_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_aggregate_input_state_reads() {
+    AGGREGATE_INPUT_STATE_READS.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn aggregate_input_state_reads() -> usize {
+    AGGREGATE_INPUT_STATE_READS.get()
+}
+
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // Each pane is rendered by herdr's own terminal layer, not the outer terminal
     // that launched the app. Advertising the inherited TERM leaks the host terminal
@@ -2607,6 +2622,8 @@ impl PaneRuntime {
     }
 
     pub fn input_state(&self) -> Option<InputState> {
+        #[cfg(test)]
+        AGGREGATE_INPUT_STATE_READS.set(AGGREGATE_INPUT_STATE_READS.get() + 1);
         self.terminal.input_state()
     }
 
