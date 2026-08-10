@@ -35,7 +35,9 @@ SKIPPED_SUBTREES = ("keys.command",)
 FIELD_RE = re.compile(r"^\s*pub ([a-z_][a-z0-9_]*):\s*(.+?),?\s*$")
 STRUCT_RE = re.compile(r"^\s*pub(?:\(crate\))? struct ([A-Za-z0-9_]+)\s*\{\s*$")
 ENUM_RE = re.compile(r"^\s*pub(?:\(crate\))? enum ([A-Za-z0-9_]+)\s*\{\s*$")
-VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\(.*\))?\s*,?\s*$")
+VARIANT_RE = re.compile(
+    r"^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\(.*\)|\{)?\s*,?\s*$"
+)
 RENAME_ALL_RE = re.compile(r'rename_all\s*=\s*"([^"]+)"')
 RENAME_RE = re.compile(r'rename\s*=\s*"([^"]+)"')
 
@@ -190,11 +192,11 @@ def parse_enum_body(
             index += 1
             break
 
-        depth += stripped.count("{") - stripped.count("}")
         if depth == 0 and not stripped.startswith(("#[", "///")):
             match = VARIANT_RE.match(stripped)
             if match:
                 variants.append(apply_rename_all(match.group(1), rename_all or "lowercase"))
+        depth += stripped.count("{") - stripped.count("}")
         index += 1
 
     model.enums[name] = variants

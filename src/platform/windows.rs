@@ -33,13 +33,16 @@ use windows_sys::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-                    TH32CS_SNAPPROCESS,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
+                    Thread32Next, PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD,
+                    THREADENTRY32,
                 },
             },
             JobObjects::{
-                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+                JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
@@ -47,10 +50,11 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
-                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
-                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
+                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
+                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
+                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+                THREAD_SUSPEND_RESUME,
             },
         },
         UI::{
@@ -263,6 +267,38 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true
 }
 
+/// The machine's node name, as shown by tmux's `#h`.
+pub(crate) fn hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|name| !name.is_empty())
+}
+
+pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
+    let mut timestamp: libc::time_t = 0;
+    if unsafe { libc::time(&mut timestamp) } == -1 {
+        return None;
+    }
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_s(&mut local, &timestamp) } != 0 {
+        return None;
+    }
+    let month = time::Month::try_from(u8::try_from(local.tm_mon + 1).ok()?).ok()?;
+    let date = time::Date::from_calendar_date(
+        local.tm_year + 1900,
+        month,
+        u8::try_from(local.tm_mday).ok()?,
+    )
+    .ok()?;
+    let time = time::Time::from_hms(
+        u8::try_from(local.tm_hour).ok()?,
+        u8::try_from(local.tm_min).ok()?,
+        u8::try_from(local.tm_sec).ok()?,
+    )
+    .ok()?;
+    Some(time::PrimitiveDateTime::new(date, time))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsProcessEntry {
     pid: u32,
@@ -392,6 +428,137 @@ fn cmd_encoded_powershell_command(script: &str) -> String {
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
     detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
+}
+
+pub(crate) fn status_commands_supported() -> bool {
+    true
+}
+
+pub(crate) fn configure_status_command(process: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    // The process must not run before it is assigned to the kill-on-close job.
+    process.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+}
+
+pub(crate) struct StatusCommandGuard {
+    job: usize,
+}
+
+impl StatusCommandGuard {
+    pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
+            Ok(size) => size,
+            Err(_) => {
+                unsafe {
+                    CloseHandle(job);
+                }
+                return Err(std::io::Error::other("job limits size exceeds u32"));
+            }
+        };
+        if unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                limits_size,
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+
+        let Some(process) = child.raw_handle() else {
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(std::io::Error::other(
+                "status command has no process handle",
+            ));
+        };
+        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+        if let Err(error) = resume_suspended_process(child.id()) {
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+
+        Ok(Self { job: job as usize })
+    }
+}
+
+fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
+    let process_id =
+        process_id.ok_or_else(|| std::io::Error::other("status command has no process id"))?;
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let result = (|| {
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = u32::try_from(size_of::<THREADENTRY32>())
+            .map_err(|_| std::io::Error::other("thread entry size exceeds u32"))?;
+        if unsafe { Thread32First(snapshot, &mut entry) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        loop {
+            if entry.th32OwnerProcessID == process_id {
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if thread.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let resume_result = unsafe { ResumeThread(thread) };
+                let resume_error = (resume_result == u32::MAX).then(std::io::Error::last_os_error);
+                unsafe {
+                    CloseHandle(thread);
+                }
+                if let Some(error) = resume_error {
+                    return Err(error);
+                }
+                return Ok(());
+            }
+            if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
+                return Err(std::io::Error::other(
+                    "status command primary thread was not found",
+                ));
+            }
+        }
+    })();
+
+    unsafe {
+        CloseHandle(snapshot);
+    }
+    result
+}
+
+impl Drop for StatusCommandGuard {
+    fn drop(&mut self) {
+        // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
+        // the job, including on task cancellation and config reload.
+        unsafe {
+            CloseHandle(self.job as HANDLE);
+        }
+    }
 }
 
 fn detached_custom_command_process_with_comspec(

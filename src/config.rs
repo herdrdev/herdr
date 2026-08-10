@@ -5,6 +5,7 @@ mod keybinds;
 mod model;
 mod sidebar;
 mod sound;
+mod tab_bar;
 mod theme;
 
 pub use self::{
@@ -30,11 +31,20 @@ pub use self::{
         SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
+    tab_bar::TabBarRightEntryConfig,
     theme::{parse_color, CustomThemeColors, ThemeConfig, THEME_NAMES},
 };
 
 pub(crate) use self::keybinds::parse_key_combo;
-pub(crate) use self::{io::upsert_top_level_bool, theme::canonical_theme_name};
+pub(crate) use self::{
+    io::upsert_top_level_bool,
+    tab_bar::{
+        parse_tab_bar_datetime_format, tab_bar_right_diagnostics,
+        MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS, MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS,
+        MAX_TAB_BAR_RIGHT_ENTRIES,
+    },
+    theme::canonical_theme_name,
+};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
@@ -74,6 +84,7 @@ impl Config {
             .chain(self.remote_image_paste_key().err())
             .chain(self.theme.diagnostics())
             .chain(self.ui.sound.diagnostics())
+            .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .collect()
     }

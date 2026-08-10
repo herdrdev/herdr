@@ -14,7 +14,8 @@ Read `references/pre-release-audit.md` and follow its workflow. Treat it as the 
 - auditing `docs/next/CHANGELOG.md`
 - auditing `docs/next/README.md` and staged website docs
 - checking issue reference lines
-- deciding when to run `just release-docs-check`
+- deciding when to run `just pre-release-check` or its component checks
+- running and assessing `just bench-render-scale`
 - producing the final release-readiness report
 
 Do not edit files during the audit unless the user explicitly asks to apply fixes. When applying fixes, keep changes scoped to the files named in the reference workflow.

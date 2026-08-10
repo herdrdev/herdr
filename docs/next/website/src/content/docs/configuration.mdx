@@ -269,6 +269,26 @@ The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
 
+Configure an ordered tmux-style status area at the right edge of the tab row:
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "zoom" },
+  { type = "hostname" },
+  { type = "datetime", format = "%H:%M" },
+  { type = "text", text = "prod" },
+  { type = "command", command = "~/.config/herdr/status.sh", interval_seconds = 5, timeout_seconds = 2 },
+]
+tab_bar_right_separator = " · "
+```
+
+The status area is empty by default. Add `zoom` to show a fixed `ZOOM` pill while the active tab is zoomed; the existing per-tab `Z` markers remain independent. `hostname`, `datetime`, and `command` resolve on the Herdr server, so `herdr --remote` shows the remote machine's values. Datetime entries use `strftime` formatting; directives that require a UTC offset or Unix timestamp, such as `%z` and `%s`, are rejected because the value is server-local wall-clock time.
+
+Command entries run immediately and then at `interval_seconds` without blocking rendering or overlapping a previous run. The interval can be 1–31,536,000 seconds and the timeout can be 1–3,600 seconds. Herdr uses the last line of successful output, clears it after failure, empty output, or `timeout_seconds`, and provides the same active workspace, tab, pane, socket, binary, and working-directory context as custom command keybindings. Commands are supported on Linux, macOS, and Windows, using `/bin/sh -lc` on Linux and macOS and `cmd.exe /d /c` on Windows.
+
+Separators appear only between visible entries. Set `tab_bar_right_separator = ""` for direct concatenation. On a narrow tab row, the complete status area yields to the tabs and their controls.
+
 Agent status uses compact colored dots by default. To distinguish blocked, working, done, idle, and unknown states by shape as well as color, choose **distinct symbols** in Settings or configure:
 
 ```toml

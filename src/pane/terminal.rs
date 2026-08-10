@@ -1675,6 +1675,8 @@ impl GhosttyPaneTerminal {
         })
     }
 
+    // This aggregate snapshot performs multiple terminal queries and may format
+    // keyboard state. Pane-scaled callers should add a narrow accessor instead.
     pub fn input_state(&self) -> Option<InputState> {
         let Ok(core) = self.core.lock() else {
             return None;
