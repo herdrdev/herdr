@@ -83,6 +83,22 @@ Native session restore requires these Herdr integration versions or newer:
 | Hermes Agent | `2` | `hermes --resume <id>` |
 | MastraCode | `1` | `mastracode --thread <id>` |
 
+Herdr also replays the options the agent was started with, so a pane started as
+`claude --permission-mode bypassPermissions` resumes as
+`claude --resume <id> --permission-mode bypassPermissions` instead of dropping back to
+default permissions.
+
+Options that select or continue a conversation (`--resume`, `--continue`, `--session`) and
+options that switch the agent to a one-shot run (`--print`, `--prompt`) are never replayed;
+every other option is, including ones Herdr has never heard of. A bare word is replayed only
+when it directly follows a replayed option, where it is that option's value, so prompts,
+subcommands, and positional session ids are left behind.
+
+Two limits follow from that rule: an option given several separate values keeps only the
+first (`--add-dir /a /b` resumes as `--add-dir /a`), and a prompt written directly after a
+flag cannot be told apart from that flag's value, so it is replayed. Use `--option=value`
+form if you want to be sure a following prompt is not mistaken for a value.
+
 Run `herdr integration status` to check installed integration versions. Reinstall outdated integrations with `herdr integration install <agent>`.
 
 Unsupported, missing, invalid, duplicated, or stale session references restore as normal shells in the saved pane directory.

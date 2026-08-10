@@ -66,6 +66,13 @@ pub enum AppEvent {
         process_exited: bool,
         observed_at: Instant,
     },
+    /// The options a detected agent process was started with.
+    /// Herdr replays them when it resumes that agent's session.
+    AgentLaunchArgsDetected {
+        pane_id: PaneId,
+        agent: Agent,
+        args: Vec<String>,
+    },
     /// Hook-authoritative agent state was reported for a pane.
     HookStateReported {
         pane_id: PaneId,

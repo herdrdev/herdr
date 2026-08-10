@@ -2793,6 +2793,14 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::AgentLaunchArgsDetected {
+                pane_id,
+                agent,
+                args,
+            } => {
+                self.record_agent_launch_args(pane_id, agent, args);
+                Vec::new()
+            }
             AppEvent::HookStateReported {
                 pane_id,
                 source,
@@ -2937,6 +2945,21 @@ impl AppState {
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
+        }
+    }
+
+    fn record_agent_launch_args(&mut self, pane_id: PaneId, agent: Agent, args: Vec<String>) {
+        let Some(terminal_id) = self.workspaces.iter().find_map(|ws| {
+            ws.pane_state(pane_id)
+                .map(|pane| pane.attached_terminal_id.clone())
+        }) else {
+            return;
+        };
+        let Some(terminal) = self.terminals.get_mut(&terminal_id) else {
+            return;
+        };
+        if terminal.set_agent_launch_args(crate::detect::agent_label(agent), args) {
+            self.mark_session_dirty();
         }
     }
 
@@ -4820,6 +4843,31 @@ mod tests {
         assert_eq!(state.workspaces[0].panes.len(), 1);
         assert_eq!(state.workspaces[0].panes.keys().next().unwrap(), &first_id);
         state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn detected_agent_launch_args_are_recorded_for_the_pane() {
+        let mut state = app_with_workspaces(&["test"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+
+        state.handle_app_event(AppEvent::AgentLaunchArgsDetected {
+            pane_id,
+            agent: Agent::Claude,
+            args: vec!["--permission-mode".into(), "bypassPermissions".into()],
+        });
+
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        let launch = state.terminals[&terminal_id]
+            .agent_launch_args
+            .as_ref()
+            .expect("launch options should be recorded");
+        assert_eq!(launch.agent, "claude");
+        assert_eq!(launch.args, vec!["--permission-mode", "bypassPermissions"]);
     }
 
     #[test]

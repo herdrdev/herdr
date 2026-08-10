@@ -243,6 +243,42 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     best.map(|(_, agent, name)| (agent, name))
 }
 
+/// Read the options `agent` was started with from a foreground job.
+///
+/// Returns the command line after the agent token, so wrapped invocations such
+/// as `node .../cli.js --permission-mode plan` yield the agent's own options.
+/// Returns `None` when no process in the job exposes an argument vector that
+/// starts with a recognizable agent token; the caller then keeps whatever it
+/// already knows instead of recording a truncated command line.
+pub fn agent_launch_args_in_job(
+    job: &crate::platform::ForegroundJob,
+    agent: Agent,
+) -> Option<Vec<String>> {
+    let leader = job
+        .processes
+        .iter()
+        .find(|process| process.pid == job.process_group_id);
+    leader
+        .and_then(|process| agent_launch_args(process, agent))
+        .or_else(|| {
+            job.processes
+                .iter()
+                .find_map(|process| agent_launch_args(process, agent))
+        })
+}
+
+fn agent_launch_args(
+    process: &crate::platform::ForegroundProcess,
+    agent: Agent,
+) -> Option<Vec<String>> {
+    let argv = process.argv.as_deref()?;
+    let label = agent_label(agent);
+    let agent_token = argv
+        .iter()
+        .position(|token| agent_name_from_path_token(token).as_deref() == Some(label))?;
+    Some(argv[agent_token + 1..].to_vec())
+}
+
 /// Detect the state of an agent from the live terminal tail snapshot.
 /// If `agent` is `None`, returns `Unknown`.
 #[cfg(test)]
@@ -650,6 +686,58 @@ mod tests {
             argv: Some(argv.iter().map(|arg| (*arg).to_string()).collect()),
             cmdline: Some(argv.join(" ")),
         }
+    }
+
+    #[test]
+    fn agent_launch_args_read_options_after_the_agent_token() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 1,
+            processes: vec![foreground_process(
+                1,
+                "claude",
+                &["claude", "--permission-mode", "bypassPermissions"],
+            )],
+        };
+
+        assert_eq!(
+            agent_launch_args_in_job(&job, Agent::Claude),
+            Some(vec![
+                "--permission-mode".to_string(),
+                "bypassPermissions".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn agent_launch_args_skip_a_wrapping_runtime() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 1,
+            processes: vec![
+                foreground_process(1, "node", &["node", "/path/to/bin/codex", "--full-auto"]),
+                foreground_process(2, "bash", &["bash"]),
+            ],
+        };
+
+        assert_eq!(
+            agent_launch_args_in_job(&job, Agent::Codex),
+            Some(vec!["--full-auto".to_string()])
+        );
+    }
+
+    #[test]
+    fn agent_launch_args_are_unknown_without_a_matching_token() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 1,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 1,
+                name: "claude".to_string(),
+                argv0: None,
+                argv: None,
+                cmdline: None,
+            }],
+        };
+
+        assert_eq!(agent_launch_args_in_job(&job, Agent::Claude), None);
     }
 
     #[cfg(unix)]
