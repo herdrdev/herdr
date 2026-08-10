@@ -7,15 +7,16 @@ description: Create and control a disposable named Herdr session from inside an 
 
 Use a disposable named Herdr session when a reproduction needs a real Herdr server, panes, PTYs, agents, or socket API without risking the user's main session.
 
-The temporary TUI only keeps the disposable session attached and supplies terminal geometry. Drive the reproduction from the parent session through Herdr's CLI/API. Do not manually operate the nested TUI unless the bug specifically requires client input.
+Run that session as a headless server and drive it from the current session through Herdr's CLI/API. A headless server spawns real PTYs with no client attached, so most reproductions need no nested TUI and no extra pane in the user's session.
 
 ## Non-negotiable safety
 
 - Never run the reproduction in the default session.
+- If the disposable session cannot be started or addressed, stop and report. Never continue the reproduction in the current session, and never edit the user's `config.toml` to work around it.
 - Never stop, restart, delete, or kill the main Herdr server.
 - Never use `pkill`, broad process matching, or guessed PIDs for cleanup.
 - Create a unique session name. Never reuse or delete an unrelated named session.
-- Create a new outer pane and close only that pane during cleanup.
+- Create a parent-session pane only when the reproduction needs an attached client, and close only that pane during cleanup.
 - Read workspace, tab, pane, terminal, and agent IDs from command output. Never construct them.
 - Use `/var/tmp` for reproduction directories and potentially large artifacts.
 - Do not approve destructive or unnecessary agent actions.
@@ -40,19 +41,22 @@ Inspect nested command help before using unfamiliar or potentially mutating comm
 
 Record which Herdr binary and version the reproduction tests. If testing a checkout build, follow the repository's instructions for running that build instead of silently substituting the installed binary.
 
-## Create the outer pane
-
-Create a sibling shell pane in the current tab without moving focus. Use an available Herdr layout tool when the harness provides one. Otherwise use the installed pane split command after checking its help.
-
-Use `/var/tmp` or a dedicated reproduction directory as the new pane's cwd. Save the returned outer pane ID. This is the only parent-session pane that cleanup may close.
-
 ## Start the disposable session
 
-Choose a short unique name such as `repro-<topic>-<timestamp>`.
-
-Run the named session inside the new outer pane. Clear inherited session selection, socket overrides, and caller IDs so the nested runtime cannot accidentally address the parent session:
+Choose a short unique name such as `repro-<topic>-<timestamp>`, then prove it is unused before launching:
 
 ```bash
+herdr session list --json
+```
+
+That lists stopped sessions as well as running ones. A running name is refused, but starting a server on the name of a stopped session silently restores that session's saved workspaces and panes, and cleanup would then delete someone else's session. Pick another name on any exact match.
+
+Start it as a headless server. `herdr --session <name>` launches the TUI, and launching the TUI from inside a Herdr pane exits with `nested herdr is disabled by default` unless the user enabled `experimental.allow_nested`. The `server` command has no such gate.
+
+The server runs until it is stopped and never returns on its own, so start it with the harness's background primitive. The launching shell otherwise blocks here and never reaches the rest of this workflow. Clear inherited socket overrides, session selection, and caller IDs so the new server binds its own session paths instead of the parent's:
+
+```bash
+# To be run as a background job
 env \
   -u HERDR_SOCKET_PATH \
   -u HERDR_CLIENT_SOCKET_PATH \
@@ -60,29 +64,42 @@ env \
   -u HERDR_WORKSPACE_ID \
   -u HERDR_TAB_ID \
   -u HERDR_PANE_ID \
-  herdr --session <session-name>
+  herdr --session <session-name> server
 ```
 
 Add reproduction-specific environment variables to this launch command when needed. Environment variables that configure the server must be present before the named server starts.
 
-Do not continue until the named session's API is ready. Confirm readiness by addressing that session from the parent and listing its panes.
+That log's first lines name the api socket, client socket, and session log. Do not continue until `herdr session list` shows the name as running; the same check catches a server that died with its launching shell.
+
+A headless session starts empty. Create the first workspace with `herdr --session <session-name> workspace create --cwd <dir>`; the returned root pane is the reproduction's first shell. With no client attached the shared runtime size is 80x24.
+
+### When the reproduction needs an attached client
+
+Only bugs in client rendering, input, or attach behavior need a real TUI. That requires a nested launch, so give the nested process its own config file instead of changing the user's:
+
+```bash
+printf '[experimental]\nallow_nested = true\n' > /var/tmp/<session-name>-config.toml
+```
+
+Create a sibling shell pane in the current tab without moving focus, using an available Herdr layout tool or the installed pane split command after checking its help, with `/var/tmp` as its cwd. That split is the one command in this workflow that is meant to reach the user's session, so run it without `--session`; adding the flag would put the pane inside the disposable session, where no client can reach it. Everything that drives the disposable session still requires `--session <session-name>`.
+
+Save the returned outer pane ID; this is the only parent-session pane that cleanup may close. Attach inside that pane using the launch environment above with `server` dropped and `HERDR_CONFIG_PATH=/var/tmp/<session-name>-config.toml` added.
+
+Never set `experimental.allow_nested` in the user's `config.toml`.
 
 ## Address only the disposable session
 
-Every control command issued from the parent must clear inherited socket overrides and explicitly select the temporary session:
+Select the session with the `--session` flag on every control command:
 
 ```bash
-env \
-  -u HERDR_SOCKET_PATH \
-  -u HERDR_CLIENT_SOCKET_PATH \
-  -u HERDR_WORKSPACE_ID \
-  -u HERDR_TAB_ID \
-  -u HERDR_PANE_ID \
-  HERDR_SESSION=<session-name> \
-  herdr pane list
+herdr --session <session-name> pane list
 ```
 
-Repeat this prefix for every command. Do not rely on shell state persisting between tool calls.
+The flag marks the session explicit, so Herdr ignores the `HERDR_SOCKET_PATH` inherited from the surrounding pane. Naming a session that is not running then fails with `server_not_running` instead of answering from the user's session.
+
+The `HERDR_SESSION` environment variable does not do this. Inside a Herdr pane `HERDR_SOCKET_PATH` already points at the user's server and takes precedence over that variable, so `HERDR_SESSION=<session-name> herdr pane list` reads and mutates the user's session and reports success. A bare `herdr pane list` does the same. Treat any command without `--session` as aimed at the user's session.
+
+Repeat the flag on every server-scoped command. Do not rely on shell state persisting between tool calls.
 
 Read the disposable root pane ID from `pane list`. Confirm its cwd and foreground process before starting anything in it.
 
@@ -92,7 +109,7 @@ Named sessions isolate runtime state, sockets, panes, and persistence. They stil
 
 Use pane commands for shells and ordinary processes:
 
-- `pane run` to start a command at an available shell prompt.
+- `pane run <pane-id> <command>...` to start a command at an available shell prompt. The command follows the pane ID directly; an inserted `--` is typed into the shell and fails.
 - `pane wait-output` to wait for deterministic output.
 - `pane read` to capture terminal contents.
 - `pane send-text` for literal input.
@@ -146,9 +163,9 @@ Cleanup is part of the reproduction, including after failure.
 2. Verify that harmless probe files or other test artifacts do not exist, or remove only artifacts created by this reproduction.
 3. Stop the temporary named session with the installed session command.
 4. Delete that same stopped session.
-5. Confirm it no longer appears as running.
-6. Wait for the outer pane to return to its shell.
-7. Close only the outer pane created by this workflow.
+5. Confirm it no longer appears in `session list`.
+6. Remove the temporary config file when one was written.
+7. When an outer pane was created, wait for it to return to its shell and close only that pane.
 
 Never delete another named session because it looks stale. Never close the pane running the current agent or any pane not created for the reproduction.
 
