@@ -40,6 +40,41 @@ pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
     (rects[0], rects[1], rects[2])
 }
 
+/// Draws the shared `name_input` field and puts the host cursor on its caret.
+///
+/// IMEs draw their composition preview at the host terminal cursor. Without an
+/// explicit cursor the frame carries none, the client keeps the position last
+/// reported by the focused pane, and composition lands behind the dialog.
+fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) {
+    frame.render_widget(Clear, input_rect);
+
+    // The text stops one column short of the field so the clamped caret always
+    // lands on a blank cell: a host terminal inverts the cell under its cursor,
+    // and an IME composes there.
+    let text_rect = Rect {
+        width: input_rect.width.saturating_sub(1),
+        ..input_rect
+    };
+    frame.render_widget(
+        Paragraph::new(format!(" {}", app.name_input)).style(
+            Style::default()
+                .fg(app.palette.text)
+                .bg(app.palette.surface0),
+        ),
+        text_rect,
+    );
+
+    if input_rect.width == 0 {
+        return;
+    }
+    let caret_x = input_rect
+        .x
+        .saturating_add(1)
+        .saturating_add(display_width_u16(&app.name_input))
+        .min(input_rect.right().saturating_sub(1));
+    frame.set_cursor_position((caret_x, input_rect.y));
+}
+
 pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     super::dim_background(frame, area);
 
@@ -71,15 +106,7 @@ pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rec
     render_modal_header(frame, rows[0], title, &app.palette);
 
     let input_rect = Rect::new(rows[2].x, rows[2].y, rows[2].width, 1);
-    frame.render_widget(Clear, input_rect);
-    frame.render_widget(
-        Paragraph::new(format!(" {}█", app.name_input)).style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.surface0),
-        ),
-        input_rect,
-    );
+    render_name_input_field(app, frame, input_rect);
 
     let (save_rect, clear_rect, cancel_rect) = rename_button_rects(inner);
 
@@ -267,15 +294,7 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
         rows[1],
     );
     let input_rect = Rect::new(rows[2].x, rows[2].y, rows[2].width, 1);
-    frame.render_widget(Clear, input_rect);
-    frame.render_widget(
-        Paragraph::new(format!(" {}█", app.name_input)).style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.surface0),
-        ),
-        input_rect,
-    );
+    render_name_input_field(app, frame, input_rect);
 
     let checkout = create.checkout_path.display().to_string();
     frame.render_widget(
@@ -767,12 +786,19 @@ pub(crate) fn confirm_close_button_rects(inner: Rect) -> (Rect, Rect) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        app::{state::WorktreeCreateState, AppState},
+        app::{state::WorktreeCreateState, AppState, Mode},
         workspace::Workspace,
     };
-    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+    use ratatui::{
+        backend::TestBackend,
+        buffer::Buffer,
+        layout::{Position, Rect},
+        Terminal,
+    };
 
-    use super::{confirm_close_overlay_text, render_new_linked_worktree_overlay};
+    use super::{
+        confirm_close_overlay_text, render_new_linked_worktree_overlay, render_rename_overlay,
+    };
 
     #[test]
     fn confirm_close_text_uses_live_workspace_cwd_label() {
@@ -942,5 +968,191 @@ mod tests {
         assert_eq!(inner.height, super::NEW_LINKED_WORKTREE_POPUP_HEIGHT - 2);
         assert_eq!(create.y, inner.y + inner.height - 1);
         assert_eq!(cancel.y, inner.y + inner.height - 1);
+    }
+
+    const RENAME_AREA: Rect = Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 20,
+    };
+    const WORKTREE_AREA: Rect = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+
+    /// Reproduces the input row that `render_rename_overlay` lays out: the
+    /// centred popup, the border inset, then the third row of the vertical
+    /// split.
+    fn rename_input_rect(area: Rect) -> Rect {
+        let popup = super::centered_popup_rect(area, 56, 7).expect("popup fits");
+        let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width - 2, popup.height - 2);
+        Rect::new(inner.x, inner.y + 2, inner.width, 1)
+    }
+
+    fn rename_overlay_caret_in(mode: Mode, name: &str) -> (Position, Buffer) {
+        let mut app = AppState::test_new();
+        app.mode = mode;
+        app.name_input = name.into();
+
+        let mut terminal = Terminal::new(TestBackend::new(RENAME_AREA.width, RENAME_AREA.height))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| render_rename_overlay(&app, frame, RENAME_AREA))
+            .expect("rename overlay should render");
+        let caret = terminal.get_cursor_position().expect("cursor position");
+        (caret, terminal.backend().buffer().clone())
+    }
+
+    fn rename_overlay_caret(name: &str) -> Position {
+        rename_overlay_caret_in(Mode::RenameWorkspace, name).0
+    }
+
+    fn worktree_overlay_caret(branch: &str) -> Position {
+        let mut app = AppState::test_new();
+        app.name_input = branch.into();
+        app.worktree_create = Some(WorktreeCreateState {
+            source_workspace_id: "source".into(),
+            source_checkout_path: "/repo/herdr".into(),
+            source_existing_membership: None,
+            source_repo_root: "/repo/herdr".into(),
+            repo_key: "repo-key".into(),
+            repo_name: "herdr".into(),
+            branch: branch.into(),
+            checkout_path: "/repo/.worktrees/herdr/foo".into(),
+            error: None,
+            creating: false,
+        });
+
+        let mut terminal =
+            Terminal::new(TestBackend::new(WORKTREE_AREA.width, WORKTREE_AREA.height))
+                .expect("test terminal");
+        terminal
+            .draw(|frame| render_new_linked_worktree_overlay(&app, frame, WORKTREE_AREA))
+            .expect("new worktree overlay should render");
+        terminal.get_cursor_position().expect("cursor position")
+    }
+
+    #[test]
+    fn rename_overlay_anchors_the_host_cursor_to_the_input_caret() {
+        let input = rename_input_rect(RENAME_AREA);
+
+        // Without an explicit cursor the frame carries none, the client parks the
+        // host cursor where the focused pane last reported it, and the IME
+        // composes there instead of in the dialog.
+        assert_eq!(
+            rename_overlay_caret(""),
+            Position::new(input.x + 1, input.y),
+            "empty input should put the caret past the one-column left padding"
+        );
+        assert_eq!(
+            rename_overlay_caret("abcd"),
+            Position::new(input.x + 5, input.y)
+        );
+
+        // The cell under the caret has to be blank: a host terminal draws its
+        // cursor by inverting that cell, so a glyph there would swallow it.
+        let (caret, buffer) = rename_overlay_caret_in(Mode::RenameWorkspace, "ab");
+        assert_eq!(caret, Position::new(input.x + 3, input.y));
+        assert_eq!(buffer[(caret.x, caret.y)].symbol(), " ");
+        assert_eq!(buffer[(caret.x - 1, caret.y)].symbol(), "b");
+    }
+
+    #[test]
+    fn rename_overlay_anchors_the_cursor_in_every_rename_mode() {
+        let input = rename_input_rect(RENAME_AREA);
+        let expected = Position::new(input.x + 3, input.y);
+
+        for mode in [Mode::RenameWorkspace, Mode::RenameTab, Mode::RenamePane] {
+            assert_eq!(
+                rename_overlay_caret_in(mode, "ab").0,
+                expected,
+                "{mode:?} should anchor the caret like the other rename modes"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_overlay_caret_counts_wide_characters_as_two_columns() {
+        let input = rename_input_rect(RENAME_AREA);
+
+        // "あい" is two columns per character, so the caret sits two cells further
+        // right than the two-column "ab".
+        assert_eq!(
+            rename_overlay_caret("あい"),
+            Position::new(input.x + 5, input.y)
+        );
+        assert_eq!(
+            rename_overlay_caret("aあ"),
+            Position::new(input.x + 4, input.y)
+        );
+    }
+
+    #[test]
+    fn rename_overlay_caret_stays_inside_the_input_when_the_name_overflows() {
+        let input = rename_input_rect(RENAME_AREA);
+        let last_column = input.right() - 1;
+
+        // The field is 54 columns wide. 51 characters is the last name whose
+        // caret still lands strictly inside it; from 52 on the unclamped column
+        // would leave the field and gets pinned to the final cell.
+        assert_eq!(
+            rename_overlay_caret(&"a".repeat(51)),
+            Position::new(input.x + 52, input.y)
+        );
+        assert_eq!(
+            rename_overlay_caret(&"a".repeat(53)),
+            Position::new(last_column, input.y)
+        );
+        assert_eq!(
+            rename_overlay_caret(&"a".repeat(200)),
+            Position::new(last_column, input.y)
+        );
+
+        // The clamped cell has to stay blank as well, or the host cursor would
+        // sit on a glyph and the IME would compose over it.
+        let (caret, buffer) = rename_overlay_caret_in(Mode::RenameWorkspace, &"a".repeat(200));
+        assert_eq!(caret, Position::new(last_column, input.y));
+        assert_eq!(buffer[(caret.x, caret.y)].symbol(), " ");
+        assert_eq!(buffer[(caret.x - 1, caret.y)].symbol(), "a");
+    }
+
+    #[test]
+    fn rename_overlay_caret_reaches_the_frame_the_server_sends() {
+        let input = rename_input_rect(RENAME_AREA);
+        let mut app = AppState::test_new();
+        app.mode = Mode::RenameWorkspace;
+        app.name_input = "ab".into();
+
+        // The widget tests above stop at the ratatui frame. This one goes through
+        // the server's cursor resolution, which is where the bug lived: the frame
+        // used to leave here with `cursor: None`.
+        let (_, cursor) =
+            crate::server::render_stream::render_virtual(&mut app, RENAME_AREA, false);
+        let cursor = cursor.expect("the modal caret should survive cursor resolution");
+
+        assert_eq!((cursor.x, cursor.y), (input.x + 3, input.y));
+        assert!(cursor.visible);
+    }
+
+    #[test]
+    fn new_worktree_overlay_anchors_the_host_cursor_to_the_input_caret() {
+        let popup = super::new_linked_worktree_inner_rect(WORKTREE_AREA).expect("popup fits");
+        let input = Rect::new(popup.x, popup.y + 2, popup.width, 1);
+
+        assert_eq!(
+            worktree_overlay_caret(""),
+            Position::new(input.x + 1, input.y)
+        );
+        assert_eq!(
+            worktree_overlay_caret("ab"),
+            Position::new(input.x + 3, input.y)
+        );
+        assert_eq!(
+            worktree_overlay_caret("あい"),
+            Position::new(input.x + 5, input.y)
+        );
     }
 }
