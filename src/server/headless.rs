@@ -582,16 +582,6 @@ impl HeadlessServer {
                 needs_render = true;
                 crate::render_prof::event("render.request.signal");
             }
-            let terminal_title_changed = self.app.sync_terminal_titles();
-            if terminal_title_changed
-                && (self.app.terminal_title_sidebar_configured()
-                    || self.app.window_title_uses_terminal_title())
-            {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.terminal_title");
-            }
-
             // 2. Drain a bounded internal-event batch. API handlers perform an
             // exhaustive forwarding-aware drain before reading pane/runtime state.
             if self.drain_internal_events_with_forwarding() {
@@ -707,13 +697,6 @@ impl HeadlessServer {
             self.stream_host_mouse_capture_mode();
             self.stream_host_keyboard_enhancement_flags();
 
-            // Every input to the window title is app state, and app-state changes
-            // request a full render. Gating on that keeps hidden-pane PTY output,
-            // which only ever sets needs_render, off this path entirely.
-            if needs_full_render {
-                self.sync_window_title();
-            }
-
             // 7. Render virtually and stream frames.
             if needs_render && self.app.can_render_now(now) {
                 crate::render_prof::event("render.attempt");
@@ -729,6 +712,22 @@ impl HeadlessServer {
                 if render_request.generic {
                     needs_full_render = true;
                     crate::render_prof::event("full_render_cause.generic_dirty");
+                }
+                let (sidebar_title_changed, outer_title_synced) =
+                    self.sync_terminal_title_sources(&render_request.terminal_title_sources);
+                if sidebar_title_changed {
+                    needs_full_render = true;
+                    crate::render_prof::event("full_render_cause.terminal_title_sidebar");
+                }
+                if needs_full_render && !outer_title_synced {
+                    self.sync_window_title();
+                }
+                if !needs_full_render && !needs_graphics_render && !pty_dirty {
+                    // A synchronized-output OSC title can be the only pending work.
+                    // Its deferred PTY repaint has its own signal; do not manufacture
+                    // a full UI render for this client-local side effect.
+                    needs_render = false;
+                    continue;
                 }
                 if needs_full_render {
                     crate::render_prof::event("retained_gate.needs_full_render");
@@ -2143,13 +2142,38 @@ impl HeadlessServer {
         .unwrap_or_else(|_| "{}".to_string())
     }
 
+    /// Pulls only titles reported dirty by the PTY parser. A focused pane title
+    /// is forwarded as an independent client side effect; only sidebar title
+    /// tokens require a UI render.
+    fn sync_terminal_title_sources(
+        &mut self,
+        sources: &HashSet<crate::layout::PaneId>,
+    ) -> (bool, bool) {
+        let focused_source = self
+            .app
+            .state
+            .active
+            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
+            .and_then(|workspace| workspace.focused_pane_id())
+            .is_some_and(|pane_id| sources.contains(&pane_id));
+        let changes = self.app.sync_terminal_titles(sources);
+        let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
+        if outer_title_synced {
+            self.sync_window_title();
+        }
+        (
+            self.app.terminal_title_sidebar_changed(&changes),
+            outer_title_synced,
+        )
+    }
+
     /// Renders `ui.window_title` against current session state. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
     /// the client on Herdr's default title.
     fn configured_window_title(&self) -> Option<String> {
-        self.app.window_title().and_then(|title| {
-            sanitize_window_title_text(&title, crate::config::MAX_WINDOW_TITLE_CHARS)
-        })
+        self.app
+            .window_title()
+            .and_then(|title| crate::config::sanitize_window_title_text(&title))
     }
 
     /// Pushes the configured outer window title to the foreground client when it
@@ -2204,21 +2228,19 @@ impl HeadlessServer {
         use api::schema::{ClientWindowTitleReason, ResponseResult};
 
         let title = match title {
-            Some(title) => {
-                match sanitize_window_title_text(&title, crate::config::MAX_WINDOW_TITLE_CHARS) {
-                    Some(title) => Some(title),
-                    None => {
-                        return serde_json::to_string(&api::schema::ErrorResponse {
-                            id,
-                            error: api::schema::ErrorBody {
-                                code: "invalid_params".into(),
-                                message: "window title is empty".into(),
-                            },
-                        })
-                        .unwrap_or_else(|_| "{}".to_string());
-                    }
+            Some(title) => match crate::config::sanitize_window_title_text(&title) {
+                Some(title) => Some(title),
+                None => {
+                    return serde_json::to_string(&api::schema::ErrorResponse {
+                        id,
+                        error: api::schema::ErrorBody {
+                            code: "invalid_params".into(),
+                            message: "window title is empty".into(),
+                        },
+                    })
+                    .unwrap_or_else(|_| "{}".to_string());
                 }
-            }
+            },
             None => None,
         };
         let set_title = title.is_some();
@@ -4912,17 +4934,6 @@ fn sanitize_notification_text(value: &str, max_chars: usize) -> Option<String> {
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-fn sanitize_window_title_text(value: &str, max_chars: usize) -> Option<String> {
-    let sanitized = value
-        .chars()
-        .filter(|ch| !matches!(*ch, '\u{1b}' | '\u{7}' | '\u{9c}') && !ch.is_control())
-        .take(max_chars)
-        .collect::<String>()
-        .trim()
-        .to_string();
-    (!sanitized.is_empty()).then_some(sanitized)
-}
-
 fn server_config_diagnostic_summaries(diagnostics: &[String]) -> (Option<String>, Option<String>) {
     let without_keybindings = diagnostics
         .iter()
@@ -5383,6 +5394,7 @@ mod tests {
             .app
             .terminal_runtimes
             .insert(terminal_id.clone(), runtime);
+        server.app.render_dirty.request_terminal_title(pane_id);
 
         let first = headless_pane_list(&mut server).pop().unwrap();
         assert_eq!(first.terminal_title.as_deref(), Some("⠋ task"));
@@ -5408,6 +5420,7 @@ mod tests {
             .get(&terminal_id)
             .unwrap()
             .test_process_pty_bytes(b"\x1b]2;\xe2\xa0\x99 task\x1b\\");
+        server.app.render_dirty.request_terminal_title(pane_id);
         let second = headless_pane_list(&mut server).pop().unwrap();
         assert_eq!(second.terminal_title.as_deref(), Some("⠙ task"));
         assert_eq!(second.terminal_title_stripped.as_deref(), Some("task"));
@@ -5708,6 +5721,47 @@ mod tests {
             next_window_title(&control_rx),
             Some(Some("herd/build".to_string()))
         );
+
+        shutdown_test_runtimes(&mut server);
+    }
+
+    #[tokio::test]
+    async fn focused_terminal_title_syncs_without_requesting_a_sidebar_render() {
+        let (mut server, control_rx) = window_title_test_server();
+        server.app.configure_window_title("{terminal_title}");
+        server.app.state.ensure_test_terminals();
+        let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = server.app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .expect("terminal")
+            .clone();
+        let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
+        runtime.test_process_pty_bytes("\x1b]0;⠋ building\x07".as_bytes());
+        server
+            .app
+            .terminal_runtimes
+            .insert(terminal_id.clone(), runtime);
+
+        assert_eq!(
+            server.sync_terminal_title_sources(&HashSet::from([pane_id])),
+            (false, true)
+        );
+        assert_eq!(
+            next_window_title(&control_rx),
+            Some(Some("building".to_string()))
+        );
+
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .expect("runtime")
+            .test_process_pty_bytes("\x1b]0;⠙ building\x07".as_bytes());
+        assert_eq!(
+            server.sync_terminal_title_sources(&HashSet::from([pane_id])),
+            (false, true)
+        );
+        assert!(no_window_title(&control_rx));
 
         shutdown_test_runtimes(&mut server);
     }

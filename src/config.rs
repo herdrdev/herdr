@@ -46,7 +46,7 @@ pub(crate) use self::{
         MAX_TAB_BAR_RIGHT_ENTRIES,
     },
     theme::canonical_theme_name,
-    window_title::{window_title_diagnostics, MAX_WINDOW_TITLE_CHARS},
+    window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";

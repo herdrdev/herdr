@@ -464,13 +464,14 @@ pub(super) struct AgentOscStateTracker {
 }
 
 impl AgentOscStateTracker {
-    pub(super) fn observe(&mut self, bytes: &[u8]) {
+    pub(super) fn observe(&mut self, bytes: &[u8]) -> bool {
         let (collector, latest_title, terminal_title, latest_progress) = (
             &mut self.collector,
             &mut self.latest_title,
             &mut self.terminal_title,
             &mut self.latest_progress,
         );
+        let mut terminal_title_changed = false;
         collector.observe(bytes, |body| {
             let Some((command, payload)) = parse_agent_osc_body(body) else {
                 return;
@@ -478,8 +479,10 @@ impl AgentOscStateTracker {
             match command {
                 b"0" | b"2" => {
                     let title = sanitize_agent_osc_string(payload, AGENT_OSC_MAX_CHARS);
-                    *terminal_title = (!title.is_empty()).then_some(title.clone());
-                    *latest_title = (!title.is_empty()).then_some(title);
+                    let title = (!title.is_empty()).then_some(title);
+                    terminal_title_changed |= *terminal_title != title;
+                    *terminal_title = title.clone();
+                    *latest_title = title;
                 }
                 b"9" => {
                     *latest_progress =
@@ -488,6 +491,7 @@ impl AgentOscStateTracker {
                 _ => {}
             }
         });
+        terminal_title_changed
     }
 
     pub(super) fn terminal_title(&self) -> Option<&str> {

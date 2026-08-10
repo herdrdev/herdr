@@ -1808,8 +1808,10 @@ async fn run_client_loop(
                     let _ = io::stdout().flush();
                 }
                 ServerMessage::WindowTitle { title } => {
-                    write_window_title(title.as_deref());
-                    let _ = io::stdout().flush();
+                    let _ = crate::terminal_effects::write_window_title(
+                        &mut io::stdout(),
+                        title.as_deref(),
+                    );
                 }
                 ServerMessage::ReloadSoundConfig => {
                     reload_local_client_config(
@@ -2300,19 +2302,6 @@ fn forward_clipboard(data: &str) {
     };
 
     crate::selection::write_osc52_bytes(&bytes);
-}
-
-fn window_title_osc(title: Option<&str>) -> Vec<u8> {
-    let title = title.unwrap_or("herdr");
-    let safe_title = title
-        .chars()
-        .filter(|ch| !matches!(*ch, '\u{1b}' | '\u{7}' | '\u{9c}'))
-        .collect::<String>();
-    format!("\x1b]0;{safe_title}\x07").into_bytes()
-}
-
-fn write_window_title(title: Option<&str>) {
-    let _ = io::stdout().write_all(&window_title_osc(title));
 }
 
 // ---------------------------------------------------------------------------
@@ -3568,14 +3557,5 @@ mod tests {
         unsafe {
             std::env::remove_var("SSH_CONNECTION");
         }
-    }
-
-    #[test]
-    fn window_title_osc_strips_terminators_and_defaults_to_herdr() {
-        assert_eq!(
-            window_title_osc(Some("herdr\x1b api\u{7}\u{9c}")),
-            b"\x1b]0;herdr api\x07"
-        );
-        assert_eq!(window_title_osc(None), b"\x1b]0;herdr\x07");
     }
 }

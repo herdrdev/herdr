@@ -933,6 +933,7 @@ impl App {
         self.query_host_terminal_theme();
 
         let mut needs_render = true;
+        let mut sent_window_title: Option<Option<String>> = None;
         let mut host_mouse_capture_active = self.state.mouse_capture;
         let mut host_keyboard_report_all_active = false;
 
@@ -941,11 +942,6 @@ impl App {
             if self.render_dirty.is_pending() {
                 needs_render = true;
             }
-            let terminal_title_changed = self.sync_terminal_titles();
-            if terminal_title_changed && self.terminal_title_sidebar_configured() {
-                needs_render = true;
-            }
-
             // Drain a bounded internal-event batch for responsiveness. API handlers
             // perform an exhaustive drain before reading pane/runtime state.
             if self.drain_internal_events() {
@@ -1067,7 +1063,20 @@ impl App {
             self.sync_host_keyboard_report_all(&mut host_keyboard_report_all_active)?;
 
             if needs_render && self.can_render_now(now) {
-                let _ = self.render_dirty.take();
+                let render_request = self.render_dirty.take();
+                self.sync_terminal_titles(&render_request.terminal_title_sources);
+                if self.window_title_configured() {
+                    let title = self
+                        .window_title()
+                        .and_then(|title| crate::config::sanitize_window_title_text(&title));
+                    if sent_window_title.as_ref() != Some(&title) {
+                        crate::terminal_effects::write_window_title(
+                            &mut std::io::stdout(),
+                            title.as_deref(),
+                        )?;
+                        sent_window_title = Some(title);
+                    }
+                }
                 let _sync_output = SyncOutputGuard::begin()?;
                 let kitty_graphics_enabled = self.state.kitty_graphics_enabled;
                 if self.full_redraw_pending {

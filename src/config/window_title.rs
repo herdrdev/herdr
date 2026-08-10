@@ -5,6 +5,17 @@ pub(crate) fn default_window_title() -> String {
     "{hostname}: {workspace}".to_string()
 }
 
+pub(crate) fn sanitize_window_title_text(value: &str) -> Option<String> {
+    let sanitized = value
+        .chars()
+        .filter(|ch| !matches!(*ch, '\u{1b}' | '\u{7}' | '\u{9c}') && !ch.is_control())
+        .take(MAX_WINDOW_TITLE_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
 /// A value the server can substitute into `ui.window_title`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowTitleToken {
@@ -162,6 +173,22 @@ mod tests {
         assert!(window_title_diagnostics("{session}")
             .expect("diagnostic")
             .contains("unknown token '{session}'"));
+    }
+
+    #[test]
+    fn sanitizes_and_bounds_rendered_titles() {
+        assert_eq!(
+            sanitize_window_title_text("  herdr\u{1b} api\u{7}\n  ").as_deref(),
+            Some("herdr api")
+        );
+        assert_eq!(sanitize_window_title_text("\u{7}\n"), None);
+        assert_eq!(
+            sanitize_window_title_text(&"x".repeat(MAX_WINDOW_TITLE_CHARS + 1))
+                .expect("title")
+                .chars()
+                .count(),
+            MAX_WINDOW_TITLE_CHARS
+        );
     }
 
     #[test]

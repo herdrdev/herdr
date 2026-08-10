@@ -146,6 +146,7 @@ impl InputState {
 pub(crate) struct ProcessBytesResult {
     pub request_render: bool,
     pub render_delay: Option<Duration>,
+    pub terminal_title_changed: bool,
     pub terminal_bells: u16,
     pub clipboard_writes: Vec<Vec<u8>>,
     pub reported_cwd: Option<std::path::PathBuf>,
@@ -1201,6 +1202,7 @@ impl GhosttyPaneTerminal {
             return ProcessBytesResult {
                 request_render: false,
                 render_delay: None,
+                terminal_title_changed: false,
                 terminal_bells: 0,
                 clipboard_writes: Vec::new(),
                 reported_cwd: None,
@@ -1233,7 +1235,7 @@ impl GhosttyPaneTerminal {
                 "agent OSC evidence observed"
             );
         }
-        core.agent_osc_state.observe(bytes);
+        let terminal_title_changed = core.agent_osc_state.observe(bytes);
 
         let alternate_screen = core
             .terminal
@@ -1335,6 +1337,7 @@ impl GhosttyPaneTerminal {
         ProcessBytesResult {
             request_render,
             render_delay,
+            terminal_title_changed,
             terminal_bells,
             clipboard_writes,
             reported_cwd,
@@ -3774,6 +3777,33 @@ mod tests {
         assert_eq!(result.terminal_bells, 2);
         let drained = pane.process_pty_bytes(pane_id, 0, b"live output", &tx);
         assert_eq!(drained.terminal_bells, 0);
+    }
+
+    #[test]
+    fn process_pty_bytes_reports_only_completed_title_changes() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+
+        assert!(
+            !pane
+                .process_pty_bytes(pane_id, 0, b"\x1b]0;buil", &tx)
+                .terminal_title_changed
+        );
+        assert!(
+            pane.process_pty_bytes(pane_id, 0, b"ding\x07", &tx)
+                .terminal_title_changed
+        );
+        assert!(
+            !pane
+                .process_pty_bytes(pane_id, 0, b"\x1b]2;building\x07", &tx)
+                .terminal_title_changed
+        );
+        assert!(
+            pane.process_pty_bytes(pane_id, 0, b"\x1b]2;done\x07", &tx)
+                .terminal_title_changed
+        );
     }
 
     #[test]
