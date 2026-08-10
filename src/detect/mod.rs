@@ -225,9 +225,15 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         }
     }
 
+    identify_agent_among_processes(&job.processes)
+}
+
+fn identify_agent_among_processes(
+    processes: &[crate::platform::ForegroundProcess],
+) -> Option<(Agent, String)> {
     let mut best: Option<(u8, Agent, String)> = None;
 
-    for process in &job.processes {
+    for process in processes {
         let candidate = normalized_process_name(process);
         let Some(agent) = identify_agent(&candidate) else {
             continue;
@@ -241,6 +247,32 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     }
 
     best.map(|(_, agent, name)| (agent, name))
+}
+
+/// Editors that embed terminals where agents run on their own pty and process
+/// group (e.g. nvim plugins spawning `opencode` or `codex` in a `:terminal`
+/// buffer). Those agents are never members of the pane's foreground job, so
+/// identification has to walk the editor's descendants instead.
+fn is_terminal_hosting_editor(process: &crate::platform::ForegroundProcess) -> bool {
+    let effective = process.argv0.as_deref().unwrap_or(&process.name);
+    matches!(
+        normalized_agent_lookup_name(path_basename(effective)).as_str(),
+        "nvim" | "vim" | "vi"
+    )
+}
+
+/// Identify an agent hosted inside a terminal-embedding editor that is part of
+/// the pane's foreground job. `descendant_processes` resolves the descendant
+/// processes of an editor PID; production callers pass
+/// [`crate::platform::descendant_processes`].
+pub fn identify_agent_hosted_by_editor(
+    job: &crate::platform::ForegroundJob,
+    descendant_processes: impl Fn(u32) -> Vec<crate::platform::ForegroundProcess>,
+) -> Option<(Agent, String)> {
+    job.processes
+        .iter()
+        .filter(|process| is_terminal_hosting_editor(process))
+        .find_map(|editor| identify_agent_among_processes(&descendant_processes(editor.pid)))
 }
 
 /// Detect the state of an agent from the live terminal tail snapshot.
@@ -1249,6 +1281,65 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- Editor-hosted agent identification ----
+
+    fn editor_job(editor_name: &str) -> crate::platform::ForegroundJob {
+        crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![foreground_process(42, editor_name, &[editor_name])],
+        }
+    }
+
+    #[test]
+    fn editor_hosted_agent_is_identified_from_nvim_descendants() {
+        let descendants = vec![
+            foreground_process(120, "copilot-language-server", &["copilot-language-server"]),
+            foreground_process(121, "opencode", &["opencode"]),
+        ];
+
+        assert_eq!(
+            identify_agent_hosted_by_editor(&editor_job("nvim"), |pid| {
+                assert_eq!(pid, 42);
+                descendants.clone()
+            }),
+            Some((Agent::OpenCode, "opencode".to_string()))
+        );
+    }
+
+    #[test]
+    fn editor_hosted_agent_is_identified_from_wrapped_descendant() {
+        let descendants = vec![foreground_process(
+            120,
+            "node",
+            &["node", "/home/can/.local/bin/codex"],
+        )];
+
+        assert_eq!(
+            identify_agent_hosted_by_editor(&editor_job("vim"), |_| descendants.clone()),
+            Some((Agent::Codex, "codex".to_string()))
+        );
+    }
+
+    #[test]
+    fn editor_hosted_lookup_returns_none_without_agent_descendants() {
+        let descendants = vec![foreground_process(120, "rust-analyzer", &["rust-analyzer"])];
+
+        assert_eq!(
+            identify_agent_hosted_by_editor(&editor_job("nvim"), |_| descendants.clone()),
+            None
+        );
+    }
+
+    #[test]
+    fn editor_hosted_lookup_skips_non_editor_processes() {
+        assert_eq!(
+            identify_agent_hosted_by_editor(&editor_job("some_vm"), |_| {
+                panic!("descendants must not be scanned for non-editor processes")
+            }),
+            None
+        );
     }
 
     // ---- Screen detection routing ----

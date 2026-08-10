@@ -575,6 +575,7 @@ fn probe_foreground_process_from_jobs(
     leader_job: Option<crate::platform::ForegroundJob>,
     foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
     read_hint: impl Fn(u32) -> Option<Agent> + Copy,
+    editor_descendants: impl Fn(u32) -> Vec<crate::platform::ForegroundProcess> + Copy,
 ) -> ProcessProbeResult {
     if let Some(job) = leader_job.as_ref() {
         if let Some(hinted) = hinted_process_probe_result(job, pid, read_hint) {
@@ -607,7 +608,8 @@ fn probe_foreground_process_from_jobs(
             );
         }
 
-        let identified = crate::detect::identify_agent_in_job(job);
+        let identified = crate::detect::identify_agent_in_job(job)
+            .or_else(|| crate::detect::identify_agent_hosted_by_editor(job, editor_descendants));
         return ProcessProbeResult {
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
@@ -631,6 +633,7 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
         foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
         || crate::detect::foreground_job(pid),
         crate::platform::process_agent_hint,
+        crate::platform::descendant_processes,
     )
 }
 
@@ -3692,6 +3695,7 @@ mod tests {
             Some(job),
             || None,
             |pid| (pid == 99).then_some(Agent::Claude),
+            |_| Vec::new(),
         );
 
         assert_eq!(result.agent, Some(Agent::Claude));
@@ -3711,6 +3715,7 @@ mod tests {
             None,
             || Some(job),
             |pid| (pid == 99).then_some(Agent::Claude),
+            |_| Vec::new(),
         );
 
         assert_eq!(result.agent, Some(Agent::Claude));
@@ -3733,6 +3738,7 @@ mod tests {
             None,
             || Some(job),
             |pid| (pid == 100).then_some(Agent::Claude),
+            |_| Vec::new(),
         );
 
         assert_eq!(result.agent, Some(Agent::Codex));
@@ -3755,10 +3761,54 @@ mod tests {
             None,
             || Some(job),
             |pid| (pid == 100).then_some(Agent::Claude),
+            |_| Vec::new(),
         );
 
         assert_eq!(result.agent, Some(Agent::Claude));
         assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn editor_hosted_agent_is_probed_from_editor_descendants() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![foreground_process(99, "nvim")],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            None,
+            || Some(job),
+            |_| None,
+            |pid| {
+                assert_eq!(pid, 99);
+                vec![foreground_process(120, "opencode")]
+            },
+        );
+
+        assert_eq!(result.agent, Some(Agent::OpenCode));
+        assert_eq!(result.process_name.as_deref(), Some("opencode"));
+        assert!(!result.foreground_is_pane_shell);
+    }
+
+    #[test]
+    fn non_editor_foreground_process_skips_descendant_probe() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![foreground_process(99, "some_vm")],
+        };
+
+        let result = probe_foreground_process_from_jobs(
+            42,
+            Some(99),
+            None,
+            || Some(job),
+            |_| None,
+            |_| panic!("descendants must not be scanned for non-editor processes"),
+        );
+
+        assert_eq!(result.agent, None);
     }
 
     fn process_probe_input() -> ProcessProbeInput {

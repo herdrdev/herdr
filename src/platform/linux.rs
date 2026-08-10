@@ -249,6 +249,35 @@ fn foreground_process_group_members_with(
     (!members.is_empty()).then_some(members)
 }
 
+const DESCENDANT_PROCESS_SCAN_LIMIT: usize = 64;
+
+/// Collect descendant processes of a root PID, bounded.
+///
+/// Used to find agents that run on their own pty inside terminal-embedding
+/// editors, where the agent is not part of the pane's foreground job.
+pub fn descendant_processes(root_pid: u32) -> Vec<ForegroundProcess> {
+    if root_pid == 0 {
+        return Vec::new();
+    }
+
+    process_tree_pids([root_pid], process_task_ids, process_task_children)
+        .into_iter()
+        .filter(|pid| *pid != root_pid)
+        .take(DESCENDANT_PROCESS_SCAN_LIMIT)
+        .filter_map(|pid| {
+            let (_, comm) = process_pgrp_and_comm(pid)?;
+            let argv = process_argv(pid);
+            Some(ForegroundProcess {
+                pid,
+                name: comm,
+                argv0: None,
+                cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+                argv,
+            })
+        })
+        .collect()
+}
+
 fn process_tree_pids(
     roots: impl IntoIterator<Item = u32>,
     mut task_ids: impl FnMut(u32) -> Vec<u32>,
@@ -754,6 +783,33 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn descendant_processes_finds_spawned_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleep should spawn");
+        let child_pid = child.id();
+
+        let mut found = false;
+        for _ in 0..20 {
+            found = descendant_processes(std::process::id())
+                .iter()
+                .any(|process| process.pid == child_pid && process.name == "sleep");
+            if found {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(found, "spawned sleep child should appear in descendants");
     }
 
     #[test]

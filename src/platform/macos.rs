@@ -20,6 +20,8 @@ pub(crate) use super::unix_common::{
 };
 
 const PROC_PGRP_ONLY: u32 = 2;
+const PROC_PPID_ONLY: u32 = 6;
+const DESCENDANT_PROCESS_SCAN_LIMIT: usize = 64;
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
@@ -324,6 +326,14 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
 }
 
 fn process_group_pids(process_group_id: u32) -> Vec<u32> {
+    proc_list_pids(PROC_PGRP_ONLY, process_group_id)
+}
+
+fn child_pids(parent_pid: u32) -> Vec<u32> {
+    proc_list_pids(PROC_PPID_ONLY, parent_pid)
+}
+
+fn proc_list_pids(list_kind: u32, list_key: u32) -> Vec<u32> {
     let mut capacity = 16usize;
 
     for _ in 0..8 {
@@ -331,8 +341,8 @@ fn process_group_pids(process_group_id: u32) -> Vec<u32> {
         let buffer_bytes = pids.len() * std::mem::size_of::<libc::pid_t>();
         let returned_bytes = unsafe {
             libc::proc_listpids(
-                PROC_PGRP_ONLY,
-                process_group_id,
+                list_kind,
+                list_key,
                 pids.as_mut_ptr() as *mut libc::c_void,
                 buffer_bytes as libc::c_int,
             )
@@ -350,6 +360,47 @@ fn process_group_pids(process_group_id: u32) -> Vec<u32> {
     }
 
     Vec::new()
+}
+
+/// Collect descendant processes of a root PID, breadth-first and bounded.
+///
+/// Used to find agents that run on their own pty inside terminal-embedding
+/// editors, where the agent is not part of the pane's foreground job.
+pub fn descendant_processes(root_pid: u32) -> Vec<ForegroundProcess> {
+    if root_pid == 0 {
+        return Vec::new();
+    }
+
+    let mut pending = std::collections::VecDeque::from([root_pid]);
+    let mut visited = std::collections::HashSet::from([root_pid]);
+    let mut processes = Vec::new();
+
+    while let Some(pid) = pending.pop_front() {
+        for child in child_pids(pid) {
+            if child == 0 || !visited.insert(child) {
+                continue;
+            }
+            if processes.len() >= DESCENDANT_PROCESS_SCAN_LIMIT {
+                return processes;
+            }
+            pending.push_back(child);
+
+            let Some(name) = process_bsdinfo(child).and_then(|info| comm_from_bsdinfo(&info))
+            else {
+                continue;
+            };
+            let argv = process_argv(child);
+            processes.push(ForegroundProcess {
+                pid: child,
+                name,
+                argv0: process_argv0_name(child),
+                cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+                argv,
+            });
+        }
+    }
+
+    processes
 }
 
 /// Read `e_tpgid` (foreground process group of the controlling terminal)
@@ -1013,6 +1064,33 @@ mod tests {
             target_nofile_soft_limit(16_384, libc::RLIM_INFINITY, 8192),
             None
         );
+    }
+
+    #[test]
+    fn descendant_processes_finds_spawned_child() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep should spawn");
+        let child_pid = child.id();
+
+        let mut found = false;
+        for _ in 0..20 {
+            found = descendant_processes(std::process::id())
+                .iter()
+                .any(|process| process.pid == child_pid && process.name == "sleep");
+            if found {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(found, "spawned sleep child should appear in descendants");
     }
 
     fn build_procargs2(exec_path: &str, argv: &[&str], env: &[&str]) -> Vec<u8> {

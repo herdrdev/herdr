@@ -978,6 +978,21 @@ fn process_is_ancestor(
     false
 }
 
+const DESCENDANT_PROCESS_SCAN_LIMIT: usize = 64;
+
+/// Collect descendant processes of a root PID, bounded.
+///
+/// Used to find agents hosted inside terminal-embedding editors, where the
+/// agent is not part of the pane's foreground job.
+pub fn descendant_processes(root_pid: u32) -> Vec<super::ForegroundProcess> {
+    let entries = snapshot_processes();
+    descendant_entries(root_pid, &entries)
+        .into_iter()
+        .take(DESCENDANT_PROCESS_SCAN_LIMIT)
+        .map(foreground_process_from_entry)
+        .collect()
+}
+
 fn descendant_entries(root_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<&WindowsProcessEntry> {
     let mut children: HashMap<u32, Vec<&WindowsProcessEntry>> = HashMap::new();
     for entry in entries {

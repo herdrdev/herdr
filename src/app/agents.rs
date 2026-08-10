@@ -437,6 +437,13 @@ fn live_runtime_agent(runtime: &crate::terminal::TerminalRuntime) -> Option<crat
                 .iter()
                 .find_map(|process| crate::platform::process_agent_hint(process.pid))
         })
+        .or_else(|| {
+            crate::detect::identify_agent_hosted_by_editor(
+                &job,
+                crate::platform::descendant_processes,
+            )
+            .map(|(agent, _)| agent)
+        })
 }
 
 pub(super) enum AgentStartError {
