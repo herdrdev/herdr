@@ -1742,6 +1742,8 @@ impl App {
                     let key = self.input_leases.normalize_press(&lease_key, key);
                     match key.kind {
                         crossterm::event::KeyEventKind::Press => {
+                            let repeat_copy_navigation =
+                                self.state.allows_copy_navigation_repeat(&key);
                             let initial_context = self.terminal_input_context();
                             let target = if initial_context.is_some() {
                                 self.handle_terminal_key_headless_from(source_id, key.clone())
@@ -1757,7 +1759,26 @@ impl App {
                                 resulting_context.as_ref(),
                                 target,
                             );
+                            if repeat_copy_navigation && self.state.mode == Mode::Copy {
+                                self.input_leases.insert_consumed(
+                                    lease_key,
+                                    input::ConsumedInputLease::RepeatCopyNavigation,
+                                );
+                            }
                             self.execute_repeat_plan_headless(source_id, lease_key, key, plan);
+                        }
+                        crossterm::event::KeyEventKind::Repeat
+                            if self.state.allows_copy_navigation_repeat(&key)
+                                && self.input_leases.repeats_copy_navigation(&lease_key) =>
+                        {
+                            let repetitions = key.repeat_count;
+                            let key = key.with_repeat_count(1);
+                            for _ in 0..repetitions {
+                                if self.state.mode != Mode::Copy {
+                                    break;
+                                }
+                                self.handle_non_terminal_key_headless(key.clone());
+                            }
                         }
                         crossterm::event::KeyEventKind::Repeat => {
                             let current_context = self.terminal_input_context();

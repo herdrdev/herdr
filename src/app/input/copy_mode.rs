@@ -27,6 +27,17 @@ impl App {
 }
 
 impl AppState {
+    pub(crate) fn allows_copy_navigation_repeat(&self, key: &TerminalKey) -> bool {
+        self.mode == Mode::Copy
+            && self
+                .copy_mode
+                .as_ref()
+                .is_some_and(|copy_mode| copy_mode.search.prompt.is_none())
+            && !self.is_prefix_key(key)
+            && key.generated_text.is_none()
+            && is_repeatable_navigation_key(key)
+    }
+
     pub(crate) fn enter_copy_mode(&mut self, terminal_runtimes: &TerminalRuntimeRegistry) {
         let Some(ws_idx) = self.active else {
             return;
@@ -964,6 +975,46 @@ fn copy_mode_page_lines(height: u16, half_page: bool) -> usize {
     }
 }
 
+fn is_repeatable_navigation_key(key: &TerminalKey) -> bool {
+    matches!(
+        key.code,
+        KeyCode::Left
+            | KeyCode::Down
+            | KeyCode::Up
+            | KeyCode::Right
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Home
+            | KeyCode::End
+    ) || matches!(
+        (key.code, key.modifiers),
+        (KeyCode::Char('b' | 'f' | 'u' | 'd'), modifiers)
+            if modifiers.contains(KeyModifiers::CONTROL)
+    ) || copy_mode_command_char(key.clone()).is_some_and(|ch| {
+        matches!(
+            ch,
+            'h' | 'j'
+                | 'k'
+                | 'l'
+                | 'g'
+                | 'G'
+                | '0'
+                | '$'
+                | '^'
+                | 'n'
+                | 'N'
+                | 'w'
+                | 'b'
+                | 'e'
+                | 'W'
+                | 'B'
+                | 'E'
+                | '{'
+                | '}'
+        )
+    })
+}
+
 fn copy_mode_command_char(key: TerminalKey) -> Option<char> {
     if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
         return None;
@@ -1173,6 +1224,147 @@ mod tests {
             app.state.copy_mode.as_ref().expect("copy mode").pane_id,
             pane_id
         );
+    }
+
+    #[test]
+    fn copy_mode_repeat_allowlist_covers_navigation_but_not_actions() {
+        for code in [
+            KeyCode::Left,
+            KeyCode::Down,
+            KeyCode::Up,
+            KeyCode::Right,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+        ] {
+            assert!(is_repeatable_navigation_key(&TerminalKey::new(
+                code,
+                KeyModifiers::empty()
+            )));
+        }
+
+        for ch in [
+            'h', 'j', 'k', 'l', 'g', 'G', '0', '$', '^', 'n', 'N', 'w', 'b', 'e', 'W', 'B', 'E',
+            '{', '}',
+        ] {
+            assert!(is_repeatable_navigation_key(&TerminalKey::new(
+                KeyCode::Char(ch),
+                KeyModifiers::empty()
+            )));
+        }
+
+        for ch in ['b', 'f', 'u', 'd'] {
+            assert!(is_repeatable_navigation_key(&TerminalKey::new(
+                KeyCode::Char(ch),
+                KeyModifiers::CONTROL
+            )));
+        }
+
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Esc,
+            KeyCode::Char('q'),
+            KeyCode::Char('y'),
+            KeyCode::Char('v'),
+            KeyCode::Char('V'),
+            KeyCode::Char(' '),
+            KeyCode::Char('/'),
+            KeyCode::Char('?'),
+        ] {
+            assert!(!is_repeatable_navigation_key(&TerminalKey::new(
+                code,
+                KeyModifiers::empty()
+            )));
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_mode_does_not_repeat_navigation_while_searching_or_for_the_prefix() {
+        let (mut app, _) = app_with_copy_screen(b"alpha\nbeta\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        let navigation = TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty());
+        assert!(app.state.allows_copy_navigation_repeat(&navigation));
+
+        app.state
+            .open_copy_mode_search(CopyModeSearchDirection::Forward);
+        assert!(!app.state.allows_copy_navigation_repeat(&navigation));
+
+        app.state
+            .copy_mode
+            .as_mut()
+            .expect("copy mode")
+            .search
+            .prompt = None;
+        app.state.prefix_code = KeyCode::Char('b');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
+        let prefix = TerminalKey::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert!(!app.state.allows_copy_navigation_repeat(&prefix));
+    }
+
+    #[tokio::test]
+    async fn copy_mode_repeats_ghostty_enhanced_arrow_navigation() {
+        let (mut app, _) = app_with_copy_screen(b"alpha\nbeta\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        app.state.copy_mode.as_mut().expect("copy mode").cursor_col = 3;
+
+        app.route_client_input(b"\x1b[1;1:1D\x1b[1;1:2D\x1b[1;1:2D\x1b[1;1:3D".to_vec());
+
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_col,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_mode_repeats_windows_character_navigation() {
+        let (mut app, _) = app_with_copy_screen(b"zero\none\ntwo\n");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        app.state.copy_mode.as_mut().expect("copy mode").cursor_row = 0;
+        let record = crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0x4a,
+            virtual_scan_code: 0x24,
+            unicode: u16::from(b'j'),
+            control_key_state: 0,
+        };
+        let key =
+            TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()).with_windows_record(record);
+
+        app.handle_raw_input_event(crate::raw_input::RawInputEvent::Key(key.clone()))
+            .await;
+        app.handle_raw_input_event(crate::raw_input::RawInputEvent::Key(key))
+            .await;
+
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").cursor_row,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_mode_repeats_ctrl_navigation() {
+        let bytes = numbered_lines_bytes(64);
+        let (mut app, pane_id) = app_with_copy_scrollback(&bytes);
+        app.state.prefix_code = KeyCode::Char('a');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        let height = app.state.copy_mode.as_ref().expect("copy mode").cursor_row + 1;
+        let expected_lines = copy_mode_page_lines(height, false) * 2;
+        let key = TerminalKey::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+
+        app.route_client_events(
+            vec![
+                crate::raw_input::RawInputEvent::Key(key.clone()),
+                crate::raw_input::RawInputEvent::Key(
+                    key.with_kind(crossterm::event::KeyEventKind::Repeat),
+                ),
+            ],
+            false,
+        );
+
+        assert_eq!(copy_mode_offset_from_bottom(&app, pane_id), expected_lines);
     }
 
     #[tokio::test]
