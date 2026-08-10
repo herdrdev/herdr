@@ -273,7 +273,7 @@ reason の候補は `shown`、`disabled`、`rate_limited`、`no_foreground_clien
 {"id":"req_title_clear","method":"client.window_title.clear","params":{}}
 ```
 
-`client.window_title.clear` は Herdr のデフォルトタイトルを復元します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
+`client.window_title.clear` はタイトルを `ui.window_title` に戻します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
 
 Worktree メソッドは Git チェックアウトを Herdr ワークスペースとして管理します。`worktree.create` はチェックアウトを作成し、新しい `workspace`、`tab`、`root_pane`、`worktree` のレコードを返します。要求されたブランチがローカルに既存ならそれをチェックアウトし、なければ要求されたベースまたは `HEAD` からブランチを作成します。`worktree.open` は既存のチェックアウトを開くか、すでに開いているワークスペースを返します。`worktree.remove` はリンクされた子ワークスペースに対して `git worktree remove` を実行し、ブランチは決して削除しません。
 

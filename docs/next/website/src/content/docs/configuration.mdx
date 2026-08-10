@@ -289,6 +289,21 @@ Command entries run immediately and then at `interval_seconds` without blocking 
 
 Separators appear only between visible entries. Set `tab_bar_right_separator = ""` for direct concatenation. On a narrow tab row, the complete status area yields to the tabs and their controls.
 
+### Outer terminal window title
+
+Herdr emulates the terminals in its panes, so an `OSC 0`/`OSC 2` title written inside a pane stops at Herdr. Herdr writes its own title to the terminal it runs in, which is what window managers and terminal tab bars read:
+
+```toml
+[ui]
+window_title = "{hostname}: {workspace}"
+```
+
+Tokens are `{hostname}`, `{workspace}`, `{tab}`, `{pane}` (the focused pane's manual name), and `{terminal_title}` (the focused pane's own terminal title with spinner frames stripped). Write `{{` and `}}` for literal braces. A token with no value renders empty.
+
+The title renders on the Herdr server, so `{hostname}` names the machine the panes run on, including when you attach with `herdr --remote` or run `herdr` over SSH. Set `window_title = ""` to leave the outer terminal title alone.
+
+`client.window_title.set` overrides the configured title until `client.window_title.clear` hands it back.
+
 Agent status uses compact colored dots by default. To distinguish blocked, working, done, idle, and unknown states by shape as well as color, choose **distinct symbols** in Settings or configure:
 
 ```toml

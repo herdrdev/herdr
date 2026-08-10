@@ -890,6 +890,9 @@ pub struct UiConfig {
     pub tab_bar_right: Vec<TabBarRightEntryConfig>,
     /// Text inserted between visible right-side tab bar entries. Default: one space.
     pub tab_bar_right_separator: String,
+    /// Format for the outer terminal window title. Empty leaves the title alone.
+    /// Default: "{hostname}: {workspace}".
+    pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Retired setting that Herdr wrote before the workspace filter was removed.
@@ -1108,6 +1111,7 @@ impl Default for UiConfig {
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
+            window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
