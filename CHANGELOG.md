@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- `herdr plugin pane open --help` and shell completions now list `popup` as an accepted `--placement` value, matching the CLI's actual parser and the documented `plugin.pane.open` override values.
+
 ## [0.8.0] - 2026-08-03
 
 ### Added
