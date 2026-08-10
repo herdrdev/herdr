@@ -341,7 +341,7 @@ terminal, or agent target. It prints newline-delimited JSON `terminal.frame`
 records with base64-encoded ANSI bytes, then a `terminal.closed` record when
 the server closes the stream. Multiple observers can watch the same terminal
 without taking input, resize, scroll, or takeover authority.
-`terminal title clear` restores Herdr's default outer terminal window title.
+`terminal title clear` hands the outer terminal window title back to `ui.window_title`.
 
 ## Output waits
 
