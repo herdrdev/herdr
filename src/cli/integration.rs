@@ -47,6 +47,13 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
             crate::integration::IntegrationStatusKind::Current => {
                 format!("current ({version})")
             }
+            crate::integration::IntegrationStatusKind::Outdated
+                if status
+                    .installed_version
+                    .is_some_and(|installed| installed >= status.expected_version) =>
+            {
+                format!("needs repair ({version})")
+            }
             crate::integration::IntegrationStatusKind::Outdated => {
                 format!("outdated ({version} < v{})", status.expected_version)
             }

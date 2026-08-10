@@ -82,6 +82,11 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+
+pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
+    title.strip_prefix("Administrator: ").unwrap_or(title)
+}
+
 const MAX_PROCESS_ENVIRONMENT_BYTES: usize = 256 * 1024;
 const PROCESS_ENVIRONMENT_READ_CHUNK_BYTES: usize = 16 * 1024;
 const PROCESS_RUNTIME_MARKER_CACHE_CAPACITY: usize = 1_024;

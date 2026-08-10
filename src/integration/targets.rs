@@ -25,6 +25,9 @@ use super::env::{
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
 };
+use super::opencode_config::{
+    add_tui_plugin, remove_tui_plugin, tui_config_path, validate_tui_plugin_config,
+};
 use super::types::{
     AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
     ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
@@ -49,9 +52,9 @@ use super::{
     KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
     OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
-    OPENCODE_PLUGIN_INSTALL_NAME, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME,
-    QODERCLI_HOOK_ASSET, QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME,
-    QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
+    OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
+    OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
+    QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -452,13 +455,21 @@ pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
         )));
     }
 
+    validate_tui_plugin_config(&dir)?;
     let plugins_dir = dir.join("plugins");
     fs::create_dir_all(&plugins_dir)?;
 
     let plugin_path = plugins_dir.join(OPENCODE_PLUGIN_INSTALL_NAME);
     fs::write(&plugin_path, OPENCODE_PLUGIN_ASSET)?;
+    let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    fs::write(&tui_plugin_path, OPENCODE_TUI_PLUGIN_ASSET)?;
+    let tui_config_path = add_tui_plugin(&dir, OPENCODE_TUI_PLUGIN_SPEC)?;
 
-    Ok(OpenCodeInstallPaths { plugin_path })
+    Ok(OpenCodeInstallPaths {
+        plugin_path,
+        tui_plugin_path,
+        tui_config_path,
+    })
 }
 
 pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
@@ -801,14 +812,38 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
 }
 
 pub(crate) fn uninstall_opencode() -> io::Result<OpenCodeUninstallResult> {
-    let plugin_path = opencode_dir()?
-        .join("plugins")
-        .join(OPENCODE_PLUGIN_INSTALL_NAME);
-    let removed_plugin = remove_file_if_exists(&plugin_path)?;
+    let dir = opencode_dir()?;
+    let tui_config_path = tui_config_path(&dir);
+    let plugin_path = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    let mut errors = Vec::new();
+    let updated_tui_config =
+        remove_tui_plugin(&dir, OPENCODE_TUI_PLUGIN_SPEC).unwrap_or_else(|err| {
+            errors.push(err.to_string());
+            false
+        });
+    let removed_plugin = remove_file_if_exists(&plugin_path).unwrap_or_else(|err| {
+        errors.push(format!("failed to remove {}: {err}", plugin_path.display()));
+        false
+    });
+    let removed_tui_plugin = remove_file_if_exists(&tui_plugin_path).unwrap_or_else(|err| {
+        errors.push(format!(
+            "failed to remove {}: {err}",
+            tui_plugin_path.display()
+        ));
+        false
+    });
+    if !errors.is_empty() {
+        return Err(io::Error::other(errors.join("; ")));
+    }
 
     Ok(OpenCodeUninstallResult {
         plugin_path,
+        tui_plugin_path,
+        tui_config_path,
         removed_plugin,
+        removed_tui_plugin,
+        updated_tui_config,
     })
 }
 

@@ -466,6 +466,7 @@ impl HeadlessServer {
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
+        should_quit: Arc<AtomicBool>,
     ) -> io::Result<Self> {
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -478,8 +479,6 @@ impl HeadlessServer {
         // Set non-blocking on Unix so we can poll it from the event loop.
         #[cfg(unix)]
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
-
-        let should_quit = Arc::new(AtomicBool::new(false));
 
         // Channel for server events from client threads.
         let (server_event_tx, server_event_rx) = mpsc::channel(64);
@@ -555,12 +554,15 @@ impl HeadlessServer {
 
             // If shutdown has been initiated, complete it and exit.
             if self.shutting_down {
-                self.complete_shutdown()?;
+                self.complete_shutdown().await?;
                 break;
             }
 
             // Check if we should start shutting down.
             if self.app.state.should_quit || self.should_quit.load(Ordering::Acquire) {
+                self.drain_internal_events_with_forwarding_up_to(
+                    crate::app::APP_EVENT_CHANNEL_CAPACITY,
+                );
                 self.initiate_shutdown();
                 continue;
             }
@@ -584,6 +586,9 @@ impl HeadlessServer {
                 needs_full_render = true;
                 needs_graphics_render = false;
                 crate::render_prof::event("full_render_cause.internal_events");
+            }
+            if self.should_quit.load(Ordering::Acquire) {
+                continue;
             }
             if self.app.expire_due_metadata(Instant::now()) {
                 needs_render = true;
@@ -612,6 +617,9 @@ impl HeadlessServer {
                 needs_full_render = true;
                 crate::render_prof::event("full_render_cause.api_requests");
             }
+            if self.should_quit.load(Ordering::Acquire) {
+                continue;
+            }
 
             self.app.sync_focus_events();
             self.app.sync_session_save_schedule();
@@ -639,6 +647,9 @@ impl HeadlessServer {
                 needs_render = true;
                 needs_full_render = true;
                 crate::render_prof::event("full_render_cause.server_events");
+            }
+            if self.should_quit.load(Ordering::Acquire) {
+                continue;
             }
 
             // 6. Handle scheduled tasks.
@@ -785,6 +796,25 @@ impl HeadlessServer {
                     _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
                 }
             };
+
+            if self.should_quit.load(Ordering::Acquire) {
+                match event {
+                    LoopEvent::Internal(ev) => {
+                        self.handle_internal_event_with_forwarding(ev);
+                    }
+                    LoopEvent::ServerEvent(ServerEvent::ClientConnected { writer, .. }) => {
+                        if let Ok(message) =
+                            Self::frame_server_message(&ServerMessage::ServerShutdown {
+                                reason: Some("server is shutting down".to_owned()),
+                            })
+                        {
+                            let _ = writer.control.send(message);
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
 
             match event {
                 LoopEvent::Timer => {}
@@ -1394,7 +1424,11 @@ impl HeadlessServer {
             .api_tx
             .clone()
             .ok_or_else(|| io::Error::other("cannot restore api socket without api sender"))?;
-        let api_server = api::start_server(api_tx, self.app.event_hub.clone())?;
+        let api_server = api::start_server_with_stop_control(
+            api_tx,
+            self.app.event_hub.clone(),
+            self.should_quit.clone(),
+        )?;
 
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -1657,7 +1691,10 @@ impl HeadlessServer {
     /// Uses the original full-render semantics when pane graphics are dormant.
     fn drain_server_events(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(ev) = self.server_event_rx.try_recv() {
+        while !self.should_quit.load(Ordering::Acquire) {
+            let Ok(ev) = self.server_event_rx.try_recv() else {
+                break;
+            };
             changed |= self.handle_server_event(ev);
         }
         changed
@@ -1666,10 +1703,26 @@ impl HeadlessServer {
     /// Returns the strongest render impact from the drained event batch.
     fn drain_server_events_with_render_impact(&mut self) -> RenderImpact {
         let mut impact = RenderImpact::None;
-        while let Ok(ev) = self.server_event_rx.try_recv() {
+        while !self.should_quit.load(Ordering::Acquire) {
+            let Ok(ev) = self.server_event_rx.try_recv() else {
+                break;
+            };
             impact.merge(self.handle_server_event_with_render_impact(ev));
         }
         impact
+    }
+
+    async fn reject_late_client_connections(&mut self) {
+        self.server_event_rx.close();
+        while let Some(event) = self.server_event_rx.recv().await {
+            if let ServerEvent::ClientConnected { writer, .. } = event {
+                if let Ok(message) = Self::frame_server_message(&ServerMessage::ServerShutdown {
+                    reason: Some("server is shutting down".to_owned()),
+                }) {
+                    let _ = writer.control.send(message);
+                }
+            }
+        }
     }
 
     fn terminal_id_by_string(&self, terminal_id: &str) -> Option<crate::terminal::TerminalId> {
@@ -2443,7 +2496,7 @@ impl HeadlessServer {
             let (had_event, batch_changed) =
                 self.drain_internal_events_with_forwarding_up_to(crate::app::APP_EVENT_DRAIN_LIMIT);
             changed |= batch_changed;
-            if !had_event {
+            if !had_event || self.should_quit.load(Ordering::Acquire) {
                 break;
             }
         }
@@ -3347,15 +3400,30 @@ impl HeadlessServer {
     /// During shutdown, remaining requests get a `server_unavailable` error.
     fn drain_api_requests_with_shutdown_check(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(msg) = self.app.api_rx.try_recv() {
+        while !self.should_quit.load(Ordering::Acquire) {
+            let Ok(msg) = self.app.api_rx.try_recv() else {
+                break;
+            };
             changed |= self.handle_api_request_with_shutdown_check(msg);
         }
         changed
     }
 
+    fn reject_queued_api_requests_for_shutdown(&mut self) {
+        for _ in 0..self.app.api_rx.len() {
+            let Ok(msg) = self.app.api_rx.try_recv() else {
+                break;
+            };
+            self.handle_api_request_with_shutdown_check(msg);
+        }
+    }
+
     fn drain_api_requests_with_render_impact(&mut self) -> RenderImpact {
         let mut impact = RenderImpact::None;
-        while let Ok(msg) = self.app.api_rx.try_recv() {
+        while !self.should_quit.load(Ordering::Acquire) {
+            let Ok(msg) = self.app.api_rx.try_recv() else {
+                break;
+            };
             impact.merge(self.handle_api_request_with_render_impact(msg));
         }
         impact
@@ -4606,8 +4674,9 @@ impl HeadlessServer {
 
     /// Completes the shutdown sequence: send ServerShutdown to clients,
     /// close client connections, remove socket files, and clean up.
-    fn complete_shutdown(&mut self) -> io::Result<()> {
+    async fn complete_shutdown(&mut self) -> io::Result<()> {
         info!("completing server shutdown");
+        self.reject_late_client_connections().await;
 
         // Send ServerShutdown to all remaining clients.
         if !self.clients.is_empty() {
@@ -4621,8 +4690,8 @@ impl HeadlessServer {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        // Drain remaining API requests with server_unavailable.
-        self.drain_api_requests_with_shutdown_check();
+        // Reject only the requests already queued when shutdown reached cleanup.
+        self.reject_queued_api_requests_for_shutdown();
 
         // Close all client connections.
         let staged_files = self
@@ -4822,9 +4891,14 @@ pub fn run_server() -> io::Result<()> {
     let loaded_config = config::Config::load();
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
+    let should_quit = Arc::new(AtomicBool::new(false));
 
     // Start the JSON API socket server.
-    let _api_server = match api::start_server(api_tx.clone(), event_hub.clone()) {
+    let _api_server = match api::start_server_with_stop_control(
+        api_tx.clone(),
+        event_hub.clone(),
+        should_quit.clone(),
+    ) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
             eprintln!("error: herdr server is already running");
@@ -4867,6 +4941,7 @@ pub fn run_server() -> io::Result<()> {
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(_api_server),
+            should_quit,
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -4931,6 +5006,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
 
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
+    let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
     for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
@@ -4969,12 +5045,17 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         }
         wait_for_old_public_sockets_to_close(Duration::from_secs(5))?;
 
-        let api_server = api::start_server(api_tx.clone(), event_hub.clone())?;
+        let api_server = api::start_server_with_stop_control(
+            api_tx.clone(),
+            event_hub.clone(),
+            should_quit.clone(),
+        )?;
         let mut server = HeadlessServer::new(
             app,
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(api_server),
+            should_quit,
         )?;
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
@@ -5120,7 +5201,6 @@ mod tests {
             .set_nonblocking(ListenerNonblockingMode::Accept)
             .expect("set listener nonblocking");
         let (server_event_tx, server_event_rx) = mpsc::channel(64);
-        #[cfg(windows)]
         let should_quit = Arc::new(AtomicBool::new(false));
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
@@ -5151,9 +5231,6 @@ mod tests {
             handoff_in_progress: false,
             #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
-            #[cfg(unix)]
-            should_quit: Arc::new(AtomicBool::new(false)),
-            #[cfg(windows)]
             should_quit,
             server_event_rx,
             server_event_tx,
@@ -5285,6 +5362,23 @@ mod tests {
             .iter()
             .filter(|(_, event)| event.event == api::schema::EventKind::PaneUpdated)
             .count()
+    }
+
+    #[test]
+    fn server_stop_interrupts_server_event_backlog() {
+        let mut server = test_headless_server();
+        for client_id in 1..=64 {
+            server
+                .server_event_tx
+                .try_send(ServerEvent::ClientDisconnected { client_id })
+                .unwrap();
+        }
+
+        server.should_quit.store(true, Ordering::Release);
+
+        assert!(!server.drain_server_events());
+        assert!(server.server_event_rx.try_recv().is_ok());
+        shutdown_test_runtimes(&mut server);
     }
 
     #[test]
