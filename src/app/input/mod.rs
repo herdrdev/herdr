@@ -354,6 +354,7 @@ impl App {
 
         if self.state.popup_pane.is_some() {
             self.handle_popup_mouse(mouse);
+            self.dispatch_pending_clipboard_write();
             return;
         }
         if self.handle_overlay_mouse(mouse) {
@@ -489,48 +490,121 @@ impl App {
         {
             return;
         }
-        let Some(rt) = self.popup_runtime() else {
-            self.close_popup_pane();
+        let Some(popup) = self.state.popup_pane.as_ref() else {
             return;
         };
-        let position = crate::input::mouse::Position::Cell {
-            column: mouse.column.saturating_sub(inner.x),
-            row: mouse.row.saturating_sub(inner.y),
-        };
-        let bytes = match mouse.kind {
-            MouseEventKind::ScrollUp
-            | MouseEventKind::ScrollDown
-            | MouseEventKind::ScrollLeft
-            | MouseEventKind::ScrollRight => match rt.wheel_routing() {
-                Some(crate::pane::WheelRouting::MouseReport) => {
-                    rt.encode_mouse_wheel(mouse.kind, position, mouse.modifiers)
-                }
-                Some(crate::pane::WheelRouting::AlternateScroll) => {
-                    rt.encode_alternate_scroll(mouse.kind)
-                }
-                Some(crate::pane::WheelRouting::HostScroll) | None => {
-                    let lines_per_notch = self.state.mouse_scroll_lines;
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => rt.scroll_up(lines_per_notch),
-                        MouseEventKind::ScrollDown => rt.scroll_down(lines_per_notch),
-                        _ => {}
+        let popup_pane_id = popup.pane_id;
+
+        let column = mouse.column.saturating_sub(inner.x);
+        let row = mouse.row.saturating_sub(inner.y);
+        let position = crate::input::mouse::Position::Cell { column, row };
+
+        let (bytes, scroll_metrics) = {
+            let Some(rt) = self.popup_runtime() else {
+                self.close_popup_pane();
+                return;
+            };
+            let bytes = match mouse.kind {
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight => match rt.wheel_routing() {
+                    Some(crate::pane::WheelRouting::MouseReport) => {
+                        rt.encode_mouse_wheel(mouse.kind, position, mouse.modifiers)
                     }
-                    return;
+                    Some(crate::pane::WheelRouting::AlternateScroll) => {
+                        rt.encode_alternate_scroll(mouse.kind)
+                    }
+                    Some(crate::pane::WheelRouting::HostScroll) | None => {
+                        let lines_per_notch = self.state.mouse_scroll_lines;
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => rt.scroll_up(lines_per_notch),
+                            MouseEventKind::ScrollDown => rt.scroll_down(lines_per_notch),
+                            _ => {}
+                        }
+                        return;
+                    }
+                },
+                MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
+                    rt.encode_mouse_button(mouse.kind, position, mouse.modifiers)
                 }
-            },
-            MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
-                rt.encode_mouse_button(mouse.kind, position, mouse.modifiers)
+                MouseEventKind::Moved => {
+                    rt.encode_mouse_motion(mouse.kind, position, mouse.modifiers)
+                }
+            };
+            (bytes, rt.scroll_metrics())
+        };
+                    }
+                    Some(crate::pane::WheelRouting::AlternateScroll) => {
+                        rt.encode_alternate_scroll(mouse.kind)
+                    }
+                    Some(crate::pane::WheelRouting::HostScroll) | None => {
+                        let lines_per_notch = self.state.mouse_scroll_lines;
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => rt.scroll_up(lines_per_notch),
+                            MouseEventKind::ScrollDown => rt.scroll_down(lines_per_notch),
+                            _ => {}
+                        }
+                        return;
+                    }
+                },
+                MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
+                    rt.encode_mouse_button(mouse.kind, column, row, mouse.modifiers)
+                }
+
+        };
+
+        if let Some(bytes) = bytes {
+            self.state.selection = None;
+            if let Some(rt) = self.popup_runtime() {
+                if !matches!(mouse.kind, MouseEventKind::Moved) {
+                    rt.scroll_reset();
+                }
+                if let Err(err) = rt.try_send_bytes(Bytes::from(bytes)) {
+                    warn!(err = %err, kind = ?mouse.kind, "failed to forward popup mouse event");
+                }
             }
-            MouseEventKind::Moved => rt.encode_mouse_motion(mouse.kind, position, mouse.modifiers),
-        };
-        let Some(bytes) = bytes else {
             return;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Moved) {
-            rt.scroll_reset();
         }
-        if let Err(err) = rt.try_send_bytes(Bytes::from(bytes)) {
-            warn!(err = %err, kind = ?mouse.kind, "failed to forward popup mouse event");
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.state.selection = Some(crate::selection::Selection::anchor(
+                    popup_pane_id,
+                    row,
+                    column,
+                    scroll_metrics,
+                ));
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self
+                    .state
+                    .selection
+                    .as_ref()
+                    .is_some_and(|sel| sel.pane_id == popup_pane_id)
+                {
+                    self.state
+                        .update_selection_drag(&self.terminal_runtimes, mouse.column, mouse.row);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(selection) = self.state.selection.as_ref() {
+                    if selection.pane_id == popup_pane_id {
+                        let was_click = selection.was_just_click();
+                        let was_finalized = selection.is_finalized();
+                        if was_click {
+                            self.state.selection = None;
+                        } else if was_finalized {
+                            // Selection already finalized
+                        } else if self.state.copy_on_select {
+                            self.state.copy_selection(&self.terminal_runtimes);
+                        } else if let Some(sel) = self.state.selection.as_mut() {
+                            sel.finish();
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

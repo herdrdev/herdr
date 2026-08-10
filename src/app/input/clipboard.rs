@@ -289,4 +289,92 @@ mod tests {
             b"\x03"
         );
     }
+
+    fn app_with_popup_screen_bytes_and_input(
+        bytes: &[u8],
+    ) -> (
+        App,
+        crate::layout::PaneId,
+        Rect,
+        tokio::sync::mpsc::Receiver<Bytes>,
+    ) {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+
+        let pane_id = crate::layout::PaneId::alloc();
+        let terminal_id = crate::terminal::TerminalId::alloc();
+
+        app.state.popup_pane = Some(crate::app::state::PopupPaneState {
+            pane_id,
+            terminal_id: terminal_id.clone(),
+            width: None,
+            height: None,
+        });
+
+        let (_, inner) =
+            crate::ui::popup_pane_rects(&app.state, app.state.view.terminal_area).unwrap();
+
+        let (runtime, input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                inner.width,
+                inner.height,
+                0,
+                bytes,
+                4,
+            );
+
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        app.state.terminals.insert(
+            terminal_id.clone(),
+            crate::terminal::TerminalState::new(
+                terminal_id.clone(),
+                std::path::PathBuf::from("/popup"),
+            ),
+        );
+
+        (app, pane_id, inner, input_rx)
+    }
+
+    #[tokio::test]
+    async fn popup_pane_drag_selection_highlights_and_copies_to_clipboard() {
+        let (mut app, pane_id, inner, _rx) =
+            app_with_popup_screen_bytes_and_input(b"popup content");
+        app.state.copy_on_select = false;
+
+        let start_col = inner.x;
+        let end_col = inner.x + 5;
+        let row = inner.y;
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), start_col, row));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), end_col, row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), end_col, row));
+
+        assert_visible_selection(&app);
+        assert_eq!(app.state.selection.as_ref().unwrap().pane_id, pane_id);
+
+        app.state.copy_selection(&app.terminal_runtimes);
+        assert!(app.dispatch_pending_clipboard_write());
+        assert_eq!(clipboard_write_content(&mut app), b"popup");
+    }
+
+    #[tokio::test]
+    async fn popup_pane_copy_on_select_copies_on_mouse_up() {
+        let (mut app, _pane_id, inner, _rx) =
+            app_with_popup_screen_bytes_and_input(b"popup content");
+        app.state.copy_on_select = true;
+
+        let start_col = inner.x;
+        let end_col = inner.x + 5;
+        let row = inner.y;
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), start_col, row));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), end_col, row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), end_col, row));
+
+        assert_eq!(clipboard_write_content(&mut app), b"popup");
+    }
 }

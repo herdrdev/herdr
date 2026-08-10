@@ -2280,13 +2280,8 @@ impl AppState {
             return;
         }
 
-        let ws_idx = match self.active {
-            Some(ws_idx) if self.workspaces.get(ws_idx).is_some() => ws_idx,
-            _ => return,
-        };
-
         let text = self
-            .runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, sel.pane_id)
+            .runtime_for_pane(terminal_runtimes, sel.pane_id)
             .and_then(|rt| rt.extract_selection(&sel));
         if let Some(text) = text {
             if !text.is_empty() {

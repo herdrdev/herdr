@@ -38,7 +38,7 @@ impl AppState {
         else {
             return;
         };
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             return;
         };
         if info.inner_rect.width == 0 || info.inner_rect.height == 0 {
@@ -339,7 +339,7 @@ impl AppState {
             return;
         };
         let pane_id = copy_mode.pane_id;
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             return;
         };
         let Some(metrics) = self.pane_scroll_metrics(terminal_runtimes, pane_id) else {
@@ -405,7 +405,7 @@ impl AppState {
         let Some(copy_mode) = self.copy_mode.as_ref() else {
             return;
         };
-        let Some(info) = self.pane_info_by_id(copy_mode.pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(copy_mode.pane_id) else {
             return;
         };
         if copy_mode.cursor_row >= info.inner_rect.height
@@ -458,7 +458,7 @@ impl AppState {
         let pane_id = copy_mode.pane_id;
         let mut cursor_row = copy_mode.cursor_row;
         let mut cursor_col = copy_mode.cursor_col;
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             self.exit_copy_mode(terminal_runtimes, false);
             return;
         };
@@ -508,7 +508,7 @@ impl AppState {
         };
         let pane_id = copy_mode.pane_id;
         let mut cursor_row = copy_mode.cursor_row;
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             self.exit_copy_mode(terminal_runtimes, false);
             return;
         };
@@ -844,7 +844,7 @@ impl AppState {
         let Some(selection) = copy_mode.selection else {
             return;
         };
-        let Some(info) = self.pane_info_by_id(copy_mode.pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(copy_mode.pane_id) else {
             return;
         };
         match selection {

@@ -1451,8 +1451,24 @@ impl AppState {
         .then_some(MouseAction::FocusPane { ws_idx, pane_id })
     }
 
-    pub(crate) fn pane_info_by_id(&self, pane_id: crate::layout::PaneId) -> Option<&PaneInfo> {
-        self.view.pane_infos.iter().find(|info| info.id == pane_id)
+    pub(crate) fn pane_info_by_id(&self, pane_id: crate::layout::PaneId) -> Option<PaneInfo> {
+        if let Some(info) = self.view.pane_infos.iter().find(|info| info.id == pane_id) {
+            return Some(info.clone());
+        }
+        if let Some(popup) = &self.popup_pane {
+            if popup.pane_id == pane_id {
+                let (_, inner) = crate::ui::popup_pane_rects(self, self.view.terminal_area)?;
+                return Some(PaneInfo {
+                    id: pane_id,
+                    rect: inner,
+                    inner_rect: inner,
+                    scrollbar_rect: None,
+                    borders: ratatui::widgets::Borders::NONE,
+                    is_focused: true,
+                });
+            }
+        }
+        None
     }
 
     pub(super) fn pane_frame_at(&self, col: u16, row: u16) -> Option<&PaneInfo> {

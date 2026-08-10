@@ -387,9 +387,16 @@ impl App {
         }
         let terminal_id = self
             .state
-            .workspaces
-            .iter()
-            .find_map(|workspace| workspace.terminal_id(pane_id))?;
+            .popup_pane
+            .as_ref()
+            .filter(|popup| popup.pane_id == pane_id)
+            .map(|popup| &popup.terminal_id)
+            .or_else(|| {
+                self.state
+                    .workspaces
+                    .iter()
+                    .find_map(|workspace| workspace.terminal_id(pane_id))
+            })?;
         self.terminal_runtimes
             .get(terminal_id)
             .and_then(|runtime| runtime.extract_selection(selection))

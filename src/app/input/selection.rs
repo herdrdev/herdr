@@ -13,7 +13,7 @@ impl AppState {
         screen_col: u16,
         screen_row: u16,
     ) {
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             return;
         };
         let metrics = self.pane_scroll_metrics(terminal_runtimes, pane_id);
@@ -35,7 +35,7 @@ impl AppState {
         let Some(pane_id) = self.selection.as_ref().map(|selection| selection.pane_id) else {
             return;
         };
-        let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
+        let Some(info) = self.pane_info_by_id(pane_id) else {
             return;
         };
 
