@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
 
 use interprocess::local_socket::traits::{Listener as _, Stream as _};
 use tokio::sync::mpsc;
@@ -16,6 +16,9 @@ pub(crate) fn accept_pending_client_connections(
     server_event_tx: &mpsc::Sender<ServerEvent>,
 ) -> io::Result<()> {
     loop {
+        if should_quit.load(Ordering::Acquire) {
+            break;
+        }
         match listener.accept() {
             Ok(stream) => {
                 let client_id = *next_client_id;

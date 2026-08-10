@@ -1,7 +1,7 @@
 const CLAUDE_ACTIVITY_GLYPHS: &str = "·✢✳✶✻✽";
 
 pub(crate) fn stripped_terminal_title(title: &str) -> Option<String> {
-    let title = title.trim();
+    let title = crate::platform::terminal_title_for_presentation(title).trim();
     if title.is_empty() {
         return None;
     }
@@ -60,5 +60,19 @@ mod tests {
         );
         assert_eq!(stripped_terminal_title("  "), None);
         assert_eq!(stripped_terminal_title("⠋   "), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strips_one_windows_elevation_decoration_before_activity_glyph() {
+        assert_eq!(
+            stripped_terminal_title("Administrator:   ⠋ task").as_deref(),
+            Some("task")
+        );
+        assert_eq!(
+            stripped_terminal_title("Administrator: Administrator: task").as_deref(),
+            Some("Administrator: task")
+        );
+        assert_eq!(stripped_terminal_title("Administrator: "), None);
     }
 }

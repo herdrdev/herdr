@@ -522,6 +522,10 @@ pub(crate) fn handle_client_handshake(
     server_event_tx: &mpsc::Sender<ServerEvent>,
     should_quit: &Arc<AtomicBool>,
 ) -> io::Result<()> {
+    if should_quit.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
     // Reset to blocking mode — the accept loop sets nonblocking but
     // the handshake thread needs blocking I/O for read_message/write_message.
     stream.set_nonblocking(false)?;
@@ -624,6 +628,10 @@ pub(crate) fn handle_client_handshake(
         }
     };
 
+    if should_quit.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
     // Send Welcome.
     let welcome = ServerMessage::Welcome {
         version: PROTOCOL_VERSION,
@@ -653,8 +661,13 @@ pub(crate) fn handle_client_handshake(
         client_writer_loop(write_stream, client_id, writer_queue, writer_event_tx);
     });
 
+    if should_quit.load(Ordering::Acquire) {
+        send_shutdown_to_unregistered_client(&writer);
+        return Ok(());
+    }
+
     // Notify the main loop about the new client.
-    let _ = server_event_tx.blocking_send(ServerEvent::ClientConnected {
+    let connected = ServerEvent::ClientConnected {
         client_id,
         cols: client_cols,
         rows: client_rows,
@@ -665,10 +678,29 @@ pub(crate) fn handle_client_handshake(
         direct_attach_requested,
         direct_graphics,
         writer,
-    });
+    };
+    if let Err(err) = server_event_tx.blocking_send(connected) {
+        if let ServerEvent::ClientConnected { writer, .. } = err.0 {
+            send_shutdown_to_unregistered_client(&writer);
+        }
+    }
 
     // Enter read loop — read client messages and forward to main loop.
     client_read_loop(stream, client_id, server_event_tx, should_quit)
+}
+
+fn send_shutdown_to_unregistered_client(writer: &ClientWriter) {
+    let mut framed = Vec::new();
+    if protocol::write_message(
+        &mut framed,
+        &ServerMessage::ServerShutdown {
+            reason: Some("server is shutting down".to_owned()),
+        },
+    )
+    .is_ok()
+    {
+        let _ = writer.control.send(framed);
+    }
 }
 
 /// The client writer loop — prioritizes control messages over render frames.
