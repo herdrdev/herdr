@@ -145,8 +145,9 @@ fn apply_settings(state: &mut AppState) -> Option<SettingsAction> {
 }
 
 pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Option<SettingsAction> {
+    let (key_code, _) = crate::config::normalize_key_combo((key.code, key.modifiers));
     match state.settings.section {
-        SettingsSection::Theme => match key.code {
+        SettingsSection::Theme => match key_code {
             KeyCode::Up | KeyCode::Char('k') => {
                 let previous = state.settings.list.selected;
                 state.settings.list.move_prev();
@@ -175,7 +176,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 _ => {}
             },
         },
-        SettingsSection::Indicators => match key.code {
+        SettingsSection::Indicators => match key_code {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
                 state.settings.list.selected = 1 - state.settings.list.selected.min(1);
             }
@@ -199,7 +200,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
         },
-        SettingsSection::Sound => match key.code {
+        SettingsSection::Sound => match key_code {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
                 state.settings.list.selected = 1 - state.settings.list.selected.min(1);
             }
@@ -223,7 +224,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
         },
-        SettingsSection::Toast => match key.code {
+        SettingsSection::Toast => match key_code {
             KeyCode::Up | KeyCode::Char('k') => state.settings.list.move_prev(),
             KeyCode::Down | KeyCode::Char('j') => state.settings.list.move_next(4),
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -246,7 +247,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
         },
-        SettingsSection::PaneLabels => match key.code {
+        SettingsSection::PaneLabels => match key_code {
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
                 state.settings.list.selected = 1 - state.settings.list.selected.min(1);
             }
@@ -270,7 +271,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
         },
-        SettingsSection::Integrations => match key.code {
+        SettingsSection::Integrations => match key_code {
             KeyCode::Enter | KeyCode::Char(' ') if integrations_need_install(state) => {
                 return Some(SettingsAction::InstallRecommendedIntegrations);
             }
@@ -552,6 +553,22 @@ mod tests {
         assert_eq!(action, Some(SettingsAction::SaveSound(true)));
         assert!(!state.sound.enabled);
         assert_eq!(state.mode, Mode::Settings);
+    }
+
+    #[test]
+    fn kitty_shift_tab_moves_to_previous_settings_section() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Indicators);
+        let mut events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[9;2u");
+        let crate::raw_input::RawInputEvent::Key(key) = events.remove(0) else {
+            panic!("expected key event");
+        };
+        assert_eq!(key.code, KeyCode::Tab);
+        assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+
+        update_settings_state(&mut state, key.as_key_event());
+
+        assert_eq!(state.settings.section, SettingsSection::Theme);
     }
 
     #[test]
