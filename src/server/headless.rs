@@ -1298,6 +1298,7 @@ impl HeadlessServer {
             panes,
             params.expected_protocol,
             params.expected_version,
+            self.api_window_title.clone(),
         );
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
@@ -2181,10 +2182,10 @@ impl HeadlessServer {
         // A detached client keeps its entry with no writer, and a targeted send
         // to one reports success without queuing anything. Caching the title
         // against that client would skip the send once it attaches again.
-        if !self
+        if self
             .clients
             .get(&client_id)
-            .is_some_and(|client| client.writer.is_some())
+            .is_none_or(|client| client.writer.is_none())
         {
             self.sent_window_title = None;
             return false;
@@ -5128,6 +5129,9 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             Some(api_server),
             should_quit,
         )?;
+        // Carried across before any client attaches, so the first title sent is
+        // the override rather than the configured one it replaced.
+        server.api_window_title = received.manifest.api_window_title.take();
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
         server.app.assume_handoff_ownership();
