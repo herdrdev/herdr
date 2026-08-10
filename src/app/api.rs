@@ -163,7 +163,7 @@ impl App {
         } = ev
         {
             let _ = self.handle_tab_bar_command_finished(generation, segment_index, result);
-            return;
+            return Vec::new();
         }
 
         if let AppEvent::PluginCommandFinished {
