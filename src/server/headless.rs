@@ -303,9 +303,11 @@ pub struct HeadlessServer {
     next_client_id: u64,
     /// The client currently driving the shared pane runtime size, theme, and input keybindings.
     foreground_client_id: Option<u64>,
-    /// Outer window title last pushed to the foreground client, so unchanged
-    /// titles do not re-emit an OSC on every render.
-    sent_window_title: Option<Option<String>>,
+    /// Outer window title last pushed, paired with the client that received it.
+    /// Keying on the client means a newly attached terminal is written to even
+    /// when the title itself has not changed, without every code path that
+    /// changes the foreground client having to remember to invalidate this.
+    sent_window_title: Option<(u64, Option<String>)>,
     /// Window title set through `client.window_title.set`. While present it wins
     /// over the configured `ui.window_title` until the API clears it again.
     api_window_title: Option<String>,
@@ -1530,11 +1532,6 @@ impl HeadlessServer {
 
         let changed = self.foreground_client_id != Some(client_id);
         self.foreground_client_id = Some(client_id);
-        if changed {
-            // A newly promoted terminal starts on whatever title its shell or
-            // ssh left behind, so the next sync has to write ours again.
-            self.sent_window_title = None;
-        }
         self.sync_foreground_client_state();
         changed
     }
@@ -1543,9 +1540,6 @@ impl HeadlessServer {
         let next_foreground = latest_app_client(&self.clients);
         let changed = next_foreground != self.foreground_client_id;
         self.foreground_client_id = next_foreground;
-        if changed {
-            self.sent_window_title = None;
-        }
         self.sync_foreground_client_state();
         changed
     }
@@ -2163,8 +2157,12 @@ impl HeadlessServer {
             None if self.app.window_title_configured() => self.configured_window_title(),
             None => return,
         };
-        if self.sent_window_title.as_ref() == Some(&title) {
-            return;
+        if let (Some(client_id), Some((sent_client_id, sent_title))) =
+            (self.foreground_client_id, self.sent_window_title.as_ref())
+        {
+            if *sent_client_id == client_id && *sent_title == title {
+                return;
+            }
         }
         self.send_window_title(title);
     }
@@ -2172,10 +2170,17 @@ impl HeadlessServer {
     /// Sends a window title and remembers it only when a foreground client took
     /// it, so the next client to attach is written to rather than skipped.
     fn send_window_title(&mut self, title: Option<String>) -> bool {
-        let sent = self.send_to_foreground_client(ServerMessage::WindowTitle {
-            title: title.clone(),
-        });
-        self.sent_window_title = sent.then_some(title);
+        let Some(client_id) = self.foreground_client_id else {
+            self.sent_window_title = None;
+            return false;
+        };
+        let sent = self.send_to_client(
+            client_id,
+            ServerMessage::WindowTitle {
+                title: title.clone(),
+            },
+        );
+        self.sent_window_title = sent.then_some((client_id, title));
         sent
     }
 
@@ -5622,6 +5627,42 @@ mod tests {
 
         assert_eq!(
             next_window_title(&control_rx),
+            Some(Some("herd".to_string()))
+        );
+        shutdown_test_runtimes(&mut server);
+    }
+
+    #[test]
+    fn an_attaching_client_gets_the_title_even_when_it_has_not_changed() {
+        let (mut server, first_control_rx) = window_title_test_server();
+        server.app.configure_window_title("{workspace}");
+        server.sync_window_title();
+        assert_eq!(
+            next_window_title(&first_control_rx),
+            Some(Some("herd".to_string()))
+        );
+
+        // ClientConnected assigns the foreground client directly rather than
+        // going through promote_client_to_foreground, so the cache must notice
+        // the new client on its own.
+        let (client_tx, second_control_rx, _render_rx) = test_client_writer();
+        server.clients.insert(
+            2,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                2,
+                RenderEncoding::SemanticFrame,
+                Some(client_tx),
+            ),
+        );
+        server.foreground_client_id = Some(2);
+        server.sync_window_title();
+
+        assert_eq!(
+            next_window_title(&second_control_rx),
             Some(Some("herd".to_string()))
         );
         shutdown_test_runtimes(&mut server);
