@@ -1696,6 +1696,16 @@ impl SshStdioBridge {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok(stream) => {
+                        let stream = match prepare_remote_bridge_stream(stream) {
+                            Ok(stream) => stream,
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "remote bridge failed to prepare client socket"
+                                );
+                                continue;
+                            }
+                        };
                         if let Err(err) = bridge_connection(
                             stream,
                             &target,
@@ -1725,6 +1735,13 @@ impl SshStdioBridge {
             thread: Some(thread),
         })
     }
+}
+
+fn prepare_remote_bridge_stream(
+    mut stream: crate::ipc::LocalStream,
+) -> io::Result<crate::ipc::LocalStream> {
+    crate::ipc::set_local_stream_polling(&mut stream, false)?;
+    Ok(stream)
 }
 
 impl Drop for SshStdioBridge {
@@ -2198,6 +2215,42 @@ mod tests {
         assert_eq!(mode, BRIDGE_SOCKET_PERMISSION_MODE);
 
         drop(bridge);
+        let _ = std::fs::remove_file(socket);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepted_bridge_stream_is_reset_to_blocking() {
+        use std::os::fd::AsRawFd as _;
+
+        fn is_nonblocking(stream: &crate::ipc::LocalStream) -> bool {
+            let fd = match stream {
+                crate::ipc::LocalStream::UdSocket(stream) => stream.inner().as_raw_fd(),
+            };
+            // SAFETY: F_GETFL only reads flags from the live descriptor owned by `stream`.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            assert!(flags >= 0, "fcntl(F_GETFL): {}", io::Error::last_os_error());
+            flags & libc::O_NONBLOCK != 0
+        }
+
+        let socket = std::env::temp_dir().join(format!(
+            "herdr-bridge-blocking-test-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket);
+        let listener = crate::ipc::bind_private_local_listener(&socket).expect("bind listener");
+        let client = crate::ipc::connect_local_stream(&socket).expect("connect client");
+        let mut server = listener.accept().expect("accept client");
+
+        crate::ipc::set_local_stream_polling(&mut server, true)
+            .expect("force the macOS accepted-stream state");
+        assert!(is_nonblocking(&server));
+        let server = prepare_remote_bridge_stream(server).expect("prepare bridge stream");
+        assert!(!is_nonblocking(&server));
+
+        drop(server);
+        drop(client);
+        drop(listener);
         let _ = std::fs::remove_file(socket);
     }
 

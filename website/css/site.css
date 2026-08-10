@@ -20,9 +20,13 @@ html[data-mode="ink"] {
      — saturated blue at low luminance softens the edges of light text, and
      the eye has least acuity there. Draining it to 6% won a side-by-side.
      Colour now lives in the mauve accent, which pops harder against neutral.
-     Contrast: ink 14.7, dim 9.3, faint 5.3 — all above AA. */
+     The greys are drained for the same reason the ground was: violet-tinted
+     text on a violet-tinted ground loses perceived contrast to shared hue,
+     and it crowds the mauve. faint2 is the recessed tier — the old page had
+     two muted steps and collapsing them flattened the card hierarchy.
+     Contrast: ink 14.7, dim 11.2, faint 8.3, faint2 5.6 — all above AA. */
   --bg: #17171a; --panel: #1e1e22; --mass: #26262b;
-  --ink: #eae8ee; --dim: #bdb9c9; --faint: #8e8a98;
+  --ink: #eae8ee; --dim: #cdccd2; --faint: #b0afb6; --faint2: #908f96;
   --line: #26262b; --line2: #35353d;
   --spot: #cba6f7; --spot-ink: #17171a;
   --grid: #202024;
@@ -30,7 +34,7 @@ html[data-mode="ink"] {
 html[data-mode="paper"] {
   --st-done: #2aa198;
   --bg: #efece5; --panel: #e7e3da; --mass: #ddd8cc;
-  --ink: #15140f; --dim: #55534a; --faint: #86826f;
+  --ink: #15140f; --dim: #55534a; --faint: #86826f; --faint2: #928e79;
   --line: #e2ded4; --line2: #cbc5b6;
   --spot: #8839ef; --spot-ink: #fff;
   --grid: #e4e0d6;
@@ -88,7 +92,7 @@ body.site .plugins-page {
   --bg-elevated: var(--panel);
   --ink-soft: var(--dim);
   --muted: var(--faint);
-  --muted-2: var(--faint);
+  --muted-2: var(--faint2);
   --line-strong: var(--line2);
   --accent-soft: color-mix(in srgb, var(--spot) 8%, transparent);
   /* the language is hairline cells in a sheet; nothing here is a rounded box */
@@ -98,7 +102,8 @@ body.site .plugins-page {
 body.site {
   margin: 0; background: var(--bg); color: var(--ink);
   font-family: var(--body); font-size: 14.5px; line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
+  /* no `antialiased`: grayscale smoothing thins light-on-dark glyphs on
+     macOS, and every text tone here is already near its contrast floor */
   background-image:
     linear-gradient(var(--grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
@@ -465,7 +470,7 @@ body.site .ph-side b {
 }
 body.site .ph-side span {
   display: block; margin-top: 10px;
-  color: var(--faint); font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--faint); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
 }
 body.site .ph-side a { display: inline-block; margin-top: 18px; color: var(--spot); text-decoration: none; font-size: 12px; }
 body.site .ph-side a:hover { text-decoration: underline; }
@@ -550,10 +555,14 @@ body.site .plugins-sort:focus { outline: 0; border-color: var(--spot); }
 /* the count sits flush against the frame otherwise */
 body.site .plugins-status { margin-left: auto; padding: 0; white-space: nowrap; }
 body.site .plugins-metabar { border-bottom: 1px solid var(--line); }
+/* Counts and timestamps are data, not labels — the uppercase + wide-tracked
+   micro-type treatment that works for one-word chrome labels destroys word
+   shapes when it carries whole sentences of metadata, which is most of what
+   this page shows. Data rows stay mono but keep their natural case. */
 body.site .plugins-meta,
 body.site .plugins-status {
-  margin: 0; padding: 13px var(--gut); color: var(--faint); font-size: 10.5px;
-  letter-spacing: .18em; text-transform: uppercase;
+  margin: 0; padding: 13px var(--gut); color: var(--faint); font-size: 11.5px;
+  letter-spacing: .04em;
 }
 body.site .plugins-status { border-top: 1px solid var(--line); }
 /* the old page wraps every block in .section, which brings its own vertical
@@ -568,22 +577,24 @@ body.site .plugins-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 14px; padding: 26px var(--gut) 34px;
 }
-/* cards are hairline cells in a sheet, not filled boxes floating on it */
+/* cards are hairline cells in a sheet, but a fully transparent cell puts its
+   text on the same ground as everything around it — a whisper of panel fill
+   gives each cell a surface to read against without rounding it into a box */
 body.site .plugin-card {
   display: flex; flex-direction: column; min-width: 0;
   padding: 20px 22px 22px; text-decoration: none;
-  background: none; border: 1px solid var(--line2); border-radius: 0;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 0;
   text-transform: none; letter-spacing: normal;
 }
 body.site .plugin-card:hover {
-  background: color-mix(in srgb, var(--spot) 5%, transparent); border-color: var(--spot);
+  background: color-mix(in srgb, var(--spot) 6%, var(--panel)); border-color: var(--spot);
 }
 body.site .plugin-card-head { display: flex; align-items: baseline; gap: 12px; }
 body.site .plugin-title { min-width: 0; font-size: 15px; letter-spacing: -.01em; }
 body.site .plugin-owner { color: var(--faint); }
 body.site .plugin-name { color: var(--ink); font-weight: 500; }
 body.site .plugin-card:hover .plugin-name { color: var(--spot); }
-body.site .plugin-go { margin-left: auto; color: var(--faint); font-size: 14px; }
+body.site .plugin-go { margin-left: auto; color: var(--faint2); font-size: 14px; }
 body.site .plugin-card:hover .plugin-go { color: var(--spot); }
 /* clamp to two lines so every cell has the same shape — the feed's own
    ellipsis truncated at a character count, which made the rows ragged */
@@ -596,12 +607,12 @@ body.site .plugin-desc {
 body.site .plugin-meta-row {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   margin-top: auto; padding-top: 18px;
-  color: var(--faint); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint); font-size: 12px; letter-spacing: .02em;
 }
 body.site .plugin-stat { display: flex; align-items: center; gap: 7px; }
 body.site .plugin-star { color: var(--spot); }
 body.site .plugin-lang-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-body.site .plugin-updated { margin-left: auto; }
+body.site .plugin-updated { margin-left: auto; color: var(--faint2); }
 /* .plugins-more is the button, not a wrapper — given section padding it
    inflated into a floating slab. It's the foot of a long list, so make it the
    full-width row a list foot should be rather than a box parked in the middle. */
@@ -1033,5 +1044,5 @@ body.site .prose { font-size: 16px; line-height: 1.75; }
 body.site .prose code, body.site .prose pre { font-size: 13.5px; }
 body.site .toc a { font-family: var(--body); font-size: 13px; line-height: 1.5; }
 body.site .plugins-trust { font-size: 13.5px; line-height: 1.7; }
-body.site .plugin-desc { font-size: 14px; line-height: 1.6; min-height: calc(2 * 1.6em); }
-body.site .plugin-title { font-size: 14.5px; }
+body.site .plugin-desc { font-size: 14.5px; line-height: 1.6; min-height: calc(2 * 1.6em); }
+body.site .plugin-title { font-size: 15px; }

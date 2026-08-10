@@ -4,12 +4,17 @@
 test:
     cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
     python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    just ui-hot-path-architecture-test
     just integration-assets-test
     just plugin-marketplace-test
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
     cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
+
+# Enforce deterministic UI hot-path architecture boundaries
+ui-hot-path-architecture-test:
+    python3 -m unittest scripts.test_ui_hot_path_architecture
 
 # Run fast local lint checks
 [unix]
@@ -26,6 +31,7 @@ lint:
 [unix]
 ci filter='all()': lint
     cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
+    just ui-hot-path-architecture-test
     just integration-assets-test
     just plugin-marketplace-test
 
@@ -57,6 +63,10 @@ install-hooks:
 build:
     cargo build --release --locked
 
+# Non-gating full-render scaling profile for background workspaces and active panes
+bench-render-scale:
+    cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1
+
 # Build the website and documentation
 website-build:
     cd website && bun install --frozen-lockfile && bun run build
@@ -65,6 +75,7 @@ website-build:
 integration-assets-test:
     bun test src/integration/assets/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-agent-state.test.ts
+    bun test src/integration/assets/opencode/herdr-tui-session.test.ts
 
 # Run plugin marketplace Worker tests
 plugin-marketplace-test:
@@ -113,6 +124,12 @@ release-docs-check:
     just website-build
     cd website && bun run build:draft
 
+# Validate release docs and review full-render scaling before release preparation
+pre-release-check:
+    just release-docs-check
+    just bench-render-scale
+    @echo "release review required: investigate material render-scaling regressions before publishing."
+
 # Prepare the release commit without tagging or pushing (usage: just release-prepare 0.1.1)
 release-prepare version:
     @printf '%s\n' '{{version}}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { \
@@ -128,7 +145,7 @@ release-prepare version:
         echo "error: tag v{{version}} already exists"; \
         exit 1; \
     fi
-    just release-docs-check
+    just pre-release-check
     python3 scripts/changelog.py prepare --version {{version}}
     cp CHANGELOG.md docs/next/CHANGELOG.md
     sed -i.bak 's/^version = ".*"/version = "{{version}}"/' Cargo.toml && rm -f Cargo.toml.bak

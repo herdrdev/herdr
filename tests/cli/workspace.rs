@@ -497,6 +497,33 @@ new_tabb = "ctrl+t"
 }
 
 #[test]
+fn config_check_reports_unknown_theme_names() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let config_dir = config_home.join(app_dir_name());
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.toml"),
+        "[theme]\nname = \"catppucin\"\n",
+    )
+    .unwrap();
+
+    let checked = run_named_cli(&config_home, &runtime_dir, &["config", "check"]);
+
+    assert_eq!(checked.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&checked.stdout);
+    assert!(stdout.contains("config: issues found"), "{stdout}");
+    assert!(
+        stdout.contains("unknown theme name theme.name = \"catppucin\"; using \"catppuccin\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("valid themes: catppuccin"), "{stdout}");
+
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn config_check_reports_unreadable_config_path() {
     let base = unique_test_dir();
     let config_home = base.join("config");

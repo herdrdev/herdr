@@ -114,6 +114,37 @@ test("suppresses redundant same-session updates", async () => {
   expect(requests.map(requestSessionID)).toEqual(["root-session", "replacement-session"]);
 });
 
+test("does not classify server activity in another root session as a selection", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin["chat.message"]({ sessionID: "visible-session" });
+  await plugin["chat.message"]({ sessionID: "attached-client-session" });
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.report_agent",
+    "pane.report_agent",
+  ]);
+  expect(requests.map(requestSessionID)).toEqual([
+    "visible-session",
+    "attached-client-session",
+  ]);
+});
+
+test("does not classify server-global root creation as a local selection", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: { type: "session.created", properties: { sessionID: "attached-session" } },
+  });
+  await plugin.event({
+    event: { type: "session.updated", properties: { sessionID: "attached-session" } },
+  });
+  await plugin["chat.message"]({ sessionID: "attached-session" });
+
+  expect(requests.map(requestMethod)).toEqual(["pane.report_agent"]);
+  expect(requests.map(requestSessionID)).toEqual(["attached-session"]);
+});
+
 test("reports retry status as working", async () => {
   const plugin = await loadPlugin();
 

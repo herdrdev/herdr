@@ -392,6 +392,18 @@
           "description": "Select the next tab."
         },
         {
+          "key": "keys.move_tab_previous",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the active tab one position toward the front. Unset by default."
+        },
+        {
+          "key": "keys.move_tab_next",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the active tab one position toward the back. Unset by default."
+        },
+        {
           "key": "keys.switch_tab",
           "type": "keybinding",
           "default": "\"prefix+1..9\"",
@@ -522,6 +534,30 @@
           "type": "keybinding",
           "default": "\"prefix+r\"",
           "description": "Enter resize mode."
+        },
+        {
+          "key": "keys.resize_pane_left",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the left. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_down",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane downward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_up",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane upward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_right",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the right. Unset by default."
         },
         {
           "key": "keys.toggle_sidebar",
@@ -659,6 +695,12 @@
           "description": "Draw borders around split panes."
         },
         {
+          "key": "ui.pane_outer_borders",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw borders along the outside edge of the pane area. Disable with pane gaps disabled for tmux-style internal splitters without an outside frame."
+        },
+        {
           "key": "ui.pane_scrollbars",
           "type": "boolean",
           "default": "true",
@@ -691,6 +733,25 @@
             "top",
             "bottom"
           ]
+        },
+        {
+          "key": "ui.tab_bar_right",
+          "type": "array",
+          "default": "[]",
+          "description": "Configure ordered right-aligned tab bar entries. Supported types are zoom, hostname, datetime, text, and command.",
+          "values": [
+            "zoom",
+            "hostname",
+            "datetime",
+            "text",
+            "command"
+          ]
+        },
+        {
+          "key": "ui.tab_bar_right_separator",
+          "type": "string",
+          "default": "\" \"",
+          "description": "Text inserted between visible right-aligned tab bar entries."
         },
         {
           "key": "ui.agent_panel_sort",
