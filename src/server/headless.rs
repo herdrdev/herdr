@@ -3579,7 +3579,7 @@ impl HeadlessServer {
         for (client_id, (cols, rows), cell_size, is_foreground, mode) in render_targets {
             let area = Rect::new(0, 0, cols, rows);
             let is_app_client = matches!(mode, ClientConnectionMode::App);
-            let mut frame = match mode {
+            let (mut frame, projected_bracketed_paste) = match mode {
                 ClientConnectionMode::App => {
                     let render_started = crate::render_prof::timer();
                     let render_cell_size =
@@ -3616,7 +3616,7 @@ impl HeadlessServer {
                         &hyperlinks,
                     );
                     crate::render_prof::duration_since("full_render.frame_build", frame_started);
-                    frame
+                    (frame, None)
                 }
                 ClientConnectionMode::TerminalAttach { terminal_id }
                 | ClientConnectionMode::TerminalObserve { terminal_id } => {
@@ -3632,6 +3632,12 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     };
+                    let projected_bracketed_paste = Some(
+                        runtime
+                            .input_state()
+                            .map(|state| state.bracketed_paste)
+                            .unwrap_or(false),
+                    );
                     let render_started = crate::render_prof::timer();
                     let (buffer, cursor) =
                         crate::server::render_stream::render_terminal_virtual(runtime, area);
@@ -3652,7 +3658,7 @@ impl HeadlessServer {
                         &hyperlinks,
                     );
                     crate::render_prof::duration_since("full_render.frame_build", frame_started);
-                    frame
+                    (frame, projected_bracketed_paste)
                 }
             };
 
@@ -3704,7 +3710,10 @@ impl HeadlessServer {
             };
             let has_graphics = !frame.graphics.is_empty();
             let prepare_started = crate::render_prof::timer();
-            let Some(mut prepared) = client.render_state.prepare_frame(frame, None) else {
+            let Some(mut prepared) = client
+                .render_state
+                .prepare_frame(frame, projected_bracketed_paste)
+            else {
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
                 crate::render_prof::duration_since("full_render.prepare_frame", prepare_started);
@@ -5109,14 +5118,27 @@ next_tab = ""
     }
 
     fn connect_pending_terminal_client(server: &mut HeadlessServer, client_id: u64) {
-        let _control_rx = connect_pending_terminal_client_with_control_rx(server, client_id);
+        let (_control_rx, _render_rx) =
+            connect_pending_terminal_client_with_receivers(server, client_id);
     }
 
     fn connect_pending_terminal_client_with_control_rx(
         server: &mut HeadlessServer,
         client_id: u64,
     ) -> std::sync::mpsc::Receiver<Vec<u8>> {
-        let (writer, control_rx, _render_rx) = test_client_writer();
+        let (control_rx, _render_rx) =
+            connect_pending_terminal_client_with_receivers(server, client_id);
+        control_rx
+    }
+
+    fn connect_pending_terminal_client_with_receivers(
+        server: &mut HeadlessServer,
+        client_id: u64,
+    ) -> (
+        std::sync::mpsc::Receiver<Vec<u8>>,
+        std::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let (writer, control_rx, render_rx) = test_client_writer();
         assert!(server.handle_server_event(ServerEvent::ClientConnected {
             client_id,
             cols: 100,
@@ -5128,7 +5150,7 @@ next_tab = ""
             direct_attach_requested: true,
             writer,
         }));
-        control_rx
+        (control_rx, render_rx)
     }
 
     #[test]
@@ -5189,6 +5211,82 @@ next_tab = ""
                 Some(ClientConnectionMode::TerminalObserve { terminal_id: observed })
                     if observed == &terminal_id.to_string()
             ));
+        });
+    }
+
+    #[test]
+    fn direct_terminal_frames_project_child_bracketed_paste_mode() {
+        with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
+            let (_control_rx, render_rx) =
+                connect_pending_terminal_client_with_receivers(server, 7);
+            assert!(
+                server.handle_server_event(ServerEvent::ClientControlTerminal {
+                    client_id: 7,
+                    target: terminal_id_string,
+                    takeover: false,
+                })
+            );
+
+            server.render_and_stream();
+            let disabled = match read_server_message(
+                render_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("initial direct frame"),
+            ) {
+                ServerMessage::Terminal(frame) => frame,
+                other => panic!("expected terminal frame, got {other:?}"),
+            };
+            assert!(disabled.full);
+            assert!(disabled
+                .bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|window| window == b"\x1b[?2004l"));
+
+            server
+                .app
+                .terminal_runtimes
+                .get(&terminal_id)
+                .expect("runtime")
+                .test_process_pty_bytes(b"\x1b[?2004h");
+            server.render_and_stream();
+            let enabled = match read_server_message(
+                render_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("mode-only direct frame"),
+            ) {
+                ServerMessage::Terminal(frame) => frame,
+                other => panic!("expected terminal frame, got {other:?}"),
+            };
+            assert!(!enabled.full);
+            assert_eq!(enabled.seq, disabled.seq + 1);
+            assert!(enabled
+                .bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|window| window == b"\x1b[?2004h"));
+
+            server.render_and_stream();
+            assert!(render_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+            server
+                .clients
+                .get_mut(&7)
+                .expect("direct client")
+                .render_state
+                .reset_baseline();
+            server.render_and_stream();
+            let reset = match read_server_message(
+                render_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("reset direct frame"),
+            ) {
+                ServerMessage::Terminal(frame) => frame,
+                other => panic!("expected terminal frame, got {other:?}"),
+            };
+            assert!(reset.full);
+            assert!(reset
+                .bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|window| window == b"\x1b[?2004h"));
         });
     }
 
@@ -7724,6 +7822,72 @@ next_tab = ""
             ServerMessage::ReloadSoundConfig
         ));
         assert!(client_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    }
+
+    #[test]
+    fn deferred_direct_terminal_render_retries_uncommitted_mode_projection() {
+        with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
+            server
+                .app
+                .terminal_runtimes
+                .get(&terminal_id)
+                .expect("runtime")
+                .test_process_pty_bytes(b"\x1b[?2004h");
+
+            let (writer, _control_rx, render_rx) = test_client_writer();
+            let queued = HeadlessServer::frame_server_message(&ServerMessage::ReloadSoundConfig)
+                .expect("serialize dummy message");
+            writer
+                .render
+                .try_send(queued)
+                .expect("pre-fill render queue");
+            assert!(server.handle_server_event(ServerEvent::ClientConnected {
+                client_id: 7,
+                cols: 100,
+                rows: 30,
+                cell_width_px: 0,
+                cell_height_px: 0,
+                render_encoding: RenderEncoding::TerminalAnsi,
+                keybindings: None,
+                direct_attach_requested: true,
+                writer,
+            }));
+            assert!(
+                server.handle_server_event(ServerEvent::ClientControlTerminal {
+                    client_id: 7,
+                    target: terminal_id_string,
+                    takeover: false,
+                })
+            );
+
+            server.render_and_stream();
+            assert_eq!(server.clients[&7].render_state.terminal_seq(), Some(0));
+            assert_eq!(server.clients[&7].deferred_render(), DeferredRender::Full);
+            assert!(matches!(
+                read_server_message(
+                    render_rx
+                        .recv_timeout(Duration::from_millis(100))
+                        .expect("queued message")
+                ),
+                ServerMessage::ReloadSoundConfig
+            ));
+
+            assert!(server.handle_server_event(ServerEvent::ClientWriterDrained { client_id: 7 }));
+            server.render_and_stream();
+            let retried = match read_server_message(
+                render_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("retried direct frame"),
+            ) {
+                ServerMessage::Terminal(frame) => frame,
+                other => panic!("expected terminal frame, got {other:?}"),
+            };
+            assert_eq!(retried.seq, 1);
+            assert!(retried
+                .bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|window| window == b"\x1b[?2004h"));
+        });
     }
 
     #[test]
