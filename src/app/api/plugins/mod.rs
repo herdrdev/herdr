@@ -1076,6 +1076,7 @@ command = ["echo", " a", "first "]
                 enabled: true,
                 source: Some(PluginSourceInfo {
                     kind: PluginSourceKind::Github,
+                    host: None,
                     owner: Some("ogulcancelik".into()),
                     repo: Some("herdr-plugin-examples".into()),
                     subdir: Some("worktree-bootstrap".into()),

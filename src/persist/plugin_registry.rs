@@ -226,6 +226,7 @@ mod tests {
         entry.enabled = false;
         entry.source = crate::api::schema::PluginSourceInfo {
             kind: crate::api::schema::PluginSourceKind::Github,
+            host: None,
             owner: Some("ogulcancelik".into()),
             repo: Some("herdr-plugin-examples".into()),
             subdir: Some("worktree-bootstrap".into()),

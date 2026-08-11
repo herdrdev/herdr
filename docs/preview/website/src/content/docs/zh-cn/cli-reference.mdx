@@ -366,13 +366,14 @@ herdr integration status [--outdated-only]
 
 ```bash
 herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]
+herdr plugin install https://<host>/<owner>/<repo>[/subdir...] [--ref REF] [--yes]
 herdr plugin list [--plugin ID] [--json]
-herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>
+herdr plugin uninstall <plugin_id|owner/repo[/subdir...]|url>
 herdr plugin enable <plugin_id>
 herdr plugin disable <plugin_id>
 ```
 
-`plugin install` 只接受 GitHub 简写,比如 `ogulcancelik/herdr-plugin-examples/worktree-bootstrap`。它使用 `git`,在交互式终端显示信任预览,运行受支持的清单构建命令,并把 GitHub 安装保存在 Herdr 管理的目录中。非交互式安装用 `--yes`。重新安装 GitHub 管理的插件会替换该托管检出。不允许覆盖安装到本地链接的插件之上。插件清单必须声明 `min_herdr_version`;当插件要求更新的 Herdr 二进制时,install 和 link 会失败。`plugin list` 默认是人类可读的;要原始 API 响应就传 `--json`。
+`plugin install` 接受 GitHub 简写,比如 `ogulcancelik/herdr-plugin-examples/worktree-bootstrap`,也接受 `https://host/owner/repo[/subdir...]` 形式的 URL,用于任何采用相同路径结构的 git 服务器(如 Forgejo、Gitea、GitLab)。它使用 `git`,在交互式终端显示信任预览,运行受支持的清单构建命令,并把远程安装保存在 Herdr 管理的目录中。非交互式安装用 `--yes`。重新安装受管理的插件会替换该托管检出。不允许覆盖安装到本地链接的插件之上。插件清单必须声明 `min_herdr_version`;当插件要求更新的 Herdr 二进制时,install 和 link 会失败。`plugin list` 默认是人类可读的;要原始 API 响应就传 `--json`。
 
 本地开发:
 

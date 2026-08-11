@@ -190,10 +190,12 @@ herdr plugin pane open --plugin example.layout --entrypoint board
 herdr plugin log list --plugin example.layout
 ```
 
-`plugin install` は `owner/repo/subdir` のような GitHub 省略記法のみを受け付けます。
+`plugin install` は `owner/repo/subdir` のような GitHub 省略記法に加えて、
+Forgejo、Gitea、GitLab など同じパス構成の git サーバー上のプラグインを指す
+`https://host/owner/repo[/subdir...]` 形式の URL も受け付けます。
 `git` でクローンし、対話的なターミナルではプレビューを表示し、サポートされる
 ビルドコマンドを実行し、チェックアウトを Herdr 管理のプラグインデータの下に保存して
-登録します。非対話的なインストールには `--yes` を使ってください。GitHub 管理の
+登録します。非対話的なインストールには `--yes` を使ってください。管理された
 プラグインを再インストールすると、その管理チェックアウトが置き換えられます。
 インストール済みおよびリンク済みのプラグインと、その有効・無効の状態は現在の
 ユーザー全体で共有され、すべての Herdr セッションから利用できます。Herdr サーバーが
@@ -206,11 +208,11 @@ Herdr 0.7.3 の名前付きセッションだけにインストールしたプ�
 `plugin config-dir <id>` はセットアップドキュメントやシェルスクリプト向けに
 設定ディレクトリを表示します。
 
-`plugin uninstall <id-or-source>` はプラグインの登録を解除します。GitHub 管理の
+`plugin uninstall <id-or-source>` はプラグインの登録を解除します。管理された
 インストールでは管理チェックアウトも削除し、プラグイン id と、install で使うのと
-同じ `owner/repo[/subdir...]` 省略記法の両方を受け付けます。`plugin unlink <id>` は
+同じ `owner/repo[/subdir...]` 省略記法または URL を受け付けます。`plugin unlink <id>` は
 登録解除のみを行いファイルには触れないため、ローカル開発に便利です。v1 に独立した
-`plugin update` はありません。管理プラグインを更新するには GitHub から
+`plugin update` はありません。管理プラグインを更新するにはインストール元から
 再インストールしてください。
 
 サンプル集のリポジトリは `ogulcancelik/herdr-plugin-examples` です。
@@ -220,7 +222,7 @@ Herdr 0.7.3 の名前付きセッションだけにインストールしたプ�
 
 ## ビルドコマンド
 
-ビルドコマンドは GitHub からの `plugin install` 中、確認の後、Herdr がプラグインを
+ビルドコマンドはリモートからの `plugin install` 中、確認の後、Herdr がプラグインを
 登録する前に実行されます。ビルドコマンドが失敗するとインストールは中止され、
 プラグインは登録されません。`plugin link` はビルドコマンドを実行しません。
 ローカルの作者は自分で作業ツリーをビルドします。ビルドコマンドはファイルを生成して

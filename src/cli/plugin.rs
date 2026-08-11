@@ -153,7 +153,9 @@ fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_install(args: &[String]) -> std::io::Result<i32> {
     let Some(source_arg) = args.first() else {
-        eprintln!("usage: herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
+        eprintln!(
+            "usage: herdr plugin install <owner>/<repo>[/subdir...] | https://<host>/<owner>/<repo>[/subdir...] [--ref REF] [--yes]"
+        );
         return Ok(2);
     };
     let source = match GithubPluginSource::parse(source_arg) {
@@ -712,6 +714,7 @@ fn normalize_plugin_path_arg(value: &str) -> std::io::Result<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GithubPluginSource {
+    host: Option<String>,
     owner: String,
     repo: String,
     subdir: Option<String>,
@@ -719,22 +722,51 @@ struct GithubPluginSource {
 
 impl GithubPluginSource {
     fn parse(value: &str) -> Result<Self, String> {
-        if value.starts_with("http://")
-            || value.starts_with("https://")
-            || value.starts_with("git@")
-            || value.contains(':')
-        {
-            return Err("plugin install v1 accepts only owner/repo[/subdir] shorthand".into());
+        if let Some(rest) = value.strip_prefix("https://") {
+            return Self::parse_url(rest);
+        }
+        if value.starts_with("http://") {
+            return Err("plugin install accepts https:// URLs only".into());
+        }
+        if value.starts_with("git@") || value.contains(':') {
+            return Err(
+                "plugin install accepts owner/repo[/subdir] shorthand (GitHub) or an https://host/owner/repo[/subdir] URL"
+                    .into(),
+            );
         }
         let parts = value.split('/').collect::<Vec<_>>();
         if parts.len() < 2 {
             return Err("usage: herdr plugin install <owner>/<repo>[/subdir...]".into());
         }
-        let owner = parts[0];
-        let repo = parts[1];
+        Self::from_parts(None, parts[0], parts[1], &parts[2..])
+    }
+
+    fn parse_url(value: &str) -> Result<Self, String> {
+        let parts = value.split('/').collect::<Vec<_>>();
+        if parts.len() < 3 {
+            return Err(
+                "usage: herdr plugin install https://<host>/<owner>/<repo>[/subdir...]".into(),
+            );
+        }
+        let host = parts[0];
+        validate_host_segment(host)?;
+        let repo = parts[2].strip_suffix(".git").unwrap_or(parts[2]);
+        let host = if host.eq_ignore_ascii_case("github.com") {
+            None
+        } else {
+            Some(host)
+        };
+        Self::from_parts(host, parts[1], repo, &parts[3..])
+    }
+
+    fn from_parts(
+        host: Option<&str>,
+        owner: &str,
+        repo: &str,
+        subdir_parts: &[&str],
+    ) -> Result<Self, String> {
         validate_github_segment("owner", owner)?;
         validate_github_segment("repo", repo)?;
-        let subdir_parts = &parts[2..];
         for part in subdir_parts {
             validate_subdir_segment(part)?;
         }
@@ -744,21 +776,31 @@ impl GithubPluginSource {
             Some(subdir_parts.join("/"))
         };
         Ok(Self {
+            host: host.map(str::to_string),
             owner: owner.to_string(),
             repo: repo.to_string(),
             subdir,
         })
     }
 
+    fn host(&self) -> &str {
+        self.host.as_deref().unwrap_or("github.com")
+    }
+
     fn remote_url(&self) -> String {
-        format!("https://github.com/{}/{}.git", self.owner, self.repo)
+        format!("https://{}/{}/{}.git", self.host(), self.owner, self.repo)
     }
 
     fn display(&self) -> String {
-        match &self.subdir {
-            Some(subdir) => format!("{}/{}/{}", self.owner, self.repo, subdir),
+        let mut display = match &self.host {
+            Some(host) => format!("{}/{}/{}", host, self.owner, self.repo),
             None => format!("{}/{}", self.owner, self.repo),
+        };
+        if let Some(subdir) = &self.subdir {
+            display.push('/');
+            display.push_str(subdir);
         }
+        display
     }
 
     fn manifest_root(&self, checkout: &Path) -> PathBuf {
@@ -777,6 +819,7 @@ impl GithubPluginSource {
     ) -> PluginSourceInfo {
         PluginSourceInfo {
             kind: PluginSourceKind::Github,
+            host: self.host.clone(),
             owner: Some(self.owner.clone()),
             repo: Some(self.repo.clone()),
             subdir: self.subdir.clone(),
@@ -797,7 +840,7 @@ fn ensure_replacement_allowed(
     };
     if existing.source.kind != PluginSourceKind::Github {
         return Err(std::io::Error::other(format!(
-            "plugin {} is already linked from a local path; uninstall/unlink it before installing from GitHub",
+            "plugin {} is already linked from a local path; uninstall/unlink it before installing from a git host",
             plugin.plugin_id
         )));
     }
@@ -818,6 +861,26 @@ fn validate_github_segment(label: &str, value: &str) -> Result<(), String> {
         return Err(format!(
             "GitHub {label} contains invalid characters: {value}"
         ));
+    }
+    Ok(())
+}
+
+fn validate_host_segment(value: &str) -> Result<(), String> {
+    let (name, port) = match value.split_once(':') {
+        Some((name, port)) => (name, Some(port)),
+        None => (value, None),
+    };
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.'))
+    {
+        return Err(format!("invalid git host: {value}"));
+    }
+    if let Some(port) = port {
+        if port.is_empty() || !port.chars().all(|ch| ch.is_ascii_digit()) {
+            return Err(format!("invalid git host port: {value}"));
+        }
     }
     Ok(())
 }
@@ -1091,6 +1154,7 @@ fn plugin_by_github_source(
 
 fn plugin_matches_github_source(plugin: &InstalledPluginInfo, source: &GithubPluginSource) -> bool {
     plugin.source.kind == PluginSourceKind::Github
+        && plugin.source.host.as_deref() == source.host.as_deref()
         && plugin.source.owner.as_deref() == Some(source.owner.as_str())
         && plugin.source.repo.as_deref() == Some(source.repo.as_str())
         && plugin.source.subdir.as_deref() == source.subdir.as_deref()
@@ -1704,6 +1768,7 @@ mod tests {
             link_handlers: vec![],
             source: PluginSourceInfo {
                 kind: PluginSourceKind::Github,
+                host: None,
                 owner: Some(owner.to_string()),
                 repo: Some(repo.to_string()),
                 subdir: subdir.map(str::to_string),
@@ -1741,8 +1806,12 @@ mod tests {
     #[test]
     fn github_plugin_source_rejects_non_shorthand_sources() {
         for source in [
-            "https://github.com/ogulcancelik/herdr-plugin-examples",
             "git@github.com:ogulcancelik/herdr-plugin-examples.git",
+            "http://git.example.com/ogulcancelik/herdr-plugin-examples",
+            "https://git.example.com/ogulcancelik",
+            "https://bad_host/ogulcancelik/herdr-plugin-examples",
+            "https://git.example.com:notaport/ogulcancelik/herdr-plugin-examples",
+            "https://git.example.com/ogulcancelik/herdr-plugin-examples/../bad",
             "ogulcancelik",
             "ogulcancelik/herdr-plugin-examples/../bad",
             "ogulcancelik/herdr-plugin-examples//bad",
@@ -1752,6 +1821,74 @@ mod tests {
                 "{source} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn plugin_source_parses_https_url_with_host() {
+        let source =
+            GithubPluginSource::parse("https://git.example.com/ogulcancelik/herdr-plugin-examples")
+                .unwrap();
+        assert_eq!(source.host.as_deref(), Some("git.example.com"));
+        assert_eq!(source.owner, "ogulcancelik");
+        assert_eq!(source.repo, "herdr-plugin-examples");
+        assert_eq!(source.subdir, None);
+        assert_eq!(
+            source.remote_url(),
+            "https://git.example.com/ogulcancelik/herdr-plugin-examples.git"
+        );
+    }
+
+    #[test]
+    fn plugin_source_parses_https_url_with_port_git_suffix_and_subdir() {
+        let source = GithubPluginSource::parse(
+            "https://git.example.com:3000/ogulcancelik/herdr-plugin-examples.git/worktree-bootstrap",
+        )
+        .unwrap();
+        assert_eq!(source.host.as_deref(), Some("git.example.com:3000"));
+        assert_eq!(source.repo, "herdr-plugin-examples");
+        assert_eq!(source.subdir.as_deref(), Some("worktree-bootstrap"));
+        assert_eq!(
+            source.remote_url(),
+            "https://git.example.com:3000/ogulcancelik/herdr-plugin-examples.git"
+        );
+    }
+
+    #[test]
+    fn plugin_source_normalizes_github_url_to_shorthand() {
+        let url = GithubPluginSource::parse(
+            "https://github.com/ogulcancelik/herdr-plugin-examples/worktree-bootstrap",
+        )
+        .unwrap();
+        let shorthand =
+            GithubPluginSource::parse("ogulcancelik/herdr-plugin-examples/worktree-bootstrap")
+                .unwrap();
+        assert_eq!(url, shorthand);
+        assert_eq!(url.host, None);
+    }
+
+    #[test]
+    fn source_lookup_requires_matching_host() {
+        let github_target =
+            GithubPluginSource::parse("ogulcancelik/herdr-plugin-examples").unwrap();
+        let forge_target =
+            GithubPluginSource::parse("https://git.example.com/ogulcancelik/herdr-plugin-examples")
+                .unwrap();
+
+        let mut forge_install = github_plugin(
+            "examples.forge",
+            "ogulcancelik",
+            "herdr-plugin-examples",
+            None,
+        );
+        forge_install.source.host = Some("git.example.com".to_string());
+
+        assert!(plugin_by_github_source([forge_install.clone()], &github_target).is_none());
+        assert_eq!(
+            plugin_by_github_source([forge_install], &forge_target)
+                .unwrap()
+                .plugin_id,
+            "examples.forge"
+        );
     }
 
     #[test]

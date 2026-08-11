@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `plugin install` and `plugin uninstall` now accept `https://host/owner/repo[/subdir...]` URLs, so plugins can be installed from any https git host with the GitHub path layout — Forgejo, Gitea, GitLab, or self-hosted — and pinned with `--ref` exactly like GitHub installs.
 - Herdr now keeps the outer terminal window title in sync with the session through `ui.window_title`, so window managers and terminal tab bars show the active workspace and the host the panes actually run on.
 - The desktop tab bar now has configurable right-aligned status entries for zoom state, hostname, date/time, literal text, and asynchronously refreshed command output.
 - Optional `keys.move_tab_previous` and `keys.move_tab_next` bindings now reorder the active tab in place, wrapping at either end.

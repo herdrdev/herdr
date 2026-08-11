@@ -366,13 +366,14 @@ herdr integration status [--outdated-only]
 
 ```bash
 herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]
+herdr plugin install https://<host>/<owner>/<repo>[/subdir...] [--ref REF] [--yes]
 herdr plugin list [--plugin ID] [--json]
-herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>
+herdr plugin uninstall <plugin_id|owner/repo[/subdir...]|url>
 herdr plugin enable <plugin_id>
 herdr plugin disable <plugin_id>
 ```
 
-`plugin install` は `ogulcancelik/herdr-plugin-examples/worktree-bootstrap` のような GitHub 省略記法のみを受け付けます。`git` を使い、対話的なターミナルでは信頼プレビューを表示し、サポートされるマニフェストのビルドコマンドを実行し、GitHub インストールを Herdr 管理のディレクトリに保存します。非対話的なインストールには `--yes` を使ってください。GitHub 管理プラグインの再インストールは、その管理チェックアウトを置き換えます。ローカルにリンクされたプラグインへの上書きインストールは拒否されます。プラグインのマニフェストは `min_herdr_version` を宣言しなければならず、プラグインがより新しい Herdr バイナリを要求する場合、install と link は失敗します。`plugin list` はデフォルトで人間可読です。生の API レスポンスが欲しいときは `--json` を渡してください。
+`plugin install` は `ogulcancelik/herdr-plugin-examples/worktree-bootstrap` のような GitHub 省略記法に加えて、Forgejo、Gitea、GitLab など同じパス構成の git サーバーを指す `https://host/owner/repo[/subdir...]` 形式の URL も受け付けます。`git` を使い、対話的なターミナルでは信頼プレビューを表示し、サポートされるマニフェストのビルドコマンドを実行し、リモートインストールを Herdr 管理のディレクトリに保存します。非対話的なインストールには `--yes` を使ってください。管理プラグインの再インストールは、その管理チェックアウトを置き換えます。ローカルにリンクされたプラグインへの上書きインストールは拒否されます。プラグインのマニフェストは `min_herdr_version` を宣言しなければならず、プラグインがより新しい Herdr バイナリを要求する場合、install と link は失敗します。`plugin list` はデフォルトで人間可読です。生の API レスポンスが欲しいときは `--json` を渡してください。
 
 ローカル開発:
 

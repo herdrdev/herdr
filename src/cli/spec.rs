@@ -771,8 +771,11 @@ fn plugin_command() -> Command {
         .about("Install and run workflow plugins")
         .subcommand(
             Command::new("install")
-                .about("Install a plugin from GitHub")
-                .arg(required("source", "OWNER/REPO[/SUBDIR]"))
+                .about("Install a plugin from GitHub or any https git host")
+                .arg(required(
+                    "source",
+                    "OWNER/REPO[/SUBDIR] | https://HOST/OWNER/REPO[/SUBDIR]",
+                ))
                 .arg(option("ref", "REF"))
                 .arg(
                     Arg::new("yes")

@@ -174,10 +174,12 @@ herdr plugin pane open --plugin example.layout --entrypoint board
 herdr plugin log list --plugin example.layout
 ```
 
-`plugin install` 只接受 GitHub 简写,比如 `owner/repo/subdir`。它用 `git`
+`plugin install` 接受 GitHub 简写,比如 `owner/repo/subdir`,也接受
+`https://host/owner/repo[/subdir...]` 形式的 URL,用于托管在任何采用相同
+路径结构的 git 服务器(如 Forgejo、Gitea、GitLab)上的插件。它用 `git`
 克隆,在交互式终端展示预览,运行受支持的构建命令,然后把检出保存到
-Herdr 管理的插件数据下并注册。非交互式安装用 `--yes`。重新安装 GitHub
-管理的插件会替换该托管检出。已安装和已链接的插件及其启用状态对当前用户
+Herdr 管理的插件数据下并注册。非交互式安装用 `--yes`。重新安装受管理的
+插件会替换该托管检出。已安装和已链接的插件及其启用状态对当前用户
 全局生效,可在所有 Herdr 会话中使用。即使 Herdr 服务器没有运行,也可以通过
 `plugin install` 和 `plugin link` 注册插件。仅安装在 Herdr 0.7.3 命名会话中的
 插件必须重新 install 或 link;现有的插件配置和状态会保留。
@@ -186,11 +188,11 @@ Herdr 管理的插件数据下并注册。非交互式安装用 `--yes`。重新
 插件的配置和状态目录,`plugin config-dir <id>` 打印配置目录,方便安装
 文档和 shell 脚本使用。
 
-`plugin uninstall <id-or-source>` 注销插件。对 GitHub 管理的安装,它还会
-删除托管检出,并且既接受插件 id,也接受与 install 相同的
-`owner/repo[/subdir...]` 简写。`plugin unlink <id>` 只注销插件、不动文件,
+`plugin uninstall <id-or-source>` 注销插件。对受管理的安装,它还会
+删除托管检出,并且接受插件 id,也接受与 install 相同的
+`owner/repo[/subdir...]` 简写或 URL。`plugin unlink <id>` 只注销插件、不动文件,
 对本地开发很有用。v1 没有单独的 `plugin update`;要刷新托管插件,请从
-GitHub 重新安装。
+安装来源重新安装。
 
 示例菜谱仓库是 `ogulcancelik/herdr-plugin-examples`。它在子目录中包含
 多个独立示例插件,包括 `agent-telegram-notify`、`github-link-preview` 和
@@ -198,7 +200,7 @@ GitHub 重新安装。
 
 ## 构建命令
 
-构建命令在 GitHub `plugin install` 过程中运行,时机在确认之后、Herdr
+构建命令在远程 `plugin install` 过程中运行,时机在确认之后、Herdr
 注册插件之前。如果构建命令失败,安装中止,插件不会被注册。`plugin link`
 不运行构建命令;本地作者自己构建工作树。构建命令可以生成文件,但在
 安装预览之后修改 `herdr-plugin.toml` 会导致安装中止。构建失败时会显示

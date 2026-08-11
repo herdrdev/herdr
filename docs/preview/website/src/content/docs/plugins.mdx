@@ -189,11 +189,13 @@ herdr plugin pane open --plugin example.layout --entrypoint board
 herdr plugin log list --plugin example.layout
 ```
 
-`plugin install` accepts GitHub shorthand only, such as
-`owner/repo/subdir`. It clones with `git`, shows a preview in interactive
-terminals, runs supported build commands, then stores the checkout under
-Herdr-managed plugin data and registers it. Use `--yes` for noninteractive
-installs. Reinstalling a GitHub-managed plugin replaces that managed checkout.
+`plugin install` accepts GitHub shorthand, such as `owner/repo/subdir`, or an
+`https://host/owner/repo[/subdir...]` URL for a plugin hosted on any git
+server with that path layout, such as Forgejo, Gitea, or GitLab. It clones
+with `git`, shows a preview in interactive terminals, runs supported build
+commands, then stores the checkout under Herdr-managed plugin data and
+registers it. Use `--yes` for noninteractive installs. Reinstalling a managed
+plugin replaces that managed checkout.
 Installed and linked plugins, including their enabled state, are global to the
 current user and available in every Herdr session. Both `plugin install` and
 `plugin link` can register plugins while no Herdr server is running. Plugins
@@ -204,12 +206,12 @@ local plugin first. `plugin install` and `plugin link` create the plugin's
 config and state directories, and `plugin config-dir <id>` prints the config
 directory for setup docs and shell scripts.
 
-`plugin uninstall <id-or-source>` unregisters the plugin. For GitHub-managed
-installs it also removes the managed checkout, and it accepts either the plugin
-id or the same `owner/repo[/subdir...]` shorthand used by install.
+`plugin uninstall <id-or-source>` unregisters the plugin. For managed installs
+it also removes the managed checkout, and it accepts the plugin id or the same
+`owner/repo[/subdir...]` shorthand or URL used by install.
 `plugin unlink <id>` only unregisters a plugin and leaves files alone, which is
 useful for local development. There is no separate `plugin update` in v1;
-reinstall from GitHub to refresh a managed plugin.
+reinstall from the source to refresh a managed plugin.
 
 The example cookbook repo is `ogulcancelik/herdr-plugin-examples`. It contains
 separate example plugins in subdirectories, including `agent-telegram-notify`,
@@ -218,7 +220,7 @@ not maintained official plugins.
 
 ## Build commands
 
-Build commands run during GitHub `plugin install` after confirmation and before
+Build commands run during remote `plugin install` after confirmation and before
 Herdr registers the plugin. If a build command fails, install aborts and the
 plugin is not registered. `plugin link` does not run build commands; local
 authors build their working tree themselves. Build commands may generate files,

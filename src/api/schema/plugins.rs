@@ -72,6 +72,8 @@ pub struct PluginSourceInfo {
     #[serde(default)]
     pub kind: PluginSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
@@ -91,6 +93,7 @@ impl Default for PluginSourceInfo {
     fn default() -> Self {
         Self {
             kind: PluginSourceKind::Local,
+            host: None,
             owner: None,
             repo: None,
             subdir: None,

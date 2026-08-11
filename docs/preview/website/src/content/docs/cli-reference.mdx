@@ -394,13 +394,14 @@ Install, list, and remove plugins:
 
 ```bash
 herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]
+herdr plugin install https://<host>/<owner>/<repo>[/subdir...] [--ref REF] [--yes]
 herdr plugin list [--plugin ID] [--json]
-herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>
+herdr plugin uninstall <plugin_id|owner/repo[/subdir...]|url>
 herdr plugin enable <plugin_id>
 herdr plugin disable <plugin_id>
 ```
 
-`plugin install` accepts GitHub shorthand only, such as `ogulcancelik/herdr-plugin-examples/worktree-bootstrap`. It uses `git`, shows a trust preview in interactive terminals, runs supported manifest build commands, and stores GitHub installs in a Herdr-managed directory. Use `--yes` for noninteractive installs. Reinstalling a GitHub-managed plugin replaces that managed checkout. Installing over a locally linked plugin is refused. Plugin manifests must declare `min_herdr_version`; install and link fail when the plugin requires a newer Herdr binary. `plugin list` is human-readable by default; pass `--json` for the raw API response.
+`plugin install` accepts GitHub shorthand, such as `ogulcancelik/herdr-plugin-examples/worktree-bootstrap`, or an `https://host/owner/repo[/subdir...]` URL for any git server with that path layout, such as Forgejo, Gitea, or GitLab. It uses `git`, shows a trust preview in interactive terminals, runs supported manifest build commands, and stores remote installs in a Herdr-managed directory. Use `--yes` for noninteractive installs. Reinstalling a managed plugin replaces that managed checkout. Installing over a locally linked plugin is refused. Plugin manifests must declare `min_herdr_version`; install and link fail when the plugin requires a newer Herdr binary. `plugin list` is human-readable by default; pass `--json` for the raw API response.
 
 Plugin installation and enabled state are global to the current user. A plugin installed, linked, enabled, or disabled through one Herdr session is immediately available with the same state in every session.
 
