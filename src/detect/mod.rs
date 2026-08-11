@@ -208,9 +208,20 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "maki" => Some(Agent::Maki),
-        "muse" | "muse-bin" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
+}
+
+/// Muse's install-dir launcher script resolves the active release and execs
+/// `muse-bin-<version>` (e.g. `muse-bin-0.1.0-R708.1`), so the running
+/// process never carries a bare `muse`/`muse-bin` alias. Require a digit
+/// immediately after the `muse-bin-` prefix so unrelated binaries such as
+/// `muse-binary` or a bare `muse-bin` stay unmatched.
+fn is_muse_versioned_binary(name: &str) -> bool {
+    name.strip_prefix("muse-bin-")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// Identify which agent is running from the process name.
@@ -717,9 +728,10 @@ mod tests {
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
         assert_eq!(identify_agent("muse"), Some(Agent::Muse));
-        assert_eq!(identify_agent("muse-bin"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-code"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-bin-0.1.0-R708.1"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-bin-1.2.3"), Some(Agent::Muse));
     }
 
     #[test]
@@ -834,6 +846,10 @@ mod tests {
         assert_eq!(identify_agent("museum"), None);
         assert_eq!(identify_agent("muse-helper"), None);
         assert_eq!(identify_agent("muser"), None);
+        assert_eq!(identify_agent("musescore"), None);
+        assert_eq!(identify_agent("muse-bin"), None);
+        assert_eq!(identify_agent("muse-bin-"), None);
+        assert_eq!(identify_agent("muse-binary"), None);
     }
 
     #[test]
