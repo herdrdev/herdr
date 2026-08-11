@@ -181,8 +181,10 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 }
 
 fn lookup_agent(name: &str) -> Option<Agent> {
+    if name == "pi" || name.starts_with("senpi") {
+        return Some(Agent::Pi);
+    }
     match name {
-        "pi" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
         "codex" => Some(Agent::Codex),
         "gemini" => Some(Agent::Gemini),
@@ -548,6 +550,11 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
                 "cli",
             ]
         {
+            return Some(agent_label(Agent::Pi).to_string());
+        }
+    }
+    for window in components.windows(4) {
+        if window == ["node_modules", "@code-yeongyu", "senpi", "dist"] {
             return Some(agent_label(Agent::Pi).to_string());
         }
     }

@@ -76,7 +76,27 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
+    // senpi is the successor to pi — it shares the same integration lifecycle.
+    // If a ~/.senpi tree exists, keep it in sync so `herdr integration install pi`
+    // covers both without requiring a separate target.
+    sync_pi_extension_to_senpi_dirs();
     Ok(path)
+}
+
+fn sync_pi_extension_to_senpi_dirs() {
+    let Ok(home) = crate::integration::env::home_dir() else {
+        return;
+    };
+    for candidate in [
+        home.join(".senpi/agent/extensions"),
+        home.join(".senpi2/agent/extensions"),
+        home.join(".senpi3/agent/extensions"),
+    ] {
+        if candidate.is_dir() {
+            let dest = candidate.join(PI_EXTENSION_INSTALL_NAME);
+            let _ = fs::write(&dest, PI_EXTENSION_ASSET);
+        }
+    }
 }
 
 pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
@@ -527,7 +547,28 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     })
 }
 
+fn remove_pi_extension_from_senpi_dirs() {
+    let Ok(home) = crate::integration::env::home_dir() else {
+        return;
+    };
+    for candidate in [
+        home.join(".senpi/agent/extensions"),
+        home.join(".senpi2/agent/extensions"),
+        home.join(".senpi3/agent/extensions"),
+    ] {
+        let path = candidate.join(PI_EXTENSION_INSTALL_NAME);
+        if path.is_file() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if content.contains("HERDR_INTEGRATION_ID=pi") {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
+    remove_pi_extension_from_senpi_dirs();
     let extension_path = pi_extension_dir()?.join(PI_EXTENSION_INSTALL_NAME);
     let removed_extension = remove_file_if_exists(&extension_path)?;
 
