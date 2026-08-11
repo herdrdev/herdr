@@ -75,15 +75,14 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
     let checkout_key = canonicalize_best_effort_path(&info.repo_root)
         .display()
         .to_string();
-    let label_path = if info
+    let common_dir_name = info
         .git_common_dir
         .file_name()
-        .and_then(|name| name.to_str())
-        == Some(".git")
-    {
-        info.git_common_dir.parent().unwrap_or(&info.repo_root)
-    } else {
-        &info.git_common_dir
+        .and_then(|name| name.to_str());
+    let label_path = match common_dir_name {
+        Some(".git") => info.git_common_dir.parent().unwrap_or(&info.repo_root),
+        Some(".bare") => embedded_bare_repo_container(info).unwrap_or(&info.git_common_dir),
+        _ => &info.git_common_dir,
     };
     let repo_name = label_path
         .file_name()
@@ -97,6 +96,12 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
         repo_root: info.repo_root.clone(),
         is_linked_worktree: info.is_linked_worktree,
     }
+}
+
+fn embedded_bare_repo_container(info: &GitWorktreeInfo) -> Option<&Path> {
+    let parent = info.git_common_dir.parent()?;
+    let parent_git_dir = git_dir_for_repo_root(parent)?;
+    (canonicalize_best_effort_path(&parent_git_dir) == info.git_common_dir).then_some(parent)
 }
 
 pub(super) fn canonicalize_best_effort_path(path: &Path) -> PathBuf {
@@ -421,12 +426,62 @@ mod tests {
         let checkout_auto_label = automatic_workspace_label(&checkout, &checkout_space.repo_root);
 
         assert_eq!(bare_space.key, checkout_space.key);
-        assert_eq!(bare_space.repo_name, checkout_space.repo_name);
+        assert_eq!(bare_space.repo_name, ".bare");
+        assert_eq!(checkout_space.repo_name, bare_space.repo_name);
         assert_eq!(bare_auto_label, bare.file_name().unwrap().to_str().unwrap());
         assert_eq!(
             checkout_auto_label,
             checkout.file_name().unwrap().to_str().unwrap()
         );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn embedded_dot_bare_source_and_checkout_use_container_repo_name() {
+        let base = temp_test_dir("embedded-dot-bare");
+        let seed = base.join("seed");
+        let repo = base.join("reported-repo");
+        let bare = repo.join(".bare");
+        let checkout = repo.join("develop");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        run_git(&seed, &["init", "--quiet"]);
+        run_git(&seed, &["config", "user.email", "herdr@example.invalid"]);
+        run_git(&seed, &["config", "user.name", "Herdr Test"]);
+        run_git(
+            &seed,
+            &["commit", "--quiet", "--allow-empty", "-m", "initial"],
+        );
+        run_git(
+            &base,
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                seed.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(repo.join(".git"), "gitdir: ./.bare\n").unwrap();
+        run_git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "develop",
+                checkout.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let source = git_space_metadata(&repo).unwrap();
+        let linked = git_space_metadata(&checkout).unwrap();
+
+        assert_eq!(source.repo_name, "reported-repo");
+        assert_eq!(linked.repo_name, source.repo_name);
 
         std::fs::remove_dir_all(base).unwrap();
     }

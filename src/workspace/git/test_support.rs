@@ -50,7 +50,7 @@ pub(crate) fn create_repo_with_linked_worktree(name: &str) -> (PathBuf, PathBuf,
 pub(crate) fn create_bare_repo_with_linked_worktree(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = temp_test_dir(name);
     let seed = base.join("seed");
-    let bare = base.join("herdr.git");
+    let bare = base.join(".bare");
     let checkout = base.join("feature");
     init_repo_with_commit(&seed);
     run_git(
