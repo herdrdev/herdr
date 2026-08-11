@@ -5,6 +5,41 @@ use crate::workspace::git::{
     test_support::{temp_test_dir, write_fake_tracked_repo},
 };
 
+#[cfg(unix)]
+#[test]
+fn config_symlink_retarget_invalidates_context() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_test_dir("config-symlink-retarget");
+    write_fake_tracked_repo(&root);
+    let alias = root.join("branch.cfg");
+    let first = root.join("first.cfg");
+    let second = root.join("second.cfg");
+    std::fs::write(&first, "").unwrap();
+    std::fs::write(&second, "").unwrap();
+    symlink(&first, &alias).unwrap();
+    let context = read_config_with_user_paths(
+        &git_worktree_info(&root).unwrap(),
+        "main",
+        vec![alias.clone()],
+    );
+    std::fs::remove_file(&alias).unwrap();
+    symlink(&second, &alias).unwrap();
+
+    assert!(!deps_current(&context.2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn config_read_error_retries_next_refresh() {
+    let root = temp_test_dir("config-read-error");
+    write_fake_tracked_repo(&root);
+    std::fs::write(root.join(".git/config"), [0xff]).unwrap();
+    let context = read_config(&git_worktree_info(&root).unwrap(), "main");
+    assert!(!deps_current(&context.2));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn git_status_fingerprint_honors_remote_fetch_refspec() {
     let root = temp_test_dir("custom-fetch-refspec");
@@ -74,7 +109,9 @@ fn git_status_branch_config_reads_user_config_before_repo_config() {
         .unwrap();
 
     let info = git_worktree_info(&root).unwrap();
-    let config = read_branch_config_with_user_paths(&info, "main", vec![user_config]).unwrap();
+    let config = read_config_with_user_paths(&info, "main", vec![user_config])
+        .1
+        .unwrap();
 
     assert_eq!(config.remote, "global");
     assert_eq!(
@@ -97,7 +134,9 @@ fn git_status_branch_config_repo_config_overrides_user_config() {
         .unwrap();
 
     let info = git_worktree_info(&root).unwrap();
-    let config = read_branch_config_with_user_paths(&info, "main", vec![user_config]).unwrap();
+    let config = read_config_with_user_paths(&info, "main", vec![user_config])
+        .1
+        .unwrap();
 
     assert_eq!(config.remote, "origin");
     assert_eq!(
@@ -475,7 +514,9 @@ fn git_status_fingerprint_matches_user_hasconfig_against_repo_remote_url() {
         .unwrap();
 
     let info = git_worktree_info(&root).unwrap();
-    let config = read_branch_config_with_user_paths(&info, "main", vec![user_config]).unwrap();
+    let config = read_config_with_user_paths(&info, "main", vec![user_config])
+        .1
+        .unwrap();
 
     assert_eq!(config.remote, "included");
     assert_eq!(config.merge_ref, "refs/heads/main");
@@ -511,7 +552,9 @@ fn git_status_fingerprint_skips_hasconfig_include_that_defines_remote_url() {
         .unwrap();
 
     let info = git_worktree_info(&root).unwrap();
-    let config = read_branch_config_with_user_paths(&info, "main", vec![user_config]).unwrap();
+    let config = read_config_with_user_paths(&info, "main", vec![user_config])
+        .1
+        .unwrap();
 
     assert_eq!(config.remote, "origin");
     assert_eq!(config.merge_ref, "refs/heads/main");
@@ -552,7 +595,9 @@ fn git_status_fingerprint_skips_hasconfig_include_chain_that_defines_remote_url(
         .unwrap();
 
     let info = git_worktree_info(&root).unwrap();
-    let config = read_branch_config_with_user_paths(&info, "main", vec![user_config]).unwrap();
+    let config = read_config_with_user_paths(&info, "main", vec![user_config])
+        .1
+        .unwrap();
 
     assert_eq!(config.remote, "origin");
     assert_eq!(config.merge_ref, "refs/heads/main");
