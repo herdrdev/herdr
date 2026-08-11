@@ -50,11 +50,11 @@ aliases = ["muse-code", "muse-cli"]
 # `/subagents`, `/skills`, etc. Footer verb varies by menu — captured live: `/model` says
 # `enter confirm`, `/theme` says `enter save`, `/skills` (a filterable checkbox list) says
 # `enter use - space toggle - ... - esc close - type filter`. "Enter to select"/"Esc to
-# interrupt" never appear. Matched on whichever of "esc go back" / "esc close" / "enter
-# confirm" / "space toggle" is present rather than trying to enumerate every verb; more menu
-# types than these four captures likely exist. The highlighted row in both `/model` and
-# `/skills` also renders as `⟩ <choice>`, the same glyph idle_prompt's typed-draft variant
-# matches, so idle_prompt's not-gate excludes all four menu anchors too, even though
+# interrupt" never appear. Matched on whichever of "enter confirm" / "enter save" / "esc go
+# back" / "esc close" / "space toggle" is present rather than trying to enumerate every verb;
+# more menu types than these five captures likely exist. The highlighted row in both `/model`
+# and `/skills` also renders as `⟩ <choice>`, the same glyph idle_prompt's typed-draft variant
+# matches, so idle_prompt's not-gate excludes all five menu anchors too, even though
 # menu_request_blocked's higher priority already wins that race today.
 #
 # Tool approval (no --approval-judge, or judge declines to auto-allow): footer gains
@@ -106,6 +106,7 @@ region = "bottom_non_empty_lines(8)"
 visible_blocker = true
 any = [
   { contains = ["enter confirm"] },
+  { contains = ["enter save"] },
   { contains = ["esc go back"] },
   { contains = ["esc close"] },
   { contains = ["space toggle"] },
@@ -151,6 +152,7 @@ not = [
   { contains = ["Enter to select"] },
   { contains = ["Enter to toggle"] },
   { contains = ["enter confirm"] },
+  { contains = ["enter save"] },
   { contains = ["esc go back"] },
   { contains = ["esc close"] },
   { contains = ["space toggle"] },
