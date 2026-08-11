@@ -8,6 +8,7 @@ use crate::layout::PaneId;
 pub(crate) struct RenderRequest {
     pub(crate) generic: bool,
     pub(crate) pty_sources: HashSet<PaneId>,
+    pub(crate) terminal_title_sources: HashSet<PaneId>,
 }
 
 /// Coalesces render requests while retaining enough origin information for the
@@ -46,6 +47,25 @@ impl RenderSignal {
         !self.pending.swap(true, Ordering::AcqRel)
     }
 
+    /// Coalesces terminal-title changes separately from ordinary PTY damage so
+    /// consumers can update metadata without inspecting every pane.
+    pub(crate) fn request_terminal_title(&self, pane_id: PaneId) -> bool {
+        let mut request = self
+            .request
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        request.terminal_title_sources.insert(pane_id);
+        !self.pending.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn pending_terminal_title_sources(&self) -> HashSet<PaneId> {
+        self.request
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .terminal_title_sources
+            .clone()
+    }
+
     pub(crate) fn take(&self) -> RenderRequest {
         let mut request = self
             .request
@@ -73,7 +93,25 @@ mod tests {
         let request = signal.take();
         assert!(!request.generic);
         assert_eq!(request.pty_sources, HashSet::from([first, second]));
+        assert!(request.terminal_title_sources.is_empty());
         assert!(!signal.is_pending());
+    }
+
+    #[test]
+    fn coalesces_terminal_title_sources_without_making_them_pty_damage() {
+        let signal = RenderSignal::new();
+        let pane_id = PaneId::from_raw(10);
+
+        assert!(signal.request_terminal_title(pane_id));
+        assert!(!signal.request_terminal_title(pane_id));
+        assert_eq!(
+            signal.pending_terminal_title_sources(),
+            HashSet::from([pane_id])
+        );
+
+        let request = signal.take();
+        assert!(request.pty_sources.is_empty());
+        assert_eq!(request.terminal_title_sources, HashSet::from([pane_id]));
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod sidebar;
 mod sound;
 mod tab_bar;
 mod theme;
+mod window_title;
 
 pub use self::{
     io::{
@@ -33,6 +34,7 @@ pub use self::{
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
     theme::{parse_color, CustomThemeColors, ThemeConfig, THEME_NAMES},
+    window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
 
 pub(crate) use self::keybinds::parse_key_combo;
@@ -44,6 +46,7 @@ pub(crate) use self::{
         MAX_TAB_BAR_RIGHT_ENTRIES,
     },
     theme::canonical_theme_name,
+    window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
@@ -85,6 +88,7 @@ impl Config {
             .chain(self.theme.diagnostics())
             .chain(self.ui.sound.diagnostics())
             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
+            .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .collect()
     }

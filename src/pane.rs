@@ -1917,7 +1917,10 @@ impl PaneRuntime {
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
                 publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
                 observe_detection_content_change(bytes, &detection_content_seq);
-                if result.request_render && render_dirty.request_pty(pane_id) {
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
@@ -2080,7 +2083,10 @@ impl PaneRuntime {
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
-                if result.request_render && render_dirty.request_pty(pane_id) {
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {

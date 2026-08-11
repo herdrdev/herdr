@@ -931,7 +931,7 @@ impl App {
         &mut self,
         request: crate::api::schema::Request,
     ) -> String {
-        self.sync_terminal_titles();
+        self.sync_pending_terminal_titles();
         use crate::api::schema::{
             ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse,
         };

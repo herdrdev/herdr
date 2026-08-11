@@ -113,20 +113,72 @@ fn spawn_client_process(
     }
 }
 
+fn spawn_no_session_process(config_home: &PathBuf, runtime_dir: &PathBuf) -> SpawnedHerdr {
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::create_dir_all(runtime_dir).unwrap();
+    register_runtime_dir(runtime_dir);
+    fs::write(
+        config_home.join(app_dir_name()).join("config.toml"),
+        "onboarding = false\n[ui]\nwindow_title = \"monolithic\"\n",
+    )
+    .unwrap();
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    cmd.arg("--no-session");
+    cmd.env("XDG_CONFIG_HOME", config_home);
+    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("HERDR_SOCKET_PATH");
+    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env_remove("HERDR_SESSION");
+    cmd.env_remove("HERDR_WORKSPACE_ID");
+    cmd.env_remove("HERDR_TAB_ID");
+    cmd.env_remove("HERDR_PANE_ID");
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    register_spawned_herdr_pid(child.process_id());
+    drop(pair.slave);
+
+    SpawnedHerdr {
+        _master: Some(pair.master),
+        child,
+    }
+}
+
 fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
+    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
-    fs::create_dir_all(runtime_dir).unwrap();
-    register_runtime_dir(runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
+    spawn_server_with_config(
+        config_home,
+        runtime_dir,
+        api_socket_path,
+        client_socket_path,
         "onboarding = false\n",
     )
-    .unwrap();
+}
+
+fn spawn_server_with_config(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+    _client_socket_path: &PathBuf,
+    config: &str,
+) -> SpawnedHerdr {
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::create_dir_all(runtime_dir).unwrap();
+    register_runtime_dir(runtime_dir);
+    fs::write(config_home.join(app_dir_name()).join("config.toml"), config).unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -647,7 +699,24 @@ fn attach_thin_client(
     api_socket: &PathBuf,
     client_socket: &PathBuf,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
-    let spawned_server = spawn_server(config_home, runtime_dir, api_socket, client_socket);
+    attach_thin_client_with_config(
+        config_home,
+        runtime_dir,
+        api_socket,
+        client_socket,
+        "onboarding = false\n",
+    )
+}
+
+fn attach_thin_client_with_config(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket: &PathBuf,
+    client_socket: &PathBuf,
+    config: &str,
+) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+    let spawned_server =
+        spawn_server_with_config(config_home, runtime_dir, api_socket, client_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
     wait_for_socket(client_socket, Duration::from_secs(10));
 
@@ -684,6 +753,206 @@ fn attach_thin_client(
     );
 
     (spawned_server, thin_client, output)
+}
+
+fn captured_window_titles(output: &SharedOutput) -> Vec<String> {
+    read_output(output)
+        .split("\x1b]0;")
+        .skip(1)
+        .filter_map(|suffix| {
+            suffix
+                .split_once('\x07')
+                .map(|(title, _)| title.to_string())
+        })
+        .collect()
+}
+
+fn wait_for_window_title(output: &SharedOutput, expected_suffix: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(title) = captured_window_titles(output)
+            .into_iter()
+            .find(|title| title.ends_with(expected_suffix))
+        {
+            return title;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "outer window title ending in {expected_suffix:?} was not emitted; titles: {:?}; output: {:?}",
+        captured_window_titles(output),
+        read_output(output)
+    );
+}
+
+fn wait_for_pane_terminal_title(socket_path: &PathBuf, pane_id: &str, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let request = serde_json::json!({
+            "id": "window-title-pane-get",
+            "method": "pane.get",
+            "params": {"pane_id": pane_id},
+        });
+        let response = send_json_request(socket_path, &request.to_string());
+        if response["result"]["pane"]["terminal_title"].as_str() == Some(expected) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("pane {pane_id} did not report terminal title {expected:?}");
+}
+
+fn send_pane_shell_command(socket_path: &PathBuf, pane_id: &str, command: &str) {
+    let request = serde_json::json!({
+        "id": "window-title-command",
+        "method": "pane.send_input",
+        "params": {
+            "pane_id": pane_id,
+            "text": command,
+            "keys": ["Enter"],
+        }
+    });
+    let response = send_json_request(socket_path, &request.to_string());
+    assert_eq!(response["result"]["type"], "ok", "{response}");
+}
+
+#[test]
+fn configured_window_title_is_emitted_in_no_session_mode() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let no_session = spawn_no_session_process(&config_home, &runtime_dir);
+    let reader = no_session
+        ._master
+        .as_ref()
+        .expect("no-session PTY master")
+        .try_clone_reader()
+        .expect("clone no-session PTY reader");
+    let output = spawn_pty_drain(reader);
+
+    wait_for_window_title(&output, "monolithic");
+
+    cleanup_spawned_herdr(no_session, base);
+}
+
+#[test]
+fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let (server, client, output) = attach_thin_client_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[ui]\nwindow_title = \"H={hostname}|W={workspace}|T={tab}|P={pane}|O={terminal_title}\"\n",
+    );
+
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "create-workspace",
+            "method": "workspace.create",
+            "params": {"cwd": base, "focus": true},
+        })
+        .to_string(),
+    );
+    assert_eq!(created["result"]["type"], "workspace_created", "{created}");
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .expect("workspace id")
+        .to_string();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("pane id")
+        .to_string();
+    let tab_id = created["result"]["tab"]["tab_id"]
+        .as_str()
+        .expect("tab id")
+        .to_string();
+
+    for request in [
+        serde_json::json!({
+            "id": "rename-workspace",
+            "method": "workspace.rename",
+            "params": {"workspace_id": workspace_id, "label": "space-a"},
+        }),
+        serde_json::json!({
+            "id": "rename-tab",
+            "method": "tab.rename",
+            "params": {"tab_id": tab_id, "label": "tab-a"},
+        }),
+        serde_json::json!({
+            "id": "rename-pane",
+            "method": "pane.rename",
+            "params": {"pane_id": pane_id, "label": "pane-a"},
+        }),
+    ] {
+        let response = send_json_request(&api_socket, &request.to_string());
+        assert!(response.get("result").is_some(), "{response}");
+    }
+
+    let renamed = wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=");
+    assert!(renamed.starts_with("H="));
+    assert!(
+        !renamed.starts_with("H=|"),
+        "hostname token was empty: {renamed}"
+    );
+
+    send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;⠋ building\007'");
+    wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=building");
+
+    let second_tab = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "second-tab",
+            "method": "tab.create",
+            "params": {"workspace_id": workspace_id, "focus": true},
+        })
+        .to_string(),
+    );
+    assert_eq!(second_tab["result"]["type"], "tab_created", "{second_tab}");
+    let second_pane_id = second_tab["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("second pane id")
+        .to_string();
+    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=");
+    let titles_before_hidden_update = captured_window_titles(&output).len();
+    send_pane_shell_command(&api_socket, &pane_id, r"printf '\033]0;hidden update\007'");
+    // Intentionally consume the AppState title through a read-only request
+    // before the queued source is handled.
+    wait_for_pane_terminal_title(&api_socket, &pane_id, "hidden update");
+    send_pane_shell_command(
+        &api_socket,
+        &second_pane_id,
+        r"printf '\033]0;foreground marker\007'",
+    );
+    wait_for_window_title(&output, "|W=space-a|T=2|P=|O=foreground marker");
+    assert!(
+        captured_window_titles(&output)[titles_before_hidden_update..]
+            .iter()
+            .all(|title| !title.ends_with("|O=hidden update")),
+        "a hidden pane title reached the outer terminal"
+    );
+
+    let focused = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "focus-first-tab",
+            "method": "tab.focus",
+            "params": {"tab_id": tab_id},
+        })
+        .to_string(),
+    );
+    assert_eq!(focused["result"]["tab"]["focused"], true, "{focused}");
+    wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=hidden update");
+
+    drop(server);
+    cleanup_spawned_herdr(client, base);
 }
 
 /// Polls until the client exits, then returns only the output captured after

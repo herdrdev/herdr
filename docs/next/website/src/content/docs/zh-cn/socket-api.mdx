@@ -273,7 +273,7 @@ herdr notification show "build failed" --body "api workspace" --position top-lef
 {"id":"req_title_clear","method":"client.window_title.clear","params":{}}
 ```
 
-`client.window_title.clear` 恢复 Herdr 的默认标题。响应是 `type: "client_window_title"`,带 `changed` 和 `set`、`cleared` 或 `no_foreground_client` 之一的 reason。
+`client.window_title.clear` 把标题交还给 `ui.window_title`。响应是 `type: "client_window_title"`,带 `changed` 和 `set`、`cleared` 或 `no_foreground_client` 之一的 reason。
 
 Worktree 方法把 Git 检出作为 Herdr 工作区管理。`worktree.create` 创建检出,并返回新的 `workspace`、`tab`、`root_pane` 和 `worktree` 记录。请求的分支已在本地存在时检出它;否则从请求的 base 或 `HEAD` 创建分支。`worktree.open` 打开已有检出,或返回已打开的工作区。`worktree.remove` 对关联的子工作区运行 `git worktree remove`,从不删除分支。
 
