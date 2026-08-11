@@ -186,6 +186,7 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 }
 
 fn lookup_agent(name: &str) -> Option<Agent> {
+    let name = path_basename(name);
     match name {
         "pi" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
@@ -219,8 +220,11 @@ fn lookup_agent(name: &str) -> Option<Agent> {
 /// process never carries a bare `muse`/`muse-bin` alias. Require a digit
 /// immediately after the `muse-bin-` prefix so unrelated binaries such as
 /// `muse-binary` or a bare `muse-bin` stay unmatched.
+/// Accepts path-qualified `argv0` values by checking only the basename, since
+/// the launcher may `exec` with an absolute install-dir path.
 fn is_muse_versioned_binary(name: &str) -> bool {
-    name.strip_prefix("muse-bin-")
+    path_basename(name)
+        .strip_prefix("muse-bin-")
         .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
