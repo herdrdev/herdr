@@ -3487,7 +3487,7 @@ impl HeadlessServer {
             return false;
         };
         let prepare_started = crate::render_prof::timer();
-        let Some(prepared) = client.render_state.prepare_frame(frame) else {
+        let Some(prepared) = client.render_state.prepare_frame(frame, None) else {
             client.clear_deferred_render();
             crate::render_prof::event("retained_send.skip_identical");
             crate::render_prof::duration_since("retained_send.prepare_frame", prepare_started);
@@ -3704,7 +3704,7 @@ impl HeadlessServer {
             };
             let has_graphics = !frame.graphics.is_empty();
             let prepare_started = crate::render_prof::timer();
-            let Some(mut prepared) = client.render_state.prepare_frame(frame) else {
+            let Some(mut prepared) = client.render_state.prepare_frame(frame, None) else {
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
                 crate::render_prof::duration_since("full_render.prepare_frame", prepare_started);
@@ -3736,7 +3736,7 @@ impl HeadlessServer {
                     };
                     text_only_frame.graphics.clear();
                     let Some(text_only_prepared) =
-                        client.render_state.prepare_frame(text_only_frame)
+                        client.render_state.prepare_frame(text_only_frame, None)
                     else {
                         client.clear_deferred_render();
                         crate::render_prof::event("full_render.skip_identical_text_only");
@@ -8227,7 +8227,7 @@ next_tab = ""
         frame.cells[hyperlink_idx].hyperlink = Some(0);
         let prepared = client
             .render_state
-            .prepare_frame(frame)
+            .prepare_frame(frame, None)
             .expect("hyperlink frame differs");
         client.render_state.commit_sent_frame(prepared);
 

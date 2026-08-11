@@ -14,7 +14,11 @@ pub(crate) enum ClientRenderState {
     /// Semantic clients compare full frame data and skip identical frames.
     Semantic { last_frame: Option<FrameData> },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
-    TerminalAnsi { blit_encoder: BlitEncoder, seq: u64 },
+    TerminalAnsi {
+        blit_encoder: BlitEncoder,
+        seq: u64,
+        projected_bracketed_paste: Option<bool>,
+    },
 }
 
 impl ClientRenderState {
@@ -24,6 +28,7 @@ impl ClientRenderState {
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
                 blit_encoder: BlitEncoder::new(),
                 seq: 0,
+                projected_bracketed_paste: None,
             },
         }
     }
@@ -31,7 +36,14 @@ impl ClientRenderState {
     pub(crate) fn reset_baseline(&mut self) {
         match self {
             Self::Semantic { last_frame } => *last_frame = None,
-            Self::TerminalAnsi { blit_encoder, .. } => *blit_encoder = BlitEncoder::new(),
+            Self::TerminalAnsi {
+                blit_encoder,
+                projected_bracketed_paste,
+                ..
+            } => {
+                *blit_encoder = BlitEncoder::new();
+                *projected_bracketed_paste = None;
+            }
         }
     }
 
@@ -41,7 +53,11 @@ impl ClientRenderState {
         }
     }
 
-    pub(crate) fn prepare_frame(&mut self, frame: FrameData) -> Option<PreparedRender> {
+    pub(crate) fn prepare_frame(
+        &mut self,
+        frame: FrameData,
+        projected_bracketed_paste: Option<bool>,
+    ) -> Option<PreparedRender> {
         match self {
             Self::Semantic { last_frame } => {
                 if last_frame.as_ref() == Some(&frame) {
@@ -53,13 +69,28 @@ impl ClientRenderState {
                     message: ServerMessage::Frame(frame),
                 })
             }
-            Self::TerminalAnsi { blit_encoder, seq } => {
-                if blit_encoder.is_current(&frame) {
+            Self::TerminalAnsi {
+                blit_encoder,
+                seq,
+                projected_bracketed_paste: committed_bracketed_paste,
+            } => {
+                let projection_changed = *committed_bracketed_paste != projected_bracketed_paste;
+                if blit_encoder.is_current(&frame) && !projection_changed {
                     crate::render_prof::event("prepare_frame.ansi.skip_current");
                     return None;
                 }
                 let mut encoded = blit_encoder.encode(&frame, false);
                 crate::render_prof::event("prepare_frame.ansi.changed");
+                if encoded.full || projection_changed {
+                    if let Some(enabled) = projected_bracketed_paste {
+                        let sequence = if enabled {
+                            BRACKETED_PASTE_ENABLE
+                        } else {
+                            BRACKETED_PASTE_DISABLE
+                        };
+                        encoded.bytes.splice(0..0, sequence.iter().copied());
+                    }
+                }
                 crate::render_prof::counter("prepare_frame.ansi.bytes", encoded.bytes.len() as u64);
                 if encoded.full {
                     crate::render_prof::event("prepare_frame.ansi.full");
@@ -81,6 +112,7 @@ impl ClientRenderState {
                     }),
                     frame,
                     encoded: Some(encoded),
+                    projected_bracketed_paste,
                 })
             }
         }
@@ -102,14 +134,20 @@ impl ClientRenderState {
                 },
             ) => *last_frame = Some(frame),
             (
-                Self::TerminalAnsi { blit_encoder, seq },
+                Self::TerminalAnsi {
+                    blit_encoder,
+                    seq,
+                    projected_bracketed_paste: committed_bracketed_paste,
+                },
                 PreparedRender::TerminalAnsi {
                     frame,
                     encoded: Some(encoded),
+                    projected_bracketed_paste,
                     ..
                 },
             ) => {
                 blit_encoder.commit(frame, encoded);
+                *committed_bracketed_paste = projected_bracketed_paste;
                 *seq += 1;
             }
             _ => {}
@@ -125,6 +163,8 @@ impl ClientRenderState {
     }
 }
 
+const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
+const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
 const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
 
 fn insert_graphics_before_sync_end(encoded: &mut Vec<u8>, graphics: &[u8]) {
@@ -158,6 +198,7 @@ pub(crate) enum PreparedRender {
         message: ServerMessage,
         frame: FrameData,
         encoded: Option<EncodedBlit>,
+        projected_bracketed_paste: Option<bool>,
     },
 }
 
@@ -448,4 +489,115 @@ fn focused_terminal_suppresses_host_cursor(
     app_state
         .runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
         .is_some_and(crate::terminal::TerminalRuntime::synchronized_output_active)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::CellData;
+
+    fn test_frame(symbol: &str) -> FrameData {
+        FrameData {
+            cells: vec![CellData {
+                symbol: symbol.to_owned(),
+                fg: 0,
+                bg: 0,
+                modifier: 0,
+                skip: false,
+                hyperlink: None,
+            }],
+            width: 1,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        }
+    }
+
+    fn terminal_frame(prepared: &PreparedRender) -> &TerminalFrame {
+        match prepared.message() {
+            ServerMessage::Terminal(frame) => frame,
+            other => panic!("expected terminal frame, got {other:?}"),
+        }
+    }
+
+    fn contains(bytes: &[u8], sequence: &[u8]) -> bool {
+        bytes
+            .windows(sequence.len())
+            .any(|window| window == sequence)
+    }
+
+    #[test]
+    fn terminal_ansi_projects_bracketed_paste_on_full_mode_only_and_reset_frames() {
+        let mut state = ClientRenderState::new(RenderEncoding::TerminalAnsi);
+        let frame = test_frame("x");
+
+        let disabled = state
+            .prepare_frame(frame.clone(), Some(false))
+            .expect("initial full frame");
+        assert!(terminal_frame(&disabled).full);
+        assert!(contains(
+            &terminal_frame(&disabled).bytes,
+            BRACKETED_PASTE_DISABLE
+        ));
+        state.commit_sent_frame(disabled);
+
+        assert!(state.prepare_frame(frame.clone(), Some(false)).is_none());
+
+        let enabled = state
+            .prepare_frame(frame.clone(), Some(true))
+            .expect("mode-only transition");
+        assert!(!terminal_frame(&enabled).full);
+        assert_eq!(terminal_frame(&enabled).seq, 2);
+        assert!(contains(
+            &terminal_frame(&enabled).bytes,
+            BRACKETED_PASTE_ENABLE
+        ));
+        state.commit_sent_frame(enabled);
+
+        assert!(state.prepare_frame(frame.clone(), Some(true)).is_none());
+
+        state.reset_baseline();
+        let reset = state
+            .prepare_frame(frame, Some(true))
+            .expect("reset full frame");
+        assert!(terminal_frame(&reset).full);
+        assert!(contains(
+            &terminal_frame(&reset).bytes,
+            BRACKETED_PASTE_ENABLE
+        ));
+    }
+
+    #[test]
+    fn terminal_ansi_does_not_commit_an_unsent_mode_projection() {
+        let mut state = ClientRenderState::new(RenderEncoding::TerminalAnsi);
+        let frame = test_frame("x");
+
+        let pending = state
+            .prepare_frame(frame.clone(), Some(true))
+            .expect("pending frame");
+        assert_eq!(terminal_frame(&pending).seq, 1);
+        drop(pending);
+
+        let retry = state
+            .prepare_frame(frame, Some(true))
+            .expect("uncommitted mode must be retried");
+        assert_eq!(terminal_frame(&retry).seq, 1);
+        assert!(contains(
+            &terminal_frame(&retry).bytes,
+            BRACKETED_PASTE_ENABLE
+        ));
+    }
+
+    #[test]
+    fn terminal_ansi_full_app_frame_has_no_bracketed_paste_projection() {
+        let mut state = ClientRenderState::new(RenderEncoding::TerminalAnsi);
+
+        let prepared = state
+            .prepare_frame(test_frame("x"), None)
+            .expect("initial full-app frame");
+        let bytes = &terminal_frame(&prepared).bytes;
+        assert!(!contains(bytes, BRACKETED_PASTE_ENABLE));
+        assert!(!contains(bytes, BRACKETED_PASTE_DISABLE));
+    }
 }
