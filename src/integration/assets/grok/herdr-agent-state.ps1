@@ -41,7 +41,7 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 $seq = [DateTime]::UtcNow.Ticks
 $herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
-$args = @(
+$herdrArgs = @(
     "pane", "report-agent-session", $env:HERDR_PANE_ID,
     "--source", "herdr:grok",
     "--agent", "grok",
@@ -49,9 +49,9 @@ $args = @(
     "--agent-session-id", "$sessionId"
 )
 if (-not [string]::IsNullOrWhiteSpace($sessionStartSource)) {
-    $args += @("--session-start-source", "$sessionStartSource")
+    $herdrArgs += @("--session-start-source", "$sessionStartSource")
 }
 try {
-    & $herdr @args 2>$null | Out-Null
+    & $herdr @herdrArgs 2>$null | Out-Null
 } catch {
 }
