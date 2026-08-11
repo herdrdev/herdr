@@ -60,6 +60,12 @@ install-hooks:
     @echo "installed git hooks from .githooks"
 
 # Build release binary
+[unix]
+build:
+    cargo build --release --locked
+
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[windows]
 build:
     cargo build --release --locked
 
