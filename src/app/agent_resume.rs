@@ -226,10 +226,11 @@ impl App {
             );
             return false;
         };
-        let Some(launch_env) = self
-            .find_pane(pane_id)
-            .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, Vec::new()))
-        else {
+        let (ws_idx, _) = match self.find_pane(pane_id) {
+            Some(found) => found,
+            None => return false,
+        };
+        let Some(launch_env) = self.pane_launch_env(ws_idx, pane_id, Vec::new()) else {
             return false;
         };
 

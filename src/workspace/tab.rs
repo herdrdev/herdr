@@ -175,6 +175,8 @@ impl Tab {
             }
             None => TerminalState::new(terminal_id.clone(), initial_cwd),
         };
+        let terminal =
+            terminal.with_integration_token(launch_env.integration_token().map(str::to_string));
         let mut panes = HashMap::new();
         panes.insert(root_id, PaneState::new(terminal_id));
 
@@ -435,6 +437,8 @@ impl Tab {
             }
             None => TerminalState::new(terminal_id.clone(), actual_cwd),
         };
+        let terminal =
+            terminal.with_integration_token(launch_env.integration_token().map(str::to_string));
         if focus_new_pane {
             self.layout.focus_pane(new_id);
         }

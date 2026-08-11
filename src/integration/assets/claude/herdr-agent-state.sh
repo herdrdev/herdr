@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=claude
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=11
 
 set -eu
 
@@ -63,9 +63,25 @@ session_id = hook_input.get("session_id")
 agent_session_id = session_id if isinstance(session_id, str) and session_id else None
 transcript_path = hook_input.get("transcript_path")
 agent_session_path = transcript_path if isinstance(transcript_path, str) and transcript_path else None
+if not agent_session_path and agent_session_id and "/" not in agent_session_id and "\\" not in agent_session_id:
+    cwd = hook_input.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = os.environ.get("PWD")
+    if isinstance(cwd, str) and cwd:
+        config_root = os.environ.get("CLAUDE_CONFIG_DIR")
+        if not config_root:
+            config_root = os.path.join(os.path.expanduser("~"), ".claude")
+        project_key = os.path.abspath(cwd).replace(os.sep, "-")
+        agent_session_path = os.path.join(
+            os.path.abspath(os.path.expanduser(config_root)),
+            "projects",
+            project_key,
+            f"{agent_session_id}.jsonl",
+        )
 session_start_source = hook_input.get("source") if hook_event_name == "SessionStart" else None
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = None
+integration_capability = os.environ.get("HERDR_INTEGRATION_CAPABILITY") or os.environ.get("HERDR_INTEGRATION_TOKEN", "")
 if agent_session_id:
     params = {
         "pane_id": pane_id,
@@ -78,6 +94,7 @@ if agent_session_id:
         params["agent_session_path"] = agent_session_path
     if session_start_source:
         params["session_start_source"] = session_start_source
+    params["integration_token"] = integration_capability
     request = {
         "id": request_id,
         "method": "pane.report_agent_session",

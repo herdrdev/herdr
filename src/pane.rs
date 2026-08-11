@@ -82,6 +82,7 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
 pub(crate) struct PaneLaunchEnv {
     extra: Vec<(String, String)>,
     identity: PaneLaunchIdentity,
+    integration_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -101,6 +102,7 @@ impl PaneLaunchEnv {
         Self {
             extra,
             identity: PaneLaunchIdentity::Inherit,
+            integration_token: None,
         }
     }
 
@@ -122,6 +124,15 @@ impl PaneLaunchEnv {
         self.identity = PaneLaunchIdentity::OmitPane;
         self
     }
+
+    pub(crate) fn with_integration_token(mut self, token: String) -> Self {
+        self.integration_token = Some(token);
+        self
+    }
+
+    pub(crate) fn integration_token(&self) -> Option<&str> {
+        self.integration_token.as_deref()
+    }
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
@@ -133,7 +144,10 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
-        PaneLaunchIdentity::Inherit => {}
+        PaneLaunchIdentity::Inherit => {
+            cmd.env_remove(crate::integration::HERDR_INTEGRATION_CAPABILITY_ENV_VAR);
+            cmd.env_remove(crate::integration::HERDR_INTEGRATION_TOKEN_ENV_VAR);
+        }
         PaneLaunchIdentity::Managed {
             workspace_id,
             tab_id,
@@ -142,9 +156,21 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
             cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
             cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+            if let Some(token) = &launch_env.integration_token {
+                cmd.env(
+                    crate::integration::HERDR_INTEGRATION_CAPABILITY_ENV_VAR,
+                    token,
+                );
+                cmd.env(crate::integration::HERDR_INTEGRATION_TOKEN_ENV_VAR, token);
+            } else {
+                cmd.env_remove(crate::integration::HERDR_INTEGRATION_CAPABILITY_ENV_VAR);
+                cmd.env_remove(crate::integration::HERDR_INTEGRATION_TOKEN_ENV_VAR);
+            }
         }
         PaneLaunchIdentity::OmitPane => {
             cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+            cmd.env_remove(crate::integration::HERDR_INTEGRATION_CAPABILITY_ENV_VAR);
+            cmd.env_remove(crate::integration::HERDR_INTEGRATION_TOKEN_ENV_VAR);
         }
     }
 }

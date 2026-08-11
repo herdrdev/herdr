@@ -2,10 +2,11 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
+import path from "node:path";
 
 const HERDR_ENV = process.env.HERDR_ENV;
 const socketPath = process.env.HERDR_SOCKET_PATH;
@@ -64,6 +65,7 @@ type QueuedState = {
 let reportSeq = Date.now() * 1000;
 let currentAgentSessionId: string | undefined;
 let currentAgentSessionPath: string | undefined;
+let conversationReportQueue = Promise.resolve();
 
 function nextReportSeq(): number {
   reportSeq += 1;
@@ -107,6 +109,180 @@ function currentSessionRef(): Record<string, unknown> | undefined {
   return undefined;
 }
 
+const maxLiveText = 16_384;
+const maxLivePaths = 64;
+
+function boundedLiveText(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value.slice(0, maxLiveText) : fallback;
+}
+
+function liveId(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : fallback;
+}
+
+function messageText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (!isRecord(part)) return "";
+        const type = typeof part.type === "string" ? part.type : undefined;
+        if (type && !["text", "input_text", "output_text"].includes(type)) return "";
+        return messageText(part.text ?? part.content);
+      })
+      .join("");
+  }
+  if (isRecord(value)) {
+    if (["thinking", "toolCall", "toolResult"].includes(String(value.type ?? ""))) {
+      return "";
+    }
+    return messageText(value.content ?? value.text ?? value.message);
+  }
+  return "";
+}
+
+function messageTurnId(message: any): string | undefined {
+  const timestamp = message?.timestamp;
+  return typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0
+    ? `turn:${timestamp}`
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function livePaths(value: unknown): string[] {
+  const candidates: unknown[] = [];
+  if (isRecord(value)) {
+    for (const key of ["path", "file_path", "notebook_path"]) {
+      candidates.push(value[key]);
+    }
+    if (Array.isArray(value.paths)) {
+      candidates.push(...value.paths);
+    }
+  }
+  return [...new Set(candidates.map(safeLivePath).filter(Boolean))].slice(0, maxLivePaths);
+}
+
+function safeLivePath(value: unknown): string | undefined {
+  let candidate = boundedLiveText(value, "");
+  if (!candidate || candidate.includes("\0")) {
+    return undefined;
+  }
+  if (path.isAbsolute(candidate)) {
+    const relative = path.relative(process.cwd(), candidate);
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return undefined;
+    }
+    candidate = relative;
+  } else if (path.posix.isAbsolute(candidate) || path.win32.isAbsolute(candidate)) {
+    return undefined;
+  }
+  if (
+    candidate.startsWith("/") ||
+    candidate.startsWith("\\") ||
+    candidate.split(/[\\/]/).some((part) => part === ".." || part.length === 0)
+  ) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function liveCommandPreview(toolName: string, value: unknown): string | undefined {
+  const action = toolName.toLowerCase();
+  if (
+    !action.includes("bash") &&
+    !action.includes("shell") &&
+    !["exec_command", "execute_command", "run_command"].includes(action)
+  ) {
+    return undefined;
+  }
+  let input = value;
+  if (typeof input === "string") {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      return boundedLiveText(input) || undefined;
+    }
+  }
+  if (!isRecord(input)) {
+    return undefined;
+  }
+  const command = input.command ?? input.cmd;
+  return typeof command === "string" && command.length > 0
+    ? boundedLiveText(command)
+    : undefined;
+}
+
+function livePlanSteps(value: unknown): Array<Record<string, unknown>> {
+  const input = isRecord(value) ? value : {};
+  const list = input.list ?? input.steps ?? input.items ?? input.todos;
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list.slice(0, 64).flatMap((step) => {
+    if (typeof step === "string") {
+      return [{ label: boundedLiveText(step), status: "pending" }];
+    }
+    if (!isRecord(step)) {
+      return [];
+    }
+    const label = step.label ?? step.content ?? step.text ?? step.step;
+    if (typeof label !== "string" || label.length === 0) {
+      return [];
+    }
+    const rawStatus = step.status;
+    const status =
+      rawStatus === "completed" || rawStatus === "done"
+        ? "completed"
+        : rawStatus === "active" || rawStatus === "in_progress"
+          ? "active"
+          : rawStatus === "failed" || rawStatus === "blocked"
+            ? "failed"
+            : "pending";
+    return [{ label: boundedLiveText(label), status }];
+  });
+}
+
+function queueConversationReport(
+  nativeId: string,
+  turnId: string,
+  payload: Record<string, unknown>,
+): void {
+  const sessionRef = currentSessionRef();
+  if (!sessionRef) {
+    return;
+  }
+  const request = {
+    id: `${source}:conversation:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    method: "agent.conversation.report",
+    params: {
+      pane_id: paneId,
+      source,
+      agent: "pi",
+      integration_token: process.env.HERDR_INTEGRATION_TOKEN ?? "",
+      seq: nextReportSeq(),
+      ...sessionRef,
+      native_id: nativeId,
+      turn_id: turnId,
+      timestamp_ms: Date.now(),
+      payload,
+    },
+  };
+  conversationReportQueue = conversationReportQueue.then(
+    () => sendRequest(request),
+    () => sendRequest(request),
+  );
+}
+
 function reportSession(sessionStartSource?: string): Promise<void> {
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
@@ -122,6 +298,7 @@ function reportSession(sessionStartSource?: string): Promise<void> {
       agent: "pi",
       seq: nextReportSeq(),
       session_start_source: sessionStartSource,
+      integration_token: process.env.HERDR_INTEGRATION_TOKEN ?? "",
       ...sessionRef,
     },
   });
@@ -183,6 +360,11 @@ export default function (pi) {
   let lastState: AgentState | undefined;
   let lastMessage: string | undefined;
   let rootSession = false;
+  let activeTurnId: string | undefined;
+  let activeTurnStartedMs: number | undefined;
+  let turnStartedReported = false;
+  let activeMessageId: string | undefined;
+  let messageOrdinal = 0;
 
   function desiredState() {
     if (blockedCount > 0) {
@@ -203,6 +385,183 @@ export default function (pi) {
     lastMessage = next.message;
     queueState(next.state, next.message);
   }
+
+  function ensureTurn(turnId?: string, startedMs?: number): void {
+    if (turnId) {
+      activeTurnId = turnId;
+    } else if (!activeTurnId) {
+      activeTurnId = `${source}:turn:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    }
+    if (startedMs !== undefined) {
+      activeTurnStartedMs = startedMs;
+    } else if (activeTurnStartedMs === undefined) {
+      activeTurnStartedMs = Date.now();
+    }
+    if (!turnStartedReported && activeTurnId) {
+      turnStartedReported = true;
+      queueConversationReport(activeTurnId, activeTurnId, {
+        type: "turn_state",
+        state: "started",
+        started_ms: activeTurnStartedMs,
+      });
+    }
+  }
+
+  function nextMessageId(role: string, message?: any): string {
+    ensureTurn();
+    if (role === "user") {
+      return `user:${activeTurnId}`;
+    }
+    const timestamp = message?.timestamp;
+    if (typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0) {
+      return `message:${activeTurnId}:${timestamp}`;
+    }
+    const id = `message:${activeTurnId}:${messageOrdinal}`;
+    messageOrdinal += 1;
+    return id;
+  }
+
+  function reportMessage(event: any, phase: "commentary" | "final") {
+    if (!rootSession) {
+      return;
+    }
+    const message = event?.message ?? event;
+    if (message?.role !== "user" && message?.role !== "assistant") {
+      return;
+    }
+    ensureTurn(
+      message?.role === "user" ? messageTurnId(message) : undefined,
+      message?.role === "user" ? message?.timestamp : undefined,
+    );
+    const text = boundedLiveText(messageText(message));
+    if (!text || !activeTurnId) {
+      return;
+    }
+    const role = message?.role === "user" ? "user_message" : "assistant_message";
+    activeMessageId ??= nextMessageId(
+      message?.role === "user" ? "user" : "assistant",
+      message,
+    );
+    queueConversationReport(
+      activeMessageId,
+      activeTurnId,
+      role === "user_message"
+        ? { type: role, text, attachments: [] }
+        : { type: role, phase, text, state: "completed" },
+    );
+  }
+
+  function reportTool(event: any, status: "running" | "completed" | "failed") {
+    if (!rootSession) {
+      return;
+    }
+    const tool = event?.toolCall ?? event;
+    const toolName = boundedLiveText(tool?.toolName ?? tool?.name ?? "tool", "tool");
+    ensureTurn();
+    const toolId = liveId(
+      tool?.toolCallId ?? tool?.callId ?? tool?.id,
+      `tool:${activeTurnId}:${toolName}`,
+    );
+    const input = tool?.args ?? tool?.arguments ?? tool?.input;
+    const planSteps = toolName === "todo" || toolName === "plan" ? livePlanSteps(input) : [];
+    queueConversationReport(
+      planSteps.length > 0 ? `plan:${activeTurnId}` : toolId,
+      activeTurnId,
+      planSteps.length > 0
+        ? { type: "plan_update", steps: planSteps }
+        : {
+            type: "tool_activity",
+            action: toolName,
+            label: toolName,
+            status,
+            preview: liveCommandPreview(toolName, input),
+            detail: boundedLiveText(tool?.detail ?? tool?.result?.output),
+            paths: livePaths(input),
+          },
+    );
+  }
+
+  function reportApproval(event: any, status: "pending" | "resolved") {
+    if (!rootSession) {
+      return;
+    }
+    ensureTurn();
+    const approval = event?.approval ?? event;
+    const requestId = liveId(
+      approval?.requestId ??
+        approval?.request_id ??
+        approval?.toolCallId ??
+        approval?.tool_call_id ??
+        approval?.id,
+      `approval:${activeTurnId}`,
+    );
+    const decisions = Array.isArray(approval?.decisions)
+      ? approval.decisions
+          .slice(0, 16)
+          .flatMap((decision: any) =>
+            typeof decision?.id === "string" && typeof decision?.label === "string"
+              ? [{ id: decision.id.slice(0, 256), label: decision.label.slice(0, maxLiveText) }]
+              : [],
+          )
+      : [
+          { id: "allow", label: "Allow" },
+          { id: "deny", label: "Deny" },
+        ];
+    queueConversationReport(`approval:${requestId}`, activeTurnId, {
+      type: "approval",
+      request_id: requestId,
+      prompt: boundedLiveText(approval?.reason ?? approval?.prompt ?? "Approval required"),
+      decisions,
+      status,
+      selected_decision:
+        status === "resolved"
+          ? boundedLiveText(approval?.decisionId ?? approval?.decision_id)
+          : undefined,
+      structured_response: false,
+    });
+  }
+
+  pi.on("message_start", (event) => {
+    const message = event?.message ?? event;
+    if (message?.role === "user") {
+      const startedMs =
+        typeof message?.timestamp === "number" && Number.isSafeInteger(message.timestamp)
+          ? message.timestamp
+          : Date.now();
+      activeTurnId = messageTurnId(message);
+      activeTurnStartedMs = startedMs;
+      turnStartedReported = false;
+      messageOrdinal = 0;
+    }
+    if (message?.role !== "user" && message?.role !== "assistant") {
+      return;
+    }
+    ensureTurn(
+      message?.role === "user" ? messageTurnId(message) : undefined,
+      message?.role === "user" ? message?.timestamp : undefined,
+    );
+    activeMessageId =
+      message?.role === "assistant" && !messageText(message)
+        ? undefined
+        : nextMessageId(message?.role === "user" ? "user" : "assistant", message);
+    if (message?.role === "user") {
+      reportMessage(event, "final");
+    }
+  });
+  pi.on("message_update", (event) => reportMessage(event, "commentary"));
+  pi.on("message_end", (event) => reportMessage(event, "final"));
+  pi.on("tool_execution_start", (event) => reportTool(event, "running"));
+  pi.on("tool_execution_end", (event) => {
+    const failed =
+      event?.error ||
+      event?.isError === true ||
+      event?.result?.isError === true ||
+      event?.result?.success === false ||
+      event?.success === false;
+    reportTool(event, failed ? "failed" : "completed");
+  });
+  pi.on("tool_approval_requested", (event) => reportApproval(event, "pending"));
+  pi.on("tool_approval_resolved", (event) => reportApproval(event, "resolved"));
 
   pi.events.on("herdr:blocked", (data) => {
     if (!rootSession) {
@@ -242,6 +601,11 @@ export default function (pi) {
     }
     updateSessionRef(ctx);
     void reportSession();
+    activeTurnId = undefined;
+    activeTurnStartedMs = Date.now();
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
     agentActive = true;
     publishState();
   });
@@ -252,6 +616,24 @@ export default function (pi) {
     }
 
     agentActive = false;
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
+    if (activeTurnId) {
+      const now = Date.now();
+      queueConversationReport(activeTurnId, activeTurnId, {
+        type: "turn_state",
+        state: "completed",
+        started_ms: activeTurnStartedMs,
+        duration_ms:
+          activeTurnStartedMs === undefined ? undefined : Math.max(0, now - activeTurnStartedMs),
+      });
+      activeTurnId = undefined;
+      activeTurnStartedMs = undefined;
+      turnStartedReported = false;
+      activeMessageId = undefined;
+      messageOrdinal = 0;
+    }
     publishState();
   });
 }

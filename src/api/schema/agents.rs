@@ -178,6 +178,9 @@ pub struct AgentPromptParams {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<AgentPromptWaitOptions>,
+    /// Optional engine-staged attachment handles resolved on the engine host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<super::conversations::AttachmentHandle>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -205,6 +208,14 @@ pub struct AgentInfo {
     pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<AgentSessionInfo>,
+    /// Opaque conversation-session identity for structured Chat (capable
+    /// engines; path-backed sessions omit `agent_session` instead of leaking
+    /// the path here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_session: Option<super::conversations::ConversationSessionIdentity>,
+    /// Structured-chat availability for this agent, when the engine reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_capability: Option<super::conversations::ConversationCapability>,
     pub workspace_id: String,
     pub tab_id: String,
     pub pane_id: String,

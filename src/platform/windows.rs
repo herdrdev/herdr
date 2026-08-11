@@ -4,7 +4,7 @@ use std::{
     ffi::{c_void, OsStr},
     mem::{size_of, MaybeUninit},
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
@@ -3955,4 +3955,53 @@ mod tests {
             );
         }
     }
+}
+
+pub(crate) fn conversation_source_identity(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    conversation_source_identity_for_file(&file)
+}
+
+pub(crate) fn conversation_source_identity_for_file(file: &std::fs::File) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(info.dwVolumeSerialNumber.to_le_bytes());
+    hasher.update(info.nFileIndexHigh.to_le_bytes());
+    hasher.update(info.nFileIndexLow.to_le_bytes());
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+pub(crate) fn conversation_source_size_modified(path: &Path) -> Option<(u64, SystemTime)> {
+    let file = std::fs::File::open(path).ok()?;
+    conversation_source_size_modified_for_file(&file)
+}
+
+pub(crate) fn conversation_source_size_modified_for_file(
+    file: &std::fs::File,
+) -> Option<(u64, SystemTime)> {
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified = metadata.modified().ok()?;
+    Some((metadata.len(), modified))
 }

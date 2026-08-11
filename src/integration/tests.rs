@@ -893,13 +893,17 @@ fn install_claude_writes_hook_and_updates_settings() {
         .as_str()
         .unwrap()
         .contains(" session"));
+    assert_eq!(settings["hooks"]["Stop"][0]["matcher"], "*");
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" session"));
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
     assert!(settings["hooks"].get("PreToolUse").is_none());
     assert!(settings["hooks"].get("PermissionRequest").is_none());
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
     assert!(settings["hooks"].get("SessionEnd").is_none());
 
     std::env::remove_var("HOME");
@@ -945,13 +949,13 @@ fn install_claude_is_idempotent_for_hook_entries() {
         settings["hooks"]["SessionStart"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
     assert!(settings["hooks"].get("PreToolUse").is_none());
     assert!(settings["hooks"].get("PermissionRequest").is_none());
     assert!(settings["hooks"].get("PostToolUse").is_none());
     assert!(settings["hooks"].get("PostToolUseFailure").is_none());
     assert!(settings["hooks"].get("SubagentStop").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
     assert!(settings["hooks"].get("SessionEnd").is_none());
 
     std::env::remove_var("HOME");
@@ -1027,9 +1031,12 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
         settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
         "echo keep-session-end"
     );
+    assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains(" session"));
     assert!(settings["hooks"].get("UserPromptSubmit").is_none());
     assert!(settings["hooks"].get("PreToolUse").is_none());
-    assert!(settings["hooks"].get("Stop").is_none());
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1058,7 +1065,7 @@ fn claude_v1_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 7);
+    assert_eq!(claude.expected_version, 11);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1088,7 +1095,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 7);
+    assert_eq!(claude.expected_version, 11);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1221,7 +1228,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 7);
+    assert_eq!(codex.expected_version, 8);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2739,6 +2746,43 @@ fn bundled_integration_asset_versions_match_expected_versions() {
 }
 
 #[test]
+fn bundled_live_integrations_relativize_workspace_tool_paths() {
+    for (name, asset) in [("pi", PI_EXTENSION_ASSET), ("omp", OMP_EXTENSION_ASSET)] {
+        assert!(
+            asset.contains("path.relative(process.cwd(), candidate)"),
+            "{name} must convert absolute workspace paths to safe display paths"
+        );
+        assert!(
+            asset.contains("path.isAbsolute(relative)"),
+            "{name} must reject paths that remain absolute after relativization"
+        );
+        assert!(
+            asset.contains("relative === \"..\"") && asset.contains("`..${path.sep}`"),
+            "{name} must reject absolute paths outside the working directory"
+        );
+        assert!(
+            asset.contains("path.posix.isAbsolute(candidate)")
+                && asset.contains("path.win32.isAbsolute(candidate)"),
+            "{name} must reject foreign-platform absolute paths"
+        );
+    }
+}
+
+#[test]
+fn bundled_live_integrations_report_shell_command_previews() {
+    for (name, asset) in [("pi", PI_EXTENSION_ASSET), ("omp", OMP_EXTENSION_ASSET)] {
+        assert!(
+            asset.contains("preview: liveCommandPreview(toolName, input)"),
+            "{name} must report bounded shell command previews"
+        );
+        assert!(
+            asset.contains("input.command ?? input.cmd"),
+            "{name} must recognize the supported shell command fields"
+        );
+    }
+}
+
+#[test]
 fn bundled_integration_assets_report_session_refs() {
     assert!(PI_EXTENSION_ASSET.contains("agent_session_path"));
     assert!(PI_EXTENSION_ASSET.contains("agent_session_id"));
@@ -2952,7 +2996,7 @@ fn omp_root_activation_requires_ui_context() {
 #[test]
 fn omp_session_start_and_switch_use_root_activation() {
     let session_start = OMP_EXTENSION_ASSET
-        .find("pi.on(\"session_start\", (_event, ctx)")
+        .find("pi.on(\"session_start\", async (_event, ctx)")
         .expect("omp extension registers session_start handler");
     let session_start_handler = &OMP_EXTENSION_ASSET[session_start..];
     session_start_handler
@@ -2960,12 +3004,46 @@ fn omp_session_start_and_switch_use_root_activation() {
         .expect("omp session_start handler should activate root session");
 
     let session_switch = OMP_EXTENSION_ASSET
-        .find("pi.on(\"session_switch\", (event, ctx)")
+        .find("pi.on(\"session_switch\", async (event, ctx)")
         .expect("omp extension registers session_switch handler");
     let session_switch_handler = &OMP_EXTENSION_ASSET[session_switch..];
     session_switch_handler
         .find("if (!activateRootSession(ctx, event?.reason || \"resume\"))")
         .expect("omp session_switch handler should activate root session with switch reason");
+}
+
+#[test]
+fn omp_session_start_ensures_the_transcript_before_root_activation() {
+    let handler = omp_handler("session_start");
+    let ensure_transcript = handler
+        .find("ensureSessionOnDisk(ctx)")
+        .expect("omp session_start should create the lazy transcript");
+    let await_transcript = handler
+        .find("await transcriptReady;")
+        .expect("omp session_start should await transcript creation");
+    let activate = handler
+        .find("if (!activateRootSession(ctx))")
+        .expect("omp session_start should activate after creating the transcript");
+
+    assert!(ensure_transcript < await_transcript);
+    assert!(await_transcript < activate);
+}
+
+#[test]
+fn omp_agent_end_refreshes_the_lazily_flushed_transcript_before_settling() {
+    let handler = omp_handler("agent_end");
+    let update_session = handler
+        .find("updateSessionRef(ctx);")
+        .expect("omp agent_end should refresh the lazily flushed transcript path");
+    let report_session = handler
+        .find("void reportSession();")
+        .expect("omp agent_end should re-report the refreshed transcript path");
+    let settle = handler
+        .find("scheduleIdle();")
+        .expect("omp agent_end should settle after refreshing the session");
+
+    assert!(update_session < report_session);
+    assert!(report_session < settle);
 }
 
 #[test]

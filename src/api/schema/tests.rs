@@ -87,6 +87,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             target: "reviewer".into(),
             text: "review this".into(),
             wait: None,
+            attachments: vec![],
         }),
     };
     let prompt_json = serde_json::to_value(&prompt).unwrap();
@@ -105,6 +106,7 @@ fn agent_start_and_prompt_requests_round_trip() {
                 until: vec![AgentStatus::Idle, AgentStatus::Done],
                 timeout_ms: Some(120_000),
             }),
+            attachments: vec![],
         }),
     };
     let prompt_and_wait_json = serde_json::to_value(&prompt_and_wait).unwrap();
@@ -120,6 +122,36 @@ fn agent_start_and_prompt_requests_round_trip() {
         serde_json::from_value::<Request>(prompt_and_wait_json).unwrap(),
         prompt_and_wait
     );
+}
+
+#[test]
+fn live_conversation_report_round_trips_as_provider_neutral_payload() {
+    let request = Request {
+        id: "conversation-report".into(),
+        method: Method::AgentConversationReport(AgentConversationReportParams {
+            pane_id: "w1:p1".into(),
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            integration_token: "token".into(),
+            seq: 7,
+            agent_session_id: Some("thread-1".into()),
+            agent_session_path: None,
+            native_id: Some("turn-1".into()),
+            entry_id: None,
+            turn_id: Some("turn-1".into()),
+            timestamp_ms: Some(42),
+            payload: ConversationItemPayload::TurnState {
+                state: TurnStateKind::Started,
+                started_ms: Some(42),
+                duration_ms: None,
+                error: None,
+            },
+        }),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["method"], "agent.conversation.report");
+    assert_eq!(value["params"]["payload"]["type"], "turn_state");
+    assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
 }
 
 #[test]
@@ -640,6 +672,7 @@ fn success_response_round_trips() {
             capabilities: Some(ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                agent_conversations: false,
             }),
         },
     };
@@ -747,6 +780,8 @@ fn worktree_request_and_response_round_trip() {
                 state_labels: HashMap::new(),
                 tokens: HashMap::new(),
                 agent_session: None,
+                conversation_session: None,
+                conversation_capability: None,
                 scroll: None,
                 revision: 0,
             },
@@ -1175,6 +1210,8 @@ fn create_response_round_trips_with_root_pane() {
                 state_labels: HashMap::new(),
                 tokens: HashMap::new(),
                 agent_session: None,
+                conversation_session: None,
+                conversation_capability: None,
                 scroll: None,
                 revision: 0,
             },

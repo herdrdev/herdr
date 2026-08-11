@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"omp-session-redacted","timestamp":"2026-08-10T00:00:00.000Z","cwd":"/redacted/project"}
+{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-10T00:00:01.000Z","message":{"role":"user","content":"Run the checks"}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-10T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"test"}}],"stopReason":"toolUse"}}
+{"type":"message","id":"r1","parentId":"a1","timestamp":"2026-08-10T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-1","toolName":"bash","content":[{"type":"text","text":"passed"}],"isError":false}}
+{"type":"message","id":"a2","parentId":"r1","timestamp":"2026-08-10T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Checks passed."}],"stopReason":"stop"}}
+{"type":"message","id":"plan-1","parentId":"r1","timestamp":"2026-08-10T00:00:03.500Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"plan-call","name":"todo","arguments":{"items":[{"content":"Run checks","status":"in_progress"}]}}],"stopReason":"toolUse"}}
+{"type":"message","id":"plan-result","parentId":"plan-1","timestamp":"2026-08-10T00:00:04.000Z","message":{"role":"toolResult","toolCallId":"plan-call","content":"ok","details":{"op":"done","phases":[{"name":"Checks","tasks":[{"content":"Run checks","status":"completed"}]}]},"isError":false}}
+{"type":"message","id":"a-error","parentId":"plan-result","timestamp":"2026-08-10T00:00:07.000Z","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"provider failed","errorId":"omp-error"}}

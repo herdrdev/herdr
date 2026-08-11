@@ -853,6 +853,7 @@ fn capture_snapshot(state: &AppState) -> crate::persist::SessionSnapshot {
     crate::persist::capture(
         &state.workspaces,
         &state.terminals,
+        &state.conversation_sources,
         &terminal_runtimes,
         state.active,
         state.selected,

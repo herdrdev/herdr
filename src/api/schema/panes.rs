@@ -392,6 +392,10 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
+    /// Unguessable per-pane integration token injected into the managed pane
+    /// process; required to attach a transcript or publish live activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -473,6 +477,13 @@ pub struct PaneInfo {
     pub tokens: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<AgentSessionInfo>,
+    /// Opaque conversation-session identity for structured Chat (capable
+    /// engines); never a filesystem path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_session: Option<super::conversations::ConversationSessionIdentity>,
+    /// Structured-chat availability for this pane, when the engine reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_capability: Option<super::conversations::ConversationCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PaneScrollInfo>,
     pub revision: u64,

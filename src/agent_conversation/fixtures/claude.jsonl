@@ -1,0 +1,7 @@
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-08-10T00:00:01.000Z","message":{"role":"user","content":"Review the project"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-08-10T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"tool_use","id":"tool-1","name":"Edit","input":{"file_path":"src/app.ts","old_string":"before","new_string":"after"}}],"stop_reason":null}}
+{"type":"user","uuid":"r1","parentUuid":"a1","timestamp":"2026-08-10T00:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"updated","is_error":false}]}}
+{"type":"assistant","uuid":"a2","parentUuid":"r1","timestamp":"2026-08-10T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The review is complete."}],"stop_reason":"end_turn"}}
+{"type":"assistant","uuid":"a3","parentUuid":"a2","timestamp":"2026-08-10T00:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Interrupted"}],"stop_reason":"aborted"}}
+{"type":"assistant","uuid":"meta","parentUuid":"a3","isMeta":true,"message":{"role":"assistant","content":[{"type":"text","text":"hidden"}],"stop_reason":"end_turn"}}
+{"type":"result","subtype":"success","duration_ms":3000,"result":"done"}

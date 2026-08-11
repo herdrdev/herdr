@@ -402,11 +402,17 @@ impl Workspace {
         extra_env: Vec<(String, String)>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let id = generate_workspace_id();
-        let launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
+        // Every engine-managed pane process (including the initial shell, so
+        // agents the user starts inside it can authenticate transcript/live
+        // reports) carries the per-pane integration token.
+        let mut launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
             id.clone(),
             public_tab_id_for_number(&id, 1),
             public_pane_id_for_number(&id, 1),
         );
+        if let Some(token) = crate::agent_resume::generate_integration_token() {
+            launch_env = launch_env.with_integration_token(token);
+        }
         let (tab, terminal, runtime) = if let Some(argv) = argv {
             Tab::new_argv_command(
                 1,
@@ -1065,11 +1071,17 @@ impl Workspace {
         pane_number: usize,
         extra_env: Vec<(String, String)>,
     ) -> PaneLaunchEnv {
-        PaneLaunchEnv::from_extra(extra_env).with_identity(
+        let mut launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
             self.id.clone(),
             public_tab_id_for_number(&self.id, tab_number),
             public_pane_id_for_number(&self.id, pane_number),
-        )
+        );
+        // New shell panes must carry the per-pane integration token so agents
+        // launched inside them can authenticate transcript/live reports.
+        if let Some(token) = crate::agent_resume::generate_integration_token() {
+            launch_env = launch_env.with_integration_token(token);
+        }
+        launch_env
     }
 
     pub fn public_tab_number(&self, tab_idx: usize) -> Option<usize> {
@@ -1527,10 +1539,13 @@ mod tests {
         assert!(first.starts_with('w'));
         assert!(second.starts_with('w'));
         assert_ne!(first, second);
-        assert!(first.len() <= 3, "unexpectedly long workspace id: {first}");
         assert!(
-            second.len() <= 3,
-            "unexpectedly long workspace id: {second}"
+            decode_public_number(first.strip_prefix('w').unwrap()).is_some(),
+            "workspace id is not a readable public handle: {first}"
+        );
+        assert!(
+            decode_public_number(second.strip_prefix('w').unwrap()).is_some(),
+            "workspace id is not a readable public handle: {second}"
         );
     }
 

@@ -18,6 +18,15 @@ pub enum AgentSessionRefKind {
     Path,
 }
 
+impl AgentSessionRefKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            AgentSessionRefKind::Id => "id",
+            AgentSessionRefKind::Path => "path",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentResumePlan {
     pub agent: String,
@@ -67,6 +76,65 @@ pub fn session_ref_from_report(
     }
 
     agent_session_id.and_then(AgentSessionRef::id)
+}
+
+/// Engine-side transcript source, kept strictly separate from the provider
+/// resume reference. Never serialized in public API responses; validated and
+/// canonicalized before reads (Phase 3 path rules).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptRef {
+    pub path: std::path::PathBuf,
+}
+
+impl TranscriptRef {
+    pub fn new(agent: &str, path: impl Into<std::path::PathBuf>) -> Option<Self> {
+        let path = path.into();
+        let raw = path.to_str()?;
+        if raw.is_empty()
+            || raw.len() > MAX_SESSION_PATH_LEN
+            || raw.bytes().any(|byte| byte.is_ascii_control())
+        {
+            return None;
+        }
+        if !path.is_absolute() {
+            return None;
+        }
+        if !matches!(agent, "pi" | "omp" | "codex" | "claude") {
+            return None;
+        }
+        Some(Self { path })
+    }
+}
+
+/// Derives the internal transcript reference from an accepted lifecycle
+/// report. The transcript reference and the resume reference remain separate
+/// facts; a provider that reports a path may contribute one regardless of
+/// whether its resume reference is an ID.
+pub fn transcript_ref_from_report(
+    agent: &str,
+    agent_session_path: Option<String>,
+) -> Option<TranscriptRef> {
+    TranscriptRef::new(agent, agent_session_path?)
+}
+
+/// Unguessable per-pane integration token (32 random bytes, hex). Bound to
+/// the pane's managed process generation; required on transcript-source and
+/// live-conversation reports.
+pub fn generate_integration_token() -> Option<String> {
+    random_hex(32)
+}
+
+/// Independent random opaque conversation-session handle. Stable only for the
+/// accepted engine session; an engine restart changes it and forces the
+/// required reader-generation reset. Never derived from a filesystem path.
+pub fn generate_conversation_handle() -> Option<String> {
+    random_hex(16)
+}
+
+fn random_hex(bytes: usize) -> Option<String> {
+    let mut buf = vec![0u8; bytes];
+    getrandom::fill(&mut buf).ok()?;
+    Some(buf.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
@@ -731,5 +799,38 @@ mod tests {
             &AgentSessionRef::path(&agy_session).unwrap()
         )
         .is_none());
+    }
+}
+
+#[cfg(test)]
+mod unified_chat_phase2_tests {
+    use super::*;
+
+    #[test]
+    fn transcript_ref_from_report_accepts_official_providers_with_absolute_paths() {
+        for agent in ["pi", "omp", "codex", "claude"] {
+            let t = transcript_ref_from_report(agent, Some("/home/u/.pi/session.jsonl".into()));
+            assert!(t.is_some(), "{agent} should accept an absolute path");
+        }
+        assert!(transcript_ref_from_report("codex", None).is_none());
+    }
+
+    #[test]
+    fn transcript_ref_rejects_relative_empty_and_non_official_paths() {
+        assert!(TranscriptRef::new("codex", "relative.jsonl").is_none());
+        assert!(TranscriptRef::new("codex", "").is_none());
+        assert!(TranscriptRef::new("codex", "/bad\npath").is_none());
+        assert!(TranscriptRef::new("copilot", "/tmp/x.jsonl").is_none());
+    }
+
+    #[test]
+    fn integration_token_and_conversation_handle_are_random_and_unique() {
+        let first = generate_integration_token().expect("token");
+        let second = generate_integration_token().expect("token");
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 64);
+        let handle = generate_conversation_handle().expect("handle");
+        assert_eq!(handle.len(), 32);
+        assert_ne!(handle, first);
     }
 }

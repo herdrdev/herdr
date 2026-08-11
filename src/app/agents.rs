@@ -382,6 +382,8 @@ impl App {
             state_labels: pane.state_labels,
             tokens: pane.tokens,
             agent_session: pane.agent_session,
+            conversation_session: pane.conversation_session,
+            conversation_capability: pane.conversation_capability,
             workspace_id: pane.workspace_id,
             tab_id: pane.tab_id,
             pane_id: pane.pane_id,

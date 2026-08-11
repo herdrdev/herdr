@@ -270,6 +270,248 @@ test("Pi reports idle only after the agent settles", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
 });
 
+test("Pi publishes bounded live conversation overlays", async () => {
+  const requests = await startRecordingServer("pi-live-conversation");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+  const context = {
+    ...piContext(() => false),
+    sessionManager: {
+      getSessionFile: () => "/tmp/pi-live.jsonl",
+      getSessionId: () => "pi-live",
+    },
+  };
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("agent_start")?.({}, context);
+  handlers.get("message_start")?.(
+    { message: { role: "user", timestamp: 1700000000000, content: [{ type: "text", text: "hello" }] } },
+    context,
+  );
+  handlers.get("message_start")?.(
+    { message: { role: "assistant", content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: {} }] } },
+    context,
+  );
+  handlers.get("message_start")?.(
+    { message: { role: "assistant", timestamp: 1700000000100, content: [{ type: "text", text: "first" }] } },
+    context,
+  );
+  handlers.get("message_update")?.(
+    { message: { role: "assistant", timestamp: 1700000000100, content: [{ type: "text", text: "working" }] } },
+    context,
+  );
+  handlers.get("message_start")?.(
+    { message: { role: "assistant", timestamp: 1700000000200, content: [{ type: "text", text: "second" }] } },
+    context,
+  );
+  handlers.get("message_end")?.(
+    { message: { role: "assistant", timestamp: 1700000000200, content: [{ type: "text", text: "done" }] } },
+    context,
+  );
+  handlers.get("tool_execution_start")?.(
+    { toolCallId: "call-1", toolName: "Edit", args: { path: "src/app.ts" } },
+    context,
+  );
+  handlers.get("tool_execution_end")?.(
+    { toolCallId: "call-1", toolName: "Edit", result: { success: true } },
+    context,
+  );
+  handlers.get("tool_approval_requested")?.(
+    { requestId: "approval-1", reason: "Allow Edit?" },
+    context,
+  );
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "Allow Edit?" }, context);
+
+  await waitFor(
+    () =>
+      requests.filter(
+        (request) => isRecord(request) && request.method === "agent.conversation.report",
+      ).length >= 4,
+  );
+  const payloadTypes = requests
+    .filter((request) => isRecord(request) && request.method === "agent.conversation.report")
+    .map((request) => (isRecord(request.params) && isRecord(request.params.payload) ? request.params.payload.type : undefined));
+  expect(payloadTypes).toEqual(
+    expect.arrayContaining(["user_message", "assistant_message", "tool_activity", "approval"]),
+  );
+  const conversationReports = requests.filter(
+    (request) => isRecord(request) && request.method === "agent.conversation.report",
+  );
+  const messageReports = conversationReports.filter(
+    (request) =>
+      isRecord(request) &&
+      isRecord(request.params) &&
+      isRecord(request.params.payload) &&
+      ["user_message", "assistant_message"].includes(String(request.params.payload.type)),
+  );
+  expect(new Set(messageReports.map((request) => (isRecord(request) ? request.params?.native_id : undefined))).size).toBeGreaterThanOrEqual(3);
+  expect(messageReports.every((request) => isRecord(request) && request.params?.turn_id === "turn:1700000000000")).toBe(true);
+  expect(messageReports.some((request) => isRecord(request) && request.params?.native_id === "message:turn:1700000000000:1700000000100")).toBe(true);
+  expect(messageReports.some((request) => isRecord(request) && request.params?.native_id === "message:turn:1700000000000:1700000000200")).toBe(true);
+  expect(messageReports.some((request) => isRecord(request) && request.params?.native_id === "message:turn:1700000000000:0")).toBe(false);
+});
+
+test("OMP publishes live tool and approval overlays", async () => {
+  const requests = await startRecordingServer("omp-live-conversation");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+  const context = {
+    hasUI: true,
+    isIdle: () => false,
+    sessionManager: {
+      getSessionFile: () => "/tmp/omp-live.jsonl",
+      getSessionId: () => "omp-live",
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("agent_start")?.({}, context);
+  handlers.get("message_update")?.(
+    { id: "message-1", message: { role: "assistant", content: [{ type: "text", text: "working" }] } },
+    context,
+  );
+  handlers.get("tool_execution_start")?.(
+    { toolCallId: "call-1", toolName: "Edit", args: { path: "src/app.ts" } },
+    context,
+  );
+  handlers.get("tool_execution_end")?.(
+    { toolCallId: "call-1", toolName: "Edit", isError: true },
+    context,
+  );
+  handlers.get("tool_execution_start")?.(
+    { toolCallId: "todo-1", toolName: "todo", args: { phases: [{ name: "Checks", items: [{ label: "Run tests", status: "in_progress" }] }] } },
+    context,
+  );
+  handlers.get("tool_execution_start")?.(
+    { toolCallId: "todo-2", toolName: "todo", args: { phases: [{ name: "Checks", items: [{ label: "Review output", status: "active" }] }] } },
+    context,
+  );
+  handlers.get("tool_approval_requested")?.(
+    { toolCallId: "approval-1", reason: "Allow Edit?" },
+    context,
+  );
+
+  await waitFor(
+    () =>
+      requests.filter(
+        (request) => isRecord(request) && request.method === "agent.conversation.report",
+      ).length >= 6,
+  );
+  const payloadTypes = requests
+    .filter((request) => isRecord(request) && request.method === "agent.conversation.report")
+    .map((request) => (isRecord(request.params) && isRecord(request.params.payload) ? request.params.payload.type : undefined));
+  expect(payloadTypes).toEqual(
+    expect.arrayContaining(["turn_state", "assistant_message", "tool_activity", "plan_update", "approval"]),
+  );
+  expect(
+    requests.some(
+      (request) =>
+        isRecord(request) &&
+        request.method === "agent.conversation.report" &&
+        isRecord(request.params) &&
+        isRecord(request.params.payload) &&
+        request.params.payload.type === "tool_activity" &&
+        request.params.payload.status === "failed",
+    ),
+  ).toBe(true);
+  const planIds = requests
+    .filter(
+      (request) =>
+        isRecord(request) &&
+        request.method === "agent.conversation.report" &&
+        isRecord(request.params) &&
+        isRecord(request.params.payload) &&
+        request.params.payload.type === "plan_update",
+    )
+    .map((request) => (isRecord(request) ? request.params?.native_id : undefined));
+  expect(planIds.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(planIds).size).toBe(1);
+  expect(typeof planIds[0] === "string" && planIds[0].startsWith("plan:")).toBe(true);
+});
+
+test("OMP re-reports a session after its lazily created transcript is flushed", async () => {
+  const requests = await startRecordingServer("omp-lazy-transcript");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  let sessionFile: string | undefined;
+  const context = {
+    hasUI: true,
+    isIdle: () => true,
+    sessionManager: {
+      getSessionFile: () => sessionFile,
+      getSessionId: () => "omp-lazy-transcript",
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(
+    () =>
+      requests.some(
+        (request) => isRecord(request) && request.method === "pane.report_agent_session",
+      ),
+  );
+
+  handlers.get("agent_start")?.({}, context);
+  sessionFile = "/tmp/omp-lazy-transcript.jsonl";
+  handlers.get("agent_end")?.({}, context);
+
+  await waitFor(
+    () =>
+      requests.some(
+        (request) =>
+          isRecord(request) &&
+          request.method === "pane.report_agent_session" &&
+          isRecord(request.params) &&
+          request.params.agent_session_path === "/tmp/omp-lazy-transcript.jsonl",
+      ),
+  );
+  const sessionReportIndex = requests.findIndex(
+    (request) =>
+      isRecord(request) &&
+      request.method === "pane.report_agent_session" &&
+      isRecord(request.params) &&
+      request.params.agent_session_path === sessionFile,
+  );
+  expect(sessionReportIndex).toBeGreaterThanOrEqual(0);
+});
+
+test("OMP creates its lazy transcript before the initial session report", async () => {
+  const requests = await startRecordingServer("omp-initial-transcript");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  let ensureCalls = 0;
+  let sessionFile: string | undefined;
+  const context = {
+    hasUI: true,
+    isIdle: () => true,
+    sessionManager: {
+      ensureOnDisk: async () => {
+        ensureCalls += 1;
+        sessionFile = "/tmp/omp-initial-transcript.jsonl";
+      },
+      getSessionFile: () => sessionFile,
+      getSessionId: () => "omp-initial-transcript",
+    },
+  };
+
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(
+    () =>
+      requests.some(
+        (request) =>
+          isRecord(request) &&
+          request.method === "pane.report_agent_session" &&
+          isRecord(request.params) &&
+          request.params.agent_session_path === sessionFile,
+      ),
+  );
+
+  expect(ensureCalls).toBe(1);
+});
+
 test("Pi ignores RPC sessions even when UI APIs are available", async () => {
   const requests = await startRecordingServer("pi-rpc");
   const { handlers, pi } = createExtensionHarness();

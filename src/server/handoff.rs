@@ -68,12 +68,12 @@ pub(crate) fn spawn_handoff_import(
     let exe = if let Some(import_exe) = import_exe {
         import_exe
     } else {
-        fallback_exe = std::env::current_exe().map_err(|err| {
+        fallback_exe = recover_deleted_executable_path(std::env::current_exe().map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("failed to determine herdr executable path: {err}"),
             )
-        })?;
+        })?);
         &fallback_exe
     };
     let mut command = Command::new(exe);
@@ -102,6 +102,29 @@ pub(crate) fn spawn_handoff_import(
             ),
         )
     })
+}
+
+#[cfg(unix)]
+fn recover_deleted_executable_path(path: PathBuf) -> PathBuf {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    if path.exists() {
+        return path;
+    }
+    let Some(replacement) = path
+        .as_os_str()
+        .as_bytes()
+        .strip_suffix(b" (deleted)")
+        .map(|bytes| PathBuf::from(OsStr::from_bytes(bytes).to_os_string()))
+    else {
+        return path;
+    };
+    if replacement.is_file() {
+        replacement
+    } else {
+        path
+    }
 }
 
 #[cfg(unix)]
@@ -385,7 +408,7 @@ fn send_fds(stream: &UnixStream, fds: &[RawFd]) -> io::Result<()> {
     if fds.is_empty() {
         return Ok(());
     }
-    let byte = [b'F'];
+    let byte = *b"F";
     let iov = [libc::iovec {
         iov_base: byte.as_ptr() as *mut libc::c_void,
         iov_len: byte.len(),
@@ -465,6 +488,45 @@ fn recv_fds(stream: &UnixStream, expected: usize) -> io::Result<Vec<RawFd>> {
         )));
     }
     Ok(out)
+}
+
+#[cfg(all(test, unix))]
+mod executable_tests {
+    use super::*;
+
+    #[test]
+    fn deleted_current_executable_uses_the_replaced_path() {
+        let root =
+            std::env::temp_dir().join(format!("herdr-handoff-executable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("herdr");
+        std::fs::write(&executable, b"replacement").unwrap();
+        let deleted = PathBuf::from(format!("{} (deleted)", executable.display()));
+
+        assert_eq!(recover_deleted_executable_path(deleted), executable);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_executable_named_deleted_is_not_rewritten() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-handoff-existing-deleted-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("herdr (deleted)");
+        std::fs::write(&executable, b"real file").unwrap();
+
+        assert_eq!(
+            recover_deleted_executable_path(executable.clone()),
+            executable
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 #[cfg(unix)]

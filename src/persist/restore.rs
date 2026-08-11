@@ -117,7 +117,6 @@ pub fn restore_handoff(
     )
 }
 
-#[cfg(unix)]
 pub fn handoff_pane_aliases(
     snapshot: &SessionSnapshot,
     workspaces: &[Workspace],
@@ -125,7 +124,8 @@ pub fn handoff_pane_aliases(
     let mut aliases = HashMap::new();
     for (ws_snap, workspace) in snapshot.workspaces.iter().zip(workspaces) {
         for (tab_snap, tab) in ws_snap.tabs.iter().zip(&workspace.tabs) {
-            let old_ids = collect_snapshot_pane_ids(&tab_snap.layout);
+            let mut old_ids = Vec::new();
+            collect_layout_snapshot_pane_ids(&tab_snap.layout, &mut old_ids);
             let new_ids = tab.layout.pane_ids();
             for (old_id, new_id) in old_ids.into_iter().zip(new_ids) {
                 if old_id != new_id.raw() {
@@ -135,24 +135,6 @@ pub fn handoff_pane_aliases(
         }
     }
     aliases
-}
-
-#[cfg(unix)]
-fn collect_snapshot_pane_ids(node: &LayoutSnapshot) -> Vec<u32> {
-    let mut ids = Vec::new();
-    collect_snapshot_ids_inner(node, &mut ids);
-    ids
-}
-
-#[cfg(unix)]
-fn collect_snapshot_ids_inner(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
-    match node {
-        LayoutSnapshot::Pane(id) => ids.push(*id),
-        LayoutSnapshot::Split { first, second, .. } => {
-            collect_snapshot_ids_inner(first, ids);
-            collect_snapshot_ids_inner(second, ids);
-        }
-    }
 }
 
 fn migrated_public_pane_numbers_by_old_raw(
@@ -496,6 +478,7 @@ fn restore_tab(
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
+        let saved_integration_token = saved_pane.and_then(|p| p.integration_token.clone());
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let saved_history =
             old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
@@ -517,17 +500,26 @@ fn restore_tab(
         let public_pane_id = old_pane_id
             .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))
             .map(String::as_str);
+        let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
+        let was_imported = imported_runtime.is_some();
         let launch_env = public_pane_id
             .map(|pane_id| {
-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(
+                let mut env = PaneLaunchEnv::from_extra(Vec::new()).with_identity(
                     workspace_id.to_string(),
                     crate::workspace::public_tab_id_for_number(workspace_id, number),
                     pane_id.to_string(),
-                )
+                );
+                let token = if was_imported {
+                    saved_integration_token.clone()
+                } else {
+                    crate::agent_resume::generate_integration_token()
+                };
+                if let Some(token) = token {
+                    env = env.with_integration_token(token);
+                }
+                env
             })
             .unwrap_or_default();
-        let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
-        let was_imported = imported_runtime.is_some();
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -537,6 +529,7 @@ fn restore_tab(
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            terminal.integration_token = launch_env.integration_token().map(str::to_string);
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -629,6 +622,7 @@ fn restore_tab(
             Ok(runtime) => {
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+                terminal.integration_token = launch_env.integration_token().map(str::to_string);
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1198,6 +1192,8 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            integration_token: None,
+                            transcript_path: None,
                         },
                     )]),
                     zoomed: false,
@@ -1279,6 +1275,8 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                integration_token: None,
+                                transcript_path: None,
                             },
                         ),
                         (
@@ -1290,6 +1288,8 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                integration_token: None,
+                                transcript_path: None,
                             },
                         ),
                     ]),
@@ -1343,6 +1343,8 @@ mod tests {
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
+                    integration_token: None,
+                    transcript_path: None,
                 },
             )
         };
@@ -1358,6 +1360,8 @@ mod tests {
                 value: "codex-session".into(),
             }),
             launch_argv: None,
+            integration_token: None,
+            transcript_path: None,
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1509,6 +1513,8 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            integration_token: None,
+                            transcript_path: None,
                         },
                     )]),
                     zoomed: false,
@@ -1670,6 +1676,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                integration_token: None,
+                transcript_path: None,
             },
         );
         let history = SessionHistorySnapshot {

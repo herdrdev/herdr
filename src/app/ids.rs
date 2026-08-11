@@ -38,22 +38,30 @@ impl App {
     }
 
     pub(super) fn pane_launch_env(
-        &self,
+        &mut self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
         extra_env: Vec<(String, String)>,
     ) -> Option<crate::pane::PaneLaunchEnv> {
+        let internal_pane_id = pane_id;
         let workspace_id = self.public_workspace_id(ws_idx);
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let tab_id = self.public_tab_id(ws_idx, tab_idx)?;
         let pane_id = self.public_pane_id(ws_idx, pane_id)?;
+        // Rotate the per-pane integration token on every managed pane process
+        // creation; the stored token is what report handlers validate against.
+        let token = crate::agent_resume::generate_integration_token()?;
+        if let Some(terminal_id) = ws
+            .terminal_id(internal_pane_id)
+            .and_then(|terminal_id| self.state.terminals.get_mut(terminal_id))
+        {
+            terminal_id.integration_token = Some(token.clone());
+        }
         Some(
-            crate::pane::PaneLaunchEnv::from_extra(extra_env).with_identity(
-                workspace_id,
-                tab_id,
-                pane_id,
-            ),
+            crate::pane::PaneLaunchEnv::from_extra(extra_env)
+                .with_identity(workspace_id, tab_id, pane_id)
+                .with_integration_token(token),
         )
     }
 

@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 
 set -eu
 
@@ -65,6 +65,7 @@ if inherited_session_id and inherited_session_id != agent_session_id:
 session_start_source = hook_input.get("source") if hook_event_name == "SessionStart" else None
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = None
+integration_capability = os.environ.get("HERDR_INTEGRATION_CAPABILITY") or os.environ.get("HERDR_INTEGRATION_TOKEN", "")
 if agent_session_id:
     params = {
         "pane_id": pane_id,
@@ -72,6 +73,8 @@ if agent_session_id:
         "agent": "codex",
         "seq": report_seq,
         "agent_session_id": agent_session_id,
+        "agent_session_path": transcript_path,
+        "integration_token": integration_capability,
     }
     if session_start_source:
         params["session_start_source"] = session_start_source

@@ -1358,6 +1358,7 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
 
     super::send_ok_request(Method::PaneReportAgentSession(
         PaneReportAgentSessionParams {
+            integration_token: crate::integration::integration_capability_from_env(),
             pane_id,
             source,
             agent,

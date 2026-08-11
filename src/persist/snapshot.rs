@@ -107,6 +107,10 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +259,7 @@ pub fn capture(
         crate::terminal::TerminalId,
         crate::terminal::TerminalState,
     >,
+    conversation_sources: &crate::app::conversation_sources::ConversationSourceRegistry,
     terminal_runtimes: &TerminalRuntimeRegistry,
     active: Option<usize>,
     selected: usize,
@@ -266,7 +271,14 @@ pub fn capture(
         version: SNAPSHOT_VERSION,
         workspaces: workspaces
             .iter()
-            .map(|workspace| capture_workspace(workspace, terminals, terminal_runtimes))
+            .map(|workspace| {
+                capture_workspace(
+                    workspace,
+                    terminals,
+                    conversation_sources,
+                    terminal_runtimes,
+                )
+            })
             .collect(),
         active,
         selected,
@@ -282,6 +294,7 @@ fn capture_workspace(
         crate::terminal::TerminalId,
         crate::terminal::TerminalState,
     >,
+    conversation_sources: &crate::app::conversation_sources::ConversationSourceRegistry,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> WorkspaceSnapshot {
     WorkspaceSnapshot {
@@ -302,7 +315,7 @@ fn capture_workspace(
         tabs: ws
             .tabs
             .iter()
-            .map(|tab| capture_tab(tab, terminals, terminal_runtimes))
+            .map(|tab| capture_tab(tab, terminals, conversation_sources, terminal_runtimes))
             .collect(),
         active_tab: ws.active_tab,
     }
@@ -314,6 +327,7 @@ fn capture_tab(
         crate::terminal::TerminalId,
         crate::terminal::TerminalState,
     >,
+    conversation_sources: &crate::app::conversation_sources::ConversationSourceRegistry,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> TabSnapshot {
     let mut panes = HashMap::new();
@@ -338,6 +352,7 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let integration_token = terminal.and_then(|terminal| terminal.integration_token.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -359,6 +374,14 @@ fn capture_tab(
                     value: session.session_ref.value.clone(),
                 })
         });
+        let transcript_path = conversation_sources
+            .transcript_path_for_persistence(*id)
+            .or_else(|| {
+                agent_session.as_ref().and_then(|session| {
+                    (session.kind == crate::agent_resume::AgentSessionRefKind::Path)
+                        .then(|| PathBuf::from(&session.value))
+                })
+            });
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -368,6 +391,8 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                integration_token,
+                transcript_path,
             },
         );
     }
@@ -535,6 +560,7 @@ mod tests {
         capture(
             &state.workspaces,
             &state.terminals,
+            &state.conversation_sources,
             terminal_runtimes,
             state.active,
             state.selected,
@@ -648,6 +674,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                integration_token: None,
+                transcript_path: None,
             },
         );
         panes.insert(
@@ -659,6 +687,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                integration_token: None,
+                transcript_path: None,
             },
         );
 
@@ -1207,6 +1237,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                integration_token: None,
+                transcript_path: None,
             },
         );
         panes.insert(
@@ -1220,6 +1252,8 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                integration_token: None,
+                transcript_path: None,
             },
         );
 

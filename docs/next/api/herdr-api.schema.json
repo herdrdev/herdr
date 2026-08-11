@@ -79,6 +79,96 @@
           ],
           "type": "string"
         },
+        "ConversationAvailability": {
+          "description": "Whether structured Chat is available for a pane/agent.",
+          "oneOf": [
+            {
+              "const": "supported",
+              "description": "An adapter exists and a valid transcript source is available.",
+              "type": "string"
+            },
+            {
+              "const": "unavailable",
+              "description": "The provider is supported, but no valid session/transcript is available.",
+              "type": "string"
+            },
+            {
+              "const": "unsupported",
+              "description": "No structured adapter exists for this provider.",
+              "type": "string"
+            }
+          ]
+        },
+        "ConversationCapability": {
+          "description": "Structured-chat capability state exposed on pane/agent information.",
+          "properties": {
+            "availability": {
+              "$ref": "#/schemas/event/$defs/ConversationAvailability"
+            },
+            "message": {
+              "description": "Optional short safe message; never a raw OS error.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/schemas/event/$defs/ConversationReasonCode"
+            }
+          },
+          "required": [
+            "availability",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "ConversationReasonCode": {
+          "description": "Machine-readable reason for the availability state. Desktop maps these to\nuser-facing copy; engine log lines carry the detailed diagnostics.",
+          "oneOf": [
+            {
+              "const": "ready",
+              "description": "`supported`; nothing prevents reads.",
+              "type": "string"
+            },
+            {
+              "const": "adapter_missing",
+              "description": "`unsupported`; no adapter for the provider.",
+              "type": "string"
+            },
+            {
+              "const": "no_session",
+              "description": "`unavailable`; the pane has no accepted provider session.",
+              "type": "string"
+            },
+            {
+              "const": "transcript_missing",
+              "description": "`unavailable`; no transcript source has been reported/validated.",
+              "type": "string"
+            },
+            {
+              "const": "transcript_invalid",
+              "description": "`unavailable`; the transcript source failed path validation.",
+              "type": "string"
+            },
+            {
+              "const": "source_unreadable",
+              "description": "`unavailable`; the transcript source exists but is not currently readable.",
+              "type": "string"
+            }
+          ]
+        },
+        "ConversationSessionIdentity": {
+          "description": "Opaque conversation-session identity. It is engine-generated and bound to\nthe pane/provider session; it never contains a filesystem path.",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
         "EventData": {
           "oneOf": [
             {
@@ -778,6 +868,28 @@
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
             },
+            "conversation_capability": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ConversationCapability"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Structured-chat availability for this pane, when the engine reports it."
+            },
+            "conversation_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ConversationSessionIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque conversation-session identity for structured Chat (capable\nengines); never a filesystem path."
+            },
             "cwd": {
               "type": [
                 "string",
@@ -1222,8 +1334,224 @@
     },
     "request": {
       "$defs": {
+        "AgentAttachmentAbortParams": {
+          "description": "Params for `agent.attachment.abort`.",
+          "properties": {
+            "upload": {
+              "$ref": "#/schemas/request/$defs/AttachmentUploadHandle"
+            }
+          },
+          "required": [
+            "upload"
+          ],
+          "type": "object"
+        },
+        "AgentAttachmentBeginParams": {
+          "description": "Params for `agent.attachment.begin`.",
+          "properties": {
+            "byte_size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "sha256_digest": {
+              "description": "Hex SHA-256 of the intended payload.",
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "media_type",
+            "name",
+            "byte_size",
+            "sha256_digest"
+          ],
+          "type": "object"
+        },
+        "AgentAttachmentChunkParams": {
+          "description": "Params for `agent.attachment.chunk`. Chunks are ordered by index and stay\nwell below Herdr's request-line cap; the engine bounds them individually\nand in aggregate.",
+          "properties": {
+            "data_base64": {
+              "type": "string"
+            },
+            "index": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "upload": {
+              "$ref": "#/schemas/request/$defs/AttachmentUploadHandle"
+            }
+          },
+          "required": [
+            "upload",
+            "index",
+            "data_base64"
+          ],
+          "type": "object"
+        },
+        "AgentAttachmentFinishParams": {
+          "description": "Params for `agent.attachment.finish`.",
+          "properties": {
+            "upload": {
+              "$ref": "#/schemas/request/$defs/AttachmentUploadHandle"
+            }
+          },
+          "required": [
+            "upload"
+          ],
+          "type": "object"
+        },
+        "AgentConversationReadParams": {
+          "description": "Params for `agent.conversation.read`.\n\nCursors are opaque strings. A public cursor encodes direction, reader\ngeneration, opaque session identity, source fingerprint, and canonical\nsequence/revision; transcript byte offsets are private durable-adapter\nstate and are never part of the public position.",
+          "properties": {
+            "cursor": {
+              "description": "Required for `older`/`newer`; must be absent for `newest`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "direction": {
+              "$ref": "#/schemas/request/$defs/ConversationPageDirection",
+              "default": "newest"
+            },
+            "limit": {
+              "default": 64,
+              "description": "Bounded page size; the engine clamps values above the maximum.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "AgentConversationReportParams": {
+          "description": "Authenticated provider-neutral live lifecycle item. The integration token\nis checked by the pane handler and the payload is bounded before it enters\nthe ephemeral reader overlay.",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "agent_session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_session_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "entry_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "integration_token": {
+              "type": "string"
+            },
+            "native_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/schemas/request/$defs/ConversationItemPayload"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "type": "string"
+            },
+            "timestamp_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "pane_id",
+            "source",
+            "agent",
+            "integration_token",
+            "seq",
+            "payload"
+          ],
+          "type": "object"
+        },
+        "AgentConversationRespondParams": {
+          "description": "Params for `agent.conversation.respond`.",
+          "properties": {
+            "decision_id": {
+              "description": "One advertised decision id.",
+              "type": "string"
+            },
+            "reader_generation": {
+              "type": "string"
+            },
+            "request_id": {
+              "description": "Stable approval request id from the canonical `approval` item.",
+              "type": "string"
+            },
+            "session": {
+              "$ref": "#/schemas/request/$defs/ConversationSessionIdentity"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "reader_generation",
+            "session",
+            "request_id",
+            "decision_id"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
+            "attachments": {
+              "description": "Optional engine-staged attachment handles resolved on the engine host.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/AttachmentHandle"
+              },
+              "type": "array"
+            },
             "target": {
               "type": "string"
             },
@@ -1689,6 +2017,82 @@
           ],
           "type": "object"
         },
+        "ApprovalDecision": {
+          "properties": {
+            "id": {
+              "description": "Stable decision id advertised by the engine; never derived from text.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label"
+          ],
+          "type": "object"
+        },
+        "ApprovalStatus": {
+          "enum": [
+            "pending",
+            "resolved"
+          ],
+          "type": "string"
+        },
+        "AssistantMessagePhase": {
+          "enum": [
+            "commentary",
+            "final"
+          ],
+          "type": "string"
+        },
+        "AttachmentHandle": {
+          "description": "Opaque staged-attachment handle accepted by `agent.prompt`; never a host path.",
+          "properties": {
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
+        "AttachmentMetadata": {
+          "description": "Safe attachment metadata. Bytes and engine-host paths never leave the engine.",
+          "properties": {
+            "byte_size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "media_type",
+            "name",
+            "byte_size"
+          ],
+          "type": "object"
+        },
+        "AttachmentUploadHandle": {
+          "description": "Opaque attachment upload handle; never a host path.",
+          "properties": {
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleSetParams": {
           "properties": {
             "title": {
@@ -1697,6 +2101,288 @@
           },
           "required": [
             "title"
+          ],
+          "type": "object"
+        },
+        "CompletionState": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "ConversationItemPayload": {
+          "description": "Typed canonical payload. Unknown native records are ignored and counted for\ndiagnostics; they never appear here.",
+          "oneOf": [
+            {
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/AttachmentMetadata"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "user_message",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "phase": {
+                  "$ref": "#/schemas/request/$defs/AssistantMessagePhase"
+                },
+                "state": {
+                  "$ref": "#/schemas/request/$defs/CompletionState"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "assistant_message",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "phase",
+                "text",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "steps": {
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/PlanStep"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "plan_update",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "steps"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "duration_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "preview": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "$ref": "#/schemas/request/$defs/ToolStatus"
+                },
+                "type": {
+                  "const": "tool_activity",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "action",
+                "label",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "change": {
+                  "$ref": "#/schemas/request/$defs/FileChangeKind"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "const": "file_change",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "path",
+                "change"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "decisions": {
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/ApprovalDecision"
+                  },
+                  "type": "array"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "selected_decision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "$ref": "#/schemas/request/$defs/ApprovalStatus"
+                },
+                "structured_response": {
+                  "description": "False when the provider cannot safely respond; Desktop must show\n`Open Terminal to respond` instead of guessing terminal keys.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "approval",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "request_id",
+                "prompt",
+                "decisions",
+                "status",
+                "structured_response"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "duration_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "started_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "$ref": "#/schemas/request/$defs/TurnStateKind"
+                },
+                "type": {
+                  "const": "turn_state",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notice",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ConversationPageDirection": {
+          "description": "Direction of a `agent.conversation.read` page.",
+          "oneOf": [
+            {
+              "const": "newest",
+              "description": "The most recent bounded window; requires no cursor.",
+              "type": "string"
+            },
+            {
+              "const": "older",
+              "description": "Page strictly older than the cursor's position.",
+              "type": "string"
+            },
+            {
+              "const": "newer",
+              "description": "Page strictly newer than the cursor's position (delta refresh).",
+              "type": "string"
+            }
+          ]
+        },
+        "ConversationSessionIdentity": {
+          "description": "Opaque conversation-session identity. It is engine-generated and bound to\nthe pane/provider session; it never contains a filesystem path.",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
           ],
           "type": "object"
         },
@@ -2091,6 +2777,15 @@
             "match_event"
           ],
           "type": "object"
+        },
+        "FileChangeKind": {
+          "enum": [
+            "created",
+            "modified",
+            "deleted",
+            "renamed"
+          ],
+          "type": "string"
         },
         "IntegrationInstallParams": {
           "properties": {
@@ -2864,6 +3559,13 @@
                 "null"
               ]
             },
+            "integration_token": {
+              "description": "Unguessable per-pane integration token injected into the managed pane\nprocess; required to attach a transcript or publish live activity.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "pane_id": {
               "type": "string"
             },
@@ -3221,6 +3923,30 @@
         },
         "PingParams": {
           "type": "object"
+        },
+        "PlanStep": {
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/schemas/request/$defs/PlanStepStatus"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "PlanStepStatus": {
+          "enum": [
+            "pending",
+            "active",
+            "completed",
+            "failed"
+          ],
+          "type": "string"
         },
         "PluginActionInvokeParams": {
           "properties": {
@@ -4036,6 +4762,22 @@
             },
             {
               "properties": {
+                "pane_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent.conversation_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "layout.updated",
                   "type": "string"
@@ -4141,6 +4883,23 @@
             "top-right",
             "bottom-left",
             "bottom-right"
+          ],
+          "type": "string"
+        },
+        "ToolStatus": {
+          "enum": [
+            "running",
+            "completed",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "TurnStateKind": {
+          "enum": [
+            "started",
+            "completed",
+            "interrupted",
+            "failed"
           ],
           "type": "string"
         },
@@ -5101,6 +5860,134 @@
         {
           "properties": {
             "method": {
+              "const": "agent.conversation.read",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentConversationReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.conversation.metadata",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentConversationReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.conversation.report",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentConversationReportParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.conversation.respond",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentConversationRespondParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.attachment.begin",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAttachmentBeginParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.attachment.chunk",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAttachmentChunkParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.attachment.finish",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAttachmentFinishParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.attachment.abort",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAttachmentAbortParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.split",
               "type": "string"
             },
@@ -5896,6 +6783,41 @@
     },
     "subscription_event": {
       "$defs": {
+        "AgentConversationChangedEvent": {
+          "description": "Pane-scoped structured-conversation change signal. It carries identity and\nposition only; payloads are fetched through `agent.conversation.read`.",
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "reader_generation": {
+              "type": "string"
+            },
+            "reset_required": {
+              "default": false,
+              "description": "True when the client must discard its timeline and reread the newest\ntail (session replacement, source replacement, engine restart, or\nreader-cache generation change).",
+              "type": "boolean"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session": {
+              "$ref": "#/schemas/subscription_event/$defs/ConversationSessionIdentity"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "workspace_id",
+            "session",
+            "reader_generation",
+            "revision"
+          ],
+          "type": "object"
+        },
         "AgentStatus": {
           "enum": [
             "idle",
@@ -5905,6 +6827,18 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "ConversationSessionIdentity": {
+          "description": "Opaque conversation-session identity. It is engine-generated and bound to\nthe pane/provider session; it never contains a filesystem path.",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
         },
         "PaneAgentStatusChangedEvent": {
           "properties": {
@@ -6079,6 +7013,9 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/PaneScrollChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/AgentConversationChangedEvent"
             }
           ]
         },
@@ -6086,7 +7023,8 @@
           "enum": [
             "pane.output_matched",
             "pane.agent_status_changed",
-            "pane.scroll_changed"
+            "pane.scroll_changed",
+            "agent.conversation_changed"
           ],
           "type": "string"
         }
@@ -6129,6 +7067,28 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "conversation_capability": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ConversationCapability"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Structured-chat availability for this agent, when the engine reports it."
+            },
+            "conversation_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ConversationSessionIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque conversation-session identity for structured Chat (capable\nengines; path-backed sessions omit `agent_session` instead of leaking\nthe path here)."
             },
             "cwd": {
               "type": [
@@ -6336,11 +7296,95 @@
           ],
           "type": "string"
         },
+        "ApprovalDecision": {
+          "properties": {
+            "id": {
+              "description": "Stable decision id advertised by the engine; never derived from text.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "label"
+          ],
+          "type": "object"
+        },
+        "ApprovalStatus": {
+          "enum": [
+            "pending",
+            "resolved"
+          ],
+          "type": "string"
+        },
+        "AssistantMessagePhase": {
+          "enum": [
+            "commentary",
+            "final"
+          ],
+          "type": "string"
+        },
+        "AttachmentHandle": {
+          "description": "Opaque staged-attachment handle accepted by `agent.prompt`; never a host path.",
+          "properties": {
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
+        "AttachmentMetadata": {
+          "description": "Safe attachment metadata. Bytes and engine-host paths never leave the engine.",
+          "properties": {
+            "byte_size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "media_type",
+            "name",
+            "byte_size"
+          ],
+          "type": "object"
+        },
+        "AttachmentUploadHandle": {
+          "description": "Opaque attachment upload handle; never a host path.",
+          "properties": {
+            "handle": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
             "cleared",
             "no_foreground_client"
+          ],
+          "type": "string"
+        },
+        "CompletionState": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed"
           ],
           "type": "string"
         },
@@ -6351,6 +7395,514 @@
             "failed"
           ],
           "type": "string"
+        },
+        "ConversationAvailability": {
+          "description": "Whether structured Chat is available for a pane/agent.",
+          "oneOf": [
+            {
+              "const": "supported",
+              "description": "An adapter exists and a valid transcript source is available.",
+              "type": "string"
+            },
+            {
+              "const": "unavailable",
+              "description": "The provider is supported, but no valid session/transcript is available.",
+              "type": "string"
+            },
+            {
+              "const": "unsupported",
+              "description": "No structured adapter exists for this provider.",
+              "type": "string"
+            }
+          ]
+        },
+        "ConversationCapability": {
+          "description": "Structured-chat capability state exposed on pane/agent information.",
+          "properties": {
+            "availability": {
+              "$ref": "#/schemas/success_response/$defs/ConversationAvailability"
+            },
+            "message": {
+              "description": "Optional short safe message; never a raw OS error.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/schemas/success_response/$defs/ConversationReasonCode"
+            }
+          },
+          "required": [
+            "availability",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "ConversationItem": {
+          "description": "Canonical conversation item with stable identity and ordered position.",
+          "oneOf": [
+            {
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AttachmentMetadata"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "user_message",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "phase": {
+                  "$ref": "#/schemas/success_response/$defs/AssistantMessagePhase"
+                },
+                "state": {
+                  "$ref": "#/schemas/success_response/$defs/CompletionState"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "assistant_message",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "phase",
+                "text",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "steps": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PlanStep"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "plan_update",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "steps"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "duration_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "preview": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/ToolStatus"
+                },
+                "type": {
+                  "const": "tool_activity",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "action",
+                "label",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "change": {
+                  "$ref": "#/schemas/success_response/$defs/FileChangeKind"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "const": "file_change",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "path",
+                "change"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "decisions": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/ApprovalDecision"
+                  },
+                  "type": "array"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "selected_decision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/ApprovalStatus"
+                },
+                "structured_response": {
+                  "description": "False when the provider cannot safely respond; Desktop must show\n`Open Terminal to respond` instead of guessing terminal keys.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "approval",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "request_id",
+                "prompt",
+                "decisions",
+                "status",
+                "structured_response"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "duration_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "started_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "$ref": "#/schemas/success_response/$defs/TurnStateKind"
+                },
+                "type": {
+                  "const": "turn_state",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "state"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "notice",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "id": {
+              "description": "Deterministic across rereads; derived from provider-native identity or\nsession identity plus record position — never from mutable text.",
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "sequence": {
+              "description": "Monotonic order within the opaque session identity.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timestamp_ms": {
+              "description": "Provider timestamp in milliseconds since the Unix epoch, when known.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "sequence",
+            "provider"
+          ],
+          "type": "object"
+        },
+        "ConversationPage": {
+          "description": "One canonical conversation page.",
+          "properties": {
+            "capability": {
+              "$ref": "#/schemas/success_response/$defs/ConversationCapability"
+            },
+            "has_older": {
+              "type": "boolean"
+            },
+            "items": {
+              "description": "Ordered by canonical sequence ascending.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/ConversationItem"
+              },
+              "type": "array"
+            },
+            "next_cursor": {
+              "description": "Cursor for the next (`newer`) page, when available.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous_cursor": {
+              "description": "Cursor for the previous (`older`) page, when available.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider": {
+              "type": "string"
+            },
+            "reader_generation": {
+              "description": "Reader generation/reset identity derived from the engine instance,\nprovider session, source fingerprint, and reader-cache generation.",
+              "type": "string"
+            },
+            "revision": {
+              "description": "Monotonic only within the returned reader generation.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session": {
+              "$ref": "#/schemas/success_response/$defs/ConversationSessionIdentity"
+            }
+          },
+          "required": [
+            "provider",
+            "session",
+            "capability",
+            "items",
+            "has_older",
+            "revision",
+            "reader_generation"
+          ],
+          "type": "object"
+        },
+        "ConversationReadResult": {
+          "description": "Result of a read; a stale/incompatible cursor never silently reuses state.",
+          "oneOf": [
+            {
+              "properties": {
+                "page": {
+                  "$ref": "#/schemas/success_response/$defs/ConversationPage"
+                },
+                "type": {
+                  "const": "page",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "page"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "The cursor belonged to another engine generation, session, replaced\nsource, or evicted incompatible reader state. The client must reset\nand reread the newest tail.",
+              "properties": {
+                "reader_generation": {
+                  "type": "string"
+                },
+                "session": {
+                  "$ref": "#/schemas/success_response/$defs/ConversationSessionIdentity"
+                },
+                "type": {
+                  "const": "reset_required",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "session",
+                "reader_generation"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ConversationReasonCode": {
+          "description": "Machine-readable reason for the availability state. Desktop maps these to\nuser-facing copy; engine log lines carry the detailed diagnostics.",
+          "oneOf": [
+            {
+              "const": "ready",
+              "description": "`supported`; nothing prevents reads.",
+              "type": "string"
+            },
+            {
+              "const": "adapter_missing",
+              "description": "`unsupported`; no adapter for the provider.",
+              "type": "string"
+            },
+            {
+              "const": "no_session",
+              "description": "`unavailable`; the pane has no accepted provider session.",
+              "type": "string"
+            },
+            {
+              "const": "transcript_missing",
+              "description": "`unavailable`; no transcript source has been reported/validated.",
+              "type": "string"
+            },
+            {
+              "const": "transcript_invalid",
+              "description": "`unavailable`; the transcript source failed path validation.",
+              "type": "string"
+            },
+            {
+              "const": "source_unreadable",
+              "description": "`unavailable`; the transcript source exists but is not currently readable.",
+              "type": "string"
+            }
+          ]
+        },
+        "ConversationRespondReason": {
+          "enum": [
+            "accepted",
+            "already_resolved",
+            "stale_request",
+            "unknown_request",
+            "conflicting_decision",
+            "session_mismatch"
+          ],
+          "type": "string"
+        },
+        "ConversationRespondResult": {
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "decision_id": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/schemas/success_response/$defs/ConversationRespondReason"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "request_id",
+            "decision_id",
+            "accepted",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "ConversationSessionIdentity": {
+          "description": "Opaque conversation-session identity. It is engine-generated and bound to\nthe pane/provider session; it never contains a filesystem path.",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
         },
         "EventData": {
           "oneOf": [
@@ -7045,6 +8597,15 @@
           ],
           "type": "string"
         },
+        "FileChangeKind": {
+          "enum": [
+            "created",
+            "modified",
+            "deleted",
+            "renamed"
+          ],
+          "type": "string"
+        },
         "InstalledPluginInfo": {
           "properties": {
             "actions": {
@@ -7409,6 +8970,28 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "conversation_capability": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ConversationCapability"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Structured-chat availability for this pane, when the engine reports it."
+            },
+            "conversation_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ConversationSessionIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque conversation-session identity for structured Chat (capable\nengines); never a filesystem path."
             },
             "cwd": {
               "type": [
@@ -8036,6 +9619,30 @@
             "layout"
           ],
           "type": "object"
+        },
+        "PlanStep": {
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/schemas/success_response/$defs/PlanStepStatus"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "PlanStepStatus": {
+          "enum": [
+            "pending",
+            "active",
+            "completed",
+            "failed"
+          ],
+          "type": "string"
         },
         "PluginActionContext": {
           "enum": [
@@ -8948,6 +10555,106 @@
             },
             {
               "properties": {
+                "read": {
+                  "$ref": "#/schemas/success_response/$defs/ConversationReadResult"
+                },
+                "type": {
+                  "const": "agent_conversation_read",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "read"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/ConversationRespondResult"
+                },
+                "type": {
+                  "const": "agent_conversation_respond",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "chunk_size": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "agent_attachment_begin",
+                  "type": "string"
+                },
+                "upload": {
+                  "$ref": "#/schemas/success_response/$defs/AttachmentUploadHandle"
+                }
+              },
+              "required": [
+                "type",
+                "upload",
+                "chunk_size"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "index": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "agent_attachment_chunk",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "index"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "attachment": {
+                  "$ref": "#/schemas/success_response/$defs/AttachmentHandle"
+                },
+                "type": {
+                  "const": "agent_attachment_finished",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "attachment"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "agent_attachment_aborted",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "agents": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/AgentInfo"
@@ -9788,6 +11495,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "agent_conversations": {
+              "default": false,
+              "description": "Structured conversation API (`agent.conversation.*`, conversation\nsubscriptions, engine-owned attachments). Defaults to false so older\nclients feature-detect it.",
+              "type": "boolean"
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"
@@ -9916,6 +11628,23 @@
             "agent_status"
           ],
           "type": "object"
+        },
+        "ToolStatus": {
+          "enum": [
+            "running",
+            "completed",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "TurnStateKind": {
+          "enum": [
+            "started",
+            "completed",
+            "interrupted",
+            "failed"
+          ],
+          "type": "string"
         },
         "WorkspaceInfo": {
           "properties": {

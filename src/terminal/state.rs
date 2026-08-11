@@ -128,6 +128,9 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    /// Unguessable per-pane integration token for managed process generations;
+    /// validated on transcript-source and live-conversation reports.
+    pub integration_token: Option<String>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -162,6 +165,7 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            integration_token: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -240,6 +244,11 @@ impl TerminalState {
 
     pub fn with_launch_argv(mut self, argv: Vec<String>) -> Self {
         self.launch_argv = Some(argv);
+        self
+    }
+
+    pub fn with_integration_token(mut self, token: Option<String>) -> Self {
+        self.integration_token = token;
         self
     }
 

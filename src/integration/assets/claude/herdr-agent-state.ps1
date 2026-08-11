@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=claude
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=11
 
 param([string]$Action = "")
 
@@ -23,6 +23,16 @@ if ($payload.hook_event_name -eq "SubagentStop") { exit 0 }
 $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
+$transcriptPath = $payload.transcript_path
+if ([string]::IsNullOrWhiteSpace($transcriptPath) -and $sessionId -notmatch '[\\/]') {
+    $projectCwd = $payload.cwd
+    if ([string]::IsNullOrWhiteSpace($projectCwd)) { $projectCwd = (Get-Location).Path }
+    $configRoot = $env:CLAUDE_CONFIG_DIR
+    if ([string]::IsNullOrWhiteSpace($configRoot)) { $configRoot = Join-Path $HOME ".claude" }
+    $projectKey = ([IO.Path]::GetFullPath($projectCwd) -replace '[\\/]', '-')
+    $transcriptPath = Join-Path (Join-Path (Join-Path ([IO.Path]::GetFullPath($configRoot)) "projects") $projectKey) "$sessionId.jsonl"
+}
+
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 try {
     $args = @(
@@ -38,8 +48,8 @@ try {
         "--agent-session-id",
         "$sessionId"
     )
-    if ($payload.transcript_path -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcript_path)) {
-        $args += @("--agent-session-path", "$($payload.transcript_path)")
+    if (-not [string]::IsNullOrWhiteSpace($transcriptPath)) {
+        $args += @("--agent-session-path", "$transcriptPath")
     }
     if ($payload.hook_event_name -eq "SessionStart" -and $payload.source -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.source)) {
         $args += @("--session-start-source", "$($payload.source)")

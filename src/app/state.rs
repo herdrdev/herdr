@@ -1326,6 +1326,8 @@ pub enum TabBarStatusSegment {
 pub struct AppState {
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
+    /// Engine-side transcript sources keyed by pane and accepted session.
+    pub conversation_sources: crate::app::conversation_sources::ConversationSourceRegistry,
     /// Terminal ids whose size is currently owned by a direct attach client.
     pub direct_attach_resize_locks: std::collections::HashSet<crate::terminal::TerminalId>,
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,
@@ -1696,6 +1698,8 @@ impl AppState {
     pub fn test_new() -> Self {
         Self {
             terminals: std::collections::HashMap::new(),
+            conversation_sources:
+                crate::app::conversation_sources::ConversationSourceRegistry::default(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),

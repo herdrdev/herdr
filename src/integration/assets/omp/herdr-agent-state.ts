@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=13
 // @ts-nocheck
 
 import net from "node:net";
@@ -108,6 +108,21 @@ function updateSessionRef(ctx: any): void {
   }
 }
 
+function ensureSessionOnDisk(ctx: any): Promise<void> | undefined {
+  const sessionManager = ctx?.sessionManager;
+  if (typeof sessionManager?.ensureOnDisk !== "function") {
+    return undefined;
+  }
+  try {
+    return Promise.resolve(sessionManager.ensureOnDisk()).then(
+      () => undefined,
+      () => undefined,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function withSessionRef(params: Record<string, unknown>): Record<string, unknown> {
   if (currentAgentSessionPath) {
     return { ...params, agent_session_path: currentAgentSessionPath };
@@ -140,6 +155,188 @@ function currentSessionRef(): Record<string, unknown> | undefined {
   return undefined;
 }
 
+const maxLiveText = 16_384;
+const maxLivePaths = 64;
+
+function boundedLiveText(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value.slice(0, maxLiveText) : fallback;
+}
+
+function liveId(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function messageText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (!isRecord(part)) return "";
+        const type = typeof part.type === "string" ? part.type : undefined;
+        if (type && !["text", "input_text", "output_text"].includes(type)) return "";
+        return messageText(part.text ?? part.content);
+      })
+      .join("");
+  }
+  if (isRecord(value)) {
+    if (["thinking", "toolCall", "toolResult"].includes(String(value.type ?? ""))) {
+      return "";
+    }
+    return messageText(value.content ?? value.text ?? value.message);
+  }
+  return "";
+}
+
+function messageTurnId(message: any): string | undefined {
+  const timestamp = message?.timestamp;
+  return typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0
+    ? `turn:${timestamp}`
+    : undefined;
+}
+
+function livePaths(value: unknown): string[] {
+  const candidates: unknown[] = [];
+  if (isRecord(value)) {
+    for (const key of ["path", "file_path", "notebook_path"]) {
+      candidates.push(value[key]);
+    }
+    if (Array.isArray(value.paths)) {
+      candidates.push(...value.paths);
+    }
+  }
+  return [...new Set(candidates.map(safeLivePath).filter(Boolean))].slice(0, maxLivePaths);
+}
+
+function safeLivePath(value: unknown): string | undefined {
+  let candidate = boundedLiveText(value, "");
+  if (!candidate || candidate.includes("\0")) {
+    return undefined;
+  }
+  if (path.isAbsolute(candidate)) {
+    const relative = path.relative(process.cwd(), candidate);
+    if (
+      !relative ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return undefined;
+    }
+    candidate = relative;
+  } else if (path.posix.isAbsolute(candidate) || path.win32.isAbsolute(candidate)) {
+    return undefined;
+  }
+  if (
+    candidate.startsWith("/") ||
+    candidate.startsWith("\\") ||
+    candidate.split(/[\\/]/).some((part) => part === ".." || part.length === 0)
+  ) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function liveCommandPreview(toolName: string, value: unknown): string | undefined {
+  const action = toolName.toLowerCase();
+  if (
+    !action.includes("bash") &&
+    !action.includes("shell") &&
+    !["exec_command", "execute_command", "run_command"].includes(action)
+  ) {
+    return undefined;
+  }
+  let input = value;
+  if (typeof input === "string") {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      return boundedLiveText(input) || undefined;
+    }
+  }
+  if (!isRecord(input)) {
+    return undefined;
+  }
+  const command = input.command ?? input.cmd;
+  return typeof command === "string" && command.length > 0
+    ? boundedLiveText(command)
+    : undefined;
+}
+
+function livePlanSteps(value: unknown): Array<Record<string, unknown>> {
+  const input = isRecord(value) ? value : {};
+  const phases = Array.isArray(input.phases) ? input.phases : undefined;
+  const list = phases ?? input.list ?? input.steps ?? input.items ?? input.todos;
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return list.slice(0, 64).flatMap((step: any) => {
+    if (typeof step === "string") {
+      return [{ label: boundedLiveText(step), status: "pending" }];
+    }
+    if (!isRecord(step)) {
+      return [];
+    }
+    const nested = [step.tasks, step.items, step.steps].find(Array.isArray);
+    const candidates = nested ?? [step];
+    return candidates.flatMap((candidate: any) => {
+      if (typeof candidate === "string") {
+        return [{ label: boundedLiveText(candidate), status: "pending" }];
+      }
+      if (!isRecord(candidate)) {
+        return [];
+      }
+      const label = candidate.label ?? candidate.content ?? candidate.text ?? candidate.step;
+      if (typeof label !== "string" || label.length === 0) {
+        return [];
+      }
+      const rawStatus = candidate.status;
+      const status =
+        rawStatus === "completed" || rawStatus === "done"
+          ? "completed"
+          : rawStatus === "active" || rawStatus === "in_progress"
+            ? "active"
+            : rawStatus === "failed" || rawStatus === "blocked"
+              ? "failed"
+              : "pending";
+      const prefix = typeof step.name === "string" ? `${step.name}: ` : "";
+      return [{ label: boundedLiveText(`${prefix}${label}`), status }];
+    });
+  }).slice(0, 64);
+}
+
+function reportConversation(
+  nativeId: string,
+  turnId: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const sessionRef = currentSessionRef();
+  if (!sessionRef) {
+    return Promise.resolve();
+  }
+  return sendRequest({
+    id: `${source}:conversation:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    method: "agent.conversation.report",
+    params: {
+      pane_id: paneId,
+      source,
+      agent: "omp",
+      integration_token: process.env.HERDR_INTEGRATION_TOKEN ?? "",
+      seq: nextReportSeq(),
+      ...sessionRef,
+      native_id: nativeId,
+      turn_id: turnId,
+      timestamp_ms: Date.now(),
+      payload,
+    },
+  });
+}
+
 function reportSession(sessionStartSource = "startup"): Promise<void> {
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
@@ -155,6 +352,7 @@ function reportSession(sessionStartSource = "startup"): Promise<void> {
       agent: "omp",
       seq: nextReportSeq(),
       session_start_source: sessionStartSource,
+      integration_token: process.env.HERDR_INTEGRATION_TOKEN ?? "",
       ...sessionRef,
     },
   });
@@ -254,6 +452,11 @@ export default function (pi) {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let rootSession = false;
+  let activeTurnId: string | undefined;
+  let activeTurnStartedMs: number | undefined;
+  let turnStartedReported = false;
+  let activeMessageId: string | undefined;
+  let messageOrdinal = 0;
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
     if (timer) {
@@ -272,6 +475,63 @@ export default function (pi) {
     retryHoldActive = false;
     failureBlocked = false;
     failureMessage = undefined;
+  }
+
+  function ensureTurn(turnId?: string, startedMs?: number): void {
+    if (turnId) {
+      activeTurnId = turnId;
+    } else if (!activeTurnId) {
+      activeTurnId = `${source}:turn:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    }
+    if (startedMs !== undefined) {
+      activeTurnStartedMs = startedMs;
+    } else if (activeTurnStartedMs === undefined) {
+      activeTurnStartedMs = Date.now();
+    }
+    if (!turnStartedReported && activeTurnId) {
+      turnStartedReported = true;
+      void reportConversation(activeTurnId, activeTurnId, {
+        type: "turn_state",
+        state: "started",
+        started_ms: activeTurnStartedMs,
+      });
+    }
+  }
+
+  function nextMessageId(role: string, message?: any): string {
+    ensureTurn();
+    if (role === "user") {
+      return `user:${activeTurnId}`;
+    }
+    const timestamp = message?.timestamp;
+    if (typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0) {
+      return `message:${activeTurnId}:${timestamp}`;
+    }
+    const id = `message:${activeTurnId}:${messageOrdinal}`;
+    messageOrdinal += 1;
+    return id;
+  }
+
+  function finishTurn(state: "completed" | "failed" = "completed") {
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
+    if (!activeTurnId) {
+      return;
+    }
+    const now = Date.now();
+    void reportConversation(activeTurnId, activeTurnId, {
+      type: "turn_state",
+      state,
+      started_ms: activeTurnStartedMs,
+      duration_ms:
+        activeTurnStartedMs === undefined ? undefined : Math.max(0, now - activeTurnStartedMs),
+    });
+    activeTurnId = undefined;
+    activeTurnStartedMs = undefined;
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
   }
 
   function desiredState() {
@@ -307,6 +567,130 @@ export default function (pi) {
     idleTimer.unref?.();
   }
 
+  function reportMessage(event: any, phase: "commentary" | "final") {
+    if (!rootSession) {
+      return;
+    }
+    const message = event?.message ?? event;
+    if (message?.role !== "user" && message?.role !== "assistant") {
+      return;
+    }
+    ensureTurn(
+      message?.role === "user" ? messageTurnId(message) : undefined,
+      message?.role === "user" ? message?.timestamp : undefined,
+    );
+    const text = boundedLiveText(messageText(message));
+    if (!text || !activeTurnId) {
+      return;
+    }
+    const role = message?.role === "user" ? "user_message" : "assistant_message";
+    activeMessageId ??= nextMessageId(
+      message?.role === "user" ? "user" : "assistant",
+      message,
+    );
+    void reportConversation(
+      activeMessageId,
+      activeTurnId,
+      role === "user_message"
+        ? { type: role, text, attachments: [] }
+        : { type: role, phase, text, state: "completed" },
+    );
+  }
+
+  function reportTool(event: any, status: "running" | "completed" | "failed") {
+    if (!rootSession) {
+      return;
+    }
+    const tool = event?.toolCall ?? event;
+    const toolName = boundedLiveText(tool?.toolName ?? tool?.name ?? "tool", "tool");
+    ensureTurn();
+    const toolId = liveId(
+      tool?.toolCallId ?? tool?.callId ?? tool?.id,
+      `tool:${activeTurnId}:${toolName}`,
+    );
+    const input = tool?.args ?? tool?.arguments ?? tool?.input;
+    const steps = toolName === "todo" || toolName === "plan" ? livePlanSteps(input) : [];
+    void reportConversation(
+      steps.length > 0 ? `plan:${activeTurnId}` : toolId,
+      activeTurnId,
+      steps.length > 0
+        ? { type: "plan_update", steps }
+        : {
+            type: "tool_activity",
+            action: toolName,
+            label: toolName,
+            status,
+            preview: liveCommandPreview(toolName, input),
+            detail: boundedLiveText(tool?.detail ?? tool?.result?.output),
+            paths: livePaths(input),
+          },
+    );
+  }
+
+  function reportApproval(event: any, status: "pending" | "resolved") {
+    if (!rootSession) {
+      return;
+    }
+    ensureTurn();
+    const approval = event?.approval ?? event;
+    const requestId = liveId(
+      approval?.requestId ?? approval?.request_id ?? approval?.toolCallId ?? approval?.tool_call_id ?? approval?.id,
+      `approval:${activeTurnId}`,
+    );
+    const decisions = Array.isArray(approval?.decisions)
+      ? approval.decisions.slice(0, 16).flatMap((decision: any) =>
+          typeof decision?.id === "string" && typeof decision?.label === "string"
+            ? [{ id: decision.id.slice(0, 256), label: decision.label.slice(0, maxLiveText) }]
+            : [],
+        )
+      : [
+          { id: "allow", label: "Allow" },
+          { id: "deny", label: "Deny" },
+        ];
+    void reportConversation(`approval:${requestId}`, activeTurnId, {
+      type: "approval",
+      request_id: requestId,
+      prompt: boundedLiveText(approval?.reason ?? approval?.prompt ?? "Approval required"),
+      decisions,
+      status,
+      selected_decision:
+        status === "resolved"
+          ? boundedLiveText(approval?.decisionId ?? approval?.decision_id)
+          : undefined,
+      structured_response: false,
+    });
+  }
+
+  pi.on("message_start", (event) => {
+    const message = event?.message ?? event;
+    if (message?.role === "user") {
+      const startedMs =
+        typeof message?.timestamp === "number" && Number.isSafeInteger(message.timestamp)
+          ? message.timestamp
+          : Date.now();
+      activeTurnId = messageTurnId(message);
+      activeTurnStartedMs = startedMs;
+      turnStartedReported = false;
+      messageOrdinal = 0;
+    }
+    if (message?.role !== "user" && message?.role !== "assistant") {
+      return;
+    }
+    ensureTurn(
+      message?.role === "user" ? messageTurnId(message) : undefined,
+      message?.role === "user" ? message?.timestamp : undefined,
+    );
+    activeMessageId =
+      message?.role === "assistant" && !messageText(message)
+        ? undefined
+        : nextMessageId(message?.role === "user" ? "user" : "assistant", message);
+    if (message?.role === "user") {
+      reportMessage(event, "final");
+    }
+  });
+  pi.on("message_update", (event) => reportMessage(event, "commentary"));
+  pi.on("message_end", (event) => reportMessage(event, "final"));
+
   function holdForRetry(message: string) {
     clearPendingTimers();
     retryHoldActive = true;
@@ -339,6 +723,11 @@ export default function (pi) {
     agentActive = false;
     blockedCount = 0;
     blockedMessage = undefined;
+    activeTurnId = undefined;
+    activeTurnStartedMs = undefined;
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
   }
 
   function activateBlocked(message: string | undefined) {
@@ -368,7 +757,11 @@ export default function (pi) {
     activateBlocked(data.label);
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    const transcriptReady = ensureSessionOnDisk(ctx);
+    if (transcriptReady) {
+      await transcriptReady;
+    }
     if (!activateRootSession(ctx)) {
       return;
     }
@@ -377,7 +770,11 @@ export default function (pi) {
     publishState(true);
   });
 
-  pi.on("session_switch", (event, ctx) => {
+  pi.on("session_switch", async (event, ctx) => {
+    const transcriptReady = ensureSessionOnDisk(ctx);
+    if (transcriptReady) {
+      await transcriptReady;
+    }
     if (!activateRootSession(ctx, event?.reason || "resume")) {
       return;
     }
@@ -393,6 +790,11 @@ export default function (pi) {
     void reportSession();
     clearPendingTimers();
     clearFailureState();
+    activeTurnId = undefined;
+    activeTurnStartedMs = Date.now();
+    turnStartedReported = false;
+    activeMessageId = undefined;
+    messageOrdinal = 0;
     agentActive = true;
     publishState();
   });
@@ -403,39 +805,51 @@ export default function (pi) {
     }
     const label = event?.reason || `${event?.toolName || "Tool"} approval`;
     activateBlocked(label);
+    reportApproval(event, "pending");
   });
 
-  pi.on("tool_approval_resolved", (_event, ctx) => {
+  pi.on("tool_approval_resolved", (event, ctx) => {
     if (!rootSession && !activateRootSession(ctx)) {
       return;
     }
     deactivateBlocked();
+    reportApproval(event, "resolved");
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
-    if (event?.toolName !== "ask") {
+    if (!rootSession && !activateRootSession(ctx)) {
       return;
     }
-    if (!rootSession && !activateRootSession(ctx)) {
+    reportTool(event, "running");
+    if (event?.toolName !== "ask") {
       return;
     }
     activateBlocked(askBlockedMessage(event.args));
   });
 
   pi.on("tool_execution_end", (event, ctx) => {
-    if (event?.toolName !== "ask") {
+    if (!rootSession && !activateRootSession(ctx)) {
       return;
     }
-    if (!rootSession && !activateRootSession(ctx)) {
+    const failed =
+      event?.error ||
+      event?.isError === true ||
+      event?.result?.isError === true ||
+      event?.result?.success === false ||
+      event?.success === false;
+    reportTool(event, failed ? "failed" : "completed");
+    if (event?.toolName !== "ask") {
       return;
     }
     deactivateBlocked();
   });
 
-  pi.on("agent_end", (event) => {
+  pi.on("agent_end", (event, ctx) => {
     if (!rootSession) {
       return;
     }
+    updateSessionRef(ctx);
+    void reportSession();
     if (!agentActive) {
       // OMP can emit duplicate/late end events while auto-retry is already
       // holding the pane in Working. Do not let an unqualified duplicate end
@@ -452,11 +866,13 @@ export default function (pi) {
     }
 
     scheduleIdle();
+    finishTurn();
   });
 
   pi.on("session_shutdown", () => {
     if (rootSession) {
       clearPendingTimers();
+      finishTurn("failed");
     }
   });
 }

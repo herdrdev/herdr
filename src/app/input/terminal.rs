@@ -1497,6 +1497,7 @@ mod tests {
         let snapshot = crate::persist::capture(
             &app.state.workspaces,
             &app.state.terminals,
+            &app.state.conversation_sources,
             &app.terminal_runtimes,
             app.state.active,
             app.state.selected,

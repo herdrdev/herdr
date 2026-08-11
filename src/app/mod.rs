@@ -10,8 +10,10 @@ pub(crate) mod agent_view;
 mod agents;
 mod api;
 mod api_helpers;
+mod attachments;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod config_io;
+pub(crate) mod conversation_sources;
 mod creation;
 mod git_refresh;
 mod ids;
@@ -107,6 +109,10 @@ pub struct App {
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
     pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
     pub(crate) event_hub: crate::api::EventHub,
+    pub(crate) attachment_store: attachments::AttachmentStore,
+    pub(crate) conversation_readers:
+        HashMap<crate::layout::PaneId, crate::agent_conversation::ConversationReader>,
+    pub(crate) conversation_report_sequences: HashMap<crate::layout::PaneId, u64>,
     pub(crate) last_focus: Option<(usize, crate::layout::PaneId)>,
     pub(crate) no_session: bool,
     pub(crate) input_rx: Option<mpsc::Receiver<crate::raw_input::RawInputEvent>>,
@@ -390,6 +396,8 @@ impl App {
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let mut restored_conversation_sources =
+            crate::app::conversation_sources::ConversationSourceRegistry::default();
         let (
             workspaces,
             active,
@@ -427,6 +435,10 @@ impl App {
                 render_notify.clone(),
                 render_dirty.clone(),
             );
+            restored_conversation_sources =
+                crate::app::conversation_sources::ConversationSourceRegistry::restore_from_snapshot(
+                    &snap, &ws,
+                );
             restored_terminals = terminals;
             restored_terminal_runtimes = terminal_runtimes.into();
             if ws.is_empty() {
@@ -530,6 +542,7 @@ impl App {
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
         let mut state = AppState {
+            conversation_sources: restored_conversation_sources,
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -784,6 +797,9 @@ impl App {
             input_leases: input::InputLeaseTable::default(),
             api_rx,
             event_hub,
+            attachment_store: attachments::AttachmentStore::new(),
+            conversation_readers: HashMap::new(),
+            conversation_report_sequences: HashMap::new(),
             last_focus,
             no_session,
             input_rx: None,
@@ -844,6 +860,11 @@ impl App {
         app.state.pane_id_aliases = pane_id_aliases;
         app.state.workspaces = workspaces;
         app.state.terminals = terminals;
+        app.state.conversation_sources =
+            crate::app::conversation_sources::ConversationSourceRegistry::restore_from_snapshot(
+                snapshot,
+                &app.state.workspaces,
+            );
         app.terminal_runtimes = runtimes.into();
         app.state.active = snapshot
             .active
@@ -938,6 +959,7 @@ impl App {
         let mut host_keyboard_report_all_active = false;
 
         while !self.state.should_quit {
+            self.attachment_store.cleanup_expired();
             self.reap_finished_custom_commands();
             if self.render_dirty.is_pending() {
                 needs_render = true;

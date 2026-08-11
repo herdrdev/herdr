@@ -203,6 +203,47 @@ fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {
     Some(time::PrimitiveDateTime::new(date, time))
 }
 
+pub(crate) fn conversation_source_identity(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    conversation_source_identity_for_file(&file)
+}
+
+pub(crate) fn conversation_source_identity_for_file(file: &std::fs::File) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(metadata.dev().to_le_bytes());
+    hasher.update(metadata.ino().to_le_bytes());
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+pub(crate) fn conversation_source_size_modified(
+    path: &Path,
+) -> Option<(u64, std::time::SystemTime)> {
+    let file = std::fs::File::open(path).ok()?;
+    conversation_source_size_modified_for_file(&file)
+}
+
+pub(crate) fn conversation_source_size_modified_for_file(
+    file: &std::fs::File,
+) -> Option<(u64, std::time::SystemTime)> {
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,11 @@
+{"timestamp":1723248000,"type":"session_meta","payload":{"id":"codex-session-redacted"}}
+{"timestamp":1723248001,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":1723248002,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Update the project"}]}}
+{"timestamp":1723248003,"type":"response_item","payload":{"type":"reasoning","summary":["private reasoning"]}}
+{"timestamp":1723248004,"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"redacted"}}
+{"timestamp":1723248005,"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"updated"}}
+{"timestamp":1723248005,"type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call-1","changes":{"src/app.ts":{"status":"modified","success":true}},"turn_id":"turn-1"}}
+{"timestamp":1723248005,"type":"response_item","payload":{"type":"custom_tool_call","call_id":"plan-call","name":"update_plan","arguments":"{\"plan\":[{\"step\":\"Run checks\",\"status\":\"in_progress\"}]}","internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}}}
+{"timestamp":1723248007,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-1"}}
+{"timestamp":1723248006,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+{"timestamp":1723248007,"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"The update is complete."}]}}

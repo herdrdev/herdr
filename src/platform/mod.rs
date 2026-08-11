@@ -523,3 +523,77 @@ mod tests {
         );
     }
 }
+
+/// Stable opaque source identity. OS-specific implementations live in the
+/// platform module selected above; this wrapper keeps callers platform-neutral.
+#[cfg(unix)]
+pub fn conversation_source_identity(path: &std::path::Path) -> Option<String> {
+    unix_common::conversation_source_identity(path)
+}
+
+#[cfg(unix)]
+pub fn conversation_source_identity_for_file(file: &std::fs::File) -> Option<String> {
+    unix_common::conversation_source_identity_for_file(file)
+}
+
+#[cfg(windows)]
+pub fn conversation_source_identity(path: &std::path::Path) -> Option<String> {
+    windows::conversation_source_identity(path)
+}
+
+#[cfg(windows)]
+pub fn conversation_source_identity_for_file(file: &std::fs::File) -> Option<String> {
+    windows::conversation_source_identity_for_file(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn conversation_source_identity(path: &std::path::Path) -> Option<String> {
+    fallback::conversation_source_identity(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn conversation_source_identity_for_file(file: &std::fs::File) -> Option<String> {
+    fallback::conversation_source_identity_for_file(file)
+}
+
+#[cfg(unix)]
+pub fn conversation_source_size_modified(
+    path: &std::path::Path,
+) -> Option<(u64, std::time::SystemTime)> {
+    unix_common::conversation_source_size_modified(path)
+}
+
+#[cfg(unix)]
+pub fn conversation_source_size_modified_for_file(
+    file: &std::fs::File,
+) -> Option<(u64, std::time::SystemTime)> {
+    unix_common::conversation_source_size_modified_for_file(file)
+}
+
+#[cfg(windows)]
+pub fn conversation_source_size_modified(
+    path: &std::path::Path,
+) -> Option<(u64, std::time::SystemTime)> {
+    windows::conversation_source_size_modified(path)
+}
+
+#[cfg(windows)]
+pub fn conversation_source_size_modified_for_file(
+    file: &std::fs::File,
+) -> Option<(u64, std::time::SystemTime)> {
+    windows::conversation_source_size_modified_for_file(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn conversation_source_size_modified(
+    path: &std::path::Path,
+) -> Option<(u64, std::time::SystemTime)> {
+    fallback::conversation_source_size_modified(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn conversation_source_size_modified_for_file(
+    file: &std::fs::File,
+) -> Option<(u64, std::time::SystemTime)> {
+    fallback::conversation_source_size_modified_for_file(file)
+}

@@ -54,6 +54,7 @@ fn set_host_color_scheme_reports(enabled: bool) -> io::Result<()> {
     io::stdout().flush()
 }
 
+mod agent_conversation;
 mod agent_resume;
 mod api;
 mod app;

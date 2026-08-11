@@ -1580,6 +1580,9 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
     #[cfg(unix)]
     #[tokio::test]
     async fn plugin_pane_open_injects_plugin_paths_and_protects_overrides() {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut app = test_app();
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-path-env")];
         app.state.ensure_test_terminals();
@@ -1918,6 +1921,9 @@ command = ["sh", "-c", "sleep 1"]
     #[cfg(unix)]
     #[tokio::test]
     async fn plugin_pane_open_popup_is_layout_neutral() {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -2332,6 +2338,9 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
     #[cfg(unix)]
     #[test]
     fn manifest_action_invoke_injects_plugin_paths() {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut app = test_app();
         let root = unique_temp_path("plugin-action-path-env");
         write_manifest_content(

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod agents;
 pub mod common;
+pub mod conversations;
 pub mod events;
 pub mod integrations;
 pub mod panes;
@@ -15,6 +16,7 @@ pub mod worktrees;
 
 pub use agents::*;
 pub use common::*;
+pub use conversations::*;
 pub use events::*;
 pub use integrations::*;
 pub use panes::*;
@@ -127,6 +129,22 @@ pub enum Method {
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.wait")]
     AgentWait(AgentWaitParams),
+    #[serde(rename = "agent.conversation.read")]
+    AgentConversationRead(AgentConversationReadParams),
+    #[serde(rename = "agent.conversation.metadata")]
+    AgentConversationMetadata(AgentConversationReadParams),
+    #[serde(rename = "agent.conversation.report")]
+    AgentConversationReport(AgentConversationReportParams),
+    #[serde(rename = "agent.conversation.respond")]
+    AgentConversationRespond(AgentConversationRespondParams),
+    #[serde(rename = "agent.attachment.begin")]
+    AgentAttachmentBegin(AgentAttachmentBeginParams),
+    #[serde(rename = "agent.attachment.chunk")]
+    AgentAttachmentChunk(AgentAttachmentChunkParams),
+    #[serde(rename = "agent.attachment.finish")]
+    AgentAttachmentFinish(AgentAttachmentFinishParams),
+    #[serde(rename = "agent.attachment.abort")]
+    AgentAttachmentAbort(AgentAttachmentAbortParams),
     #[serde(rename = "pane.split")]
     PaneSplit(PaneSplitParams),
     #[serde(rename = "pane.swap")]

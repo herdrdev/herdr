@@ -214,3 +214,23 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
     Ok(false)
 }
+
+pub(crate) fn conversation_source_identity(_path: &std::path::Path) -> Option<String> {
+    None
+}
+
+pub(crate) fn conversation_source_identity_for_file(_file: &std::fs::File) -> Option<String> {
+    None
+}
+
+pub(crate) fn conversation_source_size_modified(
+    _path: &std::path::Path,
+) -> Option<(u64, std::time::SystemTime)> {
+    None
+}
+
+pub(crate) fn conversation_source_size_modified_for_file(
+    _file: &std::fs::File,
+) -> Option<(u64, std::time::SystemTime)> {
+    None
+}

@@ -80,6 +80,8 @@ pub enum Subscription {
     },
     #[serde(rename = "pane.scroll_changed")]
     PaneScrollChanged { pane_id: String },
+    #[serde(rename = "agent.conversation_changed")]
+    AgentConversationChanged { pane_id: String },
     #[serde(rename = "layout.updated")]
     LayoutUpdated {},
 }
@@ -372,6 +374,8 @@ pub enum SubscriptionEventKind {
     PaneAgentStatusChanged,
     #[serde(rename = "pane.scroll_changed")]
     ScrollChanged,
+    #[serde(rename = "agent.conversation_changed")]
+    AgentConversationChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -386,6 +390,7 @@ pub enum SubscriptionEventData {
     PaneOutputMatched(PaneOutputMatchedEvent),
     PaneAgentStatusChanged(PaneAgentStatusChangedEvent),
     ScrollChanged(PaneScrollChangedEvent),
+    AgentConversationChanged(AgentConversationChangedEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -415,6 +420,22 @@ pub struct PaneScrollChangedEvent {
     pub pane_id: String,
     pub workspace_id: String,
     pub scroll: PaneScrollInfo,
+}
+
+/// Pane-scoped structured-conversation change signal. It carries identity and
+/// position only; payloads are fetched through `agent.conversation.read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentConversationChangedEvent {
+    pub pane_id: String,
+    pub workspace_id: String,
+    pub session: super::conversations::ConversationSessionIdentity,
+    pub reader_generation: String,
+    pub revision: u64,
+    /// True when the client must discard its timeline and reread the newest
+    /// tail (session replacement, source replacement, engine restart, or
+    /// reader-cache generation change).
+    #[serde(default)]
+    pub reset_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

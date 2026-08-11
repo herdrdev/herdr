@@ -60,7 +60,7 @@ impl App {
     }
 
     pub(super) fn handle_agent_prompt(&mut self, id: String, params: AgentPromptParams) -> String {
-        if params.text.is_empty() {
+        if params.text.is_empty() && params.attachments.is_empty() {
             return encode_error(id, "empty_agent_prompt", "agent prompt must not be empty");
         }
         let resolved = match self.resolve_agent_target(&params.target) {
@@ -85,10 +85,22 @@ impl App {
         if terminal.managed_agent_launch_pending() {
             return agent_not_ready(id, &params.target);
         }
+        let staged_attachments = if params.attachments.is_empty() {
+            Vec::new()
+        } else {
+            match self.take_prompt_attachments(&params.target, &params.attachments) {
+                Ok(attachments) => attachments,
+                Err((code, message)) => return encode_error(id, &code, message),
+            }
+        };
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+            self.attachment_store
+                .discard_prompt_attachments(&staged_attachments);
             return agent_not_found(id, &params.target);
         };
         if !super::super::agents::runtime_hosts_agent(runtime, expected_agent) {
+            self.attachment_store
+                .discard_prompt_attachments(&staged_attachments);
             return encode_error(
                 id,
                 "agent_not_ready",
@@ -98,9 +110,29 @@ impl App {
                 ),
             );
         }
+        let prompt_text = if staged_attachments.is_empty() {
+            params.text
+        } else {
+            let paths = staged_attachments
+                .iter()
+                .map(|attachment| {
+                    format!(
+                        "{} [{}; {}; {}]",
+                        attachment.path.display(),
+                        attachment.name,
+                        attachment.media_type,
+                        attachment.byte_size,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{}\n\nAttached files:\n{paths}", params.text)
+        };
         let (text, enter) =
-            crate::app::api_helpers::encode_api_submission_parts(runtime, &params.text);
+            crate::app::api_helpers::encode_api_submission_parts(runtime, &prompt_text);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(text)) {
+            self.attachment_store
+                .discard_prompt_attachments(&staged_attachments);
             return encode_error(id, "agent_prompt_failed", err.to_string());
         }
         runtime.send_bytes_after(Bytes::from(enter), AGENT_PROMPT_SUBMIT_DELAY);
@@ -337,6 +369,7 @@ mod tests {
                 target: public_pane_id,
                 text: "A != B".into(),
                 wait: None,
+                attachments: vec![],
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -368,6 +401,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                attachments: vec![],
             },
         );
         let raw: SuccessResponse = serde_json::from_str(&raw).unwrap();
@@ -389,6 +423,7 @@ mod tests {
                 target: "opencode".into(),
                 text: "wrong target".into(),
                 wait: None,
+                attachments: vec![],
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&rejected).unwrap();
@@ -459,6 +494,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                attachments: vec![],
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();

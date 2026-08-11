@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod attachments;
+mod conversations;
 mod env;
 mod integrations;
 mod layouts;
@@ -28,6 +30,145 @@ enum RuntimeExitAction {
 }
 
 impl App {
+    fn accept_conversation_overlay(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        seq: u64,
+        native_id: Option<String>,
+        entry_id: Option<String>,
+        turn_id: Option<String>,
+        timestamp_ms: Option<u64>,
+        payload: crate::api::schema::ConversationItemPayload,
+    ) -> bool {
+        if self
+            .conversation_report_sequences
+            .get(&pane_id)
+            .is_some_and(|last_seq| seq <= *last_seq)
+        {
+            return true;
+        }
+        let Some((_, pane)) = self.find_pane(pane_id) else {
+            return false;
+        };
+        let Some(terminal) = self.state.terminals.get(&pane.attached_terminal_id) else {
+            return false;
+        };
+        let display_root = terminal.cwd.clone();
+        let Some(provider) = terminal
+            .effective_agent_label()
+            .and_then(|label| match label {
+                "pi" => Some(crate::detect::Agent::Pi),
+                "omp" => Some(crate::detect::Agent::Omp),
+                "codex" => Some(crate::detect::Agent::Codex),
+                "claude" => Some(crate::detect::Agent::Claude),
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        let Some(parts) = super::creation::terminal_effective_session_parts(terminal) else {
+            return false;
+        };
+        let identity = crate::app::conversation_sources::session_identity_key(
+            &parts.0,
+            &parts.1,
+            parts.2.kind_name(),
+            &parts.3,
+        );
+        let Some(entry) = self
+            .state
+            .conversation_sources
+            .current_for(pane_id, Some(&identity))
+        else {
+            return false;
+        };
+        let Some(conversation_id) = entry.conversation_handle().map(str::to_string) else {
+            return false;
+        };
+        let reader = self.conversation_readers.entry(pane_id).or_insert_with(|| {
+            crate::agent_conversation::ConversationReader::new(
+                provider,
+                conversation_id.clone(),
+                &conversation_id,
+                1,
+            )
+        });
+        if reader.session_id() != conversation_id {
+            *reader = crate::agent_conversation::ConversationReader::new(
+                provider,
+                conversation_id.clone(),
+                &conversation_id,
+                1,
+            );
+        }
+        reader.set_display_root(&display_root);
+        let attachment_turn = turn_id.as_deref().and_then(|turn_id| match &payload {
+            crate::api::schema::ConversationItemPayload::TurnState { state, .. } => {
+                Some((turn_id.to_string(), *state))
+            }
+            _ => None,
+        });
+        let accepted = reader.accept_overlay(crate::agent_conversation::OverlayRecord {
+            native_id: native_id.clone(),
+            entry_id,
+            timestamp_ms,
+            turn_id,
+            payload: payload.clone(),
+        });
+        tracing::info!(
+            pane = ?pane_id,
+            seq,
+            native = ?native_id.as_deref().unwrap_or("-"),
+            kind = ?crate::api::schema::conversations::payload_kind_name(&payload),
+            accepted,
+            "conversation overlay report"
+        );
+        if accepted {
+            self.conversation_report_sequences.insert(pane_id, seq);
+            if let Some((turn_id, state)) = attachment_turn {
+                if state == crate::api::schema::TurnStateKind::Started {
+                    self.attachment_store.bind_prompt_turn(pane_id, &turn_id);
+                } else {
+                    self.attachment_store
+                        .complete_prompt_turn(pane_id, &turn_id);
+                }
+            }
+        }
+        accepted
+    }
+
+    fn sync_conversation_cache_for_pane(&mut self, pane_id: crate::layout::PaneId) {
+        let expected_session =
+            self.conversation_session_key_for_pane(pane_id)
+                .and_then(|identity| {
+                    self.state
+                        .conversation_sources
+                        .current_for(pane_id, Some(&identity))
+                        .and_then(|entry| entry.conversation_handle().map(str::to_string))
+                });
+        let reader_matches = expected_session.as_deref().is_some_and(|session| {
+            self.conversation_readers
+                .get(&pane_id)
+                .is_some_and(|reader| reader.session_id() == session)
+        });
+        if !reader_matches {
+            self.conversation_readers.remove(&pane_id);
+            self.conversation_report_sequences.remove(&pane_id);
+        }
+    }
+
+    fn conversation_session_key_for_pane(&self, pane_id: crate::layout::PaneId) -> Option<String> {
+        let (_, pane) = self.find_pane(pane_id)?;
+        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        let parts = super::creation::terminal_effective_session_parts(terminal)?;
+        Some(crate::app::conversation_sources::session_identity_key(
+            &parts.0,
+            &parts.1,
+            parts.2.kind_name(),
+            &parts.3,
+        ))
+    }
+
     pub(crate) fn dispatch_api_request(
         &mut self,
         id: &'static str,
@@ -305,9 +446,31 @@ impl App {
             } else {
                 None
             };
+        if let AppEvent::PaneDied { pane_id } = &ev {
+            self.conversation_readers.remove(pane_id);
+            self.conversation_report_sequences.remove(pane_id);
+        }
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let conversation_cache_pane = match &ev {
+            AppEvent::StateChanged { pane_id, .. }
+            | AppEvent::HookStateReported { pane_id, .. }
+            | AppEvent::AgentSessionReported { pane_id, .. }
+            | AppEvent::HookAuthorityCleared { pane_id, .. }
+            | AppEvent::HookAgentReleased { pane_id, .. }
+            | AppEvent::PaneDied { pane_id } => Some(*pane_id),
+            _ => None,
+        };
+        let attachment_session_before = conversation_cache_pane
+            .and_then(|pane_id| self.conversation_session_key_for_pane(pane_id));
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
+        if let Some(pane_id) = conversation_cache_pane {
+            self.sync_conversation_cache_for_pane(pane_id);
+            let attachment_session_after = self.conversation_session_key_for_pane(pane_id);
+            if attachment_session_before != attachment_session_after {
+                self.attachment_store.remove_for_pane(pane_id);
+            }
+        }
         if let Some(agents) = manifest_update_agents {
             self.reset_agent_detection_for_agents(&agents);
         }
@@ -1068,6 +1231,30 @@ impl App {
             }
             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
             Method::AgentPrompt(params) => return self.handle_agent_prompt(request.id, params),
+            Method::AgentConversationRead(params) => {
+                return self.handle_agent_conversation_read(request.id, params)
+            }
+            Method::AgentConversationMetadata(params) => {
+                return self.handle_agent_conversation_metadata(request.id, params)
+            }
+            Method::AgentConversationReport(params) => {
+                return self.handle_agent_conversation_report(request.id, params)
+            }
+            Method::AgentConversationRespond(params) => {
+                return self.handle_agent_conversation_respond(request.id, params)
+            }
+            Method::AgentAttachmentBegin(params) => {
+                return self.handle_agent_attachment_begin(request.id, params)
+            }
+            Method::AgentAttachmentChunk(params) => {
+                return self.handle_agent_attachment_chunk(request.id, params)
+            }
+            Method::AgentAttachmentFinish(params) => {
+                return self.handle_agent_attachment_finish(request.id, params)
+            }
+            Method::AgentAttachmentAbort(params) => {
+                return self.handle_agent_attachment_abort(request.id, params)
+            }
             Method::AgentWait(_) => {
                 return responses::encode_error(
                     request.id,

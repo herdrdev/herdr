@@ -293,7 +293,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .unwrap();
     assert_eq!(integration_status.status.code(), Some(0));
     let status_stdout = String::from_utf8_lossy(&integration_status.stdout);
-    assert!(status_stdout.contains("pi: current (v8)"));
+    assert!(status_stdout.contains("pi: current (v11)"));
     assert!(status_stdout.contains("claude: not installed"));
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
@@ -453,6 +453,10 @@ fn status_commands_report_client_and_server_versions() {
         socket_path.display().to_string()
     );
     assert_eq!(full_json["server"]["restart_needed"], false);
+    assert_eq!(
+        full_json["server"]["capabilities"]["agent_conversations"],
+        true
+    );
     assert_eq!(full_json["update"]["restart_needed"], false);
 
     let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
@@ -460,6 +464,7 @@ fn status_commands_report_client_and_server_versions() {
     assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(server_json["protocol"], 20);
     assert_eq!(server_json["compatible"], true);
+    assert_eq!(server_json["capabilities"]["agent_conversations"], true);
 
     let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
     assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));

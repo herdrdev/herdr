@@ -139,15 +139,31 @@ fn claude_hook_keeps_parent_agent_type_only_blocked() {
 
 #[test]
 fn claude_hook_reports_session_id_from_stdin() {
-    let request = run_claude_hook(
-        "session",
-        r#"{"hook_event_name":"SessionStart","session_id":"claude-session"}"#,
+    let request = run_shell_hook_with_env(
+        "src/integration/assets/claude/herdr-agent-state.sh",
+        &["session"],
+        r#"{"hook_event_name":"SessionStart","session_id":"claude-session","cwd":"/tmp/claude-project"}"#,
+        &[("CLAUDE_CONFIG_DIR", "/tmp/claude-config")],
     )
     .expect("session start should report session identity");
 
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent_session_id"], "claude-session");
+    assert_eq!(
+        request["params"]["agent_session_path"],
+        "/tmp/claude-config/projects/-tmp-claude-project/claude-session.jsonl"
+    );
     assert!(request["params"].get("state").is_none());
+
+    let supplied_path = run_claude_hook(
+        "session",
+        r#"{"hook_event_name":"SessionStart","session_id":"claude-session","cwd":"/tmp/ignored","transcript_path":"/tmp/provider-supplied.jsonl"}"#,
+    )
+    .expect("provider transcript path should report");
+    assert_eq!(
+        supplied_path["params"]["agent_session_path"],
+        "/tmp/provider-supplied.jsonl"
+    );
 }
 
 #[test]
@@ -160,6 +176,11 @@ fn codex_hook_reports_persisted_root_session_and_ignores_ephemeral_or_nested_ses
 
     assert_eq!(request["method"], "pane.report_agent_session");
     assert_eq!(request["params"]["agent_session_id"], "codex-session");
+    // The codex hook retains and reports its transcript path separately.
+    assert_eq!(
+        request["params"]["agent_session_path"],
+        "/tmp/codex-session.jsonl"
+    );
     assert!(request["params"].get("state").is_none());
 
     let matching_request = run_shell_hook_with_env(
@@ -332,4 +353,36 @@ fn devin_hook_ignores_non_matching_session_list_entries() {
     );
 
     assert!(request.is_none());
+}
+
+#[test]
+fn codex_and_claude_hooks_prefer_the_nonfiltered_integration_capability() {
+    let codex = run_shell_hook_with_env(
+        "src/integration/assets/codex/herdr-agent-state.sh",
+        &["session"],
+        r#"{"hook_event_name":"SessionStart","session_id":"codex-tok","transcript_path":"/tmp/codex-tok.jsonl"}"#,
+        &[
+            ("CODEX_THREAD_ID", "codex-tok"),
+            ("HERDR_INTEGRATION_CAPABILITY", "pane-token-1"),
+            ("HERDR_INTEGRATION_TOKEN", "stale-token"),
+        ],
+    )
+    .expect("codex session report");
+    assert_eq!(codex["params"]["integration_token"], "pane-token-1");
+    assert_eq!(
+        codex["params"]["agent_session_path"],
+        "/tmp/codex-tok.jsonl"
+    );
+
+    let claude = run_shell_hook_with_env(
+        "src/integration/assets/claude/herdr-agent-state.sh",
+        &["session"],
+        r#"{"hook_event_name":"SessionStart","session_id":"claude-tok","transcript_path":"/tmp/claude-tok.jsonl"}"#,
+        &[
+            ("HERDR_INTEGRATION_CAPABILITY", "pane-token-1"),
+            ("HERDR_INTEGRATION_TOKEN", "stale-token"),
+        ],
+    )
+    .expect("claude session report");
+    assert_eq!(claude["params"]["integration_token"], "pane-token-1");
 }

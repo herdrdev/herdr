@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"pi-session-redacted","timestamp":"2026-08-10T00:00:00.000Z","cwd":"/redacted/project"}
+{"type":"message","id":"u1","parentId":null,"timestamp":"2026-08-10T00:00:01.000Z","message":{"role":"user","content":"Inspect the project"}}
+{"type":"message","id":"a-old","parentId":"u1","timestamp":"2026-08-10T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Abandoned branch"}],"stopReason":"stop"}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-08-10T00:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"text","text":"I will inspect it."},{"type":"toolCall","id":"call-1","name":"edit","arguments":{"path":"src/app.ts"}}],"stopReason":"toolUse"}}
+{"type":"message","id":"r1","parentId":"a1","timestamp":"2026-08-10T00:00:04.000Z","message":{"role":"toolResult","toolCallId":"call-1","toolName":"edit","content":[{"type":"text","text":"updated"}],"details":{"modifiedFiles":["src/app.ts"]},"isError":false}}
+{"type":"model_change","id":"m1","parentId":"r1","timestamp":"2026-08-10T00:00:04.500Z","provider":"redacted","modelId":"redacted"}
+{"type":"message","id":"a2","parentId":"m1","timestamp":"2026-08-10T00:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The change is complete."}],"stopReason":"stop"}}
+{"type":"message","id":"a-error","parentId":"a2","timestamp":"2026-08-10T00:00:07.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private"}],"stopReason":"error","errorMessage":"provider failed"}}

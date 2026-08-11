@@ -104,6 +104,23 @@ pub enum ResponseResult {
     AgentPrompted {
         agent: AgentInfo,
     },
+    AgentConversationRead {
+        read: super::conversations::ConversationReadResult,
+    },
+    AgentConversationRespond {
+        result: super::conversations::ConversationRespondResult,
+    },
+    AgentAttachmentBegin {
+        upload: super::conversations::AttachmentUploadHandle,
+        chunk_size: usize,
+    },
+    AgentAttachmentChunk {
+        index: u64,
+    },
+    AgentAttachmentFinished {
+        attachment: super::conversations::AttachmentHandle,
+    },
+    AgentAttachmentAborted {},
     AgentList {
         agents: Vec<AgentInfo>,
     },

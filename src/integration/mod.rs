@@ -14,7 +14,9 @@ pub(crate) use actions::{install_target, uninstall_target};
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
-    apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, integration_capability_from_env, HERDR_INTEGRATION_CAPABILITY_ENV_VAR,
+    HERDR_INTEGRATION_TOKEN_ENV_VAR, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR,
+    HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
     installed_integration_statuses, integration_recommendations, integration_target_label,
@@ -24,10 +26,10 @@ pub(crate) use types::{IntegrationRecommendation, IntegrationStatus, Integration
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
-const PI_INTEGRATION_VERSION: u32 = 8;
+const PI_INTEGRATION_VERSION: u32 = 11;
 const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
-const OMP_INTEGRATION_VERSION: u32 = 8;
+const OMP_INTEGRATION_VERSION: u32 = 13;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -38,7 +40,7 @@ const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/claude/herdr-agent-state.sh")
 };
-const CLAUDE_INTEGRATION_VERSION: u32 = 7;
+const CLAUDE_INTEGRATION_VERSION: u32 = 11;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -49,7 +51,7 @@ const CODEX_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/codex/herdr-agent-state.sh")
 };
-const CODEX_INTEGRATION_VERSION: u32 = 7;
+const CODEX_INTEGRATION_VERSION: u32 = 8;
 const KIMI_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {

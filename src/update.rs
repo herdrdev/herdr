@@ -2757,6 +2757,7 @@ mod tests {
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     live_handoff: true,
                     detached_server_daemon: true,
+                    agent_conversations: false,
                 }),
             },
         };

@@ -1268,12 +1268,35 @@ impl App {
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        // The shared user socket is not pane authentication: an unguessable
+        // per-pane integration token is required for transcript/live reports.
+        let terminal_id = self
+            .state
+            .workspaces
+            .get(_ws_idx)
+            .and_then(|workspace| workspace.terminal_id(pane_id));
+        let token_ok = terminal_id
+            .as_ref()
+            .and_then(|terminal_id| self.state.terminals.get(terminal_id))
+            .and_then(|terminal| terminal.integration_token.as_deref())
+            .is_some_and(|expected| params.integration_token.as_deref() == Some(expected));
+        if !token_ok {
+            return encode_error(
+                id,
+                "invalid_integration_token",
+                "Agent session report rejected: missing or stale integration token.",
+            );
+        }
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
                 &params.source,
                 &agent_label,
                 params.agent_session_id,
+                params.agent_session_path.clone(),
+            ),
+            transcript_ref: crate::agent_resume::transcript_ref_from_report(
+                &agent_label,
                 params.agent_session_path,
             ),
             source: params.source,
@@ -4113,5 +4136,156 @@ mod tests {
 
             assert_eq!(metadata_error_code(&response), "invalid_metadata_ttl");
         }
+    }
+
+    #[test]
+    fn live_conversation_report_requires_the_pane_integration_token_and_session() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(internal_pane_id)
+            .unwrap()
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.integration_token = Some("tok-live".into());
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+
+        let session_response = app.handle_pane_report_agent_session(
+            "session".into(),
+            PaneReportAgentSessionParams {
+                pane_id: pane_id.clone(),
+                source: "herdr:pi".into(),
+                agent: "pi".into(),
+                seq: Some(1),
+                agent_session_id: None,
+                agent_session_path: Some("/tmp/pi-live.jsonl".into()),
+                session_start_source: Some("startup".into()),
+                integration_token: Some("tok-live".into()),
+            },
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(&session_response)
+            .unwrap()
+            .get("error")
+            .is_none());
+
+        let report = |app: &mut App, token: &str, seq: u64, native_id: &str| {
+            app.handle_agent_conversation_report(
+                format!("report-{seq}-{native_id}"),
+                crate::api::schema::AgentConversationReportParams {
+                    pane_id: pane_id.clone(),
+                    source: "herdr:pi".into(),
+                    agent: "pi".into(),
+                    integration_token: token.into(),
+                    seq,
+                    agent_session_id: None,
+                    agent_session_path: Some("/tmp/pi-live.jsonl".into()),
+                    native_id: Some(native_id.into()),
+                    entry_id: None,
+                    turn_id: Some("turn-1".into()),
+                    timestamp_ms: Some(10),
+                    payload: crate::api::schema::ConversationItemPayload::TurnState {
+                        state: crate::api::schema::TurnStateKind::Started,
+                        started_ms: Some(10),
+                        duration_ms: None,
+                        error: None,
+                    },
+                },
+            )
+        };
+        let invalid = report(&mut app, "wrong", 2, "turn-1");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&invalid).unwrap()["error"]["code"],
+            "invalid_integration_token"
+        );
+        let valid = report(&mut app, "tok-live", 2, "turn-1");
+        assert!(serde_json::from_str::<serde_json::Value>(&valid)
+            .unwrap()
+            .get("error")
+            .is_none());
+        assert!(app.conversation_readers.contains_key(&internal_pane_id));
+
+        let oversized = report(&mut app, "tok-live", 3, &"x".repeat(1_100_000));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&oversized).unwrap()["error"]["code"],
+            "conversation_report_rejected"
+        );
+        assert_eq!(
+            app.conversation_report_sequences.get(&internal_pane_id),
+            Some(&2)
+        );
+        let next = report(&mut app, "tok-live", 3, "turn-3");
+        assert!(serde_json::from_str::<serde_json::Value>(&next)
+            .unwrap()
+            .get("error")
+            .is_none());
+        assert_eq!(
+            app.conversation_report_sequences.get(&internal_pane_id),
+            Some(&3)
+        );
+    }
+
+    #[test]
+    fn agent_session_report_requires_the_pane_integration_token() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let internal_pane_id = app.parse_pane_id(&pane_id).unwrap().1;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(internal_pane_id)
+            .unwrap()
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .integration_token = Some("tok-1".into());
+
+        let params = PaneReportAgentSessionParams {
+            pane_id: pane_id.clone(),
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            seq: Some(1),
+            agent_session_id: None,
+            agent_session_path: Some("/tmp/pi-session.jsonl".into()),
+            session_start_source: None,
+            integration_token: None,
+        };
+        let response = app.handle_pane_report_agent_session("req-1".into(), params);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_integration_token");
+
+        let wrong_token = PaneReportAgentSessionParams {
+            pane_id: pane_id.clone(),
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            seq: Some(1),
+            agent_session_id: None,
+            agent_session_path: Some("/tmp/pi-session.jsonl".into()),
+            session_start_source: None,
+            integration_token: Some("tok-other".into()),
+        };
+        let response = app.handle_pane_report_agent_session("req-2".into(), wrong_token);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_integration_token");
+
+        let valid = PaneReportAgentSessionParams {
+            pane_id: pane_id.clone(),
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            seq: Some(2),
+            agent_session_id: None,
+            agent_session_path: Some("/tmp/pi-session.jsonl".into()),
+            session_start_source: Some("startup".into()),
+            integration_token: Some("tok-1".into()),
+        };
+        let response = app.handle_pane_report_agent_session("req-3".into(), valid);
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert!(
+            value.get("error").is_none(),
+            "valid token accepted: {value}"
+        );
+
+        // Registry recording happens only after the session authority machine
+        // accepts the report; that path is covered by conversation_sources
+        // unit tests and the Phase 4 API integration tests.
+        let _ = internal_pane_id;
     }
 }

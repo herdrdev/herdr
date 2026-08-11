@@ -2794,8 +2794,8 @@ impl AppState {
                 visible_working,
                 process_exited,
                 observed_at,
-            } => self
-                .update_terminal_state(pane_id, |terminal| {
+            } => {
+                let outcome = self.update_terminal_state_with_mutation(pane_id, |terminal| {
                     Some(terminal.set_detected_state_with_screen_signals_at(
                         agent,
                         state,
@@ -2805,9 +2805,14 @@ impl AppState {
                         process_exited,
                         observed_at,
                     ))
-                })
-                .into_iter()
-                .collect(),
+                });
+                if outcome.as_ref().is_some_and(|(_, mutation)| {
+                    mutation.session_ref_changed || mutation.agent_released
+                }) {
+                    self.conversation_sources.clear(pane_id);
+                }
+                outcome.and_then(|(update, _)| update).into_iter().collect()
+            }
             AppEvent::HookStateReported {
                 pane_id,
                 source,
@@ -2817,14 +2822,15 @@ impl AppState {
                 seq,
                 session_ref,
             } => {
-                if crate::agent_resume::is_reserved_native_state_source(&source, &agent_label) {
-                    self.update_terminal_state(pane_id, |terminal| {
+                let outcome = if crate::agent_resume::is_reserved_native_state_source(
+                    &source,
+                    &agent_label,
+                ) {
+                    self.update_terminal_state_with_mutation(pane_id, |terminal| {
                         terminal.set_agent_session_ref(source, agent_label, session_ref, seq)
                     })
-                    .into_iter()
-                    .collect()
                 } else {
-                    self.update_terminal_state(pane_id, |terminal| {
+                    self.update_terminal_state_with_mutation(pane_id, |terminal| {
                         terminal.set_hook_authority_with_session_ref(
                             source,
                             agent_label,
@@ -2834,9 +2840,14 @@ impl AppState {
                             seq,
                         )
                     })
-                    .into_iter()
-                    .collect()
+                };
+                if outcome
+                    .as_ref()
+                    .is_some_and(|(_, mutation)| mutation.session_ref_changed)
+                {
+                    self.conversation_sources.clear(pane_id);
                 }
+                outcome.and_then(|(update, _)| update).into_iter().collect()
             }
             AppEvent::AgentSessionReported {
                 pane_id,
@@ -2844,19 +2855,46 @@ impl AppState {
                 agent_label,
                 seq,
                 session_ref,
+                transcript_ref,
                 session_start_source,
-            } => self
-                .update_terminal_state(pane_id, |terminal| {
+            } => {
+                let outcome = self.update_terminal_state_with_mutation(pane_id, |terminal| {
                     terminal.set_agent_session_ref_for_session_start(
-                        source,
-                        agent_label,
-                        session_ref,
+                        source.clone(),
+                        agent_label.clone(),
+                        session_ref.clone(),
                         seq,
                         session_start_source,
                     )
-                })
-                .into_iter()
-                .collect(),
+                });
+                if outcome
+                    .as_ref()
+                    .is_some_and(|(_, mutation)| mutation.session_ref_changed)
+                {
+                    self.conversation_sources.clear(pane_id);
+                }
+                if outcome.is_some() {
+                    // Source registration is tied to acceptance of the
+                    // terminal authority mutation, not to the existence of a
+                    // visible pane-state delta. This also handles accepted
+                    // same-session reports that only add or replace a source.
+                    if let Some(session_ref) = &session_ref {
+                        let identity = crate::app::conversation_sources::session_identity_key(
+                            &source,
+                            &agent_label,
+                            session_ref.kind.kind_name(),
+                            &session_ref.value,
+                        );
+                        self.conversation_sources.accept(
+                            pane_id,
+                            identity,
+                            &agent_label,
+                            transcript_ref,
+                        );
+                    }
+                }
+                outcome.and_then(|(update, _)| update).into_iter().collect()
+            }
             AppEvent::HookMetadataReported {
                 pane_id,
                 source,
@@ -2892,12 +2930,15 @@ impl AppState {
                 pane_id,
                 source,
                 seq,
-            } => self
-                .update_terminal_state(pane_id, |terminal| {
+            } => {
+                let outcome = self.update_terminal_state_with_mutation(pane_id, |terminal| {
                     terminal.clear_hook_authority_with_mutation(source.as_deref(), seq)
-                })
-                .into_iter()
-                .collect(),
+                });
+                if outcome.is_some() {
+                    self.conversation_sources.clear(pane_id);
+                }
+                outcome.and_then(|(update, _)| update).into_iter().collect()
+            }
             AppEvent::HookAgentReleased {
                 pane_id,
                 source,
@@ -2908,11 +2949,13 @@ impl AppState {
                 if crate::agent_resume::is_official_agent_source(&source, &agent_label) {
                     Vec::new()
                 } else {
-                    self.update_terminal_state(pane_id, |terminal| {
+                    let outcome = self.update_terminal_state_with_mutation(pane_id, |terminal| {
                         terminal.release_agent_with_mutation(&source, &agent_label, seq)
-                    })
-                    .into_iter()
-                    .collect()
+                    });
+                    if outcome.is_some() {
+                        self.conversation_sources.clear(pane_id);
+                    }
+                    outcome.and_then(|(update, _)| update).into_iter().collect()
                 }
             }
             // Intercepted before this dispatch — in App::handle_internal_event (monolithic)
@@ -2959,6 +3002,23 @@ impl AppState {
     where
         F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
     {
+        self.update_terminal_state_with_mutation(pane_id, update)
+            .and_then(|(update, _)| update)
+    }
+
+    /// Applies a terminal mutation while retaining the acceptance result even
+    /// when the visible pane projection does not change. Session reports use
+    /// this boundary to atomically install transcript ownership with the
+    /// session authority decision instead of chaining registration to a UI
+    /// update.
+    fn update_terminal_state_with_mutation<F>(
+        &mut self,
+        pane_id: PaneId,
+        update: F,
+    ) -> Option<(Option<PaneStateUpdate>, TerminalStateMutation)>
+    where
+        F: FnOnce(&mut crate::terminal::TerminalState) -> Option<TerminalStateMutation>,
+    {
         let ws_idx = self
             .workspaces
             .iter()
@@ -2999,7 +3059,9 @@ impl AppState {
             self.mark_session_dirty();
         }
         let agent_released = mutation.agent_released;
-        let change = mutation.effective_state_change.or(unchanged_change)?;
+        let Some(change) = mutation.effective_state_change.clone().or(unchanged_change) else {
+            return Some((None, mutation));
+        };
         let suppress_completion = change.state == AgentState::Idle
             && (managed_launch_pending || suppress_acquisition_completion);
         if change.previous_state != change.state {
@@ -3035,7 +3097,7 @@ impl AppState {
             agent_release_status: agent_released.then(|| pane_agent_status(change.state, seen)),
             suppress_completion,
         };
-        Some(update)
+        Some((Some(update), mutation))
     }
 
     pub(crate) fn next_managed_agent_deadline(&self) -> Option<Instant> {
@@ -3077,7 +3139,7 @@ impl AppState {
         pane_id: PaneId,
     ) -> Option<PaneStateUpdate> {
         let observed_at = std::time::Instant::now();
-        let update = self.update_terminal_state(pane_id, |terminal| {
+        let (update, mutation) = self.update_terminal_state_with_mutation(pane_id, |terminal| {
             let agent = terminal.effective_known_agent().or(terminal.detected_agent);
             if agent.is_none() && !terminal.full_lifecycle_hook_authority_active() {
                 return None;
@@ -3092,7 +3154,10 @@ impl AppState {
                 observed_at,
             ))
         })?;
-        update.agent_released.then_some(update)
+        if mutation.session_ref_changed || mutation.agent_released {
+            self.conversation_sources.clear(pane_id);
+        }
+        update.filter(|update| update.agent_released)
     }
 
     fn apply_pane_state_change(
@@ -3332,6 +3397,7 @@ impl AppState {
     }
 
     fn handle_pane_died(&mut self, pane_id: PaneId) {
+        self.conversation_sources.clear(pane_id);
         self.pending_agent_notifications.remove(&pane_id);
         self.remove_plugin_pane_records([pane_id]);
         let ws_idx = self

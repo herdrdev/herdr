@@ -442,6 +442,43 @@ impl App {
                 .focused_pane_id()
                 .is_some_and(|focused| focused == pane_id);
         let presentation = terminal.effective_presentation();
+        let session_identity = terminal_effective_session_parts(terminal).as_ref().map(
+            |(source, agent, kind, value)| {
+                crate::app::conversation_sources::session_identity_key(
+                    source,
+                    agent,
+                    kind.kind_name(),
+                    value,
+                )
+            },
+        );
+        let conversation_entry = self
+            .state
+            .conversation_sources
+            .current_for(pane_id, session_identity.as_deref());
+        let conversation_session = conversation_entry.as_ref().and_then(|entry| {
+            entry
+                .conversation_handle()
+                .map(|id| crate::api::schema::ConversationSessionIdentity { id: id.to_string() })
+        });
+        let conversation_capability = match terminal.effective_agent_label() {
+            Some("pi" | "omp" | "codex" | "claude") => conversation_entry
+                .as_ref()
+                .map(|entry| entry.capability().clone())
+                .or_else(|| {
+                    Some(crate::api::schema::ConversationCapability {
+                        availability: crate::api::schema::ConversationAvailability::Unavailable,
+                        reason: crate::api::schema::ConversationReasonCode::TranscriptMissing,
+                        message: Some("Start or resume this agent to use Chat.".into()),
+                    })
+                }),
+            Some(_) => Some(crate::api::schema::ConversationCapability {
+                availability: crate::api::schema::ConversationAvailability::Unsupported,
+                reason: crate::api::schema::ConversationReasonCode::AdapterMissing,
+                message: Some("Chat is not currently supported for this provider.".into()),
+            }),
+            None => None,
+        };
         Some(crate::api::schema::PaneInfo {
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
@@ -464,6 +501,8 @@ impl App {
             state_labels: presentation.state_labels,
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
+            conversation_session,
+            conversation_capability,
             scroll,
             revision: terminal.revision,
         })
@@ -517,27 +556,127 @@ impl App {
     }
 }
 
-fn terminal_agent_session_info(
+pub(super) fn terminal_effective_session_parts(
     terminal: &crate::terminal::TerminalState,
-) -> Option<crate::api::schema::AgentSessionInfo> {
+) -> Option<(
+    String,
+    String,
+    crate::agent_resume::AgentSessionRefKind,
+    String,
+)> {
     if let Some(authority) = terminal.hook_authority.as_ref() {
         if let Some(session_ref) = authority.session_ref.as_ref() {
-            return Some(crate::api::schema::AgentSessionInfo {
-                source: authority.source.clone(),
-                agent: authority.agent_label.clone(),
-                kind: session_ref.kind,
-                value: session_ref.value.clone(),
-            });
+            return Some((
+                authority.source.clone(),
+                authority.agent_label.clone(),
+                session_ref.kind,
+                session_ref.value.clone(),
+            ));
         }
     }
 
-    terminal
-        .persisted_agent_session
-        .as_ref()
-        .map(|session| crate::api::schema::AgentSessionInfo {
-            source: session.source.clone(),
-            agent: session.agent.clone(),
-            kind: session.session_ref.kind,
-            value: session.session_ref.value.clone(),
-        })
+    terminal.persisted_agent_session.as_ref().map(|session| {
+        (
+            session.source.clone(),
+            session.agent.clone(),
+            session.session_ref.kind,
+            session.session_ref.value.clone(),
+        )
+    })
+}
+
+fn terminal_agent_session_info(
+    terminal: &crate::terminal::TerminalState,
+) -> Option<crate::api::schema::AgentSessionInfo> {
+    let (source, agent, kind, value) = terminal_effective_session_parts(terminal)?;
+    // Path-backed sessions omit the legacy agent_session field entirely; the
+    // capable engine exposes the opaque conversation_session identity instead
+    // so no transcript path ever crosses the public API.
+    if kind == crate::agent_resume::AgentSessionRefKind::Path {
+        return None;
+    }
+    Some(crate::api::schema::AgentSessionInfo {
+        source,
+        agent,
+        kind,
+        value,
+    })
+}
+
+#[cfg(test)]
+mod unified_chat_phase2_compat_tests {
+    use super::*;
+    use crate::agent_resume::{AgentSessionRef, AgentSessionRefKind};
+    use crate::detect::AgentState;
+    use crate::terminal::state::HookAuthority;
+    use crate::terminal::{TerminalId, TerminalState};
+
+    fn terminal_with_session(kind: AgentSessionRefKind, value: &str) -> TerminalState {
+        let mut terminal =
+            TerminalState::new(TerminalId::alloc(), std::path::PathBuf::from("/tmp"));
+        terminal.hook_authority = Some(HookAuthority {
+            source: "herdr:pi".into(),
+            agent_label: "pi".into(),
+            state: AgentState::Working,
+            message: None,
+            reported_at: std::time::Instant::now(),
+            session_ref: Some(AgentSessionRef {
+                kind,
+                value: value.into(),
+            }),
+        });
+        terminal
+    }
+
+    #[test]
+    fn capable_engine_omits_legacy_agent_session_for_path_backed_sessions() {
+        let terminal = terminal_with_session(AgentSessionRefKind::Path, "/home/u/.pi/secret.jsonl");
+        let info = terminal_agent_session_info(&terminal);
+        assert!(
+            info.is_none(),
+            "path-backed sessions must omit the legacy agent_session field entirely"
+        );
+    }
+
+    #[test]
+    fn capable_engine_keeps_legacy_agent_session_for_id_backed_sessions() {
+        let terminal = terminal_with_session(AgentSessionRefKind::Id, "opaque-thread-id");
+        let info = terminal_agent_session_info(&terminal).expect("id-backed session present");
+        assert_eq!(info.kind, AgentSessionRefKind::Id);
+        assert_eq!(info.value, "opaque-thread-id");
+        // Released Desktop decoders read the legacy shape (kind/value) and
+        // tolerate its presence for safe opaque provider IDs.
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["kind"], "id");
+        let round: crate::api::schema::AgentSessionInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(round, info);
+    }
+
+    #[test]
+    fn capable_engine_snapshot_never_serializes_the_transcript_path() {
+        // Path-backed: no legacy field, and the conversation identity is a
+        // random opaque handle that never embeds the path.
+        let terminal = terminal_with_session(AgentSessionRefKind::Path, "/home/u/.pi/secret.jsonl");
+        assert!(terminal_agent_session_info(&terminal).is_none());
+
+        let mut registry = crate::app::conversation_sources::ConversationSourceRegistry::default();
+        let pane = crate::layout::PaneId::from_raw(9);
+        let identity = crate::app::conversation_sources::session_identity_key(
+            "herdr:pi",
+            "pi",
+            "path",
+            "/home/u/.pi/secret.jsonl",
+        );
+        registry.accept(pane, identity.clone(), "pi", None);
+        let entry = registry
+            .current_for(pane, Some(&identity))
+            .expect("accepted entry");
+        let handle = entry.conversation_handle.expect("random handle");
+        assert_eq!(handle.len(), 32);
+        assert!(!handle.contains("secret") && !handle.contains(".pi"));
+
+        let snapshot_identity = crate::api::schema::ConversationSessionIdentity { id: handle };
+        let text = serde_json::to_string(&snapshot_identity).unwrap();
+        assert!(!text.contains("secret") && !text.contains(".pi"));
+    }
 }

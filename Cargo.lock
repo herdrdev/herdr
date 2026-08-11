@@ -680,6 +680,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "ctrlc",
+ "getrandom 0.3.4",
  "interprocess",
  "jsonc-parser",
  "libc",

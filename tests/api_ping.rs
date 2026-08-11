@@ -72,6 +72,19 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
+fn wait_for_nonempty_file(path: &Path, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(value) = fs::read_to_string(path) {
+            if !value.is_empty() {
+                return value;
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("file did not become readable at {}", path.display());
+}
+
 #[cfg(target_os = "linux")]
 fn wait_for_path(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
@@ -305,6 +318,7 @@ fn ping_over_socket_returns_version() {
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
     assert_eq!(value["result"]["protocol"], 20);
+    assert_eq!(value["result"]["capabilities"]["agent_conversations"], true);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -1631,7 +1645,17 @@ fn pane_report_agent_updates_effective_state() {
 
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 3\n").unwrap();
+    let token_file = base.join("pi-token");
+    let capability_file = base.join("pi-capability");
+    fs::write(
+        &fake_pi,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$HERDR_INTEGRATION_TOKEN\" > '{}'\nprintf '%s' \"$HERDR_INTEGRATION_CAPABILITY\" > '{}'\nprintf 'Working...\\n'\nsleep 3\n",
+            token_file.display(),
+            capability_file.display()
+        ),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1698,16 +1722,36 @@ fn pane_report_agent_updates_effective_state() {
         thread::sleep(Duration::from_millis(100));
     }
 
+    let integration_token = wait_for_nonempty_file(&token_file, Duration::from_secs(3));
+    let integration_capability = wait_for_nonempty_file(&capability_file, Duration::from_secs(3));
+    assert_eq!(integration_capability, integration_token);
     let session_path = base.join("pi-session.jsonl");
-    let session = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
-            pane_id,
-            session_path.display()
-        ),
+    let session_output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args([
+            "pane",
+            "report-agent-session",
+            &pane_id,
+            "--source",
+            "herdr:pi",
+            "--agent",
+            "pi",
+            "--agent-session-path",
+            session_path.to_str().unwrap(),
+            "--session-start-source",
+            "startup",
+            "--seq",
+            "1",
+        ])
+        .env("HERDR_SOCKET_PATH", &socket_path)
+        .env("HERDR_INTEGRATION_CAPABILITY", &integration_capability)
+        .env("HERDR_INTEGRATION_TOKEN", "stale-token")
+        .output()
+        .unwrap();
+    assert!(
+        session_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&session_output.stderr)
     );
-    assert_eq!(session["result"]["type"], "ok");
     let hook = send_request(
         &socket_path,
         &format!(
@@ -1727,16 +1771,21 @@ fn pane_report_agent_updates_effective_state() {
     );
     assert_eq!(pane["result"]["pane"]["agent"], "pi");
     assert_eq!(pane["result"]["pane"]["agent_status"], "working");
+    assert!(pane["result"]["pane"]["agent_session"].is_null());
     assert_eq!(
-        pane["result"]["pane"]["agent_session"]["source"],
-        "herdr:pi"
+        pane["result"]["pane"]["conversation_capability"]["availability"],
+        "unavailable"
     );
-    assert_eq!(pane["result"]["pane"]["agent_session"]["agent"], "pi");
-    assert_eq!(pane["result"]["pane"]["agent_session"]["kind"], "path");
     assert_eq!(
-        pane["result"]["pane"]["agent_session"]["value"],
-        session_path.display().to_string()
+        pane["result"]["pane"]["conversation_capability"]["reason"],
+        "transcript_missing"
     );
+    assert!(pane["result"]["pane"]["conversation_session"]["id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    assert!(!pane
+        .to_string()
+        .contains(&session_path.display().to_string()));
 
     let metadata = send_request(
         &socket_path,
@@ -1776,16 +1825,14 @@ fn pane_report_agent_updates_effective_state() {
         ),
     );
     assert_eq!(agent["result"]["agent"]["agent"], "pi");
+    assert!(agent["result"]["agent"]["agent_session"].is_null());
     assert_eq!(
-        agent["result"]["agent"]["agent_session"]["source"],
-        "herdr:pi"
+        agent["result"]["agent"]["conversation_capability"]["availability"],
+        "unavailable"
     );
-    assert_eq!(agent["result"]["agent"]["agent_session"]["agent"], "pi");
-    assert_eq!(agent["result"]["agent"]["agent_session"]["kind"], "path");
-    assert_eq!(
-        agent["result"]["agent"]["agent_session"]["value"],
-        session_path.display().to_string()
-    );
+    assert!(!agent
+        .to_string()
+        .contains(&session_path.display().to_string()));
     assert_eq!(agent["result"]["agent"]["title"], "Refactor auth");
     assert_eq!(agent["result"]["agent"]["display_agent"], "Pi auth");
     assert_eq!(
@@ -1895,10 +1942,12 @@ fn official_release_waits_for_confirmed_process_exit() {
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
     let stop_file = base.join("pi-stop");
+    let token_file = base.join("pi-token");
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nprintf 'Working...\\n'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\n",
+            "#!/bin/sh\nprintf '%s' \"$HERDR_INTEGRATION_TOKEN\" > '{}'\nprintf 'Working...\\n'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\n",
+            token_file.display(),
             stop_file.display()
         ),
     )
@@ -1969,16 +2018,18 @@ fn official_release_waits_for_confirmed_process_exit() {
         thread::sleep(Duration::from_millis(100));
     }
 
+    let integration_token = wait_for_nonempty_file(&token_file, Duration::from_secs(3));
     let session_path = base.join("release-session.jsonl");
     let session = send_request(
         &socket_path,
         &format!(
-            r#"{{"id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
+            r#"{{"id":"req_release_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1,"integration_token":"{}"}}}}"#,
             pane_id,
-            session_path.display()
+            session_path.display(),
+            integration_token
         ),
     );
-    assert_eq!(session["result"]["type"], "ok");
+    assert_eq!(session["result"]["type"], "ok", "{session}");
     let hook = send_request(
         &socket_path,
         &format!(

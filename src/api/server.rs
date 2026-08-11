@@ -76,6 +76,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
+        agent_conversations: true,
     })
 }
 
@@ -423,6 +424,14 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::AgentStart(_) => "agent.start",
         Method::AgentPrompt(_) => "agent.prompt",
         Method::AgentWait(_) => "agent.wait",
+        Method::AgentConversationRead(_) => "agent.conversation.read",
+        Method::AgentConversationMetadata(_) => "agent.conversation.metadata",
+        Method::AgentConversationReport(_) => "agent.conversation.report",
+        Method::AgentConversationRespond(_) => "agent.conversation.respond",
+        Method::AgentAttachmentBegin(_) => "agent.attachment.begin",
+        Method::AgentAttachmentChunk(_) => "agent.attachment.chunk",
+        Method::AgentAttachmentFinish(_) => "agent.attachment.finish",
+        Method::AgentAttachmentAbort(_) => "agent.attachment.abort",
         Method::PaneSplit(_) => "pane.split",
         Method::PaneSwap(_) => "pane.swap",
         Method::PaneMove(_) => "pane.move",
@@ -949,6 +958,8 @@ mod tests {
             state_labels: HashMap::new(),
             tokens: HashMap::new(),
             agent_session: None,
+            conversation_session: None,
+            conversation_capability: None,
             scroll: None,
             revision: 0,
         }
@@ -1081,6 +1092,7 @@ mod tests {
             Some(ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                agent_conversations: false,
             }),
             None,
             None,

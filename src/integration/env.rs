@@ -8,7 +8,12 @@ use portable_pty::CommandBuilder;
 pub(crate) const HERDR_PANE_ID_ENV_VAR: &str = "HERDR_PANE_ID";
 pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
-
+/// Per-pane integration token injected into managed pane processes; required
+/// on transcript-source and live-conversation reports.
+pub(crate) const HERDR_INTEGRATION_TOKEN_ENV_VAR: &str = "HERDR_INTEGRATION_TOKEN";
+/// Alias that survives provider subprocess filters which remove variables
+/// containing `TOKEN`. It carries the same per-pane capability value.
+pub(crate) const HERDR_INTEGRATION_CAPABILITY_ENV_VAR: &str = "HERDR_INTEGRATION_CAPABILITY";
 pub(crate) const PI_CODING_AGENT_DIR_ENV_VAR: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const OMP_CONFIG_DIR_ENV_VAR: &str = "PI_CONFIG_DIR";
 pub(crate) const CLAUDE_CONFIG_DIR_ENV_VAR: &str = "CLAUDE_CONFIG_DIR";
@@ -29,6 +34,15 @@ pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     if let Ok(executable) = std::env::current_exe() {
         cmd.env("HERDR_BIN_PATH", executable);
     }
+}
+
+pub(crate) fn integration_capability_from_env() -> Option<String> {
+    [
+        HERDR_INTEGRATION_CAPABILITY_ENV_VAR,
+        HERDR_INTEGRATION_TOKEN_ENV_VAR,
+    ]
+    .into_iter()
+    .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
 }
 
 pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {
