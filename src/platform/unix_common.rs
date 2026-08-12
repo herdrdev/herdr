@@ -174,8 +174,8 @@ impl StatusCommandGuard {
     }
 }
 
-impl Drop for StatusCommandGuard {
-    fn drop(&mut self) {
+impl StatusCommandGuard {
+    pub(crate) fn terminate(&mut self) {
         if let Some(process_group_id) = self.process_group_id.take() {
             // The command was spawned as this process group's leader. Killing the
             // group also cleans up background descendants on completion/cancellation.
@@ -183,6 +183,12 @@ impl Drop for StatusCommandGuard {
                 libc::kill(-process_group_id, libc::SIGKILL);
             }
         }
+    }
+}
+
+impl Drop for StatusCommandGuard {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 

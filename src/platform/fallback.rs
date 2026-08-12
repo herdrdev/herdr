@@ -109,6 +109,8 @@ impl StatusCommandGuard {
     pub(crate) fn new(_child: &tokio::process::Child) -> std::io::Result<Self> {
         Ok(Self)
     }
+
+    pub(crate) fn terminate(&mut self) {}
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {

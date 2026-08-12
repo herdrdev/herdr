@@ -1,4 +1,11 @@
-use std::{process::Stdio, time::Duration};
+use std::{
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 use tokio::io::AsyncReadExt;
 
@@ -20,13 +27,16 @@ pub(super) struct TabBarCommandRuntime {
     interval: Duration,
     timeout: Duration,
     next_run_at: std::time::Instant,
-    task: Option<tokio::task::AbortHandle>,
+    task: Option<StatusCommandTask>,
 }
 
 impl Drop for TabBarCommandRuntime {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
-            task.abort();
+            task.abort_handle.abort();
+            // Kill the process group on the reconfiguring thread instead of waiting
+            // for Tokio to schedule cancellation of the command task.
+            task.control.terminate();
         }
     }
 }
@@ -303,6 +313,46 @@ async fn read_last_output_line(
     })
 }
 
+struct StatusCommandTask {
+    abort_handle: tokio::task::AbortHandle,
+    control: Arc<StatusCommandControl>,
+}
+
+struct StatusCommandControl {
+    terminated: AtomicBool,
+    process_group: Mutex<Option<crate::platform::StatusCommandGuard>>,
+}
+
+impl StatusCommandControl {
+    fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::Acquire)
+    }
+
+    fn terminate(&self) {
+        self.terminated.store(true, Ordering::Release);
+        if let Some(mut process_group) = self
+            .process_group
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            process_group.terminate();
+        }
+    }
+
+    fn register(&self, mut process_group: crate::platform::StatusCommandGuard) {
+        let mut registered = self
+            .process_group
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.is_terminated() {
+            process_group.terminate();
+        } else {
+            *registered = Some(process_group);
+        }
+    }
+}
+
 fn spawn_status_command(
     event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
     generation: u64,
@@ -311,45 +361,24 @@ fn spawn_status_command(
     timeout: Duration,
     environment: Vec<(String, String)>,
     cwd: Option<std::path::PathBuf>,
-) -> tokio::task::AbortHandle {
+) -> StatusCommandTask {
+    let control = Arc::new(StatusCommandControl {
+        terminated: AtomicBool::new(false),
+        process_group: Mutex::new(None),
+    });
+    let task_control = Arc::clone(&control);
+    let deadline = tokio::time::Instant::now() + timeout;
     let task = tokio::spawn(async move {
-        let mut process = crate::platform::detached_custom_command_process(&command);
-        process
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .envs(environment);
-        if let Some(cwd) = cwd {
-            process.current_dir(cwd);
-        }
-        crate::platform::configure_status_command(&mut process);
-
-        let mut process = tokio::process::Command::from(process);
-        process.kill_on_drop(true);
-        let operation = async move {
-            let mut child = process.spawn().map_err(|error| error.to_string())?;
-            let _guard = crate::platform::StatusCommandGuard::new(&child)
-                .map_err(|error| error.to_string())?;
-            let stdout = child.stdout.take();
-            let read_output = async {
-                let Some(stdout) = stdout else {
-                    return std::io::Result::Ok(Vec::new());
-                };
-                read_last_output_line(stdout).await
-            };
-            let (status, output) = tokio::join!(child.wait(), read_output);
-            let status = status.map_err(|error| error.to_string())?;
-            let output = output.map_err(|error| error.to_string())?;
-            if status.success() {
-                Ok(command_output_text(&output))
-            } else {
-                Err(format!("exited with {status}"))
-            }
-        };
-        let result = match tokio::time::timeout(timeout, operation).await {
-            Ok(result) => result,
-            Err(_) => Err(format!("timed out after {}s", timeout.as_secs())),
-        };
+        let result = run_status_command(
+            task_control.as_ref(),
+            command,
+            timeout,
+            deadline,
+            environment,
+            cwd,
+        )
+        .await;
+        task_control.terminate();
         let _ = event_tx
             .send(crate::events::AppEvent::TabBarCommandFinished {
                 generation,
@@ -358,7 +387,66 @@ fn spawn_status_command(
             })
             .await;
     });
-    task.abort_handle()
+    StatusCommandTask {
+        abort_handle: task.abort_handle(),
+        control,
+    }
+}
+
+async fn run_status_command(
+    control: &StatusCommandControl,
+    command: String,
+    timeout: Duration,
+    deadline: tokio::time::Instant,
+    environment: Vec<(String, String)>,
+    cwd: Option<std::path::PathBuf>,
+) -> Result<Option<String>, String> {
+    if control.is_terminated() || tokio::time::Instant::now() >= deadline {
+        return Err(format!("timed out after {}s", timeout.as_secs()));
+    }
+
+    let mut process = crate::platform::detached_custom_command_process(&command);
+    process
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .envs(environment);
+    if let Some(cwd) = cwd {
+        process.current_dir(cwd);
+    }
+    crate::platform::configure_status_command(&mut process);
+
+    let mut process = tokio::process::Command::from(process);
+    process.kill_on_drop(true);
+    let mut child = process.spawn().map_err(|error| error.to_string())?;
+    let process_group =
+        crate::platform::StatusCommandGuard::new(&child).map_err(|error| error.to_string())?;
+    control.register(process_group);
+    if control.is_terminated() {
+        return Err("status command was cancelled".into());
+    }
+
+    let operation = async {
+        let stdout = child.stdout.take();
+        let read_output = async {
+            let Some(stdout) = stdout else {
+                return std::io::Result::Ok(Vec::new());
+            };
+            read_last_output_line(stdout).await
+        };
+        let (status, output) = tokio::join!(child.wait(), read_output);
+        let status = status.map_err(|error| error.to_string())?;
+        let output = output.map_err(|error| error.to_string())?;
+        if status.success() {
+            Ok(command_output_text(&output))
+        } else {
+            Err(format!("exited with {status}"))
+        }
+    };
+    match tokio::time::timeout_at(deadline, operation).await {
+        Ok(result) => result,
+        Err(_) => Err(format!("timed out after {}s", timeout.as_secs())),
+    }
 }
 
 #[cfg(test)]
@@ -424,6 +512,39 @@ mod tests {
         ));
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_command_timeout_starts_before_task_is_polled() {
+        let ran = unique_temp_path("ran-after-timeout");
+        let command = format!("printf ran > {}", ran.display());
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+        spawn_status_command(
+            event_tx,
+            7,
+            3,
+            command,
+            Duration::from_secs(1),
+            Vec::new(),
+            None,
+        );
+
+        std::thread::sleep(Duration::from_millis(1100));
+        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("status command timed out")
+            .expect("status command event channel closed");
+        let command_ran = ran.exists();
+        let _ = std::fs::remove_file(ran);
+        assert!(matches!(
+            event,
+            AppEvent::TabBarCommandFinished {
+                result: Err(ref error),
+                ..
+            } if error == "timed out after 1s"
+        ));
+        assert!(!command_ran, "status command ran after its deadline");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn status_command_drains_large_output_and_keeps_the_last_line() {
@@ -479,13 +600,13 @@ mod tests {
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn reload_aborts_an_in_flight_command_task_and_its_descendants() {
-        let started = unique_temp_path("started");
+        let descendant_started = unique_temp_path("descendant-started");
         let survived = unique_temp_path("survived");
         let command = format!(
-            "printf started > {}; (sleep 0.3; printf survived > {}) & wait",
-            started.display(),
+            "(printf descendant-started > {}; sleep 0.3; printf survived > {}) & wait",
+            descendant_started.display(),
             survived.display()
         );
         let mut app = test_app();
@@ -499,12 +620,15 @@ mod tests {
         );
         app.handle_tab_bar_status_tasks(std::time::Instant::now());
         for _ in 0..50 {
-            if started.exists() {
+            if descendant_started.exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(started.exists(), "status command did not start");
+        assert!(
+            descendant_started.exists(),
+            "status command descendant did not start"
+        );
 
         app.configure_tab_bar_status(
             &[TabBarRightEntryConfig::Text {
@@ -513,15 +637,20 @@ mod tests {
             " ",
         );
 
+        // Task cancellation is delivered when Tokio next polls the task. Block
+        // this current-thread test runtime long enough for the descendant to
+        // run, proving config reload kills its process group synchronously.
+        std::thread::sleep(Duration::from_millis(400));
+        let descendant_survived = survived.exists();
+        let _ = std::fs::remove_file(&descendant_started);
+        let _ = std::fs::remove_file(&survived);
+        assert!(!descendant_survived, "status command descendant survived");
+
         assert!(
             tokio::time::timeout(Duration::from_millis(100), app.event_rx.recv())
                 .await
                 .is_err()
         );
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(!survived.exists(), "status command descendant survived");
-        let _ = std::fs::remove_file(started);
-        let _ = std::fs::remove_file(survived);
     }
 
     #[tokio::test]

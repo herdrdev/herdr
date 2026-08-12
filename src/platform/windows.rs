@@ -687,13 +687,22 @@ fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
     result
 }
 
+impl StatusCommandGuard {
+    pub(crate) fn terminate(&mut self) {
+        if self.job != 0 {
+            // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
+            // the job, including on task cancellation and config reload.
+            unsafe {
+                CloseHandle(self.job as HANDLE);
+            }
+            self.job = 0;
+        }
+    }
+}
+
 impl Drop for StatusCommandGuard {
     fn drop(&mut self) {
-        // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
-        // the job, including on task cancellation and config reload.
-        unsafe {
-            CloseHandle(self.job as HANDLE);
-        }
+        self.terminate();
     }
 }
 
