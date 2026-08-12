@@ -875,8 +875,13 @@ fn automatic_selection_style(
 }
 
 fn automatic_selection_bg(p: &Palette, host_theme: crate::terminal_theme::TerminalTheme) -> Color {
-    let Some(background) = host_theme.background.map(terminal_theme_to_rgb) else {
-        return selection_palette_background(p);
+    let fallback = selection_palette_background(p);
+    let Some(background) = host_theme
+        .background
+        .map(terminal_theme_to_rgb)
+        .or_else(|| color_to_rgb(fallback))
+    else {
+        return fallback;
     };
 
     let target = if relative_luminance(background) < 0.5 {
@@ -1603,5 +1608,34 @@ mod tests {
             panic!("selection background should resolve to rgb");
         };
         assert!(relative_luminance((r, g, b)) > relative_luminance((12, 14, 16)));
+    }
+
+    #[test]
+    fn automatic_selection_background_contrasts_when_host_background_is_unknown() {
+        for (panel_bg, should_lighten) in [
+            (Color::Rgb(0x2d, 0x35, 0x3b), true),
+            (Color::Rgb(239, 241, 245), false),
+        ] {
+            let mut palette = Palette::catppuccin();
+            palette.panel_bg = panel_bg;
+            let Color::Rgb(r, g, b) = panel_bg else {
+                unreachable!("test backgrounds are rgb");
+            };
+
+            let selected =
+                automatic_selection_bg(&palette, crate::terminal_theme::TerminalTheme::default());
+            let known_host_selected = automatic_selection_bg(
+                &palette,
+                crate::terminal_theme::TerminalTheme {
+                    background: Some(crate::terminal_theme::RgbColor { r, g, b }),
+                    ..Default::default()
+                },
+            );
+            let base_luminance = relative_luminance((r, g, b));
+            let selected_luminance = relative_luminance(color_to_rgb(selected).unwrap());
+
+            assert_eq!(selected, known_host_selected);
+            assert_eq!(selected_luminance > base_luminance, should_lighten);
+        }
     }
 }
