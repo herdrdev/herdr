@@ -799,7 +799,10 @@ mod tests {
 
     #[test]
     fn default_config_lists_ui_accent_before_nested_tables() {
-        let accent = DEFAULT_CONFIG.find("# accent = \"cyan\"").unwrap();
+        let accent_marker = "# accent = \"cyan\"";
+        assert_eq!(DEFAULT_CONFIG.matches(accent_marker).count(), 1);
+
+        let accent = DEFAULT_CONFIG.find(accent_marker).unwrap();
         let sidebar = DEFAULT_CONFIG.find("# [ui.sidebar.agents]").unwrap();
 
         assert!(accent < sidebar);
