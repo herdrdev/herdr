@@ -1,28 +1,14 @@
 /* ──────────────────────────────────────────────────────────────
    site.css — herdr.dev chassis. Loaded after style.css, which is
    kept only for the session mock (.herdr-ui-mock) and its tokens.
-
-   Ink is the default ground and the presentation layer; paper is an opt-in
-   preference shared with the docs. html[data-palette] themes the mock only
-   and follows the ground, so page and plate always share one mauve.
+   Ink is the default ground; paper is shared with the docs via
+   Starlight's `starlight-theme` key.
    ────────────────────────────────────────────────────────────── */
 
-/* Ink is the presentation layer: terminals are dark and the audience has
-   internalised that, so it is the default and never follows the system.
-   Paper is a preference the reader opts into, shared with the docs through
-   Starlight's own `starlight-theme` key so one choice covers both surfaces.
-   The mock follows the ground, and the mauve shifts with it — one mauve in
-   view at any time, never two. */
 html,
 html[data-mode="ink"] {
-  /* The ground is near-neutral by test, not by taste. A blue-violet dark at
-     20% saturation measurably matched the old site's hue, but read as harder
-     — saturated blue at low luminance softens the edges of light text, and
-     the eye has least acuity there. Draining it to 6% won a side-by-side.
-     Colour now lives in the mauve accent, which pops harder against neutral.
-     Contrast: ink 14.7, dim 9.3, faint 5.3 — all above AA. */
   --bg: #17171a; --panel: #1e1e22; --mass: #26262b;
-  --ink: #eae8ee; --dim: #bdb9c9; --faint: #8e8a98;
+  --ink: #eae8ee; --dim: #cdccd2; --faint: #b0afb6; --faint2: #908f96;
   --line: #26262b; --line2: #35353d;
   --spot: #cba6f7; --spot-ink: #17171a;
   --grid: #202024;
@@ -30,42 +16,25 @@ html[data-mode="ink"] {
 html[data-mode="paper"] {
   --st-done: #2aa198;
   --bg: #efece5; --panel: #e7e3da; --mass: #ddd8cc;
-  --ink: #15140f; --dim: #55534a; --faint: #86826f;
+  --ink: #15140f; --dim: #55534a; --faint: #86826f; --faint2: #928e79;
   --line: #e2ded4; --line2: #cbc5b6;
   --spot: #8839ef; --spot-ink: #fff;
   --grid: #e4e0d6;
 }
 :root {
   --run: #5fae74; --wait: #d3a027; --idle: #5a615c; --done: #6f6a86;
-  /* The TUI's own mapping, not a palette invented for the website:
-     src/ui/status.rs state_dot() paints blocked with p.red, working with
-     p.yellow and idle with p.green once seen, and the default palette in
-     src/app/state.rs is Catppuccin Mocha — the same #f38ba8 / #f9e2af /
-     #a6e3a1 that style.css already defines for the plate. Aliasing rather
-     than copying keeps the legend, the plate and the app in step, and lets
-     all three follow the ground when it changes. */
+  /* agent state colours alias the style.css tokens so the legend, the
+     plate and the app stay in step */
   --st-blocked: var(--red);
   --st-working: var(--yellow);
   --st-idle: var(--green);
-  /* done is p.teal, and style.css has no teal token to alias, so it is set
-     per ground: Catppuccin Mocha teal on ink, Solarized cyan on paper */
+  /* style.css has no teal token to alias, so done is set per ground */
   --st-done: #94e2d5;
   --disp: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* Sentences are not code. Mono removes the word-shape cues you read by, so
-     it costs speed in prose and gets worse below ~14px. Inter is already what
-     the docs declare, so using it here makes the two surfaces agree. */
   --body: "Inter", system-ui, -apple-system, "Segoe UI", Helvetica, sans-serif;
   --gut: 34px;
 }
 
-/* The plate's chrome takes the page's spot, so there is exactly one mauve
-   in view. Agent identity colours inside the panes (claude coral, opencode
-   purple, codex) stay native. */
-/* The plate's agent states follow the TUI, not the page accent. `done` reads
-   var(--accent) in style.css, and aliasing accent to the page mauve painted a
-   done agent purple — a colour Herdr's sidebar never shows. src/ui/status.rs
-   state_dot() is the authority: blocked red, working filled yellow, done
-   filled teal, idle hollow green, unknown grey. */
 body.site .mock-agent.done > span,
 body.site .mock-agent.done small { color: var(--st-done); }
 
@@ -77,34 +46,27 @@ html[data-palette] {
   --term-blue: var(--spot);
 }
 
-/* The ported plugins page still reads style.css tokens directly, and style.css
-   only knows the 20 mock palettes — so catppuccin's violet #181825 was reaching
-   the publish card, which is why that block stayed tinted after the ground went
-   neutral. Bridge the legacy names onto the neutral scale at the page wrapper.
-   Scoped to this page, not to body.site, because the mock reads --radius-* for
-   its tabs and panes and must keep its own corners. Terminal tokens are left
-   alone on purpose: the plate stays catppuccin. */
+/* bridge style.css's legacy token names onto the neutral scale; scoped to
+   this page so the mock keeps its own --radius-* */
 body.site .plugins-page {
   --bg-elevated: var(--panel);
   --ink-soft: var(--dim);
   --muted: var(--faint);
-  --muted-2: var(--faint);
+  --muted-2: var(--faint2);
   --line-strong: var(--line2);
   --accent-soft: color-mix(in srgb, var(--spot) 8%, transparent);
-  /* the language is hairline cells in a sheet; nothing here is a rounded box */
   --radius-sm: 0; --radius-md: 0; --radius-lg: 0;
 }
 
 body.site {
   margin: 0; background: var(--bg); color: var(--ink);
   font-family: var(--body); font-size: 14.5px; line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
+  /* no `antialiased`: grayscale smoothing thins light-on-dark glyphs on macOS */
   background-image:
     linear-gradient(var(--grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 72px 72px;
   overflow-x: clip;
-  /* exactly one grid module of ground below the sheet */
   padding-bottom: 72px;
 }
 body.site ::selection { background: var(--spot); color: var(--spot-ink); }
@@ -117,8 +79,6 @@ body.site .ram {
 body.site .hd-frame {
   max-width: 1440px; margin: 0 auto; background: var(--bg); position: relative;
   border-left: 1px solid var(--line2); border-right: 1px solid var(--line2);
-  /* close the sheet: without this the two vertical rules stopped in mid-air on
-     the last pixel of the document, which read as a crop rather than an end */
   border-bottom: 1px solid var(--line2);
 }
 
@@ -135,10 +95,6 @@ body.site .hd-nav a.lnk { color: var(--dim); text-decoration: none; font-size: 1
 body.site .hd-nav a.lnk:hover { color: var(--ink); }
 body.site .hd-nav .btn { border: 1px solid var(--line2); padding: 7px 15px; color: var(--ink); text-decoration: none; font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; }
 body.site .hd-nav .btn:hover { background: var(--spot); color: var(--spot-ink); border-color: var(--spot); }
-/* Square hairline cells, the same box as the mode toggle and the Install
-   button — so the nav reads as one row of cells rather than text plus chrome.
-   The GitHub one widens to carry its count; the count is real, baked at build
-   and refreshed live, so it is proof rather than decoration. */
 body.site .hd-nav .ico {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; flex: 0 0 auto;
@@ -150,12 +106,9 @@ body.site .hd-nav .ico b {
   font-family: var(--mono); font-weight: 400; font-size: 11.5px;
   letter-spacing: .04em; font-variant-numeric: tabular-nums;
 }
-/* an empty count must not leave a lopsided cell */
 body.site .hd-nav .ico.wide:has(b:empty) { width: 30px; gap: 0; padding: 0; }
 body.site .hd-nav .ico:hover { color: var(--spot); border-color: var(--spot); }
 
-/* the menu cell is the same box as the icons and Install, so the nav stays one
-   row of cells; it only exists below the nav's own breakpoint */
 body.site .hd-nav .menu {
   display: none; align-items: center; justify-content: center; gap: 4px;
   flex-direction: column; width: 30px; height: 30px; flex: 0 0 auto; padding: 0;
@@ -164,8 +117,6 @@ body.site .hd-nav .menu {
 body.site .hd-nav .menu span { display: block; width: 13px; height: 1px; background: currentColor; }
 body.site .hd-nav .menu[aria-expanded="true"] { color: var(--spot); border-color: var(--spot); }
 
-/* The sheet is a continuation of the nav rather than a modal: same hairline
-   rows, same cell language, dropped under the bar it belongs to. */
 body.site .sheet { display: none; border-bottom: 1px solid var(--line2); }
 body.site .sheet a {
   display: block; padding: 15px var(--gut); text-decoration: none; color: var(--ink);
@@ -191,9 +142,7 @@ body.site .mode button {
 body.site .mode button:hover { color: var(--ink); }
 body.site .mode button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 
-/* ── hero ──
-   Single column. The ram is mass bleeding off the right edge, not an
-   object sitting in a second column with nothing to do. */
+/* ── hero ── */
 body.site .hd-hero { position: relative; overflow: hidden; padding: 68px var(--gut) 56px; }
 body.site .ghost {
   position: absolute; right: -14%; top: 50%; transform: translateY(-50%);
@@ -205,15 +154,12 @@ body.site .hd-eyebrow { display: flex; align-items: center; gap: 14px; color: va
 body.site .hd-eyebrow s { width: 42px; height: 1px; background: var(--spot); text-decoration: none; }
 body.site h1 {
   font-family: var(--disp); font-weight: 900; letter-spacing: -.055em; line-height: .88;
-  /* wide enough that each sentence takes one line and the type reaches
-     across the frame — a narrow measure is what left the right side empty */
   font-size: clamp(38px, 6.6vw, 132px); margin: 24px 0 0; max-width: 20ch; color: var(--ink);
 }
 body.site h1 em { font-style: normal; color: var(--spot); }
 body.site .lede { color: var(--dim); font-size: 15px; line-height: 1.75; max-width: 50ch; margin: 32px 0 0; }
 body.site .lede b { color: var(--ink); font-weight: 400; }
 
-/* one command, one link — every other install path lives on /install/ */
 body.site .go { display: flex; align-items: center; gap: 22px; margin-top: 38px; flex-wrap: wrap; }
 body.site .hd-cmd {
   display: inline-flex; align-items: center; border: 1px solid var(--line2);
@@ -230,9 +176,7 @@ body.site .meta { margin-top: 20px; color: var(--faint); font-size: 11.5px; lett
 body.site .meta a { color: var(--spot); text-decoration: none; }
 body.site .meta a:hover { text-decoration: underline; }
 
-/* ── numbers ──
-   Every value is real: baked at build from the R2 snapshots, refreshed live
-   and counted up if it moved since the last deploy. */
+/* ── numbers ── */
 body.site .strip { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line2); border-bottom: 1px solid var(--line2); }
 body.site .stat {
   position: relative; display: block; overflow: hidden; text-decoration: none;
@@ -268,9 +212,7 @@ body.site .stat i.live {
   body.site .stat i.live { animation: none; }
 }
 
-/* ── FIG 1 · the plate ──
-   Inset with paper around it and a hairline border, so it reads as a plate
-   resting on the sheet rather than a hole punched through it. */
+/* ── FIG 1 · the plate ── */
 body.site .fig { padding: 40px var(--gut) 46px; border-bottom: 1px solid var(--line2); }
 body.site .fighd {
   display: flex; align-items: baseline; gap: 16px; padding: 0 0 11px;
@@ -299,19 +241,8 @@ body.site .plate .herdr-ui-mock {
 body.site .plate .mock-main { min-height: 0; }
 body.site .plate .mock-panes { grid-template-rows: minmax(0, 1fr); }
 
-/* ── router rows: signposts, not pillars ──
-   Stacked so each gets room and the destination is the heaviest thing in
-   the row — these are for going somewhere, not for persuading. */
+/* ── router rows ── */
 body.site .caps { border-bottom: 1px solid var(--line2); }
-/* The whole row is the link, so the destination button is gone and the marks
-   move to the right — which is also where the frame had a half-empty column
-   doing nothing. The arrow is the affordance and it is always visible, since a
-   row that only reveals it on hover gives a reader nothing to go on. */
-/* Three columns: index, text at its measure, evidence. The row used to be text
-   plus a lot of nothing, and making the whole row a hover target drew a box
-   around the nothing. Every row now ends in something real — the session the
-   plate above shows, the agent states the copy names, the commands agents run,
-   the agents themselves — so the width is used rather than merely spanned. */
 body.site .caps > .cap {
   display: grid; grid-template-columns: 130px minmax(0, 58ch) minmax(0, 1fr);
   gap: 0 40px; align-items: start;
@@ -321,27 +252,14 @@ body.site .caps > .cap {
 body.site .caps > .cap:last-child { border-bottom: 0; }
 body.site .caps > .cap:hover { background: color-mix(in srgb, var(--spot) 4%, transparent); }
 body.site .caps > .cap:hover h3 { color: var(--spot); }
-/* .arw, not .go — .go is already the hero's button group and carries a
-   38px top margin that pushed the arrow to the bottom of the column.
-   It rides the headline rather than sitting in the mark column: with the
-   marks moved left, an arrow down there would point away from the text and
-   away from the destination. On the headline it sits where the eye lands. */
-/* Inline, not inline-block: an atomic inline carries a wrap opportunity before
-   it whatever the whitespace does, so at narrow widths the arrow dropped to a
-   line of its own under the heading. As plain inline text the no-break space in
-   the markup binds it to the last word. The hover nudge moves the margin for
-   the same reason — transforms don't apply to a non-replaced inline. */
+/* plain inline: an atomic inline adds a wrap opportunity before it, and
+   transforms don't apply to a non-replaced inline — so the nudge is margin */
 body.site .caps .arw {
   margin-left: 4px; vertical-align: 2px;
   font-family: var(--body); font-weight: 400; font-size: 15px; line-height: 1;
   color: var(--faint); transition: color .12s ease, margin-left .12s ease;
 }
 body.site .caps > .cap:hover .arw { color: var(--spot); margin-left: 8px; }
-/* The marks lead the row. On the right they sat past the end of a 62ch
-   measure and read as debris pinned to the frame edge; on the left they are a
-   margin the text hangs off, and the row's ragged right edge is just how
-   columns end. The index is set large for mass but kept low in contrast — it
-   is texture and position, not a second headline competing with the h3. */
 body.site .caps .n {
   display: flex; flex-direction: column; gap: 13px; align-items: flex-start;
   align-self: start; line-height: 1;
@@ -352,10 +270,6 @@ body.site .caps .n > span:first-child {
 }
 body.site .caps > .cap:hover .n > span:first-child { color: var(--line2); }
 
-/* One frame for all four, at one width, flush to the right gutter — so the
-   evidence reads as the same kind of object in every row and the column has a
-   straight edge instead of a ragged one. The frame is the terminal's, moved up
-   from .tape so the typing line no longer owns a border the others lack. */
 body.site .caps .ev {
   align-self: center; justify-self: end;
   width: 100%; max-width: 520px;
@@ -372,18 +286,15 @@ body.site .caps .ev-row b {
 body.site .caps .ev-row i { display: block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 body.site .caps .ev-note { margin-top: 9px; line-height: 1.7; }
 
-/* ── 05, the tease ──
-   Inert by design: no link, no pointer, no hover reveal, no arrow. It reads
-   the same to everyone on every device, which is the only version of this
-   that a phone gets too. The blocks are set in mono because JetBrains Mono
-   actually carries U+2580–259F; in the display face they would fall back to
-   whatever the system happens to have. */
-body.site .caps .cap-soon { cursor: default; }
+/* ── 05 ──
+   masks are mono because JetBrains Mono carries U+2580–259F; the display
+   face would fall back to whatever the system has */
 body.site .caps .cap-soon .mask { font-family: var(--mono); color: var(--line2); letter-spacing: -.02em; }
-body.site .caps .cap-soon .tape { color: var(--faint); }
-/* The line is fully redacted, so there is nothing being typed. A caret would
-   imply a live prompt and put the one moving thing on the page next to the row
-   that is deliberately saying nothing. */
+body.site .caps .cap-soon .soon-tag {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--faint);
+  border: 1px solid var(--line2); padding: 4px 8px;
+}
 body.site .caps .cap-soon .tape > span { border-right: 0; animation: none; }
 /* available to a screen reader, never on screen */
 body.site .sr {
@@ -391,34 +302,22 @@ body.site .sr {
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
-/* green live dot: "this is up right now" */
 body.site .caps .beat {
   display: block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
   background: var(--run); animation: site-pulse 2.2s ease-in-out infinite;
 }
-/* blocked, working, idle — traffic-light order, and all three sit still: they
-   are a legend, and a legend that moves reads as an alarm. Only the heartbeat
-   in the row above animates. */
 body.site .caps .ev-row .b { background: var(--st-blocked); }
 body.site .caps .ev-row .w { background: var(--st-working); }
-/* hollow, because state_dot() draws idle as ○ and every other state as ● —
-   the fill is part of the signal, not decoration */
+/* hollow: state_dot() draws idle as ○ */
 body.site .caps .ev-row .i { background: none; box-shadow: inset 0 0 0 2px var(--st-idle); }
 
-/* the typing line. The frame lives on .ev now, so this is just the line —
-   still nowrap and clipped, so a long command can never reflow the box. */
 body.site .caps .tape {
   display: flex; align-items: baseline; gap: 9px; margin: 0;
   color: var(--dim); min-height: 19px; overflow: hidden; white-space: nowrap;
 }
 body.site .caps .tape b { color: var(--spot); font-weight: 400; }
-/* The caret is the span's own right border, not a sibling box. As a sibling it
-   sat at the shrunk span's edge while the text overflowed past it, which drew
-   the caret on top of the words — and a block sibling can't sit on the text
-   baseline. A border rides the line box, so it lands after the last character
-   at the right height by construction. */
-/* direct child only: row 05's line wraps a nested redaction block, and a
-   descendant selector gave that block a caret of its own mid-line */
+/* the caret is the span's own right border so it rides the line box; direct
+   child only — row 05 nests a mask span */
 body.site .caps .tape > span {
   flex: 0 1 auto; min-width: 0;
   border-right: 7px solid var(--dim);
@@ -426,11 +325,6 @@ body.site .caps .tape > span {
 }
 @keyframes site-caret { 0%, 49% { border-color: var(--dim) } 50%, 100% { border-color: transparent } }
 
-/* Masked, not inlined: the source files carry their own brand fills, and one
-   of them is white — which would vanish on paper. Silhouettes in one colour
-   also stop the row turning into a logo salad. */
-/* two columns so eight entries stay a compact block rather than a tall list
-   that would tower over the other three evidence boxes */
 body.site .caps .herd {
   display: grid; grid-template-columns: 1fr 1fr; gap: 11px 24px; margin: 0;
 }
@@ -452,8 +346,6 @@ body.site .caps h3 { transition: color .12s ease; }
 
 /* ── page head: shared by blog and any other framed page ── */
 body.site .ph { padding: 68px var(--gut) 44px; border-bottom: 1px solid var(--line2); }
-/* a wide frame left the right half of the head empty — give it a slot with
-   something real in it rather than widening the measure past readability */
 body.site .ph-split {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   gap: 60px; align-items: end;
@@ -465,7 +357,7 @@ body.site .ph-side b {
 }
 body.site .ph-side span {
   display: block; margin-top: 10px;
-  color: var(--faint); font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--faint); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
 }
 body.site .ph-side a { display: inline-block; margin-top: 18px; color: var(--spot); text-decoration: none; font-size: 12px; }
 body.site .ph-side a:hover { text-decoration: underline; }
@@ -478,7 +370,6 @@ body.site .ph p { margin: 22px 0 0; color: var(--dim); font-size: 14.5px; line-h
 body.site .ph code {
   color: var(--ink); background: var(--panel);
   border: 1px solid var(--line2); padding: 1px 6px; font-size: 12px;
-  /* a chip split across two lines reads as a rendering fault, not a wrap */
   white-space: nowrap;
 }
 body.site .ph-actions { display: flex; gap: 12px; margin-top: 30px; flex-wrap: wrap; }
@@ -490,11 +381,8 @@ body.site .btn-solid { background: var(--spot); border-color: var(--spot); color
 body.site .btn-ghost { color: var(--ink); }
 body.site .btn-ghost:hover { background: var(--spot); border-color: var(--spot); color: var(--spot-ink); }
 
-/* The ported pages still carry style.css's .button classes on the publish
-   links and the load-more control. Given the site language here rather than
-   swapped in the markup, so all three stay in step. The solid one rendered as
-   an empty light slab because `body.site a { color: inherit }` outranks
-   .button-primary's own `color`, so the label took the card's near-white. */
+/* `body.site a { color: inherit }` outranks .button-primary's own color, so
+   the site language is restated here for style.css's .button classes */
 body.site .button {
   min-height: 0; padding: 12px 18px; border-radius: 0;
   border: 1px solid var(--line2); font-family: var(--mono); font-weight: 400;
@@ -505,10 +393,7 @@ body.site .button-primary:hover { background: var(--ink); border-color: var(--in
 body.site .button-secondary { background: none; color: var(--ink); }
 body.site .button-secondary:hover { background: var(--spot); border-color: var(--spot); color: var(--spot-ink); }
 
-/* ── plugins ──
-   The markup is the original page's; only the language is restyled, so the
-   live fetch, search and sort behaviour is untouched. ── */
-/* not flex: a wrapping flex row put the status dot on a line of its own */
+/* ── plugins ── */
 body.site .plugins-trust {
   display: block; margin: 20px 0 0;
   color: var(--faint); font-size: 12px; line-height: 1.7; max-width: 78ch;
@@ -547,19 +432,15 @@ body.site .plugins-sort {
   background-repeat: no-repeat;
 }
 body.site .plugins-sort:focus { outline: 0; border-color: var(--spot); }
-/* the count sits flush against the frame otherwise */
 body.site .plugins-status { margin-left: auto; padding: 0; white-space: nowrap; }
 body.site .plugins-metabar { border-bottom: 1px solid var(--line); }
 body.site .plugins-meta,
 body.site .plugins-status {
-  margin: 0; padding: 13px var(--gut); color: var(--faint); font-size: 10.5px;
-  letter-spacing: .18em; text-transform: uppercase;
+  margin: 0; padding: 13px var(--gut); color: var(--faint); font-size: 11.5px;
+  letter-spacing: .04em;
 }
 body.site .plugins-status { border-top: 1px solid var(--line); }
-/* the old page wraps every block in .section, which brings its own vertical
-   padding, a top border and a horizontal inset — so blocks drifted further
-   right the deeper they were nested. Neutralise it and let each block own
-   its gutter, aligned with the page head. */
+/* neutralise style.css's .section padding/borders on the ported page */
 body.site .plugins-page .section {
   padding: 0; border-top: 0; max-width: none; margin: 0;
 }
@@ -568,25 +449,22 @@ body.site .plugins-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 14px; padding: 26px var(--gut) 34px;
 }
-/* cards are hairline cells in a sheet, not filled boxes floating on it */
 body.site .plugin-card {
   display: flex; flex-direction: column; min-width: 0;
   padding: 20px 22px 22px; text-decoration: none;
-  background: none; border: 1px solid var(--line2); border-radius: 0;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 0;
   text-transform: none; letter-spacing: normal;
 }
 body.site .plugin-card:hover {
-  background: color-mix(in srgb, var(--spot) 5%, transparent); border-color: var(--spot);
+  background: color-mix(in srgb, var(--spot) 6%, var(--panel)); border-color: var(--spot);
 }
 body.site .plugin-card-head { display: flex; align-items: baseline; gap: 12px; }
 body.site .plugin-title { min-width: 0; font-size: 15px; letter-spacing: -.01em; }
 body.site .plugin-owner { color: var(--faint); }
 body.site .plugin-name { color: var(--ink); font-weight: 500; }
 body.site .plugin-card:hover .plugin-name { color: var(--spot); }
-body.site .plugin-go { margin-left: auto; color: var(--faint); font-size: 14px; }
+body.site .plugin-go { margin-left: auto; color: var(--faint2); font-size: 14px; }
 body.site .plugin-card:hover .plugin-go { color: var(--spot); }
-/* clamp to two lines so every cell has the same shape — the feed's own
-   ellipsis truncated at a character count, which made the rows ragged */
 body.site .plugin-desc {
   margin: 11px 0 0; color: var(--dim); font-size: 12.5px; line-height: 1.65;
   text-transform: none; letter-spacing: normal;
@@ -596,15 +474,12 @@ body.site .plugin-desc {
 body.site .plugin-meta-row {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   margin-top: auto; padding-top: 18px;
-  color: var(--faint); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint); font-size: 12px; letter-spacing: .02em;
 }
 body.site .plugin-stat { display: flex; align-items: center; gap: 7px; }
 body.site .plugin-star { color: var(--spot); }
 body.site .plugin-lang-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-body.site .plugin-updated { margin-left: auto; }
-/* .plugins-more is the button, not a wrapper — given section padding it
-   inflated into a floating slab. It's the foot of a long list, so make it the
-   full-width row a list foot should be rather than a box parked in the middle. */
+body.site .plugin-updated { margin-left: auto; color: var(--faint2); }
 body.site .plugins-more {
   display: block; width: 100%; margin: 0; padding: 22px var(--gut);
   border: 0; border-top: 1px solid var(--line2); background: none;
@@ -613,13 +488,10 @@ body.site .plugins-more {
 body.site .plugins-more:hover {
   background: color-mix(in srgb, var(--spot) 5%, transparent); color: var(--spot);
 }
-/* the rule above outranks the page's own .plugins-more[hidden] guard, so the
-   exhausted button stayed on screen; restate the guard at this weight */
+/* the rule above outranks the page's own [hidden] guard, so restate it */
 body.site .plugins-more[hidden] { display: none; }
 body.site .plugins-publish { padding: 40px var(--gut) 48px; border-bottom: 1px solid var(--line2); }
 body.site .plugins-publish-card { border: 1px solid var(--line2); padding: 26px 28px; }
-/* the card's heading is an h3, so the h2 rule missed it and the page's own
-   mono declaration stood — the one section heading not in Archivo */
 body.site .plugins-publish h2,
 body.site .plugins-publish h3 {
   margin: 0; font-family: var(--disp); font-weight: 900; letter-spacing: -.035em;
@@ -647,18 +519,11 @@ body.site .posts .go-arrow { color: var(--faint); font-size: 15px; }
 body.site .posts a:hover .go-arrow { color: var(--spot); }
 
 /* ── article ── */
-/* The measure column is capped at the body's own 76ch. Left as 1fr it ate every
-   spare pixel and parked the sections list against the far edge, with the gap
-   between them growing without limit on a wide display. */
 body.site .article {
   display: grid; grid-template-columns: minmax(0, 76ch) 224px; gap: 60px;
   justify-content: center;
   padding: 54px var(--gut) 76px; border-bottom: 1px solid var(--line2); align-items: start;
 }
-/* No sidebar means no second column, and the measure centres rather than
-   hugging the left gutter with the whole frame empty beside it. Elsewhere on
-   the site a short measure sits left because something else occupies the
-   right; here nothing does. */
 body.site .article-solo { grid-template-columns: minmax(0, 1fr); }
 body.site .article-solo .article-body { margin-inline: auto; }
 body.site .article-body { min-width: 0; max-width: 76ch; }
@@ -674,7 +539,6 @@ body.site .article h1 {
 body.site .article-lede { margin: 20px 0 0; color: var(--dim); font-size: 15px; line-height: 1.75; }
 body.site .article-rule { margin: 34px 0 0; border: 0; border-top: 1px solid var(--line2); }
 
-/* prose: mono body, display headings, hairlines instead of boxes */
 body.site .prose { margin-top: 34px; color: var(--dim); font-size: 13.5px; line-height: 1.85; }
 body.site .prose > * + * { margin-top: 20px; }
 body.site .prose h2 {
@@ -703,10 +567,7 @@ body.site .prose table { width: 100%; border-collapse: collapse; font-size: 12.5
 body.site .prose th, body.site .prose td { text-align: left; padding: 9px 12px; border: 1px solid var(--line); }
 body.site .prose th { color: var(--ink); font-weight: 500; }
 
-/* ── post figures ──
-   Diagrams are built from the site's own tokens rather than exported as PNGs.
-   They switch with ink and paper, stay sharp at any density, and a diagram of
-   the sidebar stops being a lie the next time the sidebar changes. */
+/* ── post figures ── */
 body.site .pf { margin: 34px 0 0; }
 body.site .pf-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 body.site .pf-panel { border: 1px solid var(--line2); background: var(--panel); min-width: 0; }
@@ -733,8 +594,6 @@ body.site .pf-row.blocked .pf-mark, body.site .pf-row.blocked small { color: var
 body.site .pf-row.done .pf-mark, body.site .pf-row.done small { color: var(--st-done); }
 body.site .pf-row.idle .pf-mark, body.site .pf-row.idle small { color: var(--st-idle); }
 
-/* The left panel animates because the argument is the motion. Four braille
-   frames at 8fps is what 0.7.5 actually did, per working pane, forever. */
 body.site .pf-spin { position: relative; display: inline-block; width: 1ch; }
 body.site .pf-spin i { position: absolute; left: 0; top: 0; font-style: normal; opacity: 0; animation: pf-frame .5s steps(1, end) infinite; }
 body.site .pf-spin i:nth-child(2) { animation-delay: .125s; }
@@ -752,8 +611,6 @@ body.site .pf-step { color: var(--dim); padding: 5px 0; }
 body.site .pf-step b { color: var(--ink); font-weight: 400; }
 body.site .pf-step s { display: block; color: var(--faint); text-decoration: none; font-size: 10.5px; padding-top: 2px; }
 body.site .pf-arrow { color: var(--line2); padding: 1px 0; }
-/* the two outcomes are alternatives, not the next two steps, so they get a
-   fork rather than another length of the same connector */
 body.site .pf-fork em { color: var(--faint); font-style: normal; margin-right: 8px; }
 body.site .pf-fork s { padding-left: 34px; }
 body.site .pf-stop { color: var(--st-done); }
@@ -830,9 +687,8 @@ body.site .vs-list p { margin: 0; color: var(--dim); font-size: 14px; line-heigh
 
 /* ── close ── */
 body.site .end { position: relative; overflow: hidden; padding: 96px var(--gut) 104px; border-bottom: 1px solid var(--line2); }
-/* The bleed is a fraction of the mark, not of the section. As a percentage it
-   resolved against .end's height, so the taller the copy wrapped the further
-   the ram sank — on a phone only its crown cleared the divider. */
+/* the bleed is a fraction of the mark, not the section — a % would resolve
+   against .end's height */
 body.site .end .ram {
   --ram-size: min(560px, 54vw);
   position: absolute; right: -6%; bottom: calc(var(--ram-size) * -0.22);
@@ -842,12 +698,7 @@ body.site .end .in { position: relative; z-index: 1; }
 body.site .end h2 { font-family: var(--disp); font-weight: 900; letter-spacing: -.05em; font-size: clamp(36px, 5.4vw, 70px); line-height: .93; margin: 0; max-width: 13ch; color: var(--ink); }
 body.site .end p { margin: 20px 0 0; color: var(--dim); font-size: 13.5px; max-width: 52ch; line-height: 1.8; }
 
-/* ── footer ──
-   The drafting title block that used to sit here is gone. Three of its five
-   cells were marketing in a spec costume, it was identical on every page so it
-   said nothing after the first view, and its version was hardcoded in two
-   files. The two facts worth keeping now sit in the footer line, with the
-   version read from latest.json at build. */
+/* ── footer ── */
 body.site .foot { padding: 22px var(--gut); border-top: 1px solid var(--line2); display: flex; gap: 22px; align-items: center; flex-wrap: wrap; color: var(--faint); font-size: 11.5px; }
 body.site .foot a { color: var(--dim); text-decoration: none; }
 body.site .foot a:hover { color: var(--ink); }
@@ -857,9 +708,6 @@ body.site .meta .yc { color: var(--dim); display: inline-flex; align-items: cent
 body.site .meta .yc img { display: block; }
 body.site .meta .yc:hover { color: var(--ink); text-decoration: none; }
 body.site .foot .fact { color: var(--faint); font-variant-numeric: tabular-nums; }
-/* the outbound cluster sits right: site links and provenance on one side, ways
-   to reach the project on the other. Its own gap is tighter than the row's, so
-   two 14px marks read as a pair, not as two more items in the list. */
 body.site .foot .out { margin-left: auto; display: flex; align-items: center; gap: 16px; }
 body.site .foot .ico { display: inline-flex; color: var(--faint); }
 body.site .foot .ico svg { width: 14px; height: 14px; fill: currentColor; }
@@ -868,92 +716,49 @@ body.site .foot .ico:hover { color: var(--ink); }
 @media (max-width: 900px) {
   :root { --gut: 20px; }
   body.site { background-size: 40px 40px; padding-bottom: 40px; }
-  /* One row can't hold the lockup, the count, Install and three links at
-     390px — those are 450px of cells in 350px. The links move into the sheet,
-     which also carries what phone width otherwise drops silently. */
   body.site .hd-nav a.lnk { display: none; }
-  /* the toggle is 103px of the bar and the sheet now carries it. Left in, it
-     overflowed the nav at 430–560px, which widened the document past the
-     viewport and left a dead strip down the right of every section. */
   body.site .hd-nav .mode { display: none; }
   body.site .hd-nav .menu { display: inline-flex; }
   body.site .sheet.open { display: block; }
-  /* two up: the column divider alone left the rows floating together, so the
-     four cells read as one block rather than a grid. The bottom row keeps its
-     edge from the strip's own border. */
   body.site .strip { grid-template-columns: 1fr 1fr; }
   body.site .strip .stat { border-bottom: 1px solid var(--line); }
   body.site .strip .stat:nth-last-child(-n + 2) { border-bottom: 0; }
   body.site .strip .stat:nth-child(2n) { border-right: 0; }
-  /* the evidence drops under the text rather than competing for width */
   body.site .caps > .cap { grid-template-columns: 54px minmax(0, 1fr); gap: 0 18px; }
   body.site .caps .n > span:first-child { font-size: 30px; }
-  /* stacked, the card butted straight into the last line of the paragraph —
-     the 20px was inside its border, so it padded the card rather than
-     separating it. Margin instead, and the interior goes back to even. */
   body.site .caps .ev { grid-column: 2; margin-top: 20px; }
   body.site .fig { padding: 26px var(--gut) 30px; }
   body.site .plate { aspect-ratio: auto; }
   body.site .hd-hero { padding: 60px var(--gut) 52px; }
-  /* 224px of sections beside a phone measure left the title breaking every two
-     words. A sticky jump list is worth least on the screen it costs most, so
-     the post falls back to the same single column a heading-less post uses. */
   body.site .article { grid-template-columns: minmax(0, 1fr); }
   body.site .article .toc { display: none; }
 }
 
-/* Below this the nav's cells stop fitting, so they come off in order of how
-   little they're worth on a phone. Measured at the 24px gap: lock 88 + github
-   88 + x 30 + toggle 103 + install 86 is 515px of cells, and a 480px viewport
-   leaves 440px. X goes first — it's the one thing the footer also carries. */
 @media (max-width: 560px) {
   body.site .hd-nav { gap: 14px; }
   body.site .hd-nav .ico[href*="x.com"] { display: none; }
-  /* the hint stops competing for the same line as the title and becomes the
-     line under it — right-aligned, it read as a second ragged column */
   body.site .fighd { flex-wrap: wrap; gap: 6px 16px; }
   body.site .fighd .r { margin-left: 0; text-align: left; }
-  /* the close is mostly the watermark's room at this width */
   body.site .end { padding: 56px var(--gut) 64px; }
-  /* nothing to push against on one column: the cluster hung alone on its own
-     line while the rest of the footer sat left */
   body.site .foot .out { margin-left: 0; }
-  /* the mark carries no wordmark of its own, so once the row wrapped it read as
-     a stray glyph leading a list rather than as a lockup. The identity is at the
-     top of the page; here it was only costing the row its first cell. */
   body.site .foot .ram { display: none; }
-  /* the 132px date column left the title about 120px to live in, so every
-     headline broke every two words. The date goes above the entry instead. */
   body.site .posts a { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; }
   body.site .posts time { grid-column: 1 / -1; }
-  /* the count column took half the head and squeezed the copy into a
-     three-words-per-line ribbon; stacked, it becomes the head's footer */
   body.site .ph-split { grid-template-columns: minmax(0, 1fr); gap: 30px; }
   body.site .ph-side { text-align: left; }
   body.site .ph-side b { font-size: 44px; }
 }
 
 @media (max-width: 430px) {
-  /* 44 characters at 13.5px ran to a third line with "sh" alone on it. At 12px
-     the only break opportunity — the space after -fsSL — lands mid-line and the
-     URL stays whole. */
   body.site .hd-cmd code { padding: 12px 14px; font-size: 12px; }
   body.site .hd-cmd button { padding: 12px 13px; }
 }
 
-/* The narrow end of the range — SE-class phones and folded covers, 320px up.
-   Four cells and three gaps came to 334px against 324px of bar at 364, so the
-   nav overflowed again and the document went wider than the screen. The count
-   is the widest thing that can go and still leave a working link: the mark
-   keeps the destination, and the same number is one screen down in the strip. */
 @media (max-width: 380px) {
   :root { --gut: 16px; }
   body.site .hd-nav { gap: 10px; }
   body.site .hd-nav .ico.wide { width: 30px; gap: 0; padding: 0; }
   body.site .hd-nav .ico.wide b { display: none; }
-  /* the button's 60px was the difference between two lines and a third with
-     "sh" on it, so it becomes the row under the command instead of the cell
-     beside it — the same shape the plugins list uses for its foot */
   body.site .hd-cmd { flex-wrap: wrap; }
   body.site .hd-cmd code { flex: 1 1 100%; }
   body.site .hd-cmd button {
@@ -962,23 +767,16 @@ body.site .foot .ico:hover { color: var(--ink); }
   }
 }
 
-/* The mock scales on its own width — .hero-product-shot is the container.
-   Sidebar left, tabs above the pane: the same layout as the wide plate, just
-   smaller. It used to reflow into stacked strips, which is a shape herdr
-   never renders and which overflowed sideways anyway. Type is the thing that
-   shrinks, so the terminal stays crisp rather than being transform-scaled. */
+/* the mock scales on its own width — .hero-product-shot is the container */
 @container (max-width: 900px) {
   body.site .herdr-ui-mock {
     aspect-ratio: auto; height: 74vh; min-height: 460px;
-    /* the sidebar keeps enough width for a branch name under the workspace */
     grid-template-columns: minmax(84px, 27%) minmax(0, 1fr);
   }
   body.site .mock-space, body.site .mock-agent { padding: 6px 8px; }
-  /* "grouped" is the sort mode; at this width it collides with the heading */
   body.site .mock-agent-title span:last-child { display: none; }
   body.site .mock-main { min-height: 0; min-width: 0; }
   body.site .mock-view, body.site .mock-pane { min-width: 0; }
-  /* splits stack out of view rather than halving an already narrow pane */
   body.site .mock-panes { grid-template-columns: minmax(0, 1fr) !important; min-width: 0; }
   body.site .mock-panes .mock-pane:not(.focused) { display: none; }
 }
@@ -987,14 +785,8 @@ body.site .foot .ico:hover { color: var(--ink); }
   body.site .strip i.live { animation: none; }
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Typography split — readability first.
-
-   Prose inherits --body from body.site. Everything below is put back
-   into mono because mono is doing a real job there: identifiers and
-   repo paths, commands, uppercase labels, and figures with units.
-   Display headings stay Archivo and are set where they're declared.
-   ────────────────────────────────────────────────────────────── */
+/* ── typography: mono where it carries identifiers, commands, labels,
+   figures; prose stays --body ── */
 body.site .hd-nav a.lnk,
 body.site .hd-nav .btn,
 body.site .hd-eyebrow,
@@ -1021,7 +813,6 @@ body.site pre {
   font-family: var(--mono);
 }
 
-/* prose sizes: comfortable rather than compact */
 body.site .lede { font-size: 16px; line-height: 1.7; max-width: 56ch; }
 body.site .ph p { font-size: 15.5px; line-height: 1.7; max-width: 62ch; }
 body.site .caps p { font-size: 14.5px; line-height: 1.7; color: var(--dim); }
@@ -1033,5 +824,5 @@ body.site .prose { font-size: 16px; line-height: 1.75; }
 body.site .prose code, body.site .prose pre { font-size: 13.5px; }
 body.site .toc a { font-family: var(--body); font-size: 13px; line-height: 1.5; }
 body.site .plugins-trust { font-size: 13.5px; line-height: 1.7; }
-body.site .plugin-desc { font-size: 14px; line-height: 1.6; min-height: calc(2 * 1.6em); }
-body.site .plugin-title { font-size: 14.5px; }
+body.site .plugin-desc { font-size: 14.5px; line-height: 1.6; min-height: calc(2 * 1.6em); }
+body.site .plugin-title { font-size: 15px; }

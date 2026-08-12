@@ -470,10 +470,20 @@ const MAX_CLIPBOARD_BYTES: usize = 192 * 1024;
 #[derive(Default)]
 struct TerminalCallbackState {
     write_pty: Option<Box<WritePtyCallback>>,
+    bell_count: u16,
     pwd_changes: Vec<Vec<u8>>,
     clipboard_writes: Vec<Vec<u8>>,
     size_report: ffi::GhosttySizeReportSize,
     color_scheme: Option<ColorScheme>,
+}
+
+unsafe extern "C" fn bell_trampoline(_terminal: ffi::GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    // SAFETY: userdata is the TerminalCallbackState installed with this terminal.
+    let state = unsafe { &mut *userdata.cast::<TerminalCallbackState>() };
+    state.bell_count = state.bell_count.saturating_add(1);
 }
 
 unsafe extern "C" fn color_scheme_trampoline(
@@ -822,6 +832,12 @@ impl Terminal {
             .into_result()?;
             ffi::ghostty_terminal_set(
                 terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_BELL,
+                (bell_trampoline as *const ()).cast(),
+            )
+            .into_result()?;
+            ffi::ghostty_terminal_set(
+                terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_PWD_CHANGED,
                 (pwd_changed_trampoline as *const ()).cast(),
             )
@@ -977,6 +993,10 @@ impl Terminal {
 
     pub fn set_color_scheme(&mut self, color_scheme: Option<ColorScheme>) -> Option<ColorScheme> {
         mem::replace(&mut self.callback_state.color_scheme, color_scheme)
+    }
+
+    pub fn take_bell_count(&mut self) -> u16 {
+        mem::take(&mut self.callback_state.bell_count)
     }
 
     pub fn take_pwd_changes(&mut self) -> Vec<Vec<u8>> {
@@ -1396,11 +1416,11 @@ impl Terminal {
         self.get_optional_rgb_color(TERMINAL_DATA_COLOR_CURSOR)
     }
 
-    fn width_px(&self) -> Result<u32, Error> {
+    pub(crate) fn width_px(&self) -> Result<u32, Error> {
         self.get_u32(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_WIDTH_PX)
     }
 
-    fn height_px(&self) -> Result<u32, Error> {
+    pub(crate) fn height_px(&self) -> Result<u32, Error> {
         self.get_u32(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_HEIGHT_PX)
     }
 

@@ -3,11 +3,12 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{c_void, OsStr},
     mem::{size_of, MaybeUninit},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -33,13 +34,16 @@ use windows_sys::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-                    TH32CS_SNAPPROCESS,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
+                    Thread32Next, PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD,
+                    THREADENTRY32,
                 },
             },
             JobObjects::{
-                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+                JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
@@ -47,10 +51,11 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
-                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
-                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
+                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
+                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
+                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+                THREAD_SUSPEND_RESUME,
             },
         },
         UI::{
@@ -77,7 +82,15 @@ use super::{ClipboardImage, ForegroundJob, Signal};
 
 const STILL_ACTIVE: u32 = 259;
 const FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(250);
+const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
+const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
+const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+
+pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
+    title.strip_prefix("Administrator: ").unwrap_or(title)
+}
+
 const MAX_PROCESS_ENVIRONMENT_BYTES: usize = 256 * 1024;
 const PROCESS_ENVIRONMENT_READ_CHUNK_BYTES: usize = 16 * 1024;
 const PROCESS_RUNTIME_MARKER_CACHE_CAPACITY: usize = 1_024;
@@ -233,12 +246,96 @@ pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) ->
 #[derive(Debug)]
 struct CachedProcessSnapshot {
     built_at: Instant,
-    entries: Arc<Vec<WindowsProcessEntry>>,
+    snapshot: Arc<ProcessSnapshot>,
 }
 
 #[derive(Debug)]
 struct ProcessSnapshotCache {
     cached: Option<CachedProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessSignature {
+    pid: u32,
+    parent_pid: u32,
+    name: String,
+}
+
+impl ProcessSignature {
+    fn from_entry(entry: &WindowsProcessEntry) -> Self {
+        Self {
+            pid: entry.pid,
+            parent_pid: entry.parent_pid,
+            name: entry.name.clone(),
+        }
+    }
+
+    fn matches(&self, entry: Option<&WindowsProcessEntry>) -> bool {
+        entry.is_some_and(|entry| {
+            self.pid == entry.pid && self.parent_pid == entry.parent_pid && self.name == entry.name
+        })
+    }
+}
+
+#[derive(Debug)]
+enum ProcessIdentity {
+    Handle(OwnedHandle),
+    #[cfg(test)]
+    Stub {
+        running: bool,
+        creation_time: Option<u64>,
+    },
+}
+
+impl ProcessIdentity {
+    fn open(pid: u32) -> Option<Self> {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return None;
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle.cast()) };
+        Some(Self::Handle(handle))
+    }
+
+    fn running(&self) -> bool {
+        match self {
+            Self::Handle(handle) => {
+                let mut exit_code = 0;
+                let read = unsafe {
+                    GetExitCodeProcess(handle.as_raw_handle().cast(), &mut exit_code) != 0
+                };
+                read && exit_code == STILL_ACTIVE
+            }
+            #[cfg(test)]
+            Self::Stub { running, .. } => *running,
+        }
+    }
+
+    fn creation_time(&self) -> Option<u64> {
+        match self {
+            Self::Handle(handle) => process_creation_time(handle.as_raw_handle().cast()),
+            #[cfg(test)]
+            Self::Stub { creation_time, .. } => *creation_time,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CachedForegroundSelection {
+    shell: ProcessSignature,
+    selected: ProcessSignature,
+    descendants: Vec<ProcessSignature>,
+    descendant_identities: Vec<ProcessIdentity>,
+    shell_identity: ProcessIdentity,
+    selected_identity: ProcessIdentity,
+    job: ForegroundJob,
+    verified_at: Instant,
+    last_used: Instant,
+}
+
+#[derive(Debug, Default)]
+struct ForegroundSelectionCache {
+    entries: HashMap<u32, CachedForegroundSelection>,
 }
 
 #[derive(Debug)]
@@ -258,19 +355,119 @@ struct CachedGitBashProcess {
 
 static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
     Mutex::new(ProcessSnapshotCache { cached: None });
+static FOREGROUND_SELECTION_CACHE: LazyLock<Mutex<ForegroundSelectionCache>> =
+    LazyLock::new(|| Mutex::new(ForegroundSelectionCache::default()));
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true
 }
 
+/// The machine's node name, as shown by tmux's `#h`.
+pub(crate) fn hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|name| !name.is_empty())
+}
+
+pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
+    let mut timestamp: libc::time_t = 0;
+    if unsafe { libc::time(&mut timestamp) } == -1 {
+        return None;
+    }
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_s(&mut local, &timestamp) } != 0 {
+        return None;
+    }
+    let month = time::Month::try_from(u8::try_from(local.tm_mon + 1).ok()?).ok()?;
+    let date = time::Date::from_calendar_date(
+        local.tm_year + 1900,
+        month,
+        u8::try_from(local.tm_mday).ok()?,
+    )
+    .ok()?;
+    let time = time::Time::from_hms(
+        u8::try_from(local.tm_hour).ok()?,
+        u8::try_from(local.tm_min).ok()?,
+        u8::try_from(local.tm_sec).ok()?,
+    )
+    .ok()?;
+    Some(time::PrimitiveDateTime::new(date, time))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsProcessCommand {
+    creation_time: Option<u64>,
+    argv0: Option<String>,
+    argv: Option<Vec<String>>,
+    cmdline: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct WindowsProcessEntry {
     pid: u32,
     parent_pid: u32,
     name: String,
-    argv0: Option<String>,
-    argv: Option<Vec<String>>,
-    cmdline: Option<String>,
+    command: OnceLock<WindowsProcessCommand>,
+}
+
+impl WindowsProcessEntry {
+    fn command(&self) -> &WindowsProcessCommand {
+        self.command
+            .get_or_init(|| read_process_command(self.pid, &self.name))
+    }
+}
+
+#[derive(Debug)]
+struct ProcessSnapshot {
+    entries: Vec<WindowsProcessEntry>,
+    entry_by_pid: HashMap<u32, usize>,
+    children_by_parent: HashMap<u32, Vec<usize>>,
+    agent_indices: OnceLock<Vec<usize>>,
+}
+
+impl ProcessSnapshot {
+    fn new(entries: Vec<WindowsProcessEntry>) -> Self {
+        let mut entry_by_pid = HashMap::with_capacity(entries.len());
+        let mut children_by_parent = HashMap::<u32, Vec<usize>>::new();
+        for (index, entry) in entries.iter().enumerate() {
+            entry_by_pid.insert(entry.pid, index);
+            children_by_parent
+                .entry(entry.parent_pid)
+                .or_default()
+                .push(index);
+        }
+        Self {
+            entries,
+            entry_by_pid,
+            children_by_parent,
+            agent_indices: OnceLock::new(),
+        }
+    }
+
+    fn entry(&self, pid: u32) -> Option<&WindowsProcessEntry> {
+        self.entry_by_pid
+            .get(&pid)
+            .map(|&index| &self.entries[index])
+    }
+
+    fn descendant_signatures(&self, root_pid: u32) -> Vec<ProcessSignature> {
+        let mut signatures = descendant_entries(root_pid, self)
+            .into_iter()
+            .map(ProcessSignature::from_entry)
+            .collect::<Vec<_>>();
+        signatures.sort_unstable_by_key(|entry| entry.pid);
+        signatures
+    }
+
+    fn agent_indices(&self) -> &[usize] {
+        self.agent_indices.get_or_init(|| {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| process_entry_identifies_agent(entry).then_some(index))
+                .collect()
+        })
+    }
 }
 
 pub fn raise_server_nofile_limit() {}
@@ -367,6 +564,146 @@ fn cmd_encoded_powershell_command(script: &str) -> String {
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
     detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
+}
+
+pub(crate) fn status_commands_supported() -> bool {
+    true
+}
+
+pub(crate) fn configure_status_command(process: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    // The process must not run before it is assigned to the kill-on-close job.
+    process.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+}
+
+pub(crate) struct StatusCommandGuard {
+    job: usize,
+}
+
+impl StatusCommandGuard {
+    pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
+            Ok(size) => size,
+            Err(_) => {
+                unsafe {
+                    CloseHandle(job);
+                }
+                return Err(std::io::Error::other("job limits size exceeds u32"));
+            }
+        };
+        if unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                limits_size,
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+
+        let Some(process) = child.raw_handle() else {
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(std::io::Error::other(
+                "status command has no process handle",
+            ));
+        };
+        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+        if let Err(error) = resume_suspended_process(child.id()) {
+            unsafe {
+                CloseHandle(job);
+            }
+            return Err(error);
+        }
+
+        Ok(Self { job: job as usize })
+    }
+}
+
+fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
+    let process_id =
+        process_id.ok_or_else(|| std::io::Error::other("status command has no process id"))?;
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let result = (|| {
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = u32::try_from(size_of::<THREADENTRY32>())
+            .map_err(|_| std::io::Error::other("thread entry size exceeds u32"))?;
+        if unsafe { Thread32First(snapshot, &mut entry) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        loop {
+            if entry.th32OwnerProcessID == process_id {
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if thread.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let resume_result = unsafe { ResumeThread(thread) };
+                let resume_error = (resume_result == u32::MAX).then(std::io::Error::last_os_error);
+                unsafe {
+                    CloseHandle(thread);
+                }
+                if let Some(error) = resume_error {
+                    return Err(error);
+                }
+                return Ok(());
+            }
+            if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
+                return Err(std::io::Error::other(
+                    "status command primary thread was not found",
+                ));
+            }
+        }
+    })();
+
+    unsafe {
+        CloseHandle(snapshot);
+    }
+    result
+}
+
+impl StatusCommandGuard {
+    pub(crate) fn terminate(&mut self) {
+        if self.job != 0 {
+            // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
+            // the job, including on task cancellation and config reload.
+            unsafe {
+                CloseHandle(self.job as HANDLE);
+            }
+            self.job = 0;
+        }
+    }
+}
+
+impl Drop for StatusCommandGuard {
+    fn drop(&mut self) {
+        self.terminate();
+    }
 }
 
 fn detached_custom_command_process_with_comspec(
@@ -625,30 +962,30 @@ pub fn current_process_is_detached_server_daemon() -> bool {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    let entries = snapshot_processes();
-    select_pane_foreground_job(child_pid, &entries)
+    select_pane_foreground_job_cached(child_pid)
 }
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
-    available_pane_shell_from_snapshot(child_pid, &snapshot_processes())
+    let snapshot = ProcessSnapshot::new(snapshot_processes());
+    available_pane_shell_from_snapshot(child_pid, &snapshot)
 }
 
 fn available_pane_shell_from_snapshot(
     child_pid: u32,
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
 ) -> Option<String> {
-    let shell = entries.iter().find(|entry| entry.pid == child_pid)?;
+    let shell = snapshot.entry(child_pid)?;
     if !super::is_pane_shell_process_name(&shell.name) {
         return None;
     }
-    descendant_entries(child_pid, entries)
+    descendant_entries(child_pid, snapshot)
         .is_empty()
         .then(|| shell.name.clone())
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
-    let entries = cached_foreground_processes();
-    let entry = entries.iter().find(|entry| entry.pid == process_group_id)?;
+    let snapshot = cached_foreground_processes();
+    let entry = snapshot.entry(process_group_id)?;
     Some(ForegroundJob {
         process_group_id,
         processes: vec![foreground_process_from_entry(entry)],
@@ -656,8 +993,7 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
 }
 
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    let entries = cached_foreground_processes();
-    select_pane_foreground_job(child_pid, &entries).map(|job| job.process_group_id)
+    select_pane_foreground_job_cached(child_pid).map(|job| job.process_group_id)
 }
 
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
@@ -668,26 +1004,61 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-fn select_pane_foreground_job(
+fn select_pane_foreground_job_cached(shell_pid: u32) -> Option<ForegroundJob> {
+    let snapshot = cached_foreground_processes();
+    let (job, retry_with_fresh_snapshot) =
+        select_pane_foreground_job_from_snapshot(shell_pid, &snapshot)?;
+    if !retry_with_fresh_snapshot {
+        return Some(job);
+    }
+
+    let snapshot = fresh_foreground_processes();
+    select_pane_foreground_job_from_snapshot(shell_pid, &snapshot).map(|(job, _)| job)
+}
+
+fn select_pane_foreground_job_from_snapshot(
     shell_pid: u32,
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
+) -> Option<(ForegroundJob, bool)> {
+    if let Some(job) = FOREGROUND_SELECTION_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(shell_pid, snapshot)
+    {
+        return Some((job, false));
+    }
+
+    let job = select_pane_foreground_job_from_snapshot_uncached(shell_pid, snapshot)?;
+    let cached = prepare_cached_foreground_selection(shell_pid, snapshot, &job);
+    let retry_with_fresh_snapshot = job.process_group_id != shell_pid && cached.is_none();
+    FOREGROUND_SELECTION_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remember(shell_pid, cached);
+    Some((job, retry_with_fresh_snapshot))
+}
+
+fn select_pane_foreground_job_from_snapshot_uncached(
+    shell_pid: u32,
+    snapshot: &ProcessSnapshot,
 ) -> Option<ForegroundJob> {
-    select_pane_foreground_job_with_runtime_inspection(
+    select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         shell_pid,
-        entries,
+        snapshot,
         |shell| process_is_git_bash(shell.pid),
         |entry| process_runtime_marker(entry.pid),
     )
 }
 
-fn select_pane_foreground_job_with_runtime_inspection(
+fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
     shell_pid: u32,
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
     shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
     mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
 ) -> Option<ForegroundJob> {
-    let shell = entries.iter().find(|entry| entry.pid == shell_pid)?;
-    let descendants = descendant_entries(shell_pid, entries);
+    let entries = &snapshot.entries;
+    let shell = snapshot.entry(shell_pid)?;
+    let descendants = descendant_entries(shell_pid, snapshot);
     let mut candidates = Vec::new();
     for entry in std::iter::once(shell).chain(descendants) {
         if process_entry_identifies_agent(entry) {
@@ -695,18 +1066,15 @@ fn select_pane_foreground_job_with_runtime_inspection(
         }
     }
 
-    if let Some(selected) = select_topmost_agent_chain_candidate(&candidates, entries) {
+    if let Some(selected) = select_topmost_agent_chain_candidate(&candidates, snapshot) {
         return Some(foreground_job_from_entry(selected));
     }
     if !candidates.is_empty() || !shell_is_git_bash(shell) {
         return Some(foreground_job_from_entry(shell));
     }
 
-    let escaped_candidates: Vec<_> = entries
-        .iter()
-        .filter(|entry| process_entry_identifies_agent(entry))
-        .collect();
-    if escaped_candidates.is_empty() {
+    let escaped_agent_indices = snapshot.agent_indices();
+    if escaped_agent_indices.is_empty() {
         return Some(foreground_job_from_entry(shell));
     }
 
@@ -714,17 +1082,30 @@ fn select_pane_foreground_job_with_runtime_inspection(
     else {
         return Some(foreground_job_from_entry(shell));
     };
-    let matching_candidates: Vec<_> = escaped_candidates
-        .into_iter()
+    let matching_candidates: Vec<_> = escaped_agent_indices
+        .iter()
+        .map(|&index| &entries[index])
         .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
         .collect();
     let selected =
-        select_topmost_agent_chain_candidate(&matching_candidates, entries).unwrap_or(shell);
+        select_topmost_agent_chain_candidate(&matching_candidates, snapshot).unwrap_or(shell);
     Some(foreground_job_from_entry(selected))
 }
 
+#[cfg(test)]
+fn select_pane_foreground_job(
+    shell_pid: u32,
+    entries: &[WindowsProcessEntry],
+) -> Option<ForegroundJob> {
+    select_pane_foreground_job_from_snapshot_uncached(
+        shell_pid,
+        &ProcessSnapshot::new(entries.to_vec()),
+    )
+}
+
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
-    crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
+    crate::detect::identify_agent(&entry.name).is_some()
+        || crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
 }
 
 fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
@@ -736,29 +1117,24 @@ fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
 
 fn select_topmost_agent_chain_candidate<'a>(
     candidates: &[&'a WindowsProcessEntry],
-    entries: &[WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
 ) -> Option<&'a WindowsProcessEntry> {
-    let parent_by_pid: HashMap<u32, u32> = entries
-        .iter()
-        .map(|entry| (entry.pid, entry.parent_pid))
-        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
 
     candidates.iter().copied().find(|entry| {
         candidates.iter().all(|other| {
-            entry.pid == other.pid || process_is_ancestor(entry.pid, other.pid, &parent_by_pid)
+            entry.pid == other.pid || process_is_ancestor(entry.pid, other.pid, snapshot)
         })
     })
 }
 
-fn process_is_ancestor(
-    ancestor_pid: u32,
-    descendant_pid: u32,
-    parent_by_pid: &HashMap<u32, u32>,
-) -> bool {
+fn process_is_ancestor(ancestor_pid: u32, descendant_pid: u32, snapshot: &ProcessSnapshot) -> bool {
     let mut current = descendant_pid;
     let mut visited = HashSet::new();
     while visited.insert(current) {
-        let Some(parent) = parent_by_pid.get(&current).copied() else {
+        let Some(parent) = snapshot.entry(current).map(|entry| entry.parent_pid) else {
             return false;
         };
         if parent == ancestor_pid {
@@ -773,18 +1149,14 @@ fn process_is_ancestor(
     false
 }
 
-fn descendant_entries(root_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<&WindowsProcessEntry> {
-    let mut children: HashMap<u32, Vec<&WindowsProcessEntry>> = HashMap::new();
-    for entry in entries {
-        children.entry(entry.parent_pid).or_default().push(entry);
-    }
-
+fn descendant_entries(root_pid: u32, snapshot: &ProcessSnapshot) -> Vec<&WindowsProcessEntry> {
     let mut output = Vec::new();
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
     visited.insert(root_pid);
-    if let Some(root_children) = children.get(&root_pid) {
-        for entry in root_children.iter().copied() {
+    if let Some(root_children) = snapshot.children_by_parent.get(&root_pid) {
+        for &index in root_children {
+            let entry = &snapshot.entries[index];
             if visited.insert(entry.pid) {
                 queue.push_back(entry);
             }
@@ -792,8 +1164,9 @@ fn descendant_entries(root_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<&Wi
     }
     while let Some(entry) = queue.pop_front() {
         output.push(entry);
-        if let Some(next) = children.get(&entry.pid) {
-            for child in next.iter().copied() {
+        if let Some(next) = snapshot.children_by_parent.get(&entry.pid) {
+            for &index in next {
+                let child = &snapshot.entries[index];
                 if visited.insert(child.pid) {
                     queue.push_back(child);
                 }
@@ -804,12 +1177,13 @@ fn descendant_entries(root_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<&Wi
 }
 
 fn foreground_process_from_entry(entry: &WindowsProcessEntry) -> super::ForegroundProcess {
+    let command = entry.command();
     super::ForegroundProcess {
         pid: entry.pid,
         name: entry.name.clone(),
-        argv0: entry.argv0.clone(),
-        argv: entry.argv.clone(),
-        cmdline: entry.cmdline.clone(),
+        argv0: command.argv0.clone(),
+        argv: command.argv.clone(),
+        cmdline: command.cmdline.clone(),
     }
 }
 
@@ -829,30 +1203,186 @@ fn snapshot_processes() -> Vec<WindowsProcessEntry> {
     while ok {
         let pid = entry.th32ProcessID;
         let name = nul_terminated_utf16_to_string(&entry.szExeFile);
-        let cmdline = process_command_line(pid);
-        let argv = cmdline.as_deref().and_then(command_line_to_argv);
-        let argv0 = argv
-            .as_ref()
-            .and_then(|argv| argv.first().cloned())
-            .or_else(|| (!name.is_empty()).then(|| name.clone()));
         output.push(WindowsProcessEntry {
             pid,
             parent_pid: entry.th32ParentProcessID,
             name,
-            argv0,
-            argv,
-            cmdline,
+            command: OnceLock::new(),
         });
         ok = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
     }
     output
 }
 
-fn cached_foreground_processes() -> Arc<Vec<WindowsProcessEntry>> {
+fn cached_foreground_processes() -> Arc<ProcessSnapshot> {
     let mut cache = FOREGROUND_PROCESS_SNAPSHOT_CACHE
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     cache.snapshot(FOREGROUND_PROCESS_SNAPSHOT_CACHE_TTL, snapshot_processes)
+}
+
+fn fresh_foreground_processes() -> Arc<ProcessSnapshot> {
+    let mut cache = FOREGROUND_PROCESS_SNAPSHOT_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    cache.snapshot(Duration::ZERO, snapshot_processes)
+}
+
+fn prepare_cached_foreground_selection(
+    shell_pid: u32,
+    snapshot: &ProcessSnapshot,
+    job: &ForegroundJob,
+) -> Option<CachedForegroundSelection> {
+    if job.process_group_id == shell_pid {
+        return None;
+    }
+    let shell_identity = ProcessIdentity::open(shell_pid)?;
+    let selected_identity = ProcessIdentity::open(job.process_group_id)?;
+    let descendants = snapshot.descendant_signatures(shell_pid);
+    let descendant_identities = descendants
+        .iter()
+        .map(|entry| ProcessIdentity::open(entry.pid))
+        .collect::<Option<Vec<_>>>()?;
+    CachedForegroundSelection::from_snapshot_with_identities(
+        shell_pid,
+        snapshot,
+        job,
+        descendants,
+        descendant_identities,
+        shell_identity,
+        selected_identity,
+    )
+}
+
+impl CachedForegroundSelection {
+    fn from_snapshot_with_identities(
+        shell_pid: u32,
+        snapshot: &ProcessSnapshot,
+        job: &ForegroundJob,
+        descendants: Vec<ProcessSignature>,
+        descendant_identities: Vec<ProcessIdentity>,
+        shell_identity: ProcessIdentity,
+        selected_identity: ProcessIdentity,
+    ) -> Option<Self> {
+        if job.process_group_id == shell_pid {
+            return None;
+        }
+        let shell_entry = snapshot.entry(shell_pid)?;
+        if shell_identity.creation_time() != shell_entry.command().creation_time {
+            return None;
+        }
+        let shell = ProcessSignature::from_entry(shell_entry);
+        let selected_entry = snapshot.entry(job.process_group_id)?;
+        if selected_identity.creation_time() != selected_entry.command().creation_time {
+            return None;
+        }
+        let selected = ProcessSignature::from_entry(selected_entry);
+        let descendants_match_identities = descendants.len() == descendant_identities.len()
+            && descendants
+                .iter()
+                .zip(&descendant_identities)
+                .all(|(signature, identity)| {
+                    snapshot.entry(signature.pid).is_some_and(|entry| {
+                        identity.creation_time() == entry.command().creation_time
+                    })
+                });
+        if !descendants_match_identities
+            || !shell_identity.running()
+            || !selected_identity.running()
+            || !descendant_identities.iter().all(ProcessIdentity::running)
+        {
+            return None;
+        }
+        let now = Instant::now();
+        Some(Self {
+            shell,
+            selected,
+            descendants,
+            descendant_identities,
+            shell_identity,
+            selected_identity,
+            job: job.clone(),
+            verified_at: now,
+            last_used: now,
+        })
+    }
+}
+
+impl ForegroundSelectionCache {
+    fn get(&mut self, shell_pid: u32, snapshot: &ProcessSnapshot) -> Option<ForegroundJob> {
+        if let Some(cached) = self.entries.get_mut(&shell_pid) {
+            let current_descendants = descendant_entries(shell_pid, snapshot);
+            let topology_matches = current_descendants.len() == cached.descendants.len()
+                && cached
+                    .descendants
+                    .iter()
+                    .all(|entry| entry.matches(snapshot.entry(entry.pid)));
+            let valid = cached.verified_at.elapsed() < FOREGROUND_SELECTION_RECHECK
+                && cached.shell_identity.running()
+                && cached.selected_identity.running()
+                && cached
+                    .descendant_identities
+                    .iter()
+                    .all(ProcessIdentity::running)
+                && cached.shell.matches(snapshot.entry(shell_pid))
+                && cached
+                    .selected
+                    .matches(snapshot.entry(cached.job.process_group_id))
+                && topology_matches;
+            if valid {
+                cached.last_used = Instant::now();
+                return Some(cached.job.clone());
+            }
+        }
+        self.entries.remove(&shell_pid);
+        None
+    }
+
+    fn remember(&mut self, shell_pid: u32, cached: Option<CachedForegroundSelection>) {
+        let Some(cached) = cached else {
+            self.entries.remove(&shell_pid);
+            return;
+        };
+        self.entries
+            .retain(|_, cached| cached.last_used.elapsed() < FOREGROUND_SELECTION_CACHE_RETENTION);
+        if self.entries.len() >= FOREGROUND_SELECTION_CACHE_CAPACITY {
+            self.entries.clear();
+        }
+        self.entries.insert(shell_pid, cached);
+    }
+
+    #[cfg(test)]
+    fn remember_for_test(
+        &mut self,
+        shell_pid: u32,
+        snapshot: &ProcessSnapshot,
+        job: &ForegroundJob,
+    ) {
+        let descendants = snapshot.descendant_signatures(shell_pid);
+        let descendant_identities = descendants
+            .iter()
+            .map(|_| ProcessIdentity::Stub {
+                running: true,
+                creation_time: None,
+            })
+            .collect();
+        let cached = CachedForegroundSelection::from_snapshot_with_identities(
+            shell_pid,
+            snapshot,
+            job,
+            descendants,
+            descendant_identities,
+            ProcessIdentity::Stub {
+                running: true,
+                creation_time: None,
+            },
+            ProcessIdentity::Stub {
+                running: true,
+                creation_time: None,
+            },
+        );
+        self.remember(shell_pid, cached);
+    }
 }
 
 impl ProcessSnapshotCache {
@@ -860,26 +1390,50 @@ impl ProcessSnapshotCache {
         &mut self,
         max_age: Duration,
         build: impl FnOnce() -> Vec<WindowsProcessEntry>,
-    ) -> Arc<Vec<WindowsProcessEntry>> {
+    ) -> Arc<ProcessSnapshot> {
         if let Some(cached) = &self.cached {
             if cached.built_at.elapsed() < max_age {
-                return Arc::clone(&cached.entries);
+                return Arc::clone(&cached.snapshot);
             }
         }
 
-        let entries = Arc::new(build());
+        let snapshot = Arc::new(ProcessSnapshot::new(build()));
         self.cached = Some(CachedProcessSnapshot {
             built_at: Instant::now(),
-            entries: Arc::clone(&entries),
+            snapshot: Arc::clone(&snapshot),
         });
-        entries
+        snapshot
     }
 }
 
-fn process_command_line(pid: u32) -> Option<String> {
-    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
-    let parameters = read_process_parameters(process.0)?;
-    read_unicode_string(process.0, parameters.command_line)
+fn read_process_command(pid: u32, name: &str) -> WindowsProcessCommand {
+    let Some(process) =
+        ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)
+    else {
+        let creation_time = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)
+            .and_then(|process| process_creation_time(process.0));
+        return WindowsProcessCommand::from_cmdline(name, creation_time, None);
+    };
+    let creation_time = process_creation_time(process.0);
+    let cmdline = read_process_parameters(process.0)
+        .and_then(|parameters| read_unicode_string(process.0, parameters.command_line));
+    WindowsProcessCommand::from_cmdline(name, creation_time, cmdline)
+}
+
+impl WindowsProcessCommand {
+    fn from_cmdline(name: &str, creation_time: Option<u64>, cmdline: Option<String>) -> Self {
+        let argv = cmdline.as_deref().and_then(command_line_to_argv);
+        let argv0 = argv
+            .as_ref()
+            .and_then(|argv| argv.first().cloned())
+            .or_else(|| (!name.is_empty()).then(|| name.to_string()));
+        Self {
+            creation_time,
+            argv0,
+            argv,
+            cmdline,
+        }
+    }
 }
 
 fn process_is_git_bash(pid: u32) -> bool {
@@ -1238,18 +1792,18 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
         return Vec::new();
     }
 
-    let entries = snapshot_processes();
-    session_processes_from_entries(child_pid, &entries)
+    let snapshot = ProcessSnapshot::new(snapshot_processes());
+    session_processes_from_snapshot(child_pid, &snapshot)
 }
 
-fn session_processes_from_entries(child_pid: u32, entries: &[WindowsProcessEntry]) -> Vec<u32> {
-    if !entries.iter().any(|entry| entry.pid == child_pid) {
+fn session_processes_from_snapshot(child_pid: u32, snapshot: &ProcessSnapshot) -> Vec<u32> {
+    if snapshot.entry(child_pid).is_none() {
         return Vec::new();
     }
 
     let mut pids = vec![child_pid];
     pids.extend(
-        descendant_entries(child_pid, entries)
+        descendant_entries(child_pid, snapshot)
             .into_iter()
             .map(|entry| entry.pid),
     );
@@ -2479,10 +3033,11 @@ mod tests {
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 10, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| panic!("Git Bash fallback must not run after normal detection succeeds"),
             |_| panic!("runtime marker must not be read after normal detection succeeds"),
         )
@@ -2494,8 +3049,40 @@ mod tests {
     }
 
     #[test]
-    fn windows_process_tree_recovers_git_bash_exec_chain_from_runtime_marker() {
+    fn windows_process_tree_still_inspects_unusual_escaped_argv0() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(20, 99, "launcher.exe", &["codex.exe"]),
+        ]);
+
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+            10,
+            &snapshot,
+            |_| true,
+            |_| Some("pane-a".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(job.process_group_id, 20);
+        assert_eq!(job.processes[0].name, "launcher.exe");
+    }
+
+    #[test]
+    fn windows_process_tree_still_inspects_unusual_descendant_argv0() {
         let entries = vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "launcher.exe", &["codex.exe"]),
+        ];
+
+        let job = super::select_pane_foreground_job(10, &entries).unwrap();
+
+        assert_eq!(job.process_group_id, 20);
+        assert_eq!(job.processes[0].name, "launcher.exe");
+    }
+
+    #[test]
+    fn windows_process_tree_shares_snapshot_candidates_across_git_bash_panes() {
+        let snapshot = super::ProcessSnapshot::new(vec![
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(
                 11,
@@ -2503,6 +3090,7 @@ mod tests {
                 "bash.exe",
                 &[r"C:\Program Files\Git\usr\bin\bash.exe"],
             ),
+            test_entry(12, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(
                 20,
                 99,
@@ -2524,23 +3112,40 @@ mod tests {
                 "codex.exe",
                 &[r"C:\npm\node_modules\@openai\codex\bin\codex.exe"],
             ),
-        ];
+            test_entry(50, 98, "claude.exe", &["claude.exe"]),
+        ]);
         let mut inspected = Vec::new();
+        assert!(snapshot.agent_indices.get().is_none());
+        let marker = |entry: &super::WindowsProcessEntry| match entry.pid {
+            12 | 50 => Some("pane-b".to_string()),
+            _ => Some("pane-a".to_string()),
+        };
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let first = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |entry| {
                 inspected.push(entry.pid);
-                Some("pane-a".to_string())
+                marker(entry)
             },
         )
         .unwrap();
+        let indices = snapshot.agent_indices.get().unwrap();
+        let second = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+            12,
+            &snapshot,
+            |_| true,
+            marker,
+        )
+        .unwrap();
 
-        assert_eq!(job.process_group_id, 20);
-        assert_eq!(job.processes[0].name, "sh.exe");
-        assert_eq!(inspected, vec![10, 20, 30, 40]);
+        assert_eq!(first.process_group_id, 20);
+        assert_eq!(first.processes[0].name, "sh.exe");
+        assert_eq!(second.process_group_id, 50);
+        assert_eq!(indices, &[3, 4, 5, 6]);
+        assert!(std::ptr::eq(indices, snapshot.agent_indices.get().unwrap()));
+        assert_eq!(inspected, vec![10, 20, 30, 40, 50]);
     }
 
     #[test]
@@ -2549,10 +3154,11 @@ mod tests {
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| false,
             |_| panic!("runtime marker must not be read for non-Git-Bash panes"),
         )
@@ -2567,10 +3173,11 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "git.exe", &["git.exe", "status"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |_| panic!("runtime marker must not be read without an agent candidate"),
         )
@@ -2585,11 +3192,12 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
         for shell_marker in [None, Some(String::new())] {
-            let job = super::select_pane_foreground_job_with_runtime_inspection(
+            let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
                 10,
-                &entries,
+                &snapshot,
                 |_| true,
                 |entry| {
                     if entry.pid == 10 {
@@ -2611,10 +3219,11 @@ mod tests {
             test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |entry| Some(if entry.pid == 10 { "pane-a" } else { "pane-b" }.to_string()),
         )
@@ -2631,10 +3240,11 @@ mod tests {
             test_entry(20, 99, "codex.exe", &["codex.exe"]),
             test_entry(30, 98, "claude.exe", &["claude.exe"]),
         ];
+        let snapshot = super::ProcessSnapshot::new(entries);
 
-        let job = super::select_pane_foreground_job_with_runtime_inspection(
+        let job = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             10,
-            &entries,
+            &snapshot,
             |_| true,
             |_| Some("pane-a".to_string()),
         )
@@ -2669,7 +3279,208 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &second));
         assert!(!Arc::ptr_eq(&second, &refreshed));
         assert_eq!(builds, 2);
-        assert_eq!(refreshed[0].pid, 20);
+        assert_eq!(refreshed.entries[0].pid, 20);
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_reuses_live_agent_and_invalidates_changes() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+        ]);
+        let job = super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+        cache.remember_for_test(10, &snapshot, &job);
+
+        assert_eq!(cache.get(10, &snapshot), Some(job.clone()));
+
+        cache.entries.get_mut(&10).unwrap().selected_identity = super::ProcessIdentity::Stub {
+            running: false,
+            creation_time: None,
+        };
+        assert_eq!(cache.get(10, &snapshot), None);
+
+        cache.remember_for_test(10, &snapshot, &job);
+        let overlap = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+            test_entry(30, 10, "claude.exe", &["claude.exe"]),
+        ]);
+        assert_eq!(cache.get(10, &overlap), None);
+
+        cache.remember_for_test(10, &snapshot, &job);
+        let changed = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "git.exe", &["git.exe"]),
+        ]);
+        assert_eq!(cache.get(10, &changed), None);
+
+        cache.remember_for_test(10, &snapshot, &job);
+        cache.entries.get_mut(&10).unwrap().verified_at = Instant::now()
+            .checked_sub(super::FOREGROUND_SELECTION_RECHECK + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(cache.get(10, &snapshot), None);
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_rejects_reused_descendant_pid() {
+        let original = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+            test_entry(30, 10, "node.exe", &["node.exe", "worker.js"]),
+        ]);
+        let job = super::foreground_job_from_entry(original.entry(20).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+        cache.remember_for_test(10, &original, &job);
+
+        let cached = cache.entries.get_mut(&10).unwrap();
+        let reused_index = cached
+            .descendants
+            .iter()
+            .position(|entry| entry.pid == 30)
+            .unwrap();
+        cached.descendant_identities[reused_index] = super::ProcessIdentity::Stub {
+            running: false,
+            creation_time: None,
+        };
+        let replacement = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+            test_entry(30, 10, "node.exe", &["node.exe", "codex.js"]),
+        ]);
+
+        assert_eq!(cache.get(10, &replacement), None);
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_rejects_identity_change_before_insertion() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry_with_creation_time(10, 1, "powershell.exe", &["powershell.exe"], Some(1)),
+            test_entry_with_creation_time(20, 10, "codex.exe", &["codex.exe"], Some(2)),
+            test_entry_with_creation_time(30, 10, "node.exe", &["node.exe", "worker.js"], Some(3)),
+        ]);
+        let job = super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+        let descendants = snapshot.descendant_signatures(10);
+        let descendant_identities = vec![
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(2),
+            },
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(4),
+            },
+        ];
+        let mut cache = super::ForegroundSelectionCache::default();
+
+        let cached = super::CachedForegroundSelection::from_snapshot_with_identities(
+            10,
+            &snapshot,
+            &job,
+            descendants,
+            descendant_identities,
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(1),
+            },
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(2),
+            },
+        );
+        cache.remember(10, cached);
+
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_accepts_limited_information_identity() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry_without_cmdline(10, 1, "powershell.exe", 1),
+            test_entry_without_cmdline(20, 10, "codex.exe", 2),
+        ]);
+        let job = super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+        let cached = super::CachedForegroundSelection::from_snapshot_with_identities(
+            10,
+            &snapshot,
+            &job,
+            snapshot.descendant_signatures(10),
+            vec![super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(2),
+            }],
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(1),
+            },
+            super::ProcessIdentity::Stub {
+                running: true,
+                creation_time: Some(2),
+            },
+        );
+
+        assert!(cached.is_some());
+        assert_eq!(job.processes[0].argv0.as_deref(), Some("codex.exe"));
+        assert!(job.processes[0].cmdline.is_none());
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_prunes_unused_entries_on_insertion() {
+        let first_snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+        ]);
+        let first_job = super::foreground_job_from_entry(first_snapshot.entry(20).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+        cache.remember_for_test(10, &first_snapshot, &first_job);
+        cache.entries.get_mut(&10).unwrap().last_used = Instant::now()
+            .checked_sub(super::FOREGROUND_SELECTION_CACHE_RETENTION + Duration::from_secs(1))
+            .unwrap();
+
+        let second_snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(11, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(21, 11, "claude.exe", &["claude.exe"]),
+        ]);
+        let second_job = super::foreground_job_from_entry(second_snapshot.entry(21).unwrap());
+        cache.remember_for_test(11, &second_snapshot, &second_job);
+
+        assert!(!cache.entries.contains_key(&10));
+        assert!(cache.entries.contains_key(&11));
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_does_not_retain_shell_result() {
+        let snapshot = super::ProcessSnapshot::new(vec![test_entry(
+            10,
+            1,
+            "powershell.exe",
+            &["powershell.exe"],
+        )]);
+        let shell = super::foreground_job_from_entry(snapshot.entry(10).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+
+        cache.remember_for_test(10, &snapshot, &shell);
+
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_retains_live_escaped_agent() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "bash.exe", &["bash.exe"]),
+            test_entry(20, 99, "launcher.exe", &["codex.exe"]),
+        ]);
+        let escaped = super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+
+        cache.remember_for_test(10, &snapshot, &escaped);
+
+        assert_eq!(cache.get(10, &snapshot), Some(escaped.clone()));
+        cache.entries.get_mut(&10).unwrap().selected_identity = super::ProcessIdentity::Stub {
+            running: false,
+            creation_time: None,
+        };
+        assert_eq!(cache.get(10, &snapshot), None);
     }
 
     #[test]
@@ -2817,19 +3628,25 @@ mod tests {
 
     #[test]
     fn windows_shell_is_available_only_without_descendants() {
-        let shell_only = vec![test_entry(10, 1, "powershell.exe", &["powershell.exe"])];
+        let shell_only = super::ProcessSnapshot::new(vec![test_entry(
+            10,
+            1,
+            "powershell.exe",
+            &["powershell.exe"],
+        )]);
         assert_eq!(
             super::available_pane_shell_from_snapshot(10, &shell_only).as_deref(),
             Some("powershell.exe")
         );
 
-        let busy = vec![
+        let busy = super::ProcessSnapshot::new(vec![
             test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
             test_entry(20, 10, "git.exe", &["git.exe", "status"]),
-        ];
+        ]);
         assert_eq!(super::available_pane_shell_from_snapshot(10, &busy), None);
 
-        let replaced = vec![test_entry(10, 1, "vim.exe", &["vim.exe"])];
+        let replaced =
+            super::ProcessSnapshot::new(vec![test_entry(10, 1, "vim.exe", &["vim.exe"])]);
         assert_eq!(
             super::available_pane_shell_from_snapshot(10, &replaced),
             None
@@ -2859,7 +3676,8 @@ mod tests {
             test_entry(40, 1, "unrelated.exe", &["unrelated.exe"]),
         ];
 
-        let mut pids = super::session_processes_from_entries(10, &entries);
+        let snapshot = super::ProcessSnapshot::new(entries);
+        let mut pids = super::session_processes_from_snapshot(10, &snapshot);
         pids.sort_unstable();
 
         assert_eq!(pids, vec![10, 20, 30]);
@@ -2873,7 +3691,8 @@ mod tests {
             test_entry(30, 20, "node.exe", &["node.exe"]),
         ];
 
-        let descendants = super::descendant_entries(10, &entries);
+        let snapshot = super::ProcessSnapshot::new(entries);
+        let descendants = super::descendant_entries(10, &snapshot);
 
         assert_eq!(
             descendants
@@ -2930,13 +3749,52 @@ mod tests {
         name: &str,
         argv: &[&str],
     ) -> super::WindowsProcessEntry {
+        test_entry_with_creation_time(pid, parent_pid, name, argv, None)
+    }
+
+    fn test_entry_without_cmdline(
+        pid: u32,
+        parent_pid: u32,
+        name: &str,
+        creation_time: u64,
+    ) -> super::WindowsProcessEntry {
+        let command = super::OnceLock::new();
+        command
+            .set(super::WindowsProcessCommand::from_cmdline(
+                name,
+                Some(creation_time),
+                None,
+            ))
+            .unwrap();
         super::WindowsProcessEntry {
             pid,
             parent_pid,
             name: name.to_string(),
-            argv0: argv.first().map(|value| (*value).to_string()),
-            argv: Some(argv.iter().map(|value| (*value).to_string()).collect()),
-            cmdline: Some(argv.join(" ")),
+            command,
+        }
+    }
+
+    fn test_entry_with_creation_time(
+        pid: u32,
+        parent_pid: u32,
+        name: &str,
+        argv: &[&str],
+        creation_time: Option<u64>,
+    ) -> super::WindowsProcessEntry {
+        let command = super::OnceLock::new();
+        command
+            .set(super::WindowsProcessCommand {
+                creation_time,
+                argv0: argv.first().map(|value| (*value).to_string()),
+                argv: Some(argv.iter().map(|value| (*value).to_string()).collect()),
+                cmdline: Some(argv.join(" ")),
+            })
+            .unwrap();
+        super::WindowsProcessEntry {
+            pid,
+            parent_pid,
+            name: name.to_string(),
+            command,
         }
     }
 

@@ -241,10 +241,10 @@ pub(crate) fn handle_navigator_key(
             state.navigator.state_filter = Some(NavigatorStateFilter::Done);
             state.select_first_navigator_match_from(terminal_runtimes);
         }
-        KeyCode::Char('j') | KeyCode::Down => {
+        KeyCode::Char('j') | KeyCode::Down if key.modifiers.is_empty() => {
             state.move_navigator_selection_from(terminal_runtimes, 1)
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        KeyCode::Char('k') | KeyCode::Up if key.modifiers.is_empty() => {
             state.move_navigator_selection_from(terminal_runtimes, -1)
         }
         KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => state
@@ -1288,6 +1288,27 @@ impl App {
             }
             (
                 ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some(action @ ("Send right-clicks to pane" | "Use Herdr right-click menu")),
+            ) => {
+                if let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) {
+                    self.runtime_pane_input_set(
+                        "tui.pane.input.set",
+                        crate::api::schema::PaneInputSetParams {
+                            pane_id,
+                            right_click: if action == "Send right-clicks to pane" {
+                                crate::api::schema::PaneRightClickTarget::Pane
+                            } else {
+                                crate::api::schema::PaneRightClickTarget::Herdr
+                            },
+                        },
+                    );
+                }
+                self.state.mode = Mode::Terminal;
+            }
+            (
+                ContextMenuKind::Pane {
                     ws_idx,
                     pane_id,
                     source_pane_id: Some(source_pane_id),
@@ -1982,6 +2003,30 @@ mod tests {
     }
 
     #[test]
+    fn navigator_ignores_modified_j_and_k() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        state.mode = Mode::Navigator;
+        state.navigator.selected = 1;
+
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(state.navigator.selected, 1);
+
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        );
+
+        assert_eq!(state.navigator.selected, 1);
+    }
+
+    #[test]
     fn open_rename_active_tab_can_prefill_default_new_tab_name() {
         let mut state = state_with_workspaces(&["test"]);
         state.workspaces[0].test_add_tab(None);
@@ -2180,6 +2225,39 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_toggles_pane_right_click_passthrough() {
+        let mut app = app_with_test_workspaces(&["main"]);
+        app.state.active = Some(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Pane {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id,
+                source_pane_id: None,
+                has_manual_label: false,
+                right_click_passthrough: false,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Send right-clicks to pane")
+            .unwrap();
+        app.apply_context_menu_action_via_api(menu, idx);
+
+        assert!(
+            app.state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .right_click_passthrough
+        );
+    }
+
+    #[test]
     fn context_menu_close_pane_last_parent_group_pane_keeps_confirmation_mode() {
         let mut state = state_with_workspaces(&["main", "issue"]);
         state.active = Some(0);
@@ -2206,6 +2284,7 @@ mod tests {
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                right_click_passthrough: false,
             },
             x: 0,
             y: 0,
@@ -2271,6 +2350,7 @@ mod tests {
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                right_click_passthrough: false,
             },
             x: 0,
             y: 0,

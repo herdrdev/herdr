@@ -3,11 +3,11 @@ title: Windows beta
 description: Native Windows support status, supported workflows, and known limitations.
 ---
 
-Native Windows support is experimental beta.
+Native Windows support is an experimental beta.
 
-Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the Unix PTY model Herdr was originally built around. Some Herdr features map cleanly to Windows, and some do not. This preview is not a commitment that every Linux/macOS feature will become fully supported on Windows.
+Herdr on Windows uses ConPTY and Windows process/runtime behavior instead of the Unix PTY model Herdr was built around, so feature support varies. This preview is not a commitment that every Linux/macOS feature will become fully supported on Windows.
 
-The goal of the beta is to learn from real use: install success, pane reliability, agent workflows, bug volume, missing features, and whether Windows users are getting enough value from Herdr. Based on that feedback, Windows support may graduate to stable, stay preview-only while it matures, or be reduced if the maintenance cost is not justified.
+The beta gathers feedback from real use: install success, pane reliability, agent workflows, bug volume, missing features, and whether Windows users get enough value from Herdr. Based on that feedback, Windows support may graduate to stable, stay preview-only while it matures, or be reduced if the maintenance cost is not justified.
 
 Install native Windows beta builds with PowerShell:
 
@@ -41,7 +41,7 @@ For internal beta testing, `HERDR_MANIFEST_URL` can point the installer at a cus
 
 Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers. It is useful for Codex, Claude, and similar agents, but it is not the same as Unix foreground process-group detection.
 
-Plugins support `windows` as a manifest platform in preview. GitHub install, local link, build commands, actions, events, and plugin panes are best effort on Windows. Commands are argv commands and must be Windows-compatible; Node package shims such as `npm`, `bun`, and `node` are expected to work when they are on `PATH`, while Unix-only examples using `sh` or Bash need Windows-specific alternatives. Platform filters skip unsupported build commands and return `platform_unsupported` for unsupported actions or panes.
+Plugins support `windows` as a manifest platform in preview. GitHub install, local link, build commands, actions, events, and plugin panes are best-effort on Windows. Commands are argv commands and must be Windows-compatible; Node package shims such as `npm`, `bun`, and `node` are expected to work when they are on `PATH`, while Unix-only examples using `sh` or Bash need Windows-specific alternatives. Platform filters skip unsupported build commands and return `platform_unsupported` for unsupported actions or panes.
 
 ## Partial support
 
@@ -54,7 +54,7 @@ Plugins support `windows` as a manifest platform in preview. GitHub install, loc
 | Kitty graphics rendering | unverified |
 | Host cursor rendering | partial |
 
-Herdr can launch panes in the right directory and can create the initial workspace from the directory where you started Herdr. PowerShell directory changes after startup are different: the process field Herdr can inspect does not reliably track later logical `cd` changes. Use Herdr integrations or prompt shell integration for live cwd reporting.
+Herdr can launch panes in the right directory and create the initial workspace from the directory where you started Herdr. After startup, the process field Herdr can inspect does not reliably track later logical `cd` changes in PowerShell. Use Herdr integrations or prompt shell integration for live cwd reporting.
 
 During `herdr --remote`, the configured remote image paste key reads a Windows clipboard image and transfers it to the remote host. Dropping one local image file into Windows Terminal also transfers that file and pastes its remote path. Clipboard image paste into a local native Windows pane remains unverified.
 
@@ -64,18 +64,18 @@ Kitty graphics remains experimental and is not claimed as Windows-supported yet.
 
 ### Cursor rendering
 
-Herdr relies on ConPTY for native Windows panes. The current Windows terminal cursor path can expose intermediate cursor positions while a multiplexer repaints the screen. A native cursor may flicker, jump, or briefly remain at an old position during active output. This behavior also reproduces in other native Windows terminal multiplexers and with direct VT cursor-position stress tests, so Herdr cannot eliminate it while preserving native cursor behavior.
+Herdr relies on ConPTY for native Windows panes. The Windows terminal cursor path can expose intermediate positions while a multiplexer repaints the screen. A native cursor may flicker, jump, or briefly remain at an old position during active output. This behavior also reproduces in other native Windows terminal multiplexers and with direct VT cursor-position stress tests, so Herdr cannot eliminate it while preserving native cursor behavior.
 
 To prioritize visual stability, the default `host_cursor = "auto"` draws Herdr's cursor as terminal cell content on native Windows and WSL. Other Linux and macOS clients continue to use the native terminal cursor. The drawn Windows cursor is steady and non-blinking, but it does not provide the outer terminal's native blink, shape, or cursor color.
 
-A drawn cursor is not the cursor that Windows uses to position IME composition and candidate UI. Korean, Japanese, or Chinese IME UI may therefore appear at the wrong location. If this affects you, opt back into the outer terminal cursor:
+Windows does not use a drawn cursor to position IME composition and candidate UI. Korean, Japanese, or Chinese IME UI may therefore appear at the wrong location. If this affects you, opt back into the outer terminal cursor:
 
 ```toml
 [ui]
 host_cursor = "native"
 ```
 
-Native mode restores the IME anchor, but it can reintroduce occasional cursor flicker, jumps, or stale cursor positions during active output. This is currently a compatibility trade-off in the Windows beta.
+Native mode restores the IME anchor, but it can reintroduce occasional cursor flicker, jumps, or stale cursor positions during active output.
 
 ### Keyboard and mouse
 

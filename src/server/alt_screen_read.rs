@@ -373,7 +373,11 @@ fn send_wheel(
     let column = snapshot.cols.saturating_sub(1) / 2;
     let row = u16::try_from(snapshot.rows.len().saturating_sub(1) / 2).unwrap_or(0);
     let event = runtime
-        .encode_mouse_wheel(kind, column, row, KeyModifiers::empty())
+        .encode_mouse_wheel(
+            kind,
+            crate::input::mouse::Position::Cell { column, row },
+            KeyModifiers::empty(),
+        )
         .ok_or(())?;
     let mut bytes = Vec::with_capacity(event.len().saturating_mul(events));
     for _ in 0..events {

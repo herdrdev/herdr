@@ -87,12 +87,9 @@ fn parse_legacy_key_sequence(data: &str) -> Option<TerminalKey> {
         _ if data.starts_with('\x1b') => {
             let rest = data.strip_prefix('\x1b')?;
             if rest.chars().count() == 1 {
-                let ch = rest.chars().next()?;
-                let mut modifiers = KeyModifiers::ALT;
-                if ch.is_ascii_uppercase() {
-                    modifiers |= KeyModifiers::SHIFT;
-                }
-                Some(TerminalKey::new(KeyCode::Char(ch), modifiers))
+                let mut key = parse_legacy_key_sequence(rest)?;
+                key.modifiers |= KeyModifiers::ALT;
+                Some(key)
             } else {
                 None
             }
@@ -547,6 +544,23 @@ mod tests {
             None,
         );
         assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"\x1bA");
+    }
+
+    #[test]
+    fn parse_legacy_alt_control_letter_composes_modifiers() {
+        let key = parse_terminal_key_sequence("\x1b\x06")
+            .expect("ctrl-alt-f legacy sequence should parse");
+        assert_terminal_key_eq(
+            key.clone(),
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            crossterm::event::KeyEventKind::Press,
+            None,
+        );
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Legacy),
+            b"\x1b\x06"
+        );
     }
 
     #[test]

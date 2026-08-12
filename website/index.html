@@ -90,7 +90,7 @@
             window.herdrGround.apply(window.herdrGround.read());
         </script>
         <link rel="stylesheet" href="/css/style.css?v=59" />
-        <link rel="stylesheet" href="/css/site.css?v=62" />
+        <link rel="stylesheet" href="/css/site.css?v=64" />
     </head>
     <body class="site">
     <div class="hd-frame">
@@ -403,8 +403,6 @@
                     <h3>Always running.&nbsp;<b class="arw">&#8594;</b></h3>
                     <p>Herdr isn't an app you keep open. It's a server running in the background, and the terminals live inside it. Close the lid or drop the network and the agents keep working; restart the machine and Herdr brings the layout back and resumes their sessions.</p>
                 </div>
-                <!-- the evidence column describes the session in the plate above,
-                     so the two never state different numbers -->
                 <div class="ev" aria-hidden="true">
                     <div class="ev-row"><span>herdr-server</span><b><i class="beat"></i>up</b></div>
                     <div class="ev-note">3 workspaces &middot; 4 agents &middot; nobody attached</div>
@@ -428,8 +426,6 @@
                     <h3>Agent-native.&nbsp;<b class="arw">&#8594;</b></h3>
                     <p>The CLI and the socket API are the same surface agents drive. They split panes, start each other, prompt each other, and wait until another agent is genuinely blocked instead of firing keystrokes and hoping.</p>
                 </div>
-                <!-- real lines from docs/agent-automation, in the order a
-                     review workflow actually runs them -->
                 <div class="ev">
                     <div class="tape" aria-hidden="true"><b>$</b><span data-tape></span></div>
                 </div>
@@ -441,9 +437,6 @@
                     <p>Claude Code, Codex, Cursor, opencode, Grok and the rest. Herdr doesn't wrap them or replace them, it just owns their terminals — one binary, macOS and Linux, Windows in beta.</p>
                 </div>
                 <div class="ev">
-                    <!-- named, not bare marks: several of these silhouettes are
-                         unreadable at this size on their own, and the name is
-                         what a visitor is scanning for anyway -->
                     <div class="herd">
                         <span><i style="--m: url('/assets/agent-icons/claude.svg')"></i>Claude Code</span>
                         <span><i style="--m: url('/assets/agent-icons/codex-mask.svg')"></i>Codex</span>
@@ -457,26 +450,18 @@
                     <div class="ev-note"><!--AGENTS_NOTE--></div>
                 </div>
             </a>
-            <!-- 05 stays redacted. There is no reveal and no link: the whole
-                 point is that something is there and it isn't saying what.
-                 The real copy is deliberately not in this page at all — not in
-                 a hidden element and not in a comment — because view-source
-                 ships to everyone and the product hasn't launched. The only
-                 thing that leaks is the shape of a command, which is the
-                 tease. Blocks are aria-hidden so a screen reader gets the
-                 caption instead of a mouthful of gibberish. -->
-            <div class="cap cap-soon">
-                <div class="n"><span>05</span></div>
+            <a class="cap cap-soon" href="/blog/herdr-is-joining-y-combinator/#where-were-going">
+                <div class="n"><span>05</span><span class="soon-tag">soon</span></div>
                 <div class="cap-in">
-                    <h3 aria-hidden="true"><span class="mask">█████ ██████</span></h3>
+                    <h3>Where do agents run while you sleep?&nbsp;<b class="arw">&#8594;</b></h3>
                     <p aria-hidden="true"><span class="mask">████ █████████ █████████ ████ █ ████████ ████ ███ ██ ██ ██████ ███ ███ ██████ █████ █████ █████</span></p>
-                    <p class="sr">Redacted. Something is coming.</p>
+                    <p class="sr">The answer is redacted for now. Read where Herdr is going in the Y Combinator announcement.</p>
                 </div>
                 <div class="ev">
                     <div class="tape" aria-hidden="true"><b>$</b><span class="mask">█████ █████ █████</span></div>
                     <div class="ev-note" aria-hidden="true"><span class="mask">███████ ███ █████ █████</span></div>
                 </div>
-            </div>
+            </a>
         </div>
 
         <section class="end" id="install">

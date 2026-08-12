@@ -141,6 +141,7 @@ fn deduplicate_git_refresh_items(
     let mut jobs = Vec::<WorkspaceGitRefreshJob>::new();
 
     for item in items {
+        let reconcile = item.cache_key_hint.is_none();
         let cache_key = item.cache_key_hint.unwrap_or_else(|| {
             crate::workspace::git_status_cache_key(&item.resolved_identity_cwd)
                 .unwrap_or_else(|| item.resolved_identity_cwd.clone())
@@ -150,11 +151,12 @@ fn deduplicate_git_refresh_items(
             resolved_identity_cwd: item.resolved_identity_cwd,
         };
         if let Some(&index) = indexes.get(&cache_key) {
+            jobs[index].cached = jobs[index].cached.take().filter(|_| !reconcile);
             jobs[index].targets.push(target);
             continue;
         }
 
-        let cached = cache.get(&cache_key).cloned();
+        let cached = cache.get(&cache_key).filter(|_| !reconcile).cloned();
         indexes.insert(cache_key.clone(), jobs.len());
         jobs.push(WorkspaceGitRefreshJob {
             cache_key,
@@ -299,6 +301,20 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].cache_key_hint, None);
+        let cache_key = items[0].resolved_identity_cwd.clone();
+        let cached = GitStatusCacheEntry {
+            fingerprint: None,
+            retry_after: None,
+            snapshot: crate::workspace::WorkspaceGitStatusSnapshot {
+                auto_label: "stale".into(),
+                branch: None,
+                ahead_behind: None,
+                space: None,
+            },
+        };
+        let jobs = deduplicate_git_refresh_items(items, &HashMap::from([(cache_key, cached)]));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].cached, None);
     }
 
     #[test]

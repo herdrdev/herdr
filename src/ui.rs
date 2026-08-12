@@ -96,7 +96,7 @@ pub(crate) use self::{
     },
     panes::{apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back},
     tab_surface::{tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceView},
-    tabs::compute_tab_bar_view,
+    tabs::{compute_tab_bar_view, tab_bar_content_area},
     widgets::{centered_popup_rect, modal_stack_areas},
 };
 use crate::app::state::ViewLayout;
@@ -267,7 +267,7 @@ fn compute_view_internal(
         .map(|ws| {
             compute_tab_bar_view(
                 ws,
-                tab_bar_rect,
+                tab_bar_content_area(app, tab_bar_rect),
                 app.tab_scroll,
                 app.tab_scroll_follow_active,
                 app.mouse_capture,

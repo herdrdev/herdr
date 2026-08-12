@@ -15,19 +15,18 @@ workspaces, panes, agents, and a stable CLI/socket API. Plugins turn that
 existing extension surface into reusable workflows that people can build,
 install, and share without adding every workflow to Herdr itself.
 
-A plugin is not an SDK integration. It is a directory with a
-`herdr-plugin.toml` manifest and commands Herdr can launch. Herdr validates the
-manifest, injects runtime context, starts the declared commands, and records
-logs. The commands call back into Herdr through the CLI or socket when they need
-to do more work.
+A plugin is a directory with a `herdr-plugin.toml` manifest and commands Herdr
+can launch. Herdr validates the manifest, injects runtime context, starts the
+declared commands, and records logs. The commands call back into Herdr through
+the CLI or socket when they need to do more work.
 
 There is no separate plugin SDK or restricted command set. The entire Herdr CLI
-is the plugin API: every command in the [CLI reference](/docs/cli-reference/) is
-available to a plugin, and anything you can run as `herdr ...` yourself a plugin
-can run too. Most plugins should call Herdr through `HERDR_BIN_PATH`, which
-points at the running Herdr binary. That keeps plugins portable across Unix
-sockets and Windows named pipes. Use the [socket API](/docs/socket-api/) when
-you want to send raw JSON requests yourself.
+is the plugin API. Every command in the
+[CLI reference](/docs/cli-reference/) is available to a plugin, and a plugin can
+run anything you can run yourself as `herdr ...`. Most plugins should call Herdr
+through `HERDR_BIN_PATH`, which points at the running Herdr binary. That keeps
+plugins portable across Unix sockets and Windows named pipes. Use the
+[socket API](/docs/socket-api/) when you want to send raw JSON requests yourself.
 
 Runtime action registration and native non-terminal plugin UI are not part of
 plugin v1. Actions, event hooks, panes, and link handlers are all declared in
@@ -35,22 +34,22 @@ the manifest.
 
 ## Trust and security
 
-A plugin is ordinary code that runs on your machine. When you install or link
-one, its build and runtime commands run as your user, with your environment, and
-can call the full Herdr CLI — the same as any extension you add to an editor,
-shell, or coding agent. That openness is the point, and a little judgment keeps
-it safe.
+A plugin is ordinary code that runs on your machine. Its build and runtime
+commands run as your user, inherit your environment, and can call the full Herdr
+CLI. Treat a plugin like any extension you add to an editor, shell, or coding
+agent.
 
-Install plugins from authors and repositories you trust, and skim what a new one
-does first: the `herdr-plugin.toml` manifest and the scripts or binaries it runs.
-`herdr plugin install` shows a preview of the source and the commands it will run
-in interactive terminals, so you can review before confirming. Use `--yes` for
+Install or link plugins only from authors and repositories you trust. Before
+installing or linking one, skim the `herdr-plugin.toml` manifest and the scripts
+or binaries it runs. `herdr plugin install` shows a preview of the source and
+the commands it will run in interactive terminals, so you can review before
+confirming. Use `--yes` for
 sources you already trust, and pin `--ref` when you want a specific revision.
 
 Herdr validates the manifest and keeps each plugin's config and state in its own
-directory, but it does not review or sandbox what a plugin does. Third-party
-plugins come from their authors, not from Herdr, so they are yours to vet and run
-at your own discretion.
+directory, but it does not review or sandbox plugin code. Third-party plugins
+come from their authors, not Herdr; you are responsible for deciding whether to
+run them.
 
 ## Manifest
 
@@ -213,8 +212,8 @@ reinstall from GitHub to refresh a managed plugin.
 
 The example cookbook repo is `ogulcancelik/herdr-plugin-examples`. It contains
 separate example plugins in subdirectories, including `agent-telegram-notify`,
-`github-link-preview`, and `dev-layout-bootstrap`. These are examples to copy,
-not maintained official plugins.
+`github-link-preview`, and `dev-layout-bootstrap`. Use them as examples to copy;
+Herdr does not maintain them as official plugins.
 
 ## Build commands
 
@@ -240,9 +239,9 @@ is linked or enabled. Herdr starts them asynchronously and records their
 completion in the normal plugin command log. A startup failure does not stop the
 server.
 
-Startup hooks are one-shot initialization commands, not supervised daemons. A
-hook should restore plugin-owned state, call any required Herdr APIs, and exit.
-For example, a plugin can save a declarative Agent view under
+Startup hooks are one-shot initialization commands rather than supervised
+daemons. A hook should restore plugin-owned state, call any required Herdr APIs,
+and exit. For example, a plugin can save a declarative Agent view under
 `HERDR_PLUGIN_STATE_DIR`, then read and reapply that view from its startup hook.
 
 Startup hooks receive the normal runtime plugin environment and

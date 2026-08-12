@@ -133,7 +133,8 @@ try {
         }
     }
 
-    $releaseDir = Get-ChildItem -LiteralPath (Join-Path $herdrHome "packages\standalone\releases") -Directory |
+    $releasesDir = Join-Path $herdrHome "packages\standalone\releases"
+    $releaseDir = Get-ChildItem -LiteralPath $releasesDir -Directory |
         Where-Object { -not $_.Name.StartsWith(".staging.") } |
         Select-Object -First 1
     if ($null -eq $releaseDir) {
@@ -164,6 +165,53 @@ try {
     }
 
     $manifest | Out-File -LiteralPath $manifestPath -Encoding utf8
+    $stagedConpty = Join-Path $releasesDir ".staging.$($releaseDir.Name).$PID\conpty\conpty.dll"
+    $lockState = @{ Handle = $null }
+    $lockStagedFile = {
+        if ($null -eq $lockState.Handle) {
+            $lockState.Handle = [System.IO.File]::Open(
+                $stagedConpty,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read
+            )
+        }
+    }.GetNewClosure()
+    $swapBreakpoint = Set-PSBreakpoint -Script $installerPath -Variable "backupDir" -Mode Write -Action $lockStagedFile
+    try {
+        $swapFailed = $false
+        try {
+            & "$PSScriptRoot\..\website\install.ps1" `
+                -ManifestUrl $manifestUrl `
+                -InstallDir $installDir `
+                -ExpectedBuildId "installer-test"
+        } catch {
+            $swapFailed = $true
+        }
+        if ($null -eq $lockState.Handle) {
+            throw "installer did not acquire the staged file handle before the swap"
+        }
+        if (-not $swapFailed) {
+            throw "installer unexpectedly activated a release with a locked staged file"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "herdr.exe") -PathType Leaf)) {
+            throw "failed activation did not restore the prior release"
+        }
+        if (@(Get-ChildItem -LiteralPath $releasesDir -Force -Directory -Filter ".backup.$($releaseDir.Name).*").Count -ne 0) {
+            throw "failed activation stranded a release backup"
+        }
+        foreach ($junction in @($installDir, (Join-Path $herdrHome "packages\standalone\current"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $junction "herdr.exe") -PathType Leaf)) {
+                throw "failed activation left an invalid installer junction at $junction"
+            }
+        }
+    } finally {
+        Remove-PSBreakpoint -Breakpoint $swapBreakpoint
+        if ($null -ne $lockState.Handle) {
+            $lockState.Handle.Dispose()
+        }
+    }
+
     & "$PSScriptRoot\..\website\install.ps1" `
         -ManifestUrl $manifestUrl `
         -InstallDir $installDir `

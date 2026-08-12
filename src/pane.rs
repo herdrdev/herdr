@@ -54,6 +54,21 @@ const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::
 const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
 
+#[cfg(test)]
+thread_local! {
+    static AGGREGATE_INPUT_STATE_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_aggregate_input_state_reads() {
+    AGGREGATE_INPUT_STATE_READS.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn aggregate_input_state_reads() -> usize {
+    AGGREGATE_INPUT_STATE_READS.get()
+}
+
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // Each pane is rendered by herdr's own terminal layer, not the outer terminal
     // that launched the app. Advertising the inherited TERM leaks the host terminal
@@ -197,6 +212,28 @@ async fn publish_state_changed_event(
             pane = pane_id.raw(),
             err = %e,
             "failed to deliver StateChanged event"
+        );
+    }
+}
+
+async fn publish_agent_process_detected_event(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Agent,
+    observed_at: std::time::Instant,
+) {
+    if let Err(e) = state_events
+        .send(AppEvent::AgentProcessDetected {
+            pane_id,
+            agent,
+            observed_at,
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver AgentProcessDetected event"
         );
     }
 }
@@ -407,6 +444,23 @@ fn should_skip_process_probe_for_lifecycle_authority(
         && input.suppressed_agent.is_none()
         && input.has_process_probe
         && !foreground_group_changed(input.foreground_pgid, input.last_foreground_pgid)
+}
+
+#[cfg(any(windows, test))]
+fn should_observe_foreground_process_group(
+    lifecycle_authority: bool,
+    content_changed: bool,
+    elapsed: std::time::Duration,
+    input: ProcessProbeInput,
+) -> bool {
+    !input.has_process_probe
+        || input.current_agent.is_none()
+        || input.suppressed_agent.is_some()
+        || input.pending_foreground_shell_clear
+        || input.pending_restore_probe
+        || content_changed
+        || (lifecycle_authority && elapsed >= PROCESS_RECHECK_IDENTIFIED)
+        || (!lifecycle_authority && input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED)
 }
 
 fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
@@ -777,21 +831,17 @@ fn spawn_basic_detection_task(
                         // A new foreground agent must not inherit OSC
                         // title/progress evidence from the previous process.
                         terminal.clear_agent_osc_state();
-                        if agent.is_some() {
+                        if let Some(agent) = agent {
                             agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
-                            state = AgentState::Idle;
-                            last_visible_idle = true;
+                            state = AgentState::Unknown;
+                            last_visible_idle = false;
                             last_visible_blocker = false;
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
-                            publish_state_changed_event(
+                            publish_agent_process_detected_event(
                                 state_events.clone(),
                                 pane_id,
                                 agent,
-                                AgentState::Idle,
-                                false,
-                                false,
-                                false,
                                 now,
                             )
                             .await;
@@ -1499,6 +1549,20 @@ fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::PathBuf> {
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
 }
 
+fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+    if count == 0 {
+        return;
+    }
+    if let Err(err) = events.try_send(AppEvent::TerminalBell { pane_id, count }) {
+        warn!(
+            pane = pane_id.raw(),
+            count,
+            err = %err,
+            "failed to queue terminal bell"
+        );
+    }
+}
+
 fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
@@ -1868,8 +1932,12 @@ impl PaneRuntime {
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
                 observe_detection_content_change(bytes, &detection_content_seq);
-                if result.request_render && render_dirty.request_pty(pane_id) {
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
@@ -2028,10 +2096,14 @@ impl PaneRuntime {
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+                publish_terminal_bells(pane_id, result.terminal_bells, &events);
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
-                if result.request_render && render_dirty.request_pty(pane_id) {
+                let title_requested =
+                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let render_requested = result.request_render && render_dirty.request_pty(pane_id);
+                if title_requested || render_requested {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
@@ -2101,6 +2173,8 @@ impl PaneRuntime {
                 let mut state = AgentState::Idle;
                 let mut last_visible_idle = initial_state.detected_agent.is_some();
                 let mut last_process_check = Instant::now();
+                #[cfg(windows)]
+                let mut last_observation = (Instant::now(), Some(0));
                 let mut last_foreground_pgid = None;
                 let mut has_process_probe = false;
                 let mut acquisition_started_at = None;
@@ -2169,23 +2243,50 @@ impl PaneRuntime {
                     let mut agent = agent_presence.current_agent();
                     let lifecycle_authority_active =
                         full_lifecycle_authority_active_for_task.load(Ordering::Acquire);
-                    let foreground_pgid = (pid > 0)
-                        .then(|| detect::foreground_process_group_id(pid))
-                        .flatten();
+                    let process_probe_input = ProcessProbeInput {
+                        current_agent: agent,
+                        suppressed_agent,
+                        foreground_pgid: last_foreground_pgid,
+                        last_foreground_pgid,
+                        has_process_probe,
+                        acquisition_age: acquisition_started_at
+                            .map(|started| now.duration_since(started)),
+                        pending_foreground_shell_clear,
+                        pending_restore_probe,
+                        elapsed_since_process_check: now.duration_since(last_process_check),
+                    };
+                    #[cfg(windows)]
+                    let content_seq = detection_content_seq.load(Ordering::Relaxed);
+                    #[cfg(windows)]
+                    let last_content_seq = last_observation.1;
+                    #[cfg(windows)]
+                    let foreground_observation_due = should_observe_foreground_process_group(
+                        lifecycle_authority_active,
+                        last_content_seq != Some(content_seq)
+                            && (last_content_seq.is_some()
+                                || now.duration_since(last_observation.0) >= TICK_IDENTIFIED),
+                        now.duration_since(last_observation.0),
+                        process_probe_input,
+                    );
+                    #[cfg(not(windows))]
+                    let foreground_observation_due = true;
+                    let foreground_pgid = match (pid, foreground_observation_due) {
+                        (0, _) => None,
+                        (_, true) => detect::foreground_process_group_id(pid),
+                        _ => last_foreground_pgid,
+                    };
+                    #[cfg(windows)]
+                    if pid > 0 && foreground_observation_due {
+                        let retry =
+                            last_content_seq.is_some() && last_content_seq != Some(content_seq);
+                        last_observation = (now, (!retry).then_some(content_seq));
+                    }
                     let process_group_changed =
                         foreground_group_changed(foreground_pgid, last_foreground_pgid);
                     let should_check_process = pid > 0 && {
                         let process_probe_input = ProcessProbeInput {
-                            current_agent: agent,
-                            suppressed_agent,
                             foreground_pgid,
-                            last_foreground_pgid,
-                            has_process_probe,
-                            acquisition_age: acquisition_started_at
-                                .map(|started| now.duration_since(started)),
-                            pending_foreground_shell_clear,
-                            pending_restore_probe,
-                            elapsed_since_process_check: now.duration_since(last_process_check),
+                            ..process_probe_input
                         };
                         !should_skip_process_probe_for_lifecycle_authority(
                             lifecycle_authority_active,
@@ -2256,22 +2357,18 @@ impl PaneRuntime {
                                     // A new foreground agent must not inherit OSC
                                     // title/progress evidence from the previous process.
                                     terminal.clear_agent_osc_state();
-                                    if agent.is_some() {
+                                    if let Some(agent) = agent {
                                         agent_startup_grace_until =
                                             Some(now + AGENT_STARTUP_GRACE_WINDOW);
-                                        state = AgentState::Idle;
-                                        last_visible_idle = true;
+                                        state = AgentState::Unknown;
+                                        last_visible_idle = false;
                                         last_visible_blocker = false;
                                         last_visible_working = false;
                                         last_visible_signal_refresh = None;
-                                        publish_state_changed_event(
+                                        publish_agent_process_detected_event(
                                             state_events.clone(),
                                             pane_id,
                                             agent,
-                                            AgentState::Idle,
-                                            false,
-                                            false,
-                                            false,
                                             now,
                                         )
                                         .await;
@@ -2577,7 +2674,13 @@ impl PaneRuntime {
     }
 
     pub fn input_state(&self) -> Option<InputState> {
+        #[cfg(test)]
+        AGGREGATE_INPUT_STATE_READS.set(AGGREGATE_INPUT_STATE_READS.get() + 1);
         self.terminal.input_state()
+    }
+
+    pub fn alternate_screen_active(&self) -> bool {
+        self.terminal.alternate_screen_active()
     }
 
     pub fn cursor_state(&self, area: Rect, show_cursor: bool) -> Option<TerminalCursorState> {
@@ -2764,40 +2867,41 @@ impl PaneRuntime {
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if !self.input_state()?.mouse_protocol_mode.reporting_enabled() {
             return None;
         }
-        self.terminal
-            .encode_mouse_button(kind, column, row, modifiers)
+        self.terminal.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.terminal
-            .encode_mouse_motion(kind, column, row, modifiers)
+        self.terminal.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if self.wheel_routing()? != WheelRouting::MouseReport {
             return None;
         }
-        self.terminal
-            .encode_mouse_wheel(kind, column, row, modifiers)
+        self.terminal.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
+        let width = u32::from(cols).checked_mul(cell_width_px)?;
+        let height = u32::from(rows).checked_mul(cell_height_px)?;
+        (width > 0 && height > 0).then_some((width, height))
     }
 
     pub fn encode_alternate_scroll(
@@ -3738,6 +3842,69 @@ mod tests {
     }
 
     #[test]
+    fn windows_foreground_observation_schedule_preserves_lifecycle_checks() {
+        let quiet = ProcessProbeInput {
+            current_agent: Some(Agent::Codex),
+            ..process_probe_input()
+        };
+        let before_safety_bound = PROCESS_RECHECK_IDENTIFIED - std::time::Duration::from_millis(1);
+        let content_retry = std::time::Duration::from_millis(300);
+        let observe = |lifecycle, content_changed, elapsed, input| {
+            should_observe_foreground_process_group(lifecycle, content_changed, elapsed, input)
+        };
+        let content_due = |last: Option<u64>, current, elapsed| {
+            last != Some(current) && (last.is_some() || elapsed >= content_retry)
+        };
+
+        assert!(!observe(false, false, before_safety_bound, quiet));
+        assert!(observe(false, true, before_safety_bound, quiet));
+        assert!(observe(true, true, before_safety_bound, quiet));
+        assert!(content_due(Some(0), 1, std::time::Duration::ZERO));
+        assert!(!content_due(
+            None,
+            1,
+            content_retry - std::time::Duration::from_millis(1)
+        ));
+        assert!(content_due(None, 1, content_retry));
+        assert!(observe(
+            false,
+            false,
+            before_safety_bound,
+            ProcessProbeInput {
+                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
+                ..quiet
+            }
+        ));
+        assert!(observe(true, false, PROCESS_RECHECK_IDENTIFIED, quiet));
+
+        for immediate in [
+            ProcessProbeInput {
+                has_process_probe: false,
+                ..quiet
+            },
+            ProcessProbeInput {
+                current_agent: None,
+                acquisition_age: Some(std::time::Duration::ZERO),
+                ..quiet
+            },
+            ProcessProbeInput {
+                pending_restore_probe: true,
+                ..quiet
+            },
+            ProcessProbeInput {
+                suppressed_agent: Some(Agent::Codex),
+                ..quiet
+            },
+            ProcessProbeInput {
+                pending_foreground_shell_clear: true,
+                ..quiet
+            },
+        ] {
+            assert!(observe(false, false, std::time::Duration::ZERO, immediate));
+        }
+    }
+
+    #[test]
     fn unchanged_unidentified_foreground_group_skips_full_process_probe() {
         assert!(!should_probe_foreground_job(process_probe_input()));
     }
@@ -4212,6 +4379,46 @@ mod tests {
         )
         .await
         .expect("re-entering active authority should notify detection reset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pty_reader_aggregates_terminal_bells() {
+        let (events, mut event_rx) = mpsc::channel(8);
+        let pane_id = PaneId::from_raw(42);
+        let runtime = PaneRuntime::spawn_shell_command(
+            pane_id,
+            24,
+            80,
+            std::env::temp_dir(),
+            "printf '\\a\\a'; sleep 0.05",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let bell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(AppEvent::TerminalBell {
+                    pane_id: delivered_pane,
+                    count,
+                }) = event_rx.recv().await
+                {
+                    break (delivered_pane, count);
+                }
+            }
+        })
+        .await
+        .expect("PTY reader should publish terminal bells");
+
+        assert_eq!(bell, (pane_id, 2));
+        runtime.shutdown();
     }
 
     #[tokio::test]

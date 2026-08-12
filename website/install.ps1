@@ -632,14 +632,15 @@ try {
             $backupDir = $null
             if (Test-Path -LiteralPath $releaseDir) {
                 $backupDir = Join-Path $releasesDir ".backup.$releaseName.$([System.Guid]::NewGuid().ToString('N'))"
-                Move-Item -LiteralPath $releaseDir -Destination $backupDir
+                [System.IO.Directory]::Move($releaseDir, $backupDir)
             }
             try {
-                Move-Item -LiteralPath $stagingDir -Destination $releaseDir
+                [System.IO.Directory]::Move($stagingDir, $releaseDir)
             } catch {
                 if ($null -ne $backupDir -and -not (Test-Path -LiteralPath $releaseDir)) {
-                    Move-Item -LiteralPath $backupDir -Destination $releaseDir
+                    [System.IO.Directory]::Move($backupDir, $releaseDir)
                 }
+                Write-WarningStep "Windows could not activate the downloaded release. Another process may have a package file open, such as antivirus or indexing. No incomplete release was activated. Run herdr update again."
                 throw
             }
             if ($null -ne $backupDir) {

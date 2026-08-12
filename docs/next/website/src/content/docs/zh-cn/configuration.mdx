@@ -255,6 +255,21 @@ yellow = "#f9e2af"
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
 
+### 外层终端窗口标题
+
+Herdr 会模拟各窗格中的终端，因此窗格内写入的 `OSC 0`/`OSC 2` 标题只会停留在 Herdr。Herdr 会向自己所运行的终端写入自己的标题，窗口管理器和终端标签栏读取的正是这个标题：
+
+```toml
+[ui]
+window_title = "{hostname}: {workspace}"
+```
+
+可用记号为 `{hostname}`、`{workspace}`、`{tab}`、`{pane}`（聚焦窗格的手动名称）和 `{terminal_title}`（聚焦窗格自身的终端标题，已去除加载动画字符）。用 `{{` 和 `}}` 表示字面花括号。没有值的记号会渲染为空。
+
+标题在 Herdr 服务器上生成，因此即使通过 `herdr --remote` 连接或经由 SSH 运行 `herdr`，`{hostname}` 仍然指向运行窗格的那台机器。设置 `window_title = ""` 可以不改动外层终端标题。
+
+`client.window_title.set` 会覆盖配置的标题，直到 `client.window_title.clear` 将其交还。
+
 ### 侧边栏行布局
 
 展开的桌面侧边栏会将 `rows` 中的每个内层数组渲染为一行。以下是完整的默认布局：

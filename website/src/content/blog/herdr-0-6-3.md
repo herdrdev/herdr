@@ -7,9 +7,9 @@ draft: false
 
 ## Persistence for the hard parts
 
-Session persistence is not one feature. A detached client, a stopped server, a terminal history replay, an agent conversation restore, and an update handoff all protect different parts of the workspace.
+Keeping a session alive means handling several different cases: a detached client, a stopped server, terminal history replay, agent conversation restore, and an update handoff. Each protects a different part of the workspace.
 
-Herdr 0.6.3 pushes on three of those boundaries.
+Herdr 0.6.3 improves three of those paths.
 
 ### Agent restore after server restart
 
@@ -62,7 +62,7 @@ Herdr also gained better update and remote-bootstrap behavior for package-manage
 
 The new `pane.report_metadata` socket method and `herdr pane report-metadata` CLI command let integrations and local hooks customize what Herdr shows for a pane.
 
-After installing an integration, the integration can report a title, visible agent name, compact status label, state label, and native session metadata without taking over unrelated lifecycle behavior.
+Once installed, an integration can report a title, visible agent name, compact status label, state label, and native session metadata without taking over unrelated lifecycle behavior.
 
 You can also use it from your own scripts. For example, a hook can mark a pane as running a deploy, rename a long-lived task, or ask an agent to report a more specific state for the work it is doing.
 

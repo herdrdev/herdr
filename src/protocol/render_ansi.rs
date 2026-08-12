@@ -633,9 +633,11 @@ fn write_ime_anchor_cursor_state(writer: &mut impl Write, cursor: HostCursorStat
 }
 
 fn write_all_cells(writer: &mut impl Write, frame: &FrameData) {
+    let mut last_sgr = String::new();
     let mut active_hyperlink = None;
     for row in 0..frame.height {
         let mut to_skip = 0usize;
+        let mut next_inline_col = None;
         for col in 0..frame.width {
             if to_skip > 0 {
                 to_skip -= 1;
@@ -646,25 +648,23 @@ fn write_all_cells(writer: &mut impl Write, frame: &FrameData) {
             let cell = &frame.cells[idx];
 
             if cell.skip {
+                next_inline_col = None;
                 continue;
             }
 
-            // Move cursor to position (1-based).
-            let _ = write!(writer, "\x1b[{};{}H", row + 1, col + 1);
-
-            // Set style.
-            let sgr = build_sgr(cell.fg, cell.bg, cell.modifier);
-            let _ = writer.write_all(sgr.as_bytes());
-
-            write_hyperlink_if_changed(
+            let cursor_position = (next_inline_col != Some(col)).then_some((col, row));
+            write_cell(
                 writer,
+                cursor_position,
+                cell,
+                &mut last_sgr,
                 &mut active_hyperlink,
-                cell_hyperlink_uri(frame, cell),
+                frame,
             );
-
-            // Write the symbol.
-            let _ = writer.write_all(cell.symbol.as_bytes());
-            to_skip = cell_width(cell).saturating_sub(1);
+            let width = cell_width(cell);
+            next_inline_col =
+                (cell.symbol.is_ascii() && width == 1).then_some(col.saturating_add(1));
+            to_skip = width.saturating_sub(1);
         }
     }
 

@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.08.04.1"
+version = "2026.08.12.1"
 min_engine_version = 2
-updated_at = "2026-08-04T00:00:00Z"
+updated_at = "2026-08-12T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -10,7 +10,8 @@ state = "working"
 priority = 1100
 region = "osc_title"
 visible_working = true
-regex = ['^[\x{2800}-\x{28FF}] ']
+# Braille covers <= 2.1.227; half-circles are the 2.1.228 busy spinner.
+regex = ['^[\x{2800}-\x{28FF}\x{25D0}-\x{25D1}] ']
 
 [[rules]]
 id = "btw_overlay_working"

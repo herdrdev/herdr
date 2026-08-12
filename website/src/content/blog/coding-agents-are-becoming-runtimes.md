@@ -5,19 +5,15 @@ date: 2026-06-10
 draft: false
 ---
 
-Coding agents have crossed an important line.
+Coding agents started as chat interfaces that could edit code. Now they live inside repositories, terminals, editors, CI jobs, remote machines, mobile shells, multiplexers, and custom wrappers. They read project instructions. They run commands. They ask for permission. They spawn subagents. They pause, resume, compact, fail, recover, and keep working while the developer does something else.
 
-They started as chat interfaces that could edit code. Now they live inside repositories, terminals, editors, CI jobs, remote machines, mobile shells, multiplexers, and custom harnesses. They read project instructions. They run commands. They ask for permission. They spawn subagents. They pause, resume, compact, fail, recover, and keep working while the developer does something else.
-
-That shape is familiar.
-
-**This is runtime behavior.**
+That is runtime behavior.
 
 The model can be proprietary. The hosted API can be proprietary. The subscription can be priced however the lab needs to price it. That part belongs to the companies building the models.
 
 But the CLI that runs inside a developer's terminal is part of the developer environment. It sits next to shells, language servers, package managers, test runners, terminals, editors, and multiplexers. Developers will compose it with the rest of their tools whether vendors plan for that or not.
 
-**That is where the industry needs to be more careful.**
+That is where the industry needs to be more careful.
 
 ## We have seen this drift before
 
@@ -51,23 +47,21 @@ Nobody loses a production database because a repo has two instruction files. The
 
 ## The terminal is the shared surface
 
-There is another debate happening around access and harnesses.
+There is another debate happening around access and third-party tools.
 
 Coding agents made per-token pricing feel very different. A chat session can be expensive. A coding agent can run tools, read files, loop, spawn work, and burn through a lot more context. So the labs started selling subscriptions with usage limits: some explicit, some soft, some hourly, some weekly, some hard to reason about from the outside.
 
-Then developers started doing what developers always do. They put the model behind the harness they preferred.
+Then developers started doing what developers always do. They put the model behind the tool they preferred.
 
-That is where the Claude ecosystem became a useful case study. People used Claude subscriptions through third-party harnesses such as OpenClaw and OpenCode. Anthropic pushed back. Today Anthropic documents that [Claude Code can use Pro and Max subscriptions](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan), while [Claude paid plans and API access are separate products](https://support.claude.com/en/articles/9876003-i-have-a-paid-claude-subscription-pro-max-team-or-enterprise-plans-why-do-i-have-to-pay-separately-to-use-the-claude-api-and-console). Anthropic also introduced a separate [Agent SDK credit](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for programmatic and third-party Agent SDK usage. Zed summarized the practical effect well: first-party Claude usage and third-party agent or SDK usage now draw from different pools.
+That is where the Claude ecosystem became a useful case study. People used Claude subscriptions through third-party tools such as OpenClaw and OpenCode. Anthropic pushed back. Today Anthropic documents that [Claude Code can use Pro and Max subscriptions](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan), while [Claude paid plans and API access are separate products](https://support.claude.com/en/articles/9876003-i-have-a-paid-claude-subscription-pro-max-team-or-enterprise-plans-why-do-i-have-to-pay-separately-to-use-the-claude-api-and-console). Anthropic also introduced a separate [Agent SDK credit](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for programmatic and third-party Agent SDK usage. Zed summarized the practical effect well: first-party Claude usage and third-party agent or SDK usage now draw from different pools.
 
-Anthropic can make that decision. They own the API. They own the subscription terms. Compute is expensive, and a first-party interactive CLI has different economics from arbitrary programmatic harnesses running through an SDK or protocol adapter.
+Anthropic can make that decision. They own the API. They own the subscription terms. Compute is expensive, and a first-party interactive CLI has different economics from arbitrary programmatic tools running through an SDK or protocol adapter.
 
-The developer-tooling question remains.
-
-> What does a developer actually own: the subscription, the API spend, the model access, or the runtime where the agent works?
+The developer-tooling question remains: what does a developer actually own—the subscription, the API spend, the model access, or the runtime where the agent works?
 
 When an agent runs in a terminal, it is no longer only a hosted product experience. It is a process in a developer environment. Developers will put that process in Herdr, Zed, tmux, SSH sessions, CI jobs, containers, and scripts. They will supervise it. They will route it. They will build workflows around it.
 
-**The terminal is where ownership gets shared.**
+The terminal is where ownership gets shared.
 
 That does not mean vendors lose the right to build first-party experiences. It means the CLI surface needs stable contracts because it has become infrastructure other tools depend on.
 
@@ -102,7 +96,7 @@ The concrete shape could be small:
 
 Permission prompts, failed tools, interrupted generations, automated reviews, subagent handoffs, and waiting for the user all need to land somewhere coherent.
 
-Claude Code has a serious hook system, and Codex has its own shape too. The problem is not that these tools do nothing. The problem is that each agent defines its own boundary. A hook surface can be powerful and still fail to provide a portable lifecycle contract.
+Claude Code has a serious hook system, and Codex has its own shape too. Both are substantial, but each agent still defines its own boundary. A hook surface can be powerful and still fail to provide a portable lifecycle contract.
 
 OpenCode is closer to the shape orchestration tools need. Its [plugin documentation](https://opencode.ai/docs/plugins/) exposes session-level events such as `session.idle`, `session.status`, `session.error`, `permission.asked`, and `permission.replied`.
 
@@ -112,7 +106,7 @@ Those designs are worth praising because they treat the agent as something other
 
 ## What Herdr sees from below
 
-**Herdr sits below the agent.**
+Herdr sits below the agent.
 
 It owns terminal panes. It keeps processes alive. It lets developers switch between agents, inspect them, recover sessions, and operate multiple agent processes as one workspace.
 
@@ -145,15 +139,13 @@ Other agents require observed detection through terminal output, screen evidence
 
 Herdr will publish this as a per-agent support matrix: which agents expose verified lifecycle signals, and which agents require observed detection.
 
-**This distinction should be public because it helps everyone.**
+This distinction should be public because it helps everyone.
 
 Users get honest expectations. Agent authors get a target. Tool builders get a vocabulary. The ecosystem rewards agents that expose their runtime state cleanly.
 
-The goal is not to force every agent to use the same plugin system. The goal is to standardize the parts that should never have been product differentiation.
+Agents can keep their own plugin systems while standardizing the parts that should never have been product differentiation.
 
-## The ask
-
-**Standardize the boring parts.**
+## Standardize the boring parts
 
 Use one predictable project instruction format. Expose a small lifecycle contract. Make permission state observable. Make interruption state observable. Tie state to the session that is actually running. Document what external tools can rely on.
 
@@ -169,6 +161,6 @@ Coding agents are becoming infrastructure. The companies building them still own
 
 Herdr is built from that position. The terminal is where these agents actually run. The runtime surface belongs to the developer workflow, and vendors share that space whether they design for it or not.
 
-The better future is simple: agents should make their basic contracts visible, durable, and boring.
+Agents should make their basic contracts visible, durable, and boring.
 
 Then the rest of us can build.

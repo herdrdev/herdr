@@ -27,9 +27,9 @@ Native mode restores the IME anchor but may reintroduce occasional cursor moveme
 
 ## Enter, Tab, or Backspace fires twice
 
-Older terminal versions can emit the release of Enter, Tab, and Backspace as the same bytes as the press when an application enables Kitty keyboard event reporting. Herdr cannot distinguish those duplicate bytes after the terminal sends them.
+Older versions of some terminals can emit the release of Enter, Tab, and Backspace as the same bytes as the press when an application enables Kitty keyboard event reporting. Herdr cannot distinguish those duplicate bytes after the terminal sends them.
 
-Update the outer terminal to a version containing its upstream fix:
+Update the outer terminal to a version that contains its upstream fix:
 
 | Terminal | Minimum fixed version |
 | --- | --- |
@@ -72,7 +72,7 @@ Stopping a server exits its pane processes. Named sessions use `herdr session st
 
 ## The `herdr` command is not found
 
-Restart the terminal so it reloads its environment, then confirm the Herdr install directory is on `PATH`. Package-manager installs must be updated and exposed through that package manager. See [Install Herdr](/docs/install/#verify).
+Restart the terminal so it reloads its environment, then confirm the Herdr install directory is on `PATH`. For package-manager installs, use that package manager to update Herdr and expose it on `PATH`. See [Install Herdr](/docs/install/#verify).
 
 ## A direct keybinding does nothing
 

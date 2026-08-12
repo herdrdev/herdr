@@ -37,14 +37,14 @@ herdr session delete side-project --json
 
 ## Remote attach over SSH
 
-There are two remote modes; [How to work with Herdr](/docs/how-to-work/) compares them. SSH to the server and run `herdr` there for the tmux-style path. Or attach through SSH from your local machine:
+Herdr supports two remote modes. [How to work with Herdr](/docs/how-to-work/) compares them. SSH to the server and run `herdr` there for the tmux-style path, or attach through SSH from your local machine:
 
 ```bash
 herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
-In this mode your local Herdr is a thin client. It connects over SSH, starts or attaches to the remote Herdr server, and streams the UI back to your local terminal. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
+In this mode, your local Herdr is a thin client. It connects over SSH, starts or attaches to the remote Herdr server, and streams the UI back to your local terminal. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
 
 By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. The local keybindings are a snapshot from attach time; detach and reattach after editing local keybindings. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
 
@@ -82,7 +82,7 @@ By default, remote attach uses the normal restart/stop flow if it needs to repla
 herdr --remote workbox --handoff
 ```
 
-If you SSH into the server first and run `herdr` there, Herdr runs entirely on the server. That mode is useful and simple, but it cannot access your local desktop clipboard beyond normal terminal text paste.
+If you SSH into the server first and run `herdr` there, Herdr runs entirely on the server and cannot access your local desktop clipboard beyond normal terminal text paste.
 
 When your local and remote platforms match, Herdr can copy the current local binary for direct installs. For Homebrew, mise, and Nix installs, or when the platforms differ, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
 
@@ -160,4 +160,4 @@ Use `--no-session` to run Herdr without the background server/client split:
 herdr --no-session
 ```
 
-This is mainly an escape hatch for debugging or compatibility. The default persistent session mode is the normal path.
+Use `--no-session` mainly for debugging or compatibility. Persistent session mode remains the default.

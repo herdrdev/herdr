@@ -543,16 +543,26 @@ fn wait_for_named_agent(
             )))
         } else if agent["name"].as_str() != Some(name) {
             Some(Err(agent_name_lost_error("cli:agent:start", name)))
-        } else if agent["interactive_ready"].as_bool().unwrap_or(false) {
-            Some(Ok(agent.clone()))
-        } else if !agent["launch_pending"].as_bool().unwrap_or(false) {
-            Some(Err(cli_agent_error(
-                "cli:agent:start",
-                "agent_start_failed",
-                "agent process exited before becoming interactive",
-            )))
         } else {
-            None
+            match agent["agent_status"].as_str() {
+                Some("blocked") => Some(Err(cli_agent_error(
+                    "cli:agent:start",
+                    "agent_not_ready",
+                    format!("agent {name} is blocked during startup and is not ready for prompts"),
+                ))),
+                Some("working" | "unknown") => None,
+                Some("idle" | "done") if agent["interactive_ready"].as_bool() == Some(true) => {
+                    Some(Ok(agent.clone()))
+                }
+                Some("idle" | "done") if !agent["launch_pending"].as_bool().unwrap_or(false) => {
+                    Some(Err(cli_agent_error(
+                        "cli:agent:start",
+                        "agent_start_failed",
+                        "agent process exited before becoming interactive",
+                    )))
+                }
+                _ => None,
+            }
         };
         if let Some(outcome) = outcome {
             return Ok(outcome);
