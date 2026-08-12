@@ -63,10 +63,11 @@ pub enum Agent {
     Qodercli,
     Qwen,
     Maki,
+    Jcode,
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,9 +90,10 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::Jcode,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -112,6 +114,7 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::Jcode,
     ];
 }
 
@@ -139,6 +142,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -172,6 +176,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -209,6 +214,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
+        "jcode" | "j-code" => Some(Agent::Jcode),
         _ => None,
     }
 }
@@ -307,7 +313,10 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
+        ("herdr:hermes", "hermes")
+            | ("herdr:qwen", "qwen")
+            | ("herdr:antigravity_cli", "agy")
+            | ("herdr:jcode", "jcode")
     )
 }
 
@@ -734,6 +743,7 @@ mod tests {
         assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
         assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+        assert_eq!(identify_agent("jcode"), Some(Agent::Jcode));
     }
 
     #[test]
@@ -761,6 +771,7 @@ mod tests {
         assert_eq!(parse_agent_label("qwen-code"), Some(Agent::Qwen));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(parse_agent_label("j-code"), Some(Agent::Jcode));
     }
 
     #[test]
@@ -804,6 +815,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
+            (Agent::Jcode, "jcode"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
@@ -834,10 +846,30 @@ mod tests {
             ("herdr:hermes", "hermes", Agent::Hermes),
             ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
+            ("herdr:jcode", "jcode", Agent::Jcode),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
             assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
+        }
+    }
+
+    #[test]
+    fn jcode_manifest_uses_composer_and_processing_status_evidence() {
+        for screen in [
+            "transcript\n2…",
+            "transcript\n⠼ waiting for response… 1s\nmultiline composer",
+            "transcript\n··● bash ●·· · run tests · 23s\nmultiline composer",
+        ] {
+            let detection = detect_agent(Some(Agent::Jcode), screen);
+            assert_eq!(detection.state, AgentState::Working, "screen: {screen}");
+            assert!(detection.visible_working);
+        }
+
+        for screen in ["1>", "6$", "6»"] {
+            let detection = detect_agent(Some(Agent::Jcode), screen);
+            assert_eq!(detection.state, AgentState::Idle, "screen: {screen}");
+            assert!(detection.visible_idle);
         }
     }
 

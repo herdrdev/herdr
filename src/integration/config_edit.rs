@@ -2,6 +2,7 @@ use std::io;
 use std::path::Path;
 
 use serde_json::{json, Map, Value};
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 use super::command::{hook_command, legacy_bash_hook_command};
 #[cfg(windows)]
@@ -808,6 +809,139 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
     } else {
         result
     }
+}
+
+pub(crate) fn jcode_session_start_commands(
+    content: &str,
+    config_path: &Path,
+) -> io::Result<Vec<String>> {
+    let document = parse_jcode_config(content, config_path)?;
+    let Some(entry) = document
+        .get("hooks")
+        .and_then(Item::as_table_like)
+        .and_then(|hooks| hooks.get("session_start"))
+    else {
+        return Ok(Vec::new());
+    };
+    if let Some(command) = entry.as_str() {
+        return Ok(vec![command.to_string()]);
+    }
+    let Some(commands) = entry.as_array() else {
+        return Err(invalid_jcode_session_start(config_path));
+    };
+    commands
+        .iter()
+        .map(|command| {
+            command
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| invalid_jcode_session_start(config_path))
+        })
+        .collect()
+}
+
+pub(crate) fn append_jcode_session_start_command(
+    content: &str,
+    config_path: &Path,
+    command: &str,
+) -> io::Result<String> {
+    let commands = jcode_session_start_commands(content, config_path)?;
+    if commands.iter().any(|existing| existing == command) {
+        return Ok(content.to_string());
+    }
+
+    let mut document = parse_jcode_config(content, config_path)?;
+    if !document.contains_key("hooks") {
+        document.insert("hooks", Item::Table(Table::new()));
+    }
+    let hooks = document
+        .get_mut("hooks")
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "jcode hooks at {} must be a TOML table",
+                config_path.display()
+            ))
+        })?;
+    match hooks.get_mut("session_start") {
+        Some(entry) if entry.is_str() => {
+            let mut updated = Array::new();
+            for existing in commands {
+                updated.push(existing);
+            }
+            updated.push(command);
+            *entry = value(updated);
+        }
+        Some(entry) => entry
+            .as_array_mut()
+            .ok_or_else(|| invalid_jcode_session_start(config_path))?
+            .push(command),
+        None => {
+            let mut commands = Array::new();
+            commands.push(command);
+            hooks.insert("session_start", value(commands));
+        }
+    }
+    Ok(document.to_string())
+}
+
+pub(crate) fn remove_jcode_session_start_command(
+    content: &str,
+    config_path: &Path,
+    command: &str,
+) -> io::Result<String> {
+    let commands = jcode_session_start_commands(content, config_path)?;
+    if !commands.iter().any(|existing| existing == command) {
+        return Ok(content.to_string());
+    }
+
+    let mut document = parse_jcode_config(content, config_path)?;
+    let remove_empty_hooks = {
+        let hooks = document
+            .get_mut("hooks")
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "jcode hooks at {} must be a TOML table",
+                    config_path.display()
+                ))
+            })?;
+        let remove_session_start = {
+            let entry = hooks
+                .get_mut("session_start")
+                .ok_or_else(|| invalid_jcode_session_start(config_path))?;
+            if entry.is_str() {
+                true
+            } else {
+                let commands = entry
+                    .as_array_mut()
+                    .ok_or_else(|| invalid_jcode_session_start(config_path))?;
+                commands.retain(|existing| existing.as_str() != Some(command));
+                commands.is_empty()
+            }
+        };
+        if remove_session_start {
+            hooks.remove("session_start");
+        }
+        hooks.is_empty()
+    };
+    if remove_empty_hooks {
+        document.remove("hooks");
+    }
+    Ok(document.to_string())
+}
+
+fn invalid_jcode_session_start(config_path: &Path) -> io::Error {
+    io::Error::other(format!(
+        "jcode hooks.session_start at {} must be a string or array of strings",
+        config_path.display()
+    ))
+}
+
+fn parse_jcode_config(content: &str, config_path: &Path) -> io::Result<DocumentMut> {
+    content.parse::<DocumentMut>().map_err(|err| {
+        io::Error::other(format!("failed to parse {}: {err}", config_path.display()))
+    })
 }
 
 pub(crate) fn toml_basic_string(value: &str) -> String {

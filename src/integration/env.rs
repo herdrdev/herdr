@@ -20,6 +20,7 @@ pub(crate) const QWEN_HOME_ENV_VAR: &str = "QWEN_HOME";
 pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 pub(crate) const ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CLI_CONFIG_DIR";
 pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
+pub(crate) const JCODE_HOME_ENV_VAR: &str = "JCODE_HOME";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
@@ -81,6 +82,10 @@ pub(crate) fn devin_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn droid_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".factory"))
+}
+
+pub(crate) fn jcode_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(JCODE_HOME_ENV_VAR, &[".jcode"])
 }
 
 pub(crate) fn config_dir_from_env_or_home(

@@ -294,6 +294,9 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
+const JCODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const JCODE_HOOK_ASSET: &str = include_str!("assets/jcode/herdr-agent-state.sh");
+const JCODE_INTEGRATION_VERSION: u32 = 1;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

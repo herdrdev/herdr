@@ -3,12 +3,12 @@ use std::io;
 use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
-    install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
-    install_mastracode, install_omp, install_opencode, install_pi, install_qodercli, install_qwen,
-    uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
+    install_devin, install_droid, install_grok, install_hermes, install_jcode, install_kilo,
+    install_kimi, install_mastracode, install_omp, install_opencode, install_pi, install_qodercli,
+    install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
     uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
-    uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp, uninstall_opencode,
-    uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    uninstall_jcode, uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp,
+    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -250,6 +250,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 ),
                 format!(
                     "registered grok hook config at {}",
+                    installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Jcode => {
+            let installed = install_jcode()?;
+            vec![
+                format!(
+                    "installed jcode integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured jcode session_start hook at {}",
                     installed.config_path.display()
                 ),
             ]
@@ -702,6 +715,33 @@ pub(crate) fn uninstall_target(
             } else {
                 messages.push(format!(
                     "no grok hook config found at {}",
+                    result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Jcode => {
+            let result = uninstall_jcode()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed jcode hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no jcode hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_config {
+                messages.push(format!(
+                    "updated jcode session_start hook in {}",
+                    result.config_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr jcode hook entry found in {}",
                     result.config_path.display()
                 ));
             }

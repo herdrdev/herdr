@@ -1,5 +1,114 @@
 use super::harness::*;
 
+// Shell integrations belong in `shell_hooks_conform_to_session_report_contract`.
+// The table exercises the asset against a real Unix socket and checks Herdr's
+// stable session-report contract. Keep adapter-specific edge cases as separate
+// tests below, and add a shared-socket case when an agent can have concurrent
+// panes (as Jcode does).
+#[derive(Clone, Copy)]
+struct ShellHookInvocation<'a> {
+    asset_path: &'a str,
+    args: &'a [&'a str],
+    hook_input: &'a str,
+    envs: &'a [(&'a str, &'a str)],
+    pane_id: &'a str,
+}
+
+pub(super) struct FakeHookSocket {
+    base: PathBuf,
+    socket_path: PathBuf,
+    server: thread::JoinHandle<Vec<serde_json::Value>>,
+}
+
+impl FakeHookSocket {
+    pub(super) fn start(expected_requests: usize) -> Self {
+        let base = unique_test_dir();
+        fs::create_dir_all(&base).unwrap();
+        let socket_path = base.join("herdr.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(700);
+            let mut requests = Vec::with_capacity(expected_requests);
+            while requests.len() < expected_requests && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut line = String::new();
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        reader.read_line(&mut line).unwrap();
+                        let _ = stream.write_all(br#"{"id":"test","result":{"type":"ok"}}"#);
+                        let _ = stream.write_all(b"\n");
+                        let _ = stream.flush();
+                        requests.push(serde_json::from_str(&line).unwrap());
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept failed: {err}"),
+                }
+            }
+            requests
+        });
+
+        Self {
+            base,
+            socket_path,
+            server,
+        }
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    pub(super) fn finish(self) -> Vec<serde_json::Value> {
+        let requests = self.server.join().unwrap();
+        cleanup_test_base(&self.base);
+        requests
+    }
+}
+
+fn invoke_shell_hook(invocation: &ShellHookInvocation<'_>, socket_path: &Path) {
+    let hook_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(invocation.asset_path);
+    let mut command = Command::new("bash");
+    command
+        .arg(hook_path)
+        .args(invocation.args)
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", socket_path)
+        .env("HERDR_PANE_ID", invocation.pane_id)
+        .env_remove("CODEX_THREAD_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in invocation.envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(invocation.hook_input.as_bytes()).unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "hook failed: asset={} status={:?} stderr={} stdout={}",
+        invocation.asset_path,
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+fn run_shell_hooks(invocations: &[ShellHookInvocation<'_>]) -> Vec<serde_json::Value> {
+    let socket = FakeHookSocket::start(invocations.len());
+    for invocation in invocations {
+        invoke_shell_hook(invocation, &socket.socket_path);
+    }
+    socket.finish()
+}
+
 fn run_claude_hook(action: &str, hook_input: &str) -> Option<serde_json::Value> {
     run_shell_hook(
         "src/integration/assets/claude/herdr-agent-state.sh",
@@ -47,66 +156,154 @@ fn run_shell_hook_with_env(
     hook_input: &str,
     envs: &[(&str, &str)],
 ) -> Option<serde_json::Value> {
-    let base = unique_test_dir();
-    fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
-    let listener = UnixListener::bind(&socket_path).unwrap();
-
-    let server = thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_millis(700);
-        while Instant::now() < deadline {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let mut line = String::new();
-                    let mut reader = BufReader::new(stream.try_clone().unwrap());
-                    reader.read_line(&mut line).unwrap();
-                    let _ = stream.write_all(br#"{"id":"test","result":{"type":"ok"}}"#);
-                    let _ = stream.write_all(b"\n");
-                    let _ = stream.flush();
-                    return Some(line);
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(err) => panic!("accept failed: {err}"),
-            }
-        }
-        None
-    });
-
-    let hook_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(asset_path);
-    let mut command = Command::new("bash");
-    command
-        .arg(hook_path)
-        .args(args)
-        .env("HERDR_ENV", "1")
-        .env("HERDR_SOCKET_PATH", &socket_path)
-        .env("HERDR_PANE_ID", "p_test")
-        .env_remove("CODEX_THREAD_ID")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in envs {
-        command.env(key, value);
-    }
-    let mut child = command.spawn().unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(hook_input.as_bytes()).unwrap();
-    drop(stdin);
-
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "hook failed: status={:?} stderr={} stdout={}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
+    let socket = FakeHookSocket::start(1);
+    invoke_shell_hook(
+        &ShellHookInvocation {
+            asset_path,
+            args,
+            hook_input,
+            envs,
+            pane_id: "p_test",
+        },
+        &socket.socket_path,
     );
+    socket.finish().into_iter().next()
+}
 
-    let request = server.join().unwrap();
-    cleanup_test_base(&base);
-    request.map(|line| serde_json::from_str(&line).unwrap())
+#[test]
+fn shell_hooks_conform_to_session_report_contract() {
+    struct Case<'a> {
+        name: &'a str,
+        invocation: ShellHookInvocation<'a>,
+        agent: &'a str,
+        session_id: &'a str,
+    }
+
+    let cases = [
+        Case {
+            name: "claude",
+            invocation: ShellHookInvocation {
+                asset_path: "src/integration/assets/claude/herdr-agent-state.sh",
+                args: &["session"],
+                hook_input: r#"{"hook_event_name":"SessionStart","session_id":"claude-session"}"#,
+                envs: &[],
+                pane_id: "p_claude",
+            },
+            agent: "claude",
+            session_id: "claude-session",
+        },
+        Case {
+            name: "codex",
+            invocation: ShellHookInvocation {
+                asset_path: "src/integration/assets/codex/herdr-agent-state.sh",
+                args: &["session"],
+                hook_input: r#"{"hook_event_name":"SessionStart","session_id":"codex-session","transcript_path":"/tmp/codex-session.jsonl"}"#,
+                envs: &[],
+                pane_id: "p_codex",
+            },
+            agent: "codex",
+            session_id: "codex-session",
+        },
+        Case {
+            name: "copilot",
+            invocation: ShellHookInvocation {
+                asset_path: "src/integration/assets/copilot/herdr-agent-state.sh",
+                args: &[],
+                hook_input: r#"{"hook_event_name":"SessionStart","session_id":"copilot-session"}"#,
+                envs: &[],
+                pane_id: "p_copilot",
+            },
+            agent: "copilot",
+            session_id: "copilot-session",
+        },
+        Case {
+            name: "devin",
+            invocation: ShellHookInvocation {
+                asset_path: "src/integration/assets/devin/herdr-agent-state.sh",
+                args: &["session"],
+                hook_input: r#"{"hook_event_name":"SessionStart","session_id":"devin-session"}"#,
+                envs: &[],
+                pane_id: "p_devin",
+            },
+            agent: "devin",
+            session_id: "devin-session",
+        },
+        Case {
+            name: "jcode",
+            invocation: ShellHookInvocation {
+                asset_path: "src/integration/assets/jcode/herdr-agent-state.sh",
+                args: &[],
+                hook_input: "",
+                envs: &[("JCODE_HOOK_SESSION_ID", "jcode-session")],
+                pane_id: "p_jcode",
+            },
+            agent: "jcode",
+            session_id: "jcode-session",
+        },
+    ];
+
+    for case in cases {
+        let mut requests = run_shell_hooks(&[case.invocation]);
+        let request = requests
+            .pop()
+            .unwrap_or_else(|| panic!("{} hook did not report a session", case.name));
+        assert_eq!(
+            request["method"], "pane.report_agent_session",
+            "{}",
+            case.name
+        );
+        assert_eq!(request["params"]["agent"], case.agent, "{}", case.name);
+        assert_eq!(
+            request["params"]["pane_id"], case.invocation.pane_id,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            request["params"]["agent_session_id"], case.session_id,
+            "{}",
+            case.name
+        );
+        assert!(
+            request["params"].get("state").is_none(),
+            "{} session report included lifecycle state",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn jcode_hook_maps_two_panes_to_distinct_sessions_on_one_socket() {
+    let invocations = [
+        ShellHookInvocation {
+            asset_path: "src/integration/assets/jcode/herdr-agent-state.sh",
+            args: &[],
+            hook_input: "",
+            envs: &[("JCODE_HOOK_SESSION_ID", "jcode-session-one")],
+            pane_id: "p_jcode_one",
+        },
+        ShellHookInvocation {
+            asset_path: "src/integration/assets/jcode/herdr-agent-state.sh",
+            args: &[],
+            hook_input: "",
+            envs: &[("JCODE_HOOK_SESSION_ID", "jcode-session-two")],
+            pane_id: "p_jcode_two",
+        },
+    ];
+
+    let requests = run_shell_hooks(&invocations);
+    let mappings: std::collections::HashMap<_, _> = requests
+        .iter()
+        .map(|request| {
+            (
+                request["params"]["pane_id"].as_str().unwrap(),
+                request["params"]["agent_session_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+
+    assert_eq!(mappings.len(), 2);
+    assert_eq!(mappings.get("p_jcode_one"), Some(&"jcode-session-one"));
+    assert_eq!(mappings.get("p_jcode_two"), Some(&"jcode-session-two"));
 }
 
 #[test]
