@@ -667,7 +667,7 @@ impl AppState {
                     return None;
                 }
 
-                if self.drag.is_none() {
+                if self.drag.is_none() && !self.chrome_press_pending() {
                     if let Some(info) = self.pane_mouse_target(mouse.column, mouse.row).cloned() {
                         if self.forward_pane_mouse_button(terminal_runtimes, &info, mouse) {
                             self.selection = None;
@@ -698,7 +698,12 @@ impl AppState {
                     } else if let Some(press) = &self.tab_press {
                         let delta_col = mouse.column.abs_diff(press.start_col);
                         let delta_row = mouse.row.abs_diff(press.start_row);
-                        if delta_col.max(delta_row) >= TAB_DRAG_THRESHOLD {
+                        // Require a real drop target before opening a reorder,
+                        // so a report from off the tab bar cannot start a drag
+                        // that has nowhere to land.
+                        if tab_drop_index.is_some()
+                            && delta_col.max(delta_row) >= TAB_DRAG_THRESHOLD
+                        {
                             self.drag = Some(DragState {
                                 target: DragTarget::TabReorder {
                                     ws_idx: press.ws_idx,
@@ -823,7 +828,7 @@ impl AppState {
                     return None;
                 }
 
-                if self.drag.is_none() {
+                if self.drag.is_none() && !self.chrome_press_pending() {
                     if let Some(info) = self.pane_mouse_target(mouse.column, mouse.row).cloned() {
                         if self.forward_pane_mouse_button(terminal_runtimes, &info, mouse) {
                             self.selection = None;
@@ -1441,6 +1446,10 @@ impl AppState {
             .or_else(|| self.pane_frame_at(col, row))
     }
 
+    fn chrome_press_pending(&self) -> bool {
+        self.tab_press.is_some() || self.workspace_press.is_some()
+    }
+
     fn mouse_pane_focus_action(&self, pane_id: crate::layout::PaneId) -> Option<MouseAction> {
         let ws_idx = self.active?;
         (self
@@ -1926,6 +1935,97 @@ mod tests {
         detect::{Agent, AgentState},
         workspace::Workspace,
     };
+
+    #[test]
+    fn tab_click_survives_stray_drag_report_off_the_tab_bar() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None);
+        ws.active_tab = 1;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let area = Rect::new(0, 0, 106, 20);
+        crate::ui::compute_view(&mut app.state, area);
+
+        let first_tab = app.state.view.tab_hit_areas[0];
+        let press_col = first_tab.x + 1;
+        let stray_row = area.height - 1;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            press_col,
+            first_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            press_col,
+            stray_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            press_col,
+            stray_row,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+    }
+
+    #[tokio::test]
+    async fn tab_click_survives_stray_drag_report_into_a_mouse_reporting_pane() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None);
+        ws.active_tab = 1;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let area = Rect::new(0, 0, 106, 20);
+        crate::ui::compute_view(&mut app.state, area);
+
+        let info = app
+            .state
+            .view
+            .pane_infos
+            .first()
+            .cloned()
+            .expect("visible pane");
+        app.state.insert_test_runtime(
+            info.id,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(
+                info.inner_rect.width.max(1),
+                info.inner_rect.height.max(1),
+                b"\x1b[?1002h",
+            ),
+        );
+        crate::ui::compute_view(&mut app.state, area);
+
+        let first_tab = app.state.view.tab_hit_areas[0];
+        let press_col = first_tab.x + 1;
+        let stray_row = info.inner_rect.bottom().saturating_sub(1);
+        assert!(
+            app.state.pane_mouse_target(press_col, stray_row).is_some(),
+            "stray coordinates must land on the pane for this to test anything"
+        );
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            press_col,
+            first_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            press_col,
+            stray_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            press_col,
+            stray_row,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+    }
 
     fn mark_worktree_space_member(workspace: &mut Workspace, ws_idx: usize, key: &str) {
         workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
