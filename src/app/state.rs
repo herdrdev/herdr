@@ -792,6 +792,7 @@ pub enum Mode {
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
     Resize,
+    FocusNav,
     ConfirmClose,
     ContextMenu,
     Settings,
@@ -823,6 +824,7 @@ impl Mode {
                 | Mode::Navigator
                 | Mode::Copy
                 | Mode::Resize
+                | Mode::FocusNav
                 | Mode::ConfirmClose
                 | Mode::ConfirmRemoveWorktree
                 | Mode::ContextMenu

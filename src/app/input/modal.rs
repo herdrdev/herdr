@@ -1158,6 +1158,65 @@ impl App {
         }
     }
 
+    /// Persistent focus-navigation mode (like resize mode, but moves focus).
+    /// Stays open so you can chain moves; esc/enter or re-pressing the trigger exits.
+    ///   h/j/k/l or arrows -> focus pane in that direction
+    ///   Tab / Shift+Tab   -> next / previous tab
+    ///   ] / [             -> next / previous workspace
+    pub(crate) fn handle_focus_nav_key(&mut self, raw_key: TerminalKey) {
+        let key = raw_key.as_key_event();
+        self.state.update_dismissed = true;
+
+        if key.code == KeyCode::Esc
+            || key.code == KeyCode::Enter
+            || self.state.keybinds.focus_nav.matches_prefix_key(&raw_key)
+            || self.state.keybinds.focus_nav.matches_direct_key(&raw_key)
+        {
+            self.state.mode = if self.state.active.is_some() {
+                Mode::Terminal
+            } else {
+                Mode::Navigate
+            };
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.focus_pane_direction_via_api(NavDirection::Left)
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.focus_pane_direction_via_api(NavDirection::Down)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.focus_pane_direction_via_api(NavDirection::Up)
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.focus_pane_direction_via_api(NavDirection::Right)
+            }
+            KeyCode::Tab => {
+                if let Some(tab_idx) = self.relative_tab(1) {
+                    self.focus_tab_idx_via_api(tab_idx);
+                }
+            }
+            KeyCode::BackTab => {
+                if let Some(tab_idx) = self.relative_tab(-1) {
+                    self.focus_tab_idx_via_api(tab_idx);
+                }
+            }
+            KeyCode::Char(']') => {
+                if let Some(ws_idx) = self.relative_visible_workspace(1) {
+                    self.focus_workspace_idx_via_api(ws_idx);
+                }
+            }
+            KeyCode::Char('[') => {
+                if let Some(ws_idx) = self.relative_visible_workspace(-1) {
+                    self.focus_workspace_idx_via_api(ws_idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn handle_confirm_close_key_via_api(&mut self, key: KeyEvent) {
         match modal_action_from_key(&key, CONFIRM_CLOSE_ACTIONS) {
             Some(ModalAction::Confirm) => {

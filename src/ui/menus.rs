@@ -283,6 +283,35 @@ pub(super) fn render_resize_overlay(app: &AppState, frame: &mut Frame, area: Rec
     render_bottom_bar(frame, overlay_area, line, app.palette.panel_bg);
 }
 
+pub(super) fn render_focus_nav_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
+    let key = Style::default()
+        .fg(app.palette.accent)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(app.palette.overlay0);
+
+    let mode_style = Style::default()
+        .fg(panel_contrast_fg(&app.palette))
+        .bg(app.palette.green)
+        .add_modifier(Modifier::BOLD);
+
+    let line = Line::from(vec![
+        Span::styled(" NAV ", mode_style),
+        Span::raw("  "),
+        Span::styled("hjkl", key),
+        Span::styled(" pane  ", dim),
+        Span::styled("⇥", key),
+        Span::styled(" tab  ", dim),
+        Span::styled("[ ]", key),
+        Span::styled(" ws  ", dim),
+        Span::styled("esc", key),
+        Span::styled(" done", dim),
+    ]);
+
+    let overlay_y = area.y + area.height.saturating_sub(1);
+    let overlay_area = Rect::new(area.x, overlay_y, area.width, 1);
+    render_bottom_bar(frame, overlay_area, line, app.palette.panel_bg);
+}
+
 pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
     let Some(menu) = &app.context_menu else {
         return;

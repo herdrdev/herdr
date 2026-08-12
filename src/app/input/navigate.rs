@@ -395,6 +395,7 @@ impl App {
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::EnterResizeMode => self.state.mode = Mode::Resize,
+            NavigateAction::EnterFocusNav => self.state.mode = Mode::FocusNav,
             NavigateAction::ResizePaneLeft => {
                 self.resize_pane_direction_via_api(NavDirection::Left);
                 leave_navigate_mode(&mut self.state);
@@ -750,7 +751,7 @@ impl App {
         Some((ws_idx, focused.id, target))
     }
 
-    fn relative_visible_workspace(&self, delta: isize) -> Option<usize> {
+    pub(super) fn relative_visible_workspace(&self, delta: isize) -> Option<usize> {
         let order = self.state.visible_workspace_order();
         if order.is_empty() {
             return None;
@@ -769,7 +770,7 @@ impl App {
         Some((ws_idx, source, insert))
     }
 
-    fn relative_tab(&self, delta: isize) -> Option<usize> {
+    pub(super) fn relative_tab(&self, delta: isize) -> Option<usize> {
         let ws = self
             .state
             .active
@@ -1416,6 +1417,7 @@ pub(crate) enum NavigateAction {
     CopyMode,
     Zoom,
     EnterResizeMode,
+    EnterFocusNav,
     ResizePaneLeft,
     ResizePaneDown,
     ResizePaneUp,
@@ -1566,6 +1568,7 @@ fn non_indexed_action_for_key(
         (&kb.close_pane, NavigateAction::ClosePane),
         (&kb.zoom, NavigateAction::Zoom),
         (&kb.resize_mode, NavigateAction::EnterResizeMode),
+        (&kb.focus_nav, NavigateAction::EnterFocusNav),
         (&kb.resize_pane_left, NavigateAction::ResizePaneLeft),
         (&kb.resize_pane_down, NavigateAction::ResizePaneDown),
         (&kb.resize_pane_up, NavigateAction::ResizePaneUp),
@@ -1809,6 +1812,7 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
         }
         NavigateAction::EnterResizeMode => state.mode = Mode::Resize,
+        NavigateAction::EnterFocusNav => state.mode = Mode::FocusNav,
         NavigateAction::ResizePaneLeft => {
             state.resize_pane(NavDirection::Left);
             leave_navigate_mode(state);
