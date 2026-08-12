@@ -19,6 +19,7 @@
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
+- Prefix-mode keybindings can use Escape as the RHS key (for example `copy_mode = "prefix+esc"`, matching tmux `bind Escape copy-mode`). Unbound Escape still cancels prefix mode.
 - Prefix keybindings now disambiguate layout-aware shifted punctuation, so a shifted `\` no longer triggers `prefix+|` on keyboard layouts where the same key produces both characters. (#2674)
 - Remote clients now continue redrawing at very large terminal sizes instead of freezing when a full ANSI frame exceeds the transport limit. (#2670)
 - OpenCode panes now track the root conversation selected in their own TUI for native restore without adopting activity from attached clients. (#2450)
