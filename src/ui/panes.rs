@@ -728,8 +728,13 @@ fn automatic_selection_style(
 }
 
 fn automatic_selection_bg(p: &Palette, host_theme: crate::terminal_theme::TerminalTheme) -> Color {
-    let Some(background) = host_theme.background.map(terminal_theme_to_rgb) else {
-        return selection_palette_background(p);
+    let fallback = selection_palette_background(p);
+    let Some(background) = host_theme
+        .background
+        .map(terminal_theme_to_rgb)
+        .or_else(|| color_to_rgb(fallback))
+    else {
+        return fallback;
     };
 
     let target = if relative_luminance(background) < 0.5 {
@@ -1415,5 +1420,20 @@ mod tests {
             panic!("selection background should resolve to rgb");
         };
         assert!(relative_luminance((r, g, b)) > relative_luminance((12, 14, 16)));
+    }
+
+    #[test]
+    fn automatic_selection_background_contrasts_when_host_background_is_unknown() {
+        for panel_bg in [Color::Rgb(0x2d, 0x35, 0x3b), Color::Rgb(239, 241, 245)] {
+            let mut palette = Palette::catppuccin();
+            palette.panel_bg = panel_bg;
+
+            let selected =
+                automatic_selection_bg(&palette, crate::terminal_theme::TerminalTheme::default());
+            let base_luminance = relative_luminance(color_to_rgb(panel_bg).unwrap());
+            let selected_luminance = relative_luminance(color_to_rgb(selected).unwrap());
+
+            assert!((selected_luminance - base_luminance).abs() > 0.08);
+        }
     }
 }
