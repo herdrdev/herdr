@@ -420,7 +420,7 @@ mod tests {
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
                 80, 24, 0, b"", 3,
             );
-        runtime.test_process_pty_bytes(b"\x1b[?1004h\x1b[?2004h");
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
         app.state.insert_test_runtime(pane_id, runtime);
 
         let response = app.handle_agent_prompt(
