@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Direction, Rect};
 use tracing::warn;
 
@@ -70,6 +70,23 @@ enum MobileMouseResult {
 }
 
 impl AppState {
+    pub(crate) fn uses_full_mouse_dispatch(&self, mouse: &MouseEvent) -> bool {
+        let rectangular_gesture = mouse.modifiers.contains(KeyModifiers::ALT)
+            && matches!(
+                mouse.kind,
+                MouseEventKind::Down(MouseButton::Left)
+                    | MouseEventKind::Drag(MouseButton::Left)
+                    | MouseEventKind::Up(MouseButton::Left)
+            );
+        self.popup_pane.is_some()
+            || self.mouse_capture
+            || rectangular_gesture
+            || self
+                .selection
+                .as_ref()
+                .is_some_and(Selection::is_rectangular)
+    }
+
     pub(crate) fn handle_pane_mouse_only(
         &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
@@ -630,7 +647,10 @@ impl AppState {
                         self.mode = Mode::Terminal;
                     }
 
-                    if self.forward_pane_mouse_button(terminal_runtimes, &info, mouse) {
+                    let rectangular = mouse.modifiers.contains(KeyModifiers::ALT);
+                    if !rectangular
+                        && self.forward_pane_mouse_button(terminal_runtimes, &info, mouse)
+                    {
                         self.selection = None;
                         self.selection_autoscroll = None;
                         return self.mouse_pane_focus_action(info.id);
@@ -640,12 +660,12 @@ impl AppState {
                         mouse.row - info.inner_rect.y,
                         mouse.column - info.inner_rect.x,
                     );
-                    self.selection = Some(Selection::anchor(
-                        info.id,
-                        row,
-                        col,
-                        self.pane_scroll_metrics(terminal_runtimes, info.id),
-                    ));
+                    let metrics = self.pane_scroll_metrics(terminal_runtimes, info.id);
+                    self.selection = Some(if rectangular {
+                        Selection::rectangular_anchor(info.id, row, col, metrics)
+                    } else {
+                        Selection::anchor(info.id, row, col, metrics)
+                    });
                     return self.mouse_pane_focus_action(info.id);
                 } else if let Some(info) = self.view.pane_infos.iter().find(|p| {
                     mouse.column >= p.rect.x
@@ -1926,6 +1946,26 @@ mod tests {
         detect::{Agent, AgentState},
         workspace::Workspace,
     };
+
+    #[test]
+    fn alt_left_drag_uses_full_dispatch_when_mouse_capture_is_disabled() {
+        let mut state = AppState::test_new();
+        state.mouse_capture = false;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            assert!(state.uses_full_mouse_dispatch(&MouseEvent {
+                modifiers: KeyModifiers::ALT,
+                ..mouse(kind, 1, 1)
+            }));
+        }
+        assert!(!state.uses_full_mouse_dispatch(&MouseEvent {
+            modifiers: KeyModifiers::ALT,
+            ..mouse(MouseEventKind::Moved, 1, 1)
+        }));
+    }
 
     fn mark_worktree_space_member(workspace: &mut Workspace, ws_idx: usize, key: &str) {
         workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {

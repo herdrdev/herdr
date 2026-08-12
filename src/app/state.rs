@@ -937,6 +937,7 @@ pub(crate) struct CopyModeState {
 pub(crate) enum CopyModeSelection {
     Character,
     Linewise { anchor_row: u32 },
+    Rectangular,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

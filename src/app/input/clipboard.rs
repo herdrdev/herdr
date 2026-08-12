@@ -130,6 +130,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn alt_drag_copies_rectangular_selection_over_mouse_reporting_pane() {
+        let (mut app, info, mut input_rx) =
+            app_with_screen_bytes_and_input(b"\x1b[?1000h\x1b[?1006habcde\r\nfghij\r\nklmno");
+        app.state.mouse_capture = false;
+        let start_col = info.inner_rect.x + 1;
+        let start_row = info.inner_rect.y;
+        let end_col = info.inner_rect.x + 3;
+        let end_row = info.inner_rect.y + 2;
+        let rectangular_mouse = |kind, column, row| {
+            crate::raw_input::RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                modifiers: KeyModifiers::ALT,
+                ..mouse(kind, column, row)
+            })
+        };
+
+        app.route_client_events_from(
+            7,
+            vec![
+                rectangular_mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    start_col,
+                    start_row,
+                ),
+                rectangular_mouse(MouseEventKind::Drag(MouseButton::Left), end_col, end_row),
+                rectangular_mouse(MouseEventKind::Up(MouseButton::Left), end_col, end_row),
+            ],
+            false,
+        );
+
+        assert_eq!(clipboard_write_content(&mut app), b"bcd\nghi\nlmn");
+        assert!(app.state.selection.is_none());
+        assert!(input_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn alt_drag_retains_rectangular_selection_when_copy_on_select_is_disabled() {
+        let (mut app, info, mut input_rx) =
+            app_with_screen_bytes_and_input(b"abcde\r\nfghij\r\nklmno");
+        app.state.copy_on_select = false;
+        let event = |kind, col, row| crossterm::event::MouseEvent {
+            modifiers: KeyModifiers::ALT,
+            ..mouse(kind, info.inner_rect.x + col, info.inner_rect.y + row)
+        };
+
+        app.handle_mouse(event(MouseEventKind::Down(MouseButton::Left), 1, 0));
+        app.handle_mouse(event(MouseEventKind::Drag(MouseButton::Left), 3, 2));
+        app.handle_mouse(event(MouseEventKind::Up(MouseButton::Left), 3, 2));
+
+        let selection = app.state.selection.as_ref().expect("retained selection");
+        assert!(selection.is_finalized());
+        assert!(selection.is_rectangular());
+        assert!(app.event_rx.try_recv().is_err());
+        assert!(input_rx.try_recv().is_err());
+
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        ));
+
+        assert_eq!(clipboard_write_content(&mut app), b"bcd\nghi\nlmn");
+        assert!(app.state.selection.is_none());
+    }
+
+    #[tokio::test]
     async fn copy_on_select_disabled_ctrl_c_copies_and_clears_retained_selection() {
         let (mut app, info, mut input_rx) = app_with_screen_bytes_and_input(b"alpha beta");
         app.state.copy_on_select = false;

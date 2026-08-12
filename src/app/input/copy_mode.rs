@@ -164,6 +164,11 @@ impl AppState {
             _ => {}
         }
 
+        if matches!(key.code, KeyCode::Char('v' | 'V')) && key.modifiers == KeyModifiers::CONTROL {
+            self.begin_copy_mode_rectangular_selection(terminal_runtimes);
+            return;
+        }
+
         let Some(ch) = copy_mode_command_char(key) else {
             return;
         };
@@ -423,6 +428,34 @@ impl AppState {
         ));
         if let Some(copy_mode) = self.copy_mode.as_mut() {
             copy_mode.selection = Some(CopyModeSelection::Character);
+        }
+    }
+
+    fn begin_copy_mode_rectangular_selection(
+        &mut self,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+    ) {
+        let Some(copy_mode) = self.copy_mode.as_ref() else {
+            return;
+        };
+        let Some(info) = self.pane_info_by_id(copy_mode.pane_id).cloned() else {
+            return;
+        };
+        if copy_mode.cursor_row >= info.inner_rect.height
+            || copy_mode.cursor_col >= info.inner_rect.width
+        {
+            return;
+        }
+
+        let metrics = self.pane_scroll_metrics(terminal_runtimes, copy_mode.pane_id);
+        self.selection = Some(Selection::rectangular_anchor(
+            copy_mode.pane_id,
+            copy_mode.cursor_row,
+            copy_mode.cursor_col,
+            metrics,
+        ));
+        if let Some(copy_mode) = self.copy_mode.as_mut() {
+            copy_mode.selection = Some(CopyModeSelection::Rectangular);
         }
     }
 
@@ -848,7 +881,7 @@ impl AppState {
             return;
         };
         match selection {
-            CopyModeSelection::Character => {
+            CopyModeSelection::Character | CopyModeSelection::Rectangular => {
                 let screen_col = info.inner_rect.x.saturating_add(copy_mode.cursor_col);
                 let screen_row = info.inner_rect.y.saturating_add(copy_mode.cursor_row);
                 self.update_selection_cursor(
@@ -1965,6 +1998,83 @@ mod tests {
         assert!(cursor_row < anchor_row);
         let expected = (cursor_row..=anchor_row)
             .map(|row| format!("{row:06}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(copy_mode_clipboard_text(&mut app), expected);
+        assert_eq!(copy_mode_offset_from_bottom(&app, pane_id), 0);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_copies_rectangular_selection() {
+        let (mut app, _) = app_with_copy_screen(b"abcde\r\nfghij\r\nklmno");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 1;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.state.copy_mode.as_ref().expect("copy mode").selection,
+            Some(CopyModeSelection::Rectangular)
+        );
+        assert!(app
+            .state
+            .selection
+            .as_ref()
+            .is_some_and(Selection::is_rectangular));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+
+        assert_eq!(copy_mode_clipboard_text(&mut app), "bcd\nghi\nlmn");
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_reverses_rectangular_selection() {
+        let (mut app, _) = app_with_copy_screen(b"abcde\r\nfghij\r\nklmno");
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 2;
+            copy_mode.cursor_col = 3;
+        }
+
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+
+        assert_eq!(copy_mode_clipboard_text(&mut app), "bcd\nghi\nlmn");
+    }
+
+    #[tokio::test]
+    async fn copy_mode_ctrl_v_page_up_keeps_rectangular_scrollback_selection() {
+        let bytes = numbered_lines_bytes(64);
+        let (mut app, pane_id) = app_with_copy_scrollback(&bytes);
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        if let Some(copy_mode) = app.state.copy_mode.as_mut() {
+            copy_mode.cursor_row = 0;
+            copy_mode.cursor_col = 4;
+        }
+
+        let anchor_row = copy_mode_viewport_top_row(&app, pane_id);
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()));
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::PageUp, KeyModifiers::empty()));
+        let cursor_row = copy_mode_viewport_top_row(&app, pane_id);
+        app.handle_copy_mode_key(TerminalKey::new(KeyCode::Char('y'), KeyModifiers::empty()));
+
+        assert!(cursor_row < anchor_row);
+        let expected = (cursor_row..=anchor_row)
+            .map(|row| {
+                let line = format!("{row:06}");
+                line[4..6].to_owned()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(copy_mode_clipboard_text(&mut app), expected);

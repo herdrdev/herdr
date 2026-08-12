@@ -232,7 +232,7 @@ impl App {
             crate::raw_input::RawInputEvent::Mouse(mouse) => {
                 let changes_view = !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved)
                     || self.state.mode.mouse_motion_changes_view();
-                if self.state.popup_pane.is_some() || self.state.mouse_capture {
+                if self.state.uses_full_mouse_dispatch(&mouse) {
                     self.handle_mouse(mouse);
                 } else {
                     self.state

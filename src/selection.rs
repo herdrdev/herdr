@@ -30,6 +30,13 @@ enum Phase {
     Done,
 }
 
+/// Geometry used to interpret the selection endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Linear,
+    Rectangular,
+}
+
 /// A text selection within a terminal pane.
 #[derive(Debug, Clone)]
 pub struct Selection {
@@ -41,6 +48,8 @@ pub struct Selection {
     cursor: (u32, u16),
     /// Selection phase.
     phase: Phase,
+    /// How the endpoint range is interpreted.
+    shape: Shape,
 }
 
 impl Selection {
@@ -52,12 +61,33 @@ impl Selection {
         col: u16,
         metrics: Option<ScrollMetrics>,
     ) -> Self {
+        Self::anchor_with_shape(pane_id, viewport_row, col, metrics, Shape::Linear)
+    }
+
+    /// Start a potential rectangular selection.
+    pub(crate) fn rectangular_anchor(
+        pane_id: PaneId,
+        viewport_row: u16,
+        col: u16,
+        metrics: Option<ScrollMetrics>,
+    ) -> Self {
+        Self::anchor_with_shape(pane_id, viewport_row, col, metrics, Shape::Rectangular)
+    }
+
+    fn anchor_with_shape(
+        pane_id: PaneId,
+        viewport_row: u16,
+        col: u16,
+        metrics: Option<ScrollMetrics>,
+        shape: Shape,
+    ) -> Self {
         let anchor = (absolute_row_for_viewport_row(viewport_row, metrics), col);
         Self {
             pane_id,
             anchor,
             cursor: anchor,
             phase: Phase::Anchored,
+            shape,
         }
     }
 
@@ -75,6 +105,7 @@ impl Selection {
             anchor: (row, start_col),
             cursor: (row, end_col),
             phase: Phase::Dragging,
+            shape: Shape::Linear,
         }
     }
 
@@ -94,6 +125,7 @@ impl Selection {
             anchor: (anchor_row, anchor_col),
             cursor: (cursor_row, cursor_col),
             phase: Phase::Dragging,
+            shape: Shape::Linear,
         }
     }
 
@@ -193,7 +225,7 @@ impl Selection {
         self.phase == Phase::Dragging
     }
 
-    /// Returns (start, end) in reading order (top-left to bottom-right).
+    /// Returns (start, end) in terminal reading order.
     fn ordered(&self) -> ((u32, u16), (u32, u16)) {
         let (ar, ac) = self.anchor;
         let (cr, cc) = self.cursor;
@@ -208,12 +240,24 @@ impl Selection {
         self.ordered()
     }
 
+    pub(crate) fn is_rectangular(&self) -> bool {
+        self.shape == Shape::Rectangular
+    }
+
     /// Check whether a pane-relative cell (row, col) is inside the selection.
     pub fn contains(&self, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> bool {
         if !self.is_visible() {
             return false;
         }
         let row = absolute_row_for_viewport_row(viewport_row, metrics);
+        if self.is_rectangular() {
+            let start_row = self.anchor.0.min(self.cursor.0);
+            let end_row = self.anchor.0.max(self.cursor.0);
+            let start_col = self.anchor.1.min(self.cursor.1);
+            let end_col = self.anchor.1.max(self.cursor.1);
+            return row >= start_row && row <= end_row && col >= start_col && col <= end_col;
+        }
+
         let ((sr, sc), (er, ec)) = self.ordered();
         if row < sr || row > er {
             return false;
@@ -347,6 +391,14 @@ mod tests {
         sel
     }
 
+    fn make_rect_sel(sr: u32, sc: u16, er: u32, ec: u16) -> Selection {
+        let mut sel = Selection::rectangular_anchor(PaneId::from_raw(0), sr as u16, sc, None);
+        sel.anchor = (sr, sc);
+        sel.cursor = (er, ec);
+        sel.phase = Phase::Dragging;
+        sel
+    }
+
     #[test]
     fn osc52_sequence_uses_bel_terminator() {
         assert_eq!(osc52_sequence(b"hello"), "\x1b]52;c;aGVsbG8=\x07");
@@ -473,6 +525,18 @@ mod tests {
         assert!(sel.contains(4, 0, None));
         assert!(sel.contains(4, 10, None));
         assert!(!sel.contains(4, 11, None));
+    }
+
+    #[test]
+    fn rectangular_contains_only_cells_inside_box() {
+        let sel = make_rect_sel(2, 10, 4, 5);
+        assert!(!sel.contains(1, 7, None));
+        assert!(!sel.contains(2, 4, None));
+        assert!(sel.contains(2, 5, None));
+        assert!(sel.contains(3, 7, None));
+        assert!(sel.contains(4, 10, None));
+        assert!(!sel.contains(4, 11, None));
+        assert!(!sel.contains(5, 7, None));
     }
 
     #[test]

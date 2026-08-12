@@ -798,6 +798,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_legacy_ctrl_v_sequence() {
+        let key = parse_terminal_key_sequence("\x16").unwrap();
+        assert_eq!(key.code, KeyCode::Char('v'));
+        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
     fn parse_legacy_ctrl_c_sequence() {
         let key = parse_terminal_key_sequence("\x03").unwrap();
         assert_eq!(key.code, KeyCode::Char('c'));

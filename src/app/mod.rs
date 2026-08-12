@@ -1780,7 +1780,7 @@ impl App {
                     self.handle_text_commit_headless(text.as_str());
                 }
                 crate::raw_input::RawInputEvent::Mouse(mouse) => {
-                    if self.state.popup_pane.is_some() || self.state.mouse_capture {
+                    if self.state.uses_full_mouse_dispatch(&mouse) {
                         self.handle_mouse_event_headless(source_id, mouse);
                     } else {
                         self.state
