@@ -54,8 +54,8 @@ pub(crate) use self::scrollbar::{
 use self::settings::render_settings_overlay;
 use self::sidebar::{render_sidebar, render_sidebar_collapsed};
 use self::status::{
-    copy_feedback_rect, render_config_diagnostic, render_copy_feedback, render_toast_notification,
-    toast_notification_rect,
+    copy_feedback_rect, render_config_diagnostic, render_copy_feedback, render_status_bar,
+    render_toast_notification, status_identity_hit_area, toast_notification_rect,
 };
 pub(crate) use self::tab_surface::{
     compute_tab_surface, render_tab_surface, resize_tab_surface, TabSurfaceLayout,
@@ -220,6 +220,17 @@ fn compute_view_internal(
         return;
     }
 
+    // Full-width top status row (tmux-parity): spans the whole client, with
+    // sidebar + tabs below. Reserve it before the horizontal split so the bar
+    // is never squeezed into the main column only.
+    let (status_bar_rect, body_area) = if area.height > 1 {
+        let [status_bar_rect, body_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+        (status_bar_rect, body_area)
+    } else {
+        (Rect::default(), area)
+    };
+
     let sidebar_w = if app.sidebar_collapsed {
         match app.sidebar_collapsed_mode {
             crate::config::SidebarCollapsedModeConfig::Compact => COLLAPSED_WIDTH,
@@ -231,7 +242,7 @@ fn compute_view_internal(
     };
 
     let [sidebar_area, main_area] =
-        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(body_area);
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -300,8 +311,11 @@ fn compute_view_internal(
         })
         .unwrap_or_default();
 
+    let status_identity_hit_area = status_identity_hit_area(app, status_bar_rect);
     app.view = crate::app::ViewState {
         layout: ViewLayout::Desktop,
+        status_bar_rect,
+        status_identity_hit_area,
         sidebar_rect: sidebar_area,
         workspace_card_areas,
         tab_bar_rect,
@@ -365,6 +379,8 @@ fn compute_mobile_view(
 
     app.view = crate::app::ViewState {
         layout: ViewLayout::Mobile,
+        status_bar_rect: Rect::default(),
+        status_identity_hit_area: Rect::default(),
         sidebar_rect: Rect::default(),
         workspace_card_areas: Vec::new(),
         tab_bar_rect: Rect::default(),
@@ -397,6 +413,10 @@ pub fn render_with_runtime_registry(
     let sidebar_area = app.view.sidebar_rect;
     let tab_bar_area = app.view.tab_bar_rect;
     let terminal_area = app.view.terminal_area;
+
+    if app.view.layout != ViewLayout::Mobile {
+        render_status_bar(app, frame, app.view.status_bar_rect);
+    }
 
     if app.view.layout == ViewLayout::Mobile {
         render_mobile_header(app, terminal_runtimes, frame, app.view.mobile_header_rect);
@@ -802,16 +822,19 @@ mod tests {
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
         let single_tab_terminal_area = app.view.terminal_area;
+        // Full-width status bar occupies row 0; chrome starts at y=1.
+        assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, 80, 1));
         assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert_eq!(single_tab_terminal_area, Rect::new(26, 0, 54, 20));
+        assert_eq!(single_tab_terminal_area, Rect::new(26, 1, 54, 19));
         assert!(app.view.tab_hit_areas.is_empty());
         assert_eq!(app.view.new_tab_hit_area, Rect::default());
 
         app.workspaces[0].test_add_tab(Some("logs"));
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
-        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 19));
+        assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, 80, 1));
+        assert_eq!(app.view.tab_bar_rect, Rect::new(26, 1, 54, 1));
+        assert_eq!(app.view.terminal_area, Rect::new(26, 2, 54, 18));
         assert_eq!(app.view.tab_hit_areas.len(), 2);
         assert!(app.view.tab_hit_areas.iter().all(|rect| rect.width > 0));
         assert!(app.view.new_tab_hit_area.width > 0);
@@ -855,8 +878,9 @@ mod tests {
         let one_tab_size = app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size();
         let two_tab_size =
             app.workspaces[1].tabs[background_tab].runtimes[&two_tab_pane].current_size();
-        assert_eq!(one_tab_size, (20, 53));
-        assert_eq!(two_tab_size, (19, 53));
+        // Status bar reserves one full-width row; single-tab workspaces reclaim the tab bar.
+        assert_eq!(one_tab_size, (19, 53));
+        assert_eq!(two_tab_size, (18, 53));
     }
 
     #[tokio::test]
@@ -969,14 +993,74 @@ mod tests {
 
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
-        assert_eq!(app.view.sidebar_rect, Rect::new(0, 0, 0, 20));
-        assert_eq!(app.view.tab_bar_rect, Rect::new(0, 0, 80, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(0, 1, 80, 19));
+        // Status bar is full-width on row 0; sidebar/tabs/terminal sit below.
+        assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, 80, 1));
+        assert_eq!(app.view.sidebar_rect, Rect::new(0, 1, 0, 19));
+        assert_eq!(app.view.tab_bar_rect, Rect::new(0, 1, 80, 1));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 80, 18));
         assert!(app.view.workspace_card_areas.is_empty());
 
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn desktop_status_bar_spans_full_width_above_sidebar() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.sidebar_width = 26;
+
+        compute_view(&mut app, Rect::new(0, 0, 100, 24));
+
+        assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, 100, 1));
+        assert_eq!(app.view.sidebar_rect.y, 1);
+        assert_eq!(app.view.sidebar_rect.height, 23);
+        assert!(app.view.sidebar_rect.x == 0);
+        assert_eq!(app.view.sidebar_rect.width, 26);
+        // Terminal/tab chrome never occupy the status-bar row.
+        assert!(app.view.terminal_area.y >= 1);
+        assert!(app.view.tab_bar_rect.y >= 1 || app.view.tab_bar_rect == Rect::default());
+    }
+
+    #[test]
+    fn status_identity_hit_area_populated_on_desktop() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut ws = Workspace::test_new("repo");
+        ws.set_custom_name("home".into());
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.sidebar_width = 26;
+
+        compute_view(&mut app, Rect::new(0, 0, 100, 24));
+
+        assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, 100, 1));
+        assert!(
+            app.view.status_identity_hit_area.width > 0,
+            "desktop must expose identity hit area"
+        );
+        assert_eq!(app.view.status_identity_hit_area.y, 0);
+    }
+
+    #[test]
+    fn mobile_layout_leaves_status_bar_empty() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.mobile_width_threshold = 90;
+
+        compute_view(&mut app, Rect::new(0, 0, 80, 20));
+
+        assert_eq!(app.view.layout, ViewLayout::Mobile);
+        assert_eq!(app.view.status_bar_rect, Rect::default());
+        assert_eq!(app.view.status_identity_hit_area, Rect::default());
     }
 
     #[test]

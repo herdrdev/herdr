@@ -324,6 +324,17 @@ impl App {
             changed = true;
         }
 
+        // Status-row clock/metrics: low-cost invalidation so time updates even
+        // when all panes are idle. Collection stays off the Ratatui draw path.
+        if self
+            .next_status_metrics_refresh
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let _ = crate::platform::status_metrics::refresh_status_metrics_if_due();
+            self.next_status_metrics_refresh = Some(now + super::STATUS_METRICS_REFRESH_INTERVAL);
+            changed = true;
+        }
+
         if self
             .selection_autoscroll_deadline
             .is_some_and(|deadline| now >= deadline)
@@ -642,6 +653,7 @@ impl App {
             self.state.next_managed_agent_deadline(),
             self.copy_feedback_deadline,
             self.next_animation_tick,
+            self.next_status_metrics_refresh,
             include_git_refresh
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
@@ -781,6 +793,8 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         );
+        // Isolate scheduled-task tests from the independent status-row clock.
+        app.next_status_metrics_refresh = None;
         let ws = Workspace::test_new("test");
         let pane_id = ws.tabs[0].root_pane;
         app.state.workspaces.push(ws);
@@ -879,6 +893,8 @@ mod tests {
         app.state.workspaces.push(Workspace::test_new("test"));
         let now = Instant::now();
         app.last_git_remote_status_refresh = now - super::super::GIT_REMOTE_STATUS_REFRESH_INTERVAL;
+        // Isolate the git-refresh timer from the independent status-row clock.
+        app.next_status_metrics_refresh = None;
 
         assert_eq!(
             app.next_headless_loop_deadline_with_git_refresh(now, false, false),
@@ -1015,6 +1031,7 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         );
+        app.next_status_metrics_refresh = None;
         let mut ws = Workspace::test_new("test");
         let pane_id = ws.tabs[0].root_pane;
         let runtime =
@@ -1150,6 +1167,8 @@ mod tests {
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
         app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
+        // Isolate agent-resume behavior from the independent status-row clock.
+        app.next_status_metrics_refresh = None;
 
         assert!(!app.handle_scheduled_tasks(Instant::now(), true));
         assert!(app.terminal_runtimes.get(&terminal_id).is_none());

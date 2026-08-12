@@ -3968,6 +3968,16 @@ impl HeadlessServer {
 
         if self
             .app
+            .next_status_metrics_refresh
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let _ = crate::platform::status_metrics::refresh_status_metrics_if_due();
+            self.app.next_status_metrics_refresh = Some(now + app::STATUS_METRICS_REFRESH_INTERVAL);
+            changed = true;
+        }
+
+        if self
+            .app
             .selection_autoscroll_deadline
             .is_some_and(|deadline| now >= deadline)
         {
@@ -4490,6 +4500,9 @@ mod tests {
         app.state.local_sound_playback = false;
         app.local_terminal_notifications = false;
         app.local_input_source_switch = false;
+        // Tests that assert "no scheduled work" should not be tripped by the
+        // independent status-row clock; production App::new still arms it.
+        app.next_status_metrics_refresh = None;
 
         let dir = std::env::temp_dir().join(format!(
             "hh-{}-{}",
@@ -5977,6 +5990,8 @@ next_tab = ""
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
         server.app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
+        // Isolate agent-resume behavior from the independent status-row clock.
+        server.app.next_status_metrics_refresh = None;
 
         assert!(!server.handle_scheduled_tasks_headless(Instant::now(), true));
         assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
@@ -6031,6 +6046,8 @@ next_tab = ""
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         });
         server.app.pending_agent_resume_deadline = Some(Instant::now() - Duration::from_millis(1));
+        // Isolate agent-resume behavior from the independent status-row clock.
+        server.app.next_status_metrics_refresh = None;
 
         assert!(!server.handle_scheduled_tasks_headless(Instant::now(), false));
         assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
@@ -7328,7 +7345,9 @@ next_tab = ""
         );
         assert!(!mobile_surface.contains("background"));
 
-        let foreground_terminal_area = Rect::new(26, 1, 94, 39);
+        // Full-width status bar occupies row 0; terminal chrome starts at y=1 (tab bar)
+        // and the terminal surface at y=2.
+        let foreground_terminal_area = Rect::new(26, 2, 94, 38);
         let expected_pane_size = (
             foreground_terminal_area.height,
             foreground_terminal_area.width.saturating_sub(1),

@@ -27,6 +27,7 @@ use super::{
 
 pub(super) enum MouseAction {
     NewWorkspace,
+    OpenNavigator,
     Settings(SettingsAction),
     FocusWorkspace {
         ws_idx: usize,
@@ -110,6 +111,13 @@ impl AppState {
             && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
         {
             return Some(MouseAction::FocusToastTarget);
+        }
+
+        if matches!(self.mode, Mode::Terminal | Mode::Prefix | Mode::Resize)
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && rect_contains(self.view.status_identity_hit_area, mouse.column, mouse.row)
+        {
+            return Some(MouseAction::OpenNavigator);
         }
 
         if self.mode == Mode::Terminal

@@ -38,6 +38,8 @@ pub(crate) const HEADLESS_ANIMATION_TICK_STEP: u32 = 8;
 pub(crate) const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
+/// Clock/metrics status-row invalidation while panes are quiet.
+pub(crate) const STATUS_METRICS_REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
@@ -122,6 +124,7 @@ pub struct App {
     pub(crate) pending_url_click_sources: HashSet<InputSourceId>,
     pub(crate) next_resize_poll: Instant,
     pub(crate) next_animation_tick: Option<Instant>,
+    pub(crate) next_status_metrics_refresh: Option<Instant>,
     pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
     pub(crate) update_version_check_enabled: bool,
@@ -583,6 +586,8 @@ impl App {
             mobile_switcher_scroll: 0,
             view: state::ViewState {
                 layout: state::ViewLayout::Desktop,
+                status_bar_rect: Rect::default(),
+                status_identity_hit_area: Rect::default(),
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
@@ -748,6 +753,13 @@ impl App {
             pending_url_click_sources: HashSet::new(),
             next_resize_poll: Instant::now() + RESIZE_POLL_INTERVAL,
             next_animation_tick: None,
+            next_status_metrics_refresh: if cfg!(test) {
+                // Keep deadline-isolation tests deterministic; production still
+                // arms the status-row clock so idle sessions repaint time/metrics.
+                None
+            } else {
+                Some(Instant::now())
+            },
             next_auto_update_check: version_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             next_agent_manifest_update_check: manifest_check_enabled

@@ -326,6 +326,9 @@ impl App {
                     MouseAction::NewWorkspace => {
                         self.begin_tui_workspace_create("tui.mouse.workspace.create")
                     }
+                    MouseAction::OpenNavigator => {
+                        self.state.open_navigator_from(&self.terminal_runtimes)
+                    }
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
