@@ -1424,16 +1424,30 @@ mod tests {
 
     #[test]
     fn automatic_selection_background_contrasts_when_host_background_is_unknown() {
-        for panel_bg in [Color::Rgb(0x2d, 0x35, 0x3b), Color::Rgb(239, 241, 245)] {
+        for (panel_bg, should_lighten) in [
+            (Color::Rgb(0x2d, 0x35, 0x3b), true),
+            (Color::Rgb(239, 241, 245), false),
+        ] {
             let mut palette = Palette::catppuccin();
             palette.panel_bg = panel_bg;
+            let Color::Rgb(r, g, b) = panel_bg else {
+                unreachable!("test backgrounds are rgb");
+            };
 
             let selected =
                 automatic_selection_bg(&palette, crate::terminal_theme::TerminalTheme::default());
-            let base_luminance = relative_luminance(color_to_rgb(panel_bg).unwrap());
+            let known_host_selected = automatic_selection_bg(
+                &palette,
+                crate::terminal_theme::TerminalTheme {
+                    background: Some(crate::terminal_theme::RgbColor { r, g, b }),
+                    ..Default::default()
+                },
+            );
+            let base_luminance = relative_luminance((r, g, b));
             let selected_luminance = relative_luminance(color_to_rgb(selected).unwrap());
 
-            assert!((selected_luminance - base_luminance).abs() > 0.08);
+            assert_eq!(selected, known_host_selected);
+            assert_eq!(selected_luminance > base_luminance, should_lighten);
         }
     }
 }
