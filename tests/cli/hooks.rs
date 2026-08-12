@@ -37,6 +37,15 @@ fn run_devin_hook(
     )
 }
 
+fn run_grok_hook(hook_input: &str, envs: &[(&str, &str)]) -> Option<serde_json::Value> {
+    run_shell_hook_with_env(
+        "src/integration/assets/grok/herdr-agent-state.sh",
+        &["session"],
+        hook_input,
+        envs,
+    )
+}
+
 fn run_shell_hook(asset_path: &str, args: &[&str], hook_input: &str) -> Option<serde_json::Value> {
     run_shell_hook_with_env(asset_path, args, hook_input, &[])
 }
@@ -209,6 +218,19 @@ fn copilot_hook_reports_session_id_from_stdin() {
     assert_eq!(camel["method"], "pane.report_agent_session");
     assert_eq!(camel["params"]["agent_session_id"], "copilot-camel-session");
     assert!(camel["params"].get("state").is_none());
+}
+
+#[test]
+fn grok_hook_reports_new_session_source() {
+    let request = run_grok_hook(
+        r#"{"hook_event_name":"session_start","source":"new","session_id":"new-session"}"#,
+        &[("GROK_SESSION_ID", "new-session")],
+    )
+    .expect("grok session start should report session identity");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent_session_id"], "new-session");
+    assert_eq!(request["params"]["session_start_source"], "new");
 }
 
 #[test]

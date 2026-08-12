@@ -2729,6 +2729,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_HOOK_ASSET,
             MASTRACODE_INTEGRATION_VERSION,
         ),
+        ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -2855,6 +2856,10 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(GROK_HOOK_ASSET.contains("sessionId"));
     assert!(GROK_HOOK_ASSET.contains("agent_session_id"));
     assert!(GROK_HOOK_ASSET.contains("pane.report_agent_session"));
+    assert!(
+        GROK_HOOK_ASSET.contains("session_start_source")
+            || GROK_HOOK_ASSET.contains("--session-start-source")
+    );
     assert!(GROK_HOOK_ASSET.contains("herdr:grok"));
     assert!(!GROK_HOOK_ASSET.contains("\"state\":"));
     assert!(!GROK_HOOK_ASSET.contains("pane.release_agent"));
@@ -3873,7 +3878,39 @@ fn install_antigravity_cli_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn grok_v1_integration_status_is_current() {
+fn grok_v1_integration_status_is_outdated() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let grok_dir = base.join(".grok");
+    let hooks_dir = grok_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &grok_dir);
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=grok\n# HERDR_INTEGRATION_VERSION=1\n",
+    )
+    .unwrap();
+    fs::write(
+        hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME),
+        serde_json::to_string(&grok_hook_config(&hook_path)).unwrap(),
+    )
+    .unwrap();
+
+    let grok = installed_integration_statuses()
+        .into_iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Grok)
+        .expect("grok integration status");
+    assert_eq!(grok.installed_version, Some(1));
+    assert_eq!(grok.expected_version, GROK_INTEGRATION_VERSION);
+    assert_eq!(grok.state, IntegrationStatusKind::Outdated);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn grok_v2_integration_status_is_current() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let grok_dir = base.join(".grok");

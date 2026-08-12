@@ -281,7 +281,7 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
-const GROK_INTEGRATION_VERSION: u32 = 1;
+const GROK_INTEGRATION_VERSION: u32 = 2;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 
