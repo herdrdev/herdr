@@ -1200,12 +1200,12 @@ mod tests {
             target_row,
         ));
         assert_eq!(app.state.active, Some(0));
-        assert!(app.state.workspace_press.is_some());
+        assert_eq!(app.state.workspace_presses.len(), 1);
 
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
         assert_eq!(app.state.active, Some(1));
         assert_eq!(app.state.selected, 1);
-        assert!(app.state.workspace_press.is_none());
+        assert!(app.state.workspace_presses.is_empty());
         let snapshot = capture_snapshot(&app.state);
         assert_eq!(snapshot.active, Some(1));
         assert_eq!(snapshot.selected, 1);
@@ -1272,7 +1272,7 @@ mod tests {
         ));
 
         assert_eq!(app.state.active, None);
-        assert!(app.state.workspace_press.is_none());
+        assert!(app.state.workspace_presses.is_empty());
         assert!(app.state.collapsed_space_keys.contains("repo-key"));
 
         app.handle_mouse(mouse(
