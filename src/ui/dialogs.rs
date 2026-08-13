@@ -15,7 +15,7 @@ use crate::app::{state::WorktreeOpenState, AppState, Mode};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const NEW_LINKED_WORKTREE_POPUP_WIDTH: u16 = 68;
-const NEW_LINKED_WORKTREE_POPUP_HEIGHT: u16 = 12;
+const NEW_LINKED_WORKTREE_POPUP_HEIGHT: u16 = 14;
 
 pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
     let rects = action_button_row_rects(
@@ -45,7 +45,13 @@ pub(crate) fn rename_button_rects(inner: Rect) -> (Rect, Rect, Rect) {
 /// IMEs draw their composition preview at the host terminal cursor. Without an
 /// explicit cursor the frame carries none, the client keeps the position last
 /// reported by the focused pane, and composition lands behind the dialog.
-fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) {
+fn render_text_input_field(
+    app: &AppState,
+    frame: &mut Frame,
+    input_rect: Rect,
+    value: &str,
+    focused: bool,
+) {
     frame.render_widget(Clear, input_rect);
 
     // The text stops one column short of the field so the clamped caret always
@@ -56,7 +62,7 @@ fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) 
         ..input_rect
     };
     frame.render_widget(
-        Paragraph::new(format!(" {}", app.name_input)).style(
+        Paragraph::new(format!(" {value}")).style(
             Style::default()
                 .fg(app.palette.text)
                 .bg(app.palette.surface0),
@@ -64,15 +70,19 @@ fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) 
         text_rect,
     );
 
-    if input_rect.width == 0 {
+    if input_rect.width == 0 || !focused {
         return;
     }
     let caret_x = input_rect
         .x
         .saturating_add(1)
-        .saturating_add(display_width_u16(&app.name_input))
+        .saturating_add(display_width_u16(value))
         .min(input_rect.right().saturating_sub(1));
     frame.set_cursor_position((caret_x, input_rect.y));
+}
+
+fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect) {
+    render_text_input_field(app, frame, input_rect, &app.name_input, true);
 }
 
 pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -271,7 +281,7 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
     ) else {
         return;
     };
-    if inner.height < 9 {
+    if inner.height < 11 {
         return;
     }
 
@@ -281,11 +291,13 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Min(0),
     ])
-    .areas::<8>(inner);
+    .areas::<10>(inner);
 
     render_modal_header(frame, rows[0], "new worktree", &app.palette);
 
@@ -294,29 +306,49 @@ pub(super) fn render_new_linked_worktree_overlay(app: &AppState, frame: &mut Fra
         rows[1],
     );
     let input_rect = Rect::new(rows[2].x, rows[2].y, rows[2].width, 1);
-    render_name_input_field(app, frame, input_rect);
+    render_text_input_field(
+        app,
+        frame,
+        input_rect,
+        &app.name_input,
+        !create.base_focused,
+    );
+
+    frame.render_widget(
+        Paragraph::new(" base  tab to switch fields")
+            .style(Style::default().fg(app.palette.overlay0)),
+        rows[3],
+    );
+    let base_input_rect = Rect::new(rows[4].x, rows[4].y, rows[4].width, 1);
+    render_text_input_field(
+        app,
+        frame,
+        base_input_rect,
+        &create.base,
+        create.base_focused,
+    );
 
     let checkout = create.checkout_path.display().to_string();
     frame.render_widget(
         Paragraph::new(" checkout").style(Style::default().fg(app.palette.overlay0)),
-        rows[3],
+        rows[5],
     );
     frame.render_widget(
         Paragraph::new(format!(" {checkout}")).style(Style::default().fg(app.palette.subtext0)),
-        rows[4],
+        rows[6],
     );
 
     if create.creating {
         frame.render_widget(
             Paragraph::new(" creating…").style(Style::default().fg(app.palette.overlay0)),
-            rows[5],
+            rows[7],
         );
     } else if let Some(error) = &create.error {
         frame.render_widget(
             Paragraph::new(format!(" {error}"))
                 .style(Style::default().fg(app.palette.red))
                 .wrap(Wrap { trim: false }),
-            rows[5],
+            rows[7],
         );
     }
 
@@ -934,6 +966,9 @@ mod tests {
             repo_key: "repo-key".into(),
             repo_name: "herdr".into(),
             branch: "foo".into(),
+            base: "main".into(),
+            base_focused: false,
+            base_replace_on_type: true,
             checkout_path: "/repo/.worktrees/herdr/foo".into(),
             error: Some(
                 "Preparing worktree (new branch 'foo')\nfatal: a branch named 'foo' already exists"
@@ -1021,6 +1056,9 @@ mod tests {
             repo_key: "repo-key".into(),
             repo_name: "herdr".into(),
             branch: branch.into(),
+            base: "main".into(),
+            base_focused: false,
+            base_replace_on_type: true,
             checkout_path: "/repo/.worktrees/herdr/foo".into(),
             error: None,
             creating: false,

@@ -256,6 +256,24 @@ impl AppState {
                     if let Some(inner) =
                         crate::ui::new_linked_worktree_inner_rect(self.screen_rect())
                     {
+                        if mouse.row == inner.y.saturating_add(2)
+                            && mouse.column >= inner.x
+                            && mouse.column < inner.right()
+                        {
+                            if let Some(create) = &mut self.worktree_create {
+                                create.base_focused = false;
+                            }
+                            return None;
+                        }
+                        if mouse.row == inner.y.saturating_add(4)
+                            && mouse.column >= inner.x
+                            && mouse.column < inner.right()
+                        {
+                            if let Some(create) = &mut self.worktree_create {
+                                create.base_focused = true;
+                            }
+                            return None;
+                        }
                         let (create, cancel) = crate::ui::new_linked_worktree_button_rects(inner);
                         match modal_action_from_buttons(
                             mouse.column,
@@ -1045,10 +1063,8 @@ impl AppState {
                                 },
                                 |space| space.is_linked_worktree,
                             );
-                            let show_git_menu = ws.worktree_space().is_some()
-                                || git_space
-                                    .as_ref()
-                                    .is_some_and(|space| !space.is_linked_worktree);
+                            let show_git_menu =
+                                ws.worktree_space().is_some() || git_space.is_some();
                             show_git_menu.then_some(ContextMenuKind::GitWorkspace {
                                 ws_idx: idx,
                                 is_linked_worktree,
