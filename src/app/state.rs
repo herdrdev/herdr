@@ -1089,10 +1089,12 @@ pub(crate) enum WorkspaceDropTarget {
 
 pub(crate) enum DragTarget {
     WorkspaceReorder {
+        source_id: crate::app::InputSourceId,
         source_ws_idx: usize,
         drop_target: Option<WorkspaceDropTarget>,
     },
     TabReorder {
+        source_id: crate::app::InputSourceId,
         ws_idx: usize,
         source_tab_idx: usize,
         insert_idx: Option<usize>,
@@ -2128,6 +2130,7 @@ impl AppState {
                 DragTarget::WorkspaceReorder {
                     source_ws_idx,
                     drop_target,
+                    ..
                 } => {
                     assert_workspace_index(*source_ws_idx, "workspace drag source");
                     if let Some(WorkspaceDropTarget::Before(ws_idx)) = drop_target {
@@ -2138,6 +2141,7 @@ impl AppState {
                     ws_idx,
                     source_tab_idx,
                     insert_idx,
+                    ..
                 } => {
                     assert_tab_index(*ws_idx, *source_tab_idx, "tab drag source");
                     if let Some(insert_idx) = insert_idx {

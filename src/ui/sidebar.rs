@@ -2748,6 +2748,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(indicator_row, app.view.workspace_card_areas[1].rect.y);
         app.drag = Some(crate::app::state::DragState {
             target: crate::app::state::DragTarget::WorkspaceReorder {
+                source_id: 0,
                 source_ws_idx: 0,
                 drop_target: Some(crate::app::state::WorkspaceDropTarget::Before(2)),
             },

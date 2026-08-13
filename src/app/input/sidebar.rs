@@ -1361,6 +1361,7 @@ mod tests {
             Some(DragTarget::WorkspaceReorder {
                 source_ws_idx: 1,
                 drop_target: Some(crate::app::state::WorkspaceDropTarget::Before(0)),
+                ..
             })
         ));
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
@@ -1496,6 +1497,7 @@ mod tests {
                 ws_idx: 0,
                 source_tab_idx: 0,
                 insert_idx: Some(3),
+                ..
             })
         ));
         app.handle_mouse(mouse(
@@ -1721,6 +1723,7 @@ mod tests {
             Some(DragTarget::WorkspaceReorder {
                 source_ws_idx: 0,
                 drop_target: Some(crate::app::state::WorkspaceDropTarget::End),
+                ..
             })
         ));
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
