@@ -988,7 +988,13 @@ impl AppState {
                 let over_agent_panel = agent_area != Rect::default()
                     && mouse.row >= agent_area.y
                     && mouse.row < agent_area.y + agent_area.height;
-                if over_agent_panel {
+                if self.sidebar_wheel == crate::config::SidebarWheelConfig::Switch {
+                    if over_agent_panel {
+                        self.cycle_agent_entry(false);
+                    } else {
+                        self.previous_workspace();
+                    }
+                } else if over_agent_panel {
                     if crate::ui::should_show_scrollbar(crate::ui::agent_panel_scroll_metrics(
                         self, agent_area,
                     )) {
@@ -1007,7 +1013,13 @@ impl AppState {
                 let over_agent_panel = agent_area != Rect::default()
                     && mouse.row >= agent_area.y
                     && mouse.row < agent_area.y + agent_area.height;
-                if over_agent_panel {
+                if self.sidebar_wheel == crate::config::SidebarWheelConfig::Switch {
+                    if over_agent_panel {
+                        self.cycle_agent_entry(true);
+                    } else {
+                        self.next_workspace();
+                    }
+                } else if over_agent_panel {
                     if crate::ui::should_show_scrollbar(crate::ui::agent_panel_scroll_metrics(
                         self, agent_area,
                     )) {
@@ -4776,5 +4788,86 @@ mod tests {
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::HostScroll);
+    }
+
+    #[test]
+    fn wheel_over_agent_panel_switches_agent() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("one");
+        let root = ws.tabs[0].root_pane;
+        let second = ws.test_split(Direction::Horizontal);
+        ws.tabs[0].layout.focus_pane(root);
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.ensure_test_terminals();
+
+        // Agent panel entries only include panes whose terminal has an agent
+        // label; give both panes one so cycle_agent_entry has entries to cycle.
+        let tids: Vec<_> = app.state.workspaces[0].tabs[0]
+            .panes
+            .values()
+            .map(|pane| pane.attached_terminal_id.clone())
+            .collect();
+        for tid in tids {
+            app.state
+                .terminals
+                .get_mut(&tid)
+                .expect("test terminal present")
+                .set_agent_name("test-agent".into());
+        }
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let agent_area = app.state.agent_panel_rect();
+        assert_ne!(agent_area, Rect::default());
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, agent_area.x + 1, agent_area.y + 2));
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(second));
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, agent_area.x + 1, agent_area.y + 2));
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollUp, agent_area.x + 1, agent_area.y + 2));
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(second));
+    }
+
+    #[test]
+    fn wheel_over_workspace_list_switches_workspace() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let ws_area = app.state.workspace_list_rect();
+        assert_ne!(ws_area, Rect::default());
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, ws_area.x + 1, ws_area.y + 2));
+        assert_eq!(app.state.active, Some(1));
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, ws_area.x + 1, ws_area.y + 2));
+        assert_eq!(app.state.active, Some(0)); // cycles back around
+
+        app.handle_mouse(mouse(MouseEventKind::ScrollUp, ws_area.x + 1, ws_area.y + 2));
+        assert_eq!(app.state.active, Some(1));
+    }
+
+    #[test]
+    fn wheel_scroll_mode_preserves_scrolling() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_wheel = crate::config::SidebarWheelConfig::Scroll;
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let ws_area = app.state.workspace_list_rect();
+
+        // Scroll mode only moves the highlight; it never switches the active workspace.
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, ws_area.x + 1, ws_area.y + 2));
+        assert_eq!(app.state.active, Some(0));
     }
 }
