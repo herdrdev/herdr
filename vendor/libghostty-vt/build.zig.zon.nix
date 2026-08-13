@@ -21,7 +21,7 @@
     ''
       hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
       mv "$TMPDIR/p/$hash" "$out"
-      chmod 755 "$out"
+      chmod -R u+rwX "$out"
     '';
 
   fetchZig = {
