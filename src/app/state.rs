@@ -1132,12 +1132,14 @@ pub(crate) struct DragState {
 }
 
 pub(crate) struct WorkspacePressState {
+    pub source_id: crate::app::InputSourceId,
     pub ws_idx: usize,
     pub start_col: u16,
     pub start_row: u16,
 }
 
 pub(crate) struct TabPressState {
+    pub source_id: crate::app::InputSourceId,
     pub ws_idx: usize,
     pub tab_idx: usize,
     pub start_col: u16,

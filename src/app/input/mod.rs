@@ -392,7 +392,10 @@ impl App {
         let previous_agent_panel_sort = self.state.agent_panel_sort;
         let previous_settings_section = self.state.settings.section;
         if !handled_pane_double_click {
-            if let Some(action) = self.state.handle_mouse(&mut self.terminal_runtimes, mouse) {
+            if let Some(action) =
+                self.state
+                    .handle_mouse(&mut self.terminal_runtimes, source_id, mouse)
+            {
                 match action {
                     MouseAction::NewWorkspace => {
                         self.begin_tui_workspace_create("tui.mouse.workspace.create")
