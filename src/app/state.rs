@@ -792,6 +792,7 @@ pub enum Mode {
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
     Resize,
+    FocusNav,
     ConfirmClose,
     ContextMenu,
     Settings,
@@ -823,6 +824,7 @@ impl Mode {
                 | Mode::Navigator
                 | Mode::Copy
                 | Mode::Resize
+                | Mode::FocusNav
                 | Mode::ConfirmClose
                 | Mode::ConfirmRemoveWorktree
                 | Mode::ContextMenu
@@ -1335,6 +1337,10 @@ pub struct AppState {
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
     pub selected: usize,
     pub mode: Mode,
+    /// True while the persistent focus-navigation command layer is active. Kept
+    /// set across text dialogs (rename, etc.) so cancelling/committing returns to
+    /// `Mode::FocusNav` instead of the terminal.
+    pub command_layer: bool,
     pub should_quit: bool,
     /// In monolithic --no-session mode, detach exits the app because there is no server to detach from.
     pub detach_exits: bool,
@@ -1704,6 +1710,7 @@ impl AppState {
             previous_pane_focus: None,
             selected: 0,
             mode: Mode::Navigate,
+            command_layer: false,
             should_quit: false,
             detach_exits: false,
             detach_requested: false,

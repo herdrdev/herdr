@@ -449,6 +449,10 @@ pub(super) fn open_new_tab_dialog(state: &mut AppState) {
 }
 
 pub(super) fn leave_modal(state: &mut AppState) {
+    if state.command_layer {
+        state.mode = Mode::FocusNav;
+        return;
+    }
     if state.active.is_some() {
         state.mode = Mode::Terminal;
     } else {
@@ -747,6 +751,10 @@ pub(super) fn confirm_close_accept(state: &mut AppState) {
 }
 
 pub(super) fn confirm_close_cancel(state: &mut AppState) {
+    if state.command_layer {
+        state.mode = Mode::FocusNav;
+        return;
+    }
     state.mode = Mode::Navigate;
 }
 

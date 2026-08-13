@@ -539,6 +539,7 @@ impl App {
             previous_pane_focus: None,
             selected,
             mode,
+            command_layer: false,
             should_quit: false,
             detach_exits: no_session,
             detach_requested: false,
@@ -1902,6 +1903,9 @@ impl App {
             }
             Mode::Resize => {
                 self.handle_resize_key_via_api(key);
+            }
+            Mode::FocusNav => {
+                self.handle_focus_nav_key(key);
             }
             Mode::ConfirmClose => {
                 self.handle_confirm_close_key_via_api(key_event);

@@ -103,6 +103,67 @@ impl App {
         leave_command_mode(&mut self.state);
     }
 
+    /// Persistent command layer (vim-like normal mode). The whole prefix keymap is
+    /// live on bare keys and the mode stays open across actions. Escape or
+    /// re-pressing the trigger exits back to the terminal. Actions that open a text
+    /// dialog (rename, new tab/workspace name, ...) suspend the layer and return to
+    /// it on commit/cancel, since `command_layer` stays set and the shared
+    /// leave/modal helpers route back to `Mode::FocusNav`.
+    pub(crate) fn handle_focus_nav_key(&mut self, raw_key: TerminalKey) {
+        let key = raw_key.as_key_event();
+        self.state.update_dismissed = true;
+
+        if matches!(key.code, KeyCode::Modifier(_)) {
+            return;
+        }
+
+        if key.code == KeyCode::Esc
+            || self.state.keybinds.focus_nav.matches_prefix_key(&raw_key)
+            || self.state.keybinds.focus_nav.matches_direct_key(&raw_key)
+        {
+            self.state.command_layer = false;
+            leave_command_mode(&mut self.state);
+            return;
+        }
+
+        if let Some(action) =
+            non_indexed_action_for_key(&self.state, &raw_key, BindingDispatch::Prefix)
+        {
+            self.execute_prefix_key_action(action);
+        } else if let Some(binding) =
+            command_for_key(&self.state, &raw_key, BindingDispatch::Prefix)
+        {
+            self.cancel_copy_mode_if_active();
+            self.launch_custom_command(binding, ActionContext::Prefix);
+        } else if let Some(action) =
+            indexed_navigation_action(&self.state, &raw_key, BindingDispatch::Prefix)
+        {
+            self.execute_prefix_key_action(action);
+        }
+
+        // Actions run through the `*_via_api` layer, which resets `mode` to
+        // Terminal to drop you into the resulting pane. Re-assert the command
+        // layer so it stays open — unless the action opened a sub-UI (dialog,
+        // picker, copy/resize), which suspends the layer and returns to it on
+        // close via the `command_layer` guard in the leave/modal helpers.
+        if self.state.command_layer && !mode_suspends_command_layer(self.state.mode) {
+            self.state.mode = Mode::FocusNav;
+        }
+    }
+
+    /// Event-loop invariant: while the command layer is active, any operation that
+    /// dropped `mode` back to the terminal or navigator — including deferred
+    /// tab/pane creations that focus their result on a later frame — snaps back to
+    /// `Mode::FocusNav`. Suspending sub-UIs (dialogs, pickers, copy/resize) keep
+    /// control and are restored via the `command_layer` guard when they close.
+    pub(crate) fn enforce_command_layer(&mut self) {
+        if self.state.command_layer
+            && matches!(self.state.mode, Mode::Terminal | Mode::Navigate)
+        {
+            self.state.mode = Mode::FocusNav;
+        }
+    }
+
     fn execute_prefix_key_action(&mut self, action: NavigateAction) {
         if action == NavigateAction::EditScrollback {
             let previous_mode = self.state.mode;
@@ -395,6 +456,10 @@ impl App {
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::EnterResizeMode => self.state.mode = Mode::Resize,
+            NavigateAction::EnterFocusNav => {
+                self.state.command_layer = true;
+                self.state.mode = Mode::FocusNav;
+            }
             NavigateAction::ResizePaneLeft => {
                 self.resize_pane_direction_via_api(NavDirection::Left);
                 leave_navigate_mode(&mut self.state);
@@ -750,7 +815,7 @@ impl App {
         Some((ws_idx, focused.id, target))
     }
 
-    fn relative_visible_workspace(&self, delta: isize) -> Option<usize> {
+    pub(super) fn relative_visible_workspace(&self, delta: isize) -> Option<usize> {
         let order = self.state.visible_workspace_order();
         if order.is_empty() {
             return None;
@@ -769,7 +834,7 @@ impl App {
         Some((ws_idx, source, insert))
     }
 
-    fn relative_tab(&self, delta: isize) -> Option<usize> {
+    pub(super) fn relative_tab(&self, delta: isize) -> Option<usize> {
         let ws = self
             .state
             .active
@@ -1416,6 +1481,7 @@ pub(crate) enum NavigateAction {
     CopyMode,
     Zoom,
     EnterResizeMode,
+    EnterFocusNav,
     ResizePaneLeft,
     ResizePaneDown,
     ResizePaneUp,
@@ -1566,6 +1632,7 @@ fn non_indexed_action_for_key(
         (&kb.close_pane, NavigateAction::ClosePane),
         (&kb.zoom, NavigateAction::Zoom),
         (&kb.resize_mode, NavigateAction::EnterResizeMode),
+        (&kb.focus_nav, NavigateAction::EnterFocusNav),
         (&kb.resize_pane_left, NavigateAction::ResizePaneLeft),
         (&kb.resize_pane_down, NavigateAction::ResizePaneDown),
         (&kb.resize_pane_up, NavigateAction::ResizePaneUp),
@@ -1809,6 +1876,10 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
         }
         NavigateAction::EnterResizeMode => state.mode = Mode::Resize,
+        NavigateAction::EnterFocusNav => {
+            state.command_layer = true;
+            state.mode = Mode::FocusNav;
+        }
         NavigateAction::ResizePaneLeft => {
             state.resize_pane(NavDirection::Left);
             leave_navigate_mode(state);
@@ -1927,7 +1998,38 @@ fn move_active_tab_relative(state: &mut AppState, delta: isize) {
     }
 }
 
+/// Modes that keep control when reached from the command layer (a text dialog,
+/// picker, or another persistent mode). While one of these is active the command
+/// layer stays suspended and is restored when it closes; any other mode is treated
+/// as an implicit drop back to the terminal and is snapped back to `Mode::FocusNav`.
+fn mode_suspends_command_layer(mode: Mode) -> bool {
+    matches!(
+        mode,
+        Mode::RenameWorkspace
+            | Mode::RenameTab
+            | Mode::RenamePane
+            | Mode::NewLinkedWorktree
+            | Mode::OpenExistingWorktree
+            | Mode::ConfirmRemoveWorktree
+            | Mode::ConfirmClose
+            | Mode::Settings
+            | Mode::KeybindHelp
+            | Mode::Navigator
+            | Mode::ContextMenu
+            | Mode::GlobalMenu
+            | Mode::Copy
+            | Mode::Resize
+            | Mode::Onboarding
+            | Mode::ReleaseNotes
+            | Mode::ProductAnnouncement
+    )
+}
+
 fn leave_navigate_mode(state: &mut AppState) {
+    if state.command_layer {
+        state.mode = Mode::FocusNav;
+        return;
+    }
     if state.active.is_some() {
         state.mode = Mode::Terminal;
     }
@@ -1954,6 +2056,10 @@ fn finish_custom_command_context(
 }
 
 fn leave_command_mode(state: &mut AppState) {
+    if state.command_layer {
+        state.mode = Mode::FocusNav;
+        return;
+    }
     if state.copy_mode_pane_is_focused() {
         state.mode = Mode::Copy;
     } else if state.active.is_some() {

@@ -670,6 +670,10 @@ impl HeadlessServer {
                 needs_graphics_render = false;
             }
 
+            // Keep the command layer sticky across deferred operations (tab/pane
+            // creation focuses its result and would otherwise drop to Terminal).
+            self.app.enforce_command_layer();
+
             self.poll_pending_alt_screen_reads(now);
             if self.process_deferred_alt_screen_reads() {
                 needs_render = true;
