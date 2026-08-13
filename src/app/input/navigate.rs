@@ -11,6 +11,8 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Direction;
 
+#[cfg(test)]
+use crate::terminal::TerminalRuntimeRegistry;
 use crate::{
     app::{
         state::{AppState, Mode},
@@ -19,8 +21,6 @@ use crate::{
     input::TerminalKey,
     layout::NavDirection,
 };
-#[cfg(test)]
-use crate::terminal::TerminalRuntimeRegistry;
 
 #[cfg(test)]
 pub(crate) fn terminal_direct_navigation_action(
