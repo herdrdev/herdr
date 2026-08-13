@@ -1339,8 +1339,7 @@ impl AppState {
         }
     }
 
-    #[cfg(test)]
-    pub fn next_workspace(&mut self) {
+    pub(crate) fn next_workspace(&mut self) {
         if self.workspaces.is_empty() {
             return;
         }
@@ -1351,8 +1350,7 @@ impl AppState {
         self.switch_workspace(next);
     }
 
-    #[cfg(test)]
-    pub fn previous_workspace(&mut self) {
+    pub(crate) fn previous_workspace(&mut self) {
         if self.workspaces.is_empty() {
             return;
         }
@@ -1513,8 +1511,7 @@ impl AppState {
         self.cycle_agent_entry(false);
     }
 
-    #[cfg(test)]
-    pub fn focus_agent_entry(&mut self, idx: usize) -> bool {
+    pub(crate) fn focus_agent_entry(&mut self, idx: usize) -> bool {
         let entries = crate::ui::agent_panel_entries(self);
         let Some(target) = entries.get(idx) else {
             return false;
@@ -1535,8 +1532,7 @@ impl AppState {
         false
     }
 
-    #[cfg(test)]
-    fn cycle_agent_entry(&mut self, forward: bool) {
+    pub(crate) fn cycle_agent_entry(&mut self, forward: bool) {
         let entries = crate::ui::agent_panel_entries(self);
         if entries.is_empty() {
             return;
