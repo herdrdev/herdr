@@ -1,10 +1,10 @@
 id = "grok"
-version = "2026.07.16.1"
+version = "2026.08.13.1"
 min_engine_version = 2
-updated_at = "2026-07-16T00:00:00Z"
+updated_at = "2026-08-13T00:00:00Z"
 aliases = ["grok-build"]
 
-# Evidence: Grok Build 0.2.101 source and live pane reads.
+# Evidence: Grok Build 1.0.3 source and live pane reads.
 #
 # Grok emits OSC 0 titles by default. Idle is "grok" or
 # "<session> - grok". During a turn, the configured title gains a braille
@@ -25,9 +25,17 @@ aliases = ["grok-build"]
 #   "┃  z (○) Type your answer here"
 # with footer hints "1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel" (permission)
 # or "Esc:unselect │ Tab:scrollback │ Shift+x:dismiss" (question dialog).
-# Idle footers end with "Ctrl+.:shortcuts" and never contain "Esc:cancel".
-# The startup splash draws its logo with braille characters, so working
-# rules must anchor on the [stop] chip, not on a bare spinner glyph.
+# Idle footers end with "Ctrl+x:shortcuts" or "Ctrl+.:shortcuts" and never contain "Esc:cancel".
+#
+# Background subagent hangover (Grok Build):
+# After the parent turn yields, OSC title/progress and the footer can go
+# idle while a child tool/subagent is still running. Live chrome then looks
+# like:
+#   "┃  ◆ Run Implement Phases J–O harness modules  [hooks: 3]"
+#   "Worked for 11m13s. 1 command still running."
+# Completed tools drop the ┃ gutter; option dialogs use "┃  N (○)" instead
+# of "┃  ◆". These working rules must outrank osc_title_idle (1140) and
+# osc_progress_idle (850), or the pane false-reports done/idle mid-wait.
 
 [[rules]]
 id = "osc_title_blocked"
@@ -74,40 +82,91 @@ any = [
   { contains = ["←/→:scope"] },
 ]
 
+# Idle prompt footer rule outranks historical transcript lines in scrollback.
 [[rules]]
-id = "osc_progress_working"
+id = "prompt_hints_idle"
+state = "idle"
+priority = 1160
+region = "bottom_non_empty_lines(2)"
+visible_idle = true
+any = [
+  { contains = ["ctrl+.:shortcuts"] },
+  { contains = ["ctrl+x:shortcuts"] },
+  { contains = ["shift+tab:mode"] },
+]
+not = [
+  { contains = ["esc:cancel"] },
+  { contains = ["ctrl+c:cancel"] },
+]
+
+# Parent turn has yielded, but a background tool/subagent is still live.
+[[rules]]
+id = "background_commands_still_running"
 state = "working"
 priority = 1150
-region = "osc_progress"
+region = "whole_recent"
 visible_working = true
-regex = ['^4;1;-1$']
+regex = ['\b\d+\s+commands?\s+still\s+running\b']
+
+[[rules]]
+id = "active_subagent_gutter_working"
+state = "working"
+priority = 1145
+region = "whole_recent"
+visible_working = true
+# Active tool/subagent rows keep the ┃ gutter + ◆ marker.
+# Permission option rows use "┃  N (○)" / "┃  z (○)" instead.
+line_regex = ['^\s*┃\s+◆\s+\S']
+
+[[rules]]
+id = "waiting_on_subagent_working"
+state = "working"
+priority = 1142
+region = "whole_recent"
+visible_working = true
+any = [
+  { contains = ["waiting on subagent"] },
+  { contains = ["waiting for subagent"] },
+  { regex = ['\bwaiting on \d+ (?:background )?(?:task|command|subagent)s?\b'] },
+]
 
 [[rules]]
 id = "osc_title_idle"
 state = "idle"
-priority = 1100
+priority = 1140
 region = "osc_title"
 visible_idle = true
-regex = ['(?:^| - )grok$']
+regex = ['(?i)(?:^|.*[\s\-_—–])grok(?:[\s\-_—–].*)?\s*$']
 not = [
   { regex = ['[\x{2800}-\x{28FF}]'] },
+  { contains = ["[stop]"] },
 ]
 
-# After known idle titles are excluded, any other non-empty Grok title is
-# active. OSC progress remains authoritative when a custom title omits the
-# spinner but the terminal supports progress reporting.
+# Active title with spinner or [stop] chip.
 [[rules]]
 id = "osc_title_working"
 state = "working"
 priority = 1000
 region = "osc_title"
 visible_working = true
-regex = ['\S']
+any = [
+  { regex = ['[\x{2800}-\x{28FF}]'] },
+  { contains = ["[stop]"] },
+]
+
+# Deprioritized below prompt/title idle rules because Grok 1.0.x does not clear 9;4 progress on yield.
+[[rules]]
+id = "osc_progress_working"
+state = "working"
+priority = 900
+region = "osc_progress"
+visible_working = true
+regex = ['^4;1;-1$']
 
 [[rules]]
 id = "osc_progress_idle"
 state = "idle"
-priority = 950
+priority = 850
 region = "osc_progress"
 visible_idle = true
 regex = ['^4;0;0$']
@@ -118,6 +177,7 @@ state = "working"
 priority = 200
 region = "whole_recent"
 visible_working = true
+# Allow optional [↓]/chips between the status text and [stop].
 line_regex = ['^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$']
 
 [[rules]]
@@ -126,7 +186,7 @@ state = "working"
 priority = 190
 region = "bottom_non_empty_lines(2)"
 visible_working = true
-contains = ["esc:cancel", "ctrl+.:shortcuts"]
+contains = ["esc:cancel"]
 
 # Pre-0.2.x working chrome kept for older Grok Build releases.
 [[rules]]
@@ -138,16 +198,4 @@ visible_working = true
 any = [
   { all = [{ contains = ["ctrl+c:cancel", "ctrl+enter:interject"] }, { contains = ["waiting"] }] },
   { line_regex = ['^\s*[\x{2801}-\x{28FF}]\s+(Run|Read|Search|List)\b'] },
-]
-
-[[rules]]
-id = "prompt_hints_idle"
-state = "idle"
-priority = 100
-region = "bottom_non_empty_lines(2)"
-visible_idle = true
-contains = ["ctrl+.:shortcuts"]
-not = [
-  { contains = ["esc:cancel"] },
-  { contains = ["ctrl+c:cancel"] },
 ]

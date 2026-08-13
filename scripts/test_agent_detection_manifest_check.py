@@ -73,6 +73,7 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
                 check.validate_catalog(website, bundled_manifests, engine_version=1)
 
+    @unittest.skipUnless(check.STAGED_WEBSITE_MANIFESTS, "no staged website manifests configured")
     def test_allows_explicitly_staged_website_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, website = staged_grok_dirs(Path(tmp))
@@ -80,6 +81,7 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
             check.validate_catalog(website, bundled_manifests, engine_version=3)
 
+    @unittest.skipUnless(check.STAGED_WEBSITE_MANIFESTS, "no staged website manifests configured")
     def test_rejects_mutated_staged_website_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, website = staged_grok_dirs(Path(tmp))

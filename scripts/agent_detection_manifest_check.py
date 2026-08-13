@@ -56,13 +56,7 @@ MAX_MATCHER_CHARS = 512
 # Keep engine-2 clients on the OSC-capable manifest until an engine-3 release
 # can consume top_non_empty_lines. Remove this entry when the website publishes
 # the bundled Grok manifest.
-STAGED_WEBSITE_MANIFESTS = {
-    "grok": (
-        "2026.07.16.2",
-        "2026.07.16.1",
-        "1f35b3271a96cf830c64bed78751619bfd8013c277c0d7c0f999b7a433895f28",
-    ),
-}
+STAGED_WEBSITE_MANIFESTS = {}
 
 
 def parse_args() -> argparse.Namespace:
