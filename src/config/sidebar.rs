@@ -424,11 +424,30 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+pub enum SidebarWheelConfig {
+    #[default]
+    #[serde(rename = "switch")]
+    Switch,
+    #[serde(rename = "scroll")]
+    Scroll,
+}
+
+impl SidebarWheelConfig {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Switch => "switch",
+            Self::Scroll => "scroll",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    pub wheel: SidebarWheelConfig,
 }
 
 #[cfg(test)]
@@ -644,5 +663,19 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
                 "accepted key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn wheel_defaults_to_switch() {
+        let config = SidebarConfig::default();
+        assert_eq!(config.wheel, SidebarWheelConfig::Switch);
+    }
+
+    #[test]
+    fn wheel_parses_switch_and_scroll() {
+        let switch: SidebarConfig = toml::from_str("wheel = 'switch'").unwrap();
+        assert_eq!(switch.wheel, SidebarWheelConfig::Switch);
+        let scroll: SidebarConfig = toml::from_str("wheel = 'scroll'").unwrap();
+        assert_eq!(scroll.wheel, SidebarWheelConfig::Scroll);
     }
 }
