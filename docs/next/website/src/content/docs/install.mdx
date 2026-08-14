@@ -118,7 +118,7 @@ Herdr checks for new releases and notifies you in the app. You can update manual
 herdr update
 ```
 
-Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
+Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, pixi, and Nix installs through those package managers instead.
 
 On Linux and macOS, Herdr uses the stable update channel by default. To opt into preview builds from `master`, set the channel:
 
@@ -134,7 +134,7 @@ herdr channel set stable
 
 For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
 
-Preview builds are manually published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
+Preview builds are manually published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, pixi, and Nix installs do not use the preview channel.
 
 Windows beta builds are preview-only for now. `herdr channel set stable` is rejected on Windows until stable Windows releases are available.
 
@@ -146,7 +146,7 @@ To opt into experimental live server handoff for supported running sessions, run
 herdr update --handoff
 ```
 
-Live handoff does not apply to Homebrew, mise, or Nix package-manager updates. For those installs, update with the package manager, then restart that Herdr session when you are ready to use the new server. If a running session still uses the old server, stop it with `herdr server stop` or `herdr session stop <name>`, then run Herdr again.
+Live handoff does not apply to Homebrew, mise, pixi, or Nix package-manager updates. For those installs, update with the package manager, then restart that Herdr session when you are ready to use the new server. If a running session still uses the old server, stop it with `herdr server stop` or `herdr session stop <name>`, then run Herdr again.
 
 ## Requirements
 

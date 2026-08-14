@@ -39,6 +39,16 @@ mise use -g herdr
 
 mise が `herdr not found in mise tool registry` と報告する場合は、mise をアップデートして再試行してください。古い mise は Herdr のレジストリ登録より前のバージョンです。一時的な回避策として `mise use -g github:herdrdev/herdr` も使えます。
 
+## pixi でインストール
+
+すでに pixi を使っている場合:
+
+```bash
+pixi global install herdr
+```
+
+これで Herdr がグローバル pixi 環境にインストールされます。インストール済みのバージョンを更新するには `pixi global update herdr` を使います。
+
 ## Nix でインストール
 
 すでに Nix を使っている場合、Herdr はソースからビルドする flake を提供しています:
@@ -118,7 +128,7 @@ Herdr は新しいリリースをチェックし、アプリ内で通知しま�
 herdr update
 ```
 
-`herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
+`herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、pixi、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
 
 Linux と macOS では、Herdr はデフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
 
@@ -134,7 +144,7 @@ herdr channel set stable
 
 直接インストールの場合、チャンネルの変更はそのチャンネルをチェックして最新バイナリをインストールします。そのアップデートが失敗した場合は、`herdr update` を実行して設定済みチャンネルから再試行してください。
 
-プレビュービルドは、現在の開発ブランチから手動で公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
+プレビュービルドは、現在の開発ブランチから手動で公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、pixi、Nix のインストールはプレビューチャンネルを使いません。
 
 Windows ベータビルドは今のところプレビュー限定です。安定版の Windows リリースが提供されるまで、Windows では `herdr channel set stable` は拒否されます。
 
@@ -146,7 +156,7 @@ Windows ベータビルドは今のところプレビュー限定です。安定
 herdr update --handoff
 ```
 
-ライブハンドオフは Homebrew、mise、Nix のパッケージマネージャー経由のアップデートには適用されません。それらのインストールではパッケージマネージャーでアップデートし、新しいサーバーを使う準備ができたらその Herdr セッションを再起動してください。実行中のセッションがまだ古いサーバーを使っている場合は、`herdr server stop` または `herdr session stop <name>` で停止してから、再度 Herdr を実行します。
+ライブハンドオフは Homebrew、mise、pixi、Nix のパッケージマネージャー経由のアップデートには適用されません。それらのインストールではパッケージマネージャーでアップデートし、新しいサーバーを使う準備ができたらその Herdr セッションを再起動してください。実行中のセッションがまだ古いサーバーを使っている場合は、`herdr server stop` または `herdr session stop <name>` で停止してから、再度 Herdr を実行します。
 
 ## 動作要件
 

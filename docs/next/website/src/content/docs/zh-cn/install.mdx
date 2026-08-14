@@ -39,6 +39,16 @@ mise use -g herdr
 
 如果 mise 报 `herdr not found in mise tool registry`,请更新 mise 后重试。旧版 mise 早于 Herdr 的注册表条目;`mise use -g github:herdrdev/herdr` 可以作为临时兜底。
 
+## 用 pixi 安装
+
+如果你已经在用 pixi:
+
+```bash
+pixi global install herdr
+```
+
+这会把 Herdr 安装到全局 pixi 环境中。想更新已安装版本时，可以使用 `pixi global update herdr`。
+
 ## 用 Nix 安装
 
 如果你已经在用 Nix,Herdr 提供了一个从源码构建的 flake:
@@ -118,7 +128,7 @@ Herdr 会检查新版本并在应用内通知你。也可以手动更新:
 herdr update
 ```
 
-`herdr update` 适用于由 Herdr 自带安装器管理的安装。Homebrew、mise 和 Nix 安装请改用那些包管理器更新。
+`herdr update` 适用于由 Herdr 自带安装器管理的安装。Homebrew、mise、pixi 和 Nix 安装请改用那些包管理器更新。
 
 在 Linux 和 macOS 上,Herdr 默认使用稳定更新通道。要启用来自 `master` 的预览构建,设置通道:
 
@@ -134,7 +144,7 @@ herdr channel set stable
 
 对于直接安装,切换通道时也会检查该通道并安装其最新二进制文件。如果该更新失败,运行 `herdr update` 从配置的通道重试。
 
-预览构建是从当前开发分支手动发布的 GitHub 预发布。当你想在下一个稳定版之前拿到修复时很有用,但它们可能出现回归。Homebrew、mise 和 Nix 安装不使用预览通道。
+预览构建是从当前开发分支手动发布的 GitHub 预发布。当你想在下一个稳定版之前拿到修复时很有用,但它们可能出现回归。Homebrew、mise、pixi 和 Nix 安装不使用预览通道。
 
 Windows 测试版构建目前仅限预览通道。在稳定的 Windows 发布可用之前,Windows 上的 `herdr channel set stable` 会被拒绝。
 
@@ -146,7 +156,7 @@ Windows 测试版构建目前仅限预览通道。在稳定的 Windows 发布可
 herdr update --handoff
 ```
 
-实时交接不适用于 Homebrew、mise 或 Nix 的包管理器更新。这些安装先用包管理器更新,然后在准备好使用新服务器时重启那个 Herdr 会话。如果运行中的会话仍在使用旧服务器,用 `herdr server stop` 或 `herdr session stop <name>` 停止它,再重新运行 Herdr。
+实时交接不适用于 Homebrew、mise、pixi 或 Nix 的包管理器更新。这些安装先用包管理器更新,然后在准备好使用新服务器时重启那个 Herdr 会话。如果运行中的会话仍在使用旧服务器,用 `herdr server stop` 或 `herdr session stop <name>` 停止它,再重新运行 Herdr。
 
 ## 系统要求
 
