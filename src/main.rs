@@ -130,6 +130,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Accepts: hex (#rrggbb), named colors, rgb(r,g,b), or panel_bg = "reset"
 # [theme.custom]
 # sidebar_bg = "#181825"
+# active_row_bg = "#313244"
 # panel_bg = "reset"
 # accent = "#f5c2e7"
 # red = "#ff6188"

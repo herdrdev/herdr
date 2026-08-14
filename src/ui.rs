@@ -1072,7 +1072,7 @@ mod tests {
         let active_row = ws_area.y + 1;
         let active_style = buffer[(ws_area.x, active_row)].style();
 
-        assert_eq!(active_style.bg, Some(app.palette.surface_dim));
+        assert_eq!(active_style.bg, Some(app.palette.active_row_bg));
     }
 
     #[test]

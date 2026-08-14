@@ -59,6 +59,12 @@
           "description": "Set the desktop sidebar background without changing other panel surfaces. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
         },
         {
+          "key": "theme.custom.active_row_bg",
+          "type": "color",
+          "default": "unset",
+          "description": "Set the active Space and focused Agent row background without changing separators or scrollbar tracks. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        },
+        {
           "key": "theme.custom.surface0",
           "type": "color",
           "default": "unset",

@@ -103,6 +103,7 @@ pub struct CustomThemeColors {
     pub accent: Option<String>,
     pub panel_bg: Option<String>,
     pub sidebar_bg: Option<String>,
+    pub active_row_bg: Option<String>,
     pub surface0: Option<String>,
     pub surface1: Option<String>,
     pub surface_dim: Option<String>,
@@ -264,6 +265,7 @@ name = "nord"
 [theme.custom]
 panel_bg = "#1e1e2e"
 sidebar_bg = "#181825"
+active_row_bg = "#313244"
 accent = "#ff79c6"
 red = "rgb(255, 85, 85)"
 "##;
@@ -272,6 +274,7 @@ red = "rgb(255, 85, 85)"
         let custom = config.theme.custom.as_ref().unwrap();
         assert_eq!(custom.panel_bg.as_deref(), Some("#1e1e2e"));
         assert_eq!(custom.sidebar_bg.as_deref(), Some("#181825"));
+        assert_eq!(custom.active_row_bg.as_deref(), Some("#313244"));
         assert_eq!(custom.accent.as_deref(), Some("#ff79c6"));
         assert_eq!(custom.red.as_deref(), Some("rgb(255, 85, 85)"));
         assert!(custom.green.is_none());

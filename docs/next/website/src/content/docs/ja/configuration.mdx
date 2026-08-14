@@ -239,6 +239,7 @@ dark_name = "catppuccin"
 ```toml
 [theme.custom]
 sidebar_bg = "#181825"
+active_row_bg = "#313244"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -247,7 +248,7 @@ red = "#f38ba8"
 yellow = "#f9e2af"
 ```
 
-`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。
+`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。`active_row_bg` は、区切り線やスクロールバートラックに影響を与えず、アクティブな Space とフォーカス中の Agent 行の背景色を変更します。
 
 色の値には、hex、名前付きの色、`rgb(r,g,b)`、または `reset`、`default`、`none`、`transparent` のようなリセットエイリアスが使えます。
 
