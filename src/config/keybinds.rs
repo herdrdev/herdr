@@ -1021,8 +1021,11 @@ fn reject_binding(
     diagnostics: &mut Vec<String>,
     source: BindingSource,
 ) -> bool {
-    if binding.trigger.is_prefix() && registry.prefix_rhs_is_reserved(binding.trigger.combo()) {
-        if source == BindingSource::Default && registry.prefix_source == BindingSource::User {
+    if binding.trigger.is_prefix()
+        && registry.prefix_rhs_is_reserved(binding.trigger.combo())
+        && source == BindingSource::Default
+    {
+        if registry.prefix_source == BindingSource::User {
             return true;
         }
         let diag = format!(
@@ -1778,22 +1781,20 @@ close_tab = "X"
     }
 
     #[test]
-    fn prefix_rhs_equal_to_configured_prefix_is_rejected() {
+    fn user_binding_can_override_double_prefix_passthrough() {
         let config: Config = toml::from_str(
             r#"
 [keys]
 prefix = "ctrl+a"
-help = "prefix+ctrl+a"
+zoom = "prefix+ctrl+a"
 "#,
         )
         .unwrap();
-        let diagnostics = config.collect_diagnostics();
-        assert!(config.keybinds().help.bindings.is_empty());
-        assert!(diagnostics.iter().any(|diag| {
-            diag.contains("reserved keybinding")
-                && diag.contains("keys.help")
-                && diag.contains("keys.prefix")
-        }));
+        let keybinds = config.keybinds();
+        assert!(keybinds
+            .zoom
+            .matches_prefix_key(&TerminalKey::new(KeyCode::Char('a'), KeyModifiers::CONTROL,)));
+        assert!(config.collect_diagnostics().is_empty());
 
         let config: Config = toml::from_str(
             r#"
@@ -1935,7 +1936,7 @@ navigate_workspace_down = "ctrl+a"
     }
 
     #[test]
-    fn custom_command_prefix_rhs_equal_to_configured_prefix_is_rejected() {
+    fn user_command_can_override_double_prefix_passthrough() {
         let config: Config = toml::from_str(
             r#"
 [keys]
@@ -1943,15 +1944,16 @@ prefix = "ctrl+b"
 
 [[keys.command]]
 key = "prefix+ctrl+b"
-command = "echo no"
+command = "echo yes"
 "#,
         )
         .unwrap();
-        let diagnostics = config.collect_diagnostics();
-        assert!(config.keybinds().custom_commands.is_empty());
-        assert!(diagnostics.iter().any(|diag| {
-            diag.contains("reserved keybinding") && diag.contains("keys.command[0].key")
-        }));
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.custom_commands.len(), 1);
+        assert!(keybinds.custom_commands[0]
+            .bindings
+            .matches_prefix_key(&TerminalKey::new(KeyCode::Char('b'), KeyModifiers::CONTROL,)));
+        assert!(config.collect_diagnostics().is_empty());
     }
 
     #[test]

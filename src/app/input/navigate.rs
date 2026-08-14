@@ -65,16 +65,6 @@ impl App {
             return;
         }
 
-        if self.state.is_prefix_key(&raw_key) {
-            if self.state.copy_mode_pane_is_focused() {
-                self.state.cancel_copy_mode(&self.terminal_runtimes);
-            }
-            if !self.pass_through_key_to_focused_pane(raw_key) {
-                leave_command_mode(&mut self.state);
-            }
-            return;
-        }
-
         if key.code == KeyCode::Esc {
             leave_command_mode(&mut self.state);
             return;
@@ -97,6 +87,16 @@ impl App {
             indexed_navigation_action(&self.state, &raw_key, BindingDispatch::Prefix)
         {
             self.execute_prefix_key_action(action);
+            return;
+        }
+
+        if self.state.is_prefix_key(&raw_key) {
+            if self.state.copy_mode_pane_is_focused() {
+                self.state.cancel_copy_mode(&self.terminal_runtimes);
+            }
+            if !self.pass_through_key_to_focused_pane(raw_key) {
+                leave_command_mode(&mut self.state);
+            }
             return;
         }
 
@@ -3226,6 +3226,69 @@ navigate_pane_down = "ctrl+j"
 
         assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[tokio::test]
+    async fn configured_double_prefix_toggles_zoom() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+s"
+zoom = "prefix+ctrl+s"
+"#,
+        )
+        .unwrap();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        let mut workspace = Workspace::test_new("test");
+        workspace.test_split(Direction::Horizontal);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        assert!(!app.state.workspaces[0].tabs[0].zoomed);
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+
+        assert!(app.state.workspaces[0].tabs[0].zoomed);
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn escape_precedes_configured_prefix_action() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+s"
+zoom = "prefix+esc"
+"#,
+        )
+        .unwrap();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        let mut workspace = Workspace::test_new("test");
+        workspace.test_split(Direction::Horizontal);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert!(!app.state.workspaces[0].tabs[0].zoomed);
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[tokio::test]
