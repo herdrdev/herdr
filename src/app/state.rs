@@ -991,6 +991,17 @@ pub enum AgentPanelSort {
     Priority,
 }
 
+/// How entries in the sidebar spaces section are ordered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SpacesSort {
+    /// Manual order (the order in which spaces/workspaces were added or
+    /// reordered by the user). This is the default behavior.
+    #[default]
+    Manual,
+    /// Sort by agent attention priority, most urgent first.
+    Priority,
+}
+
 // ---------------------------------------------------------------------------
 // Settings UI state
 // ---------------------------------------------------------------------------
@@ -1440,6 +1451,8 @@ pub struct AppState {
     /// Ratio of sidebar height allocated to the workspaces section.
     pub sidebar_section_split: f32,
     pub agent_panel_sort: AgentPanelSort,
+    /// How entries in the sidebar spaces section are ordered.
+    pub spaces_sort: SpacesSort,
     pub status_indicators: crate::config::StatusIndicatorStyle,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
@@ -1811,6 +1824,7 @@ impl AppState {
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
+            spaces_sort: SpacesSort::Manual,
             status_indicators: crate::config::StatusIndicatorStyle::Dots,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),

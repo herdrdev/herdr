@@ -256,6 +256,13 @@ fn agent_panel_sort_from_config(
     }
 }
 
+fn spaces_sort_from_config(sort: crate::config::SpacesSortConfig) -> state::SpacesSort {
+    match sort {
+        crate::config::SpacesSortConfig::Manual => state::SpacesSort::Manual,
+        crate::config::SpacesSortConfig::Priority => state::SpacesSort::Priority,
+    }
+}
+
 /// Parse the configured agent name list into a deduplicated set of `Agent`
 /// values. Unknown agent names are silently dropped so a typo cannot disable
 /// other valid entries.
@@ -476,6 +483,7 @@ impl App {
         };
 
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
+        let spaces_sort = spaces_sort_from_config(config.ui.spaces_sort);
 
         // Validate sidebar bounds before they reach any `u16::clamp(min, max)`
         // call: `clamp` panics when `min > max`. On bad config, fall back to
@@ -630,6 +638,7 @@ impl App {
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_section_split,
             agent_panel_sort,
+            spaces_sort,
             status_indicators: config.ui.status_indicators,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
@@ -1501,6 +1510,7 @@ impl App {
                 self.configure_window_title(&config.ui.window_title);
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
+                self.state.spaces_sort = spaces_sort_from_config(config.ui.spaces_sort);
                 self.state.status_indicators = config.ui.status_indicators;
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
@@ -2739,6 +2749,17 @@ mod tests {
     }
 
     #[test]
+    fn startup_uses_configured_spaces_sort() {
+        let mut config = Config::default();
+        config.ui.spaces_sort = crate::config::SpacesSortConfig::Priority;
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+
+        assert_eq!(app.state.spaces_sort, state::SpacesSort::Priority);
+    }
+
+    #[test]
     fn startup_uses_configured_sidebar_state() {
         let mut config = Config::default();
         config.ui.sidebar_start_collapsed = true;
@@ -3580,6 +3601,28 @@ mod tests {
         );
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("status_indicators = \"symbols\""));
+        assert!(app.state.config_diagnostic.is_none());
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn save_spaces_sort_persists_then_applies_live_config() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("save-spaces-sort");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "onboarding = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert_eq!(app.state.spaces_sort, state::SpacesSort::Manual);
+
+        app.save_spaces_sort(state::SpacesSort::Priority);
+
+        assert_eq!(app.state.spaces_sort, state::SpacesSort::Priority);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("spaces_sort = \"priority\""));
         assert!(app.state.config_diagnostic.is_none());
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

@@ -390,6 +390,7 @@ impl App {
         }
 
         let previous_agent_panel_sort = self.state.agent_panel_sort;
+        let previous_spaces_sort = self.state.spaces_sort;
         let previous_settings_section = self.state.settings.section;
         if !handled_pane_double_click {
             if let Some(action) =
@@ -465,6 +466,9 @@ impl App {
         }
         if self.state.agent_panel_sort != previous_agent_panel_sort {
             self.save_agent_panel_sort(self.state.agent_panel_sort);
+        }
+        if self.state.spaces_sort != previous_spaces_sort {
+            self.save_spaces_sort(self.state.spaces_sort);
         }
 
         self.dispatch_pending_clipboard_write();

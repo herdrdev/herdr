@@ -326,8 +326,9 @@ impl AppState {
             return None;
         }
 
+        let order = crate::ui::workspace_index_order(self);
         let idx = (row - ws_area.y) as usize;
-        (idx < self.workspaces.len()).then_some(idx)
+        order.get(idx).copied()
     }
 
     pub(super) fn collapsed_agent_detail_target_at(
@@ -482,6 +483,23 @@ impl AppState {
             && row < rect.y + rect.height
     }
 
+    pub(super) fn on_spaces_sort_toggle(&self, col: u16, row: u16) -> bool {
+        if self.sidebar_collapsed {
+            return false;
+        }
+
+        let (ws_area, _) = crate::ui::expanded_sidebar_sections(
+            self.view.sidebar_rect,
+            self.sidebar_section_split,
+        );
+        let rect = crate::ui::spaces_sort_toggle_rect(ws_area, self.spaces_sort);
+        rect.width > 0
+            && col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height
+    }
+
     pub(super) fn agent_detail_target_at(
         &self,
         row: u16,
@@ -530,7 +548,7 @@ mod tests {
 
     use super::super::{app_for_mouse_test, capture_snapshot, mouse, unique_temp_path};
     use crate::{
-        app::state::{AgentPanelSort, DragTarget, Mode},
+        app::state::{AgentPanelSort, DragTarget, Mode, SpacesSort},
         config::SidebarCollapsedModeConfig,
         detect::{Agent, AgentState},
         workspace::Workspace,
@@ -868,6 +886,30 @@ mod tests {
     }
 
     #[test]
+    fn clicking_spaces_toggle_switches_sort() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.workspace_scroll = 3;
+
+        let (ws_area, _) = crate::ui::expanded_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_section_split,
+        );
+        let toggle = crate::ui::spaces_sort_toggle_rect(ws_area, app.state.spaces_sort);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            toggle.x,
+            toggle.y,
+        ));
+
+        assert_eq!(app.state.spaces_sort, SpacesSort::Priority);
+        assert_eq!(app.state.workspace_scroll, 0);
+    }
+
+    #[test]
     fn clicking_all_workspaces_agent_row_switches_to_correct_workspace() {
         let mut app = app_for_mouse_test();
         let first = Workspace::test_new("one");
@@ -1135,6 +1177,51 @@ mod tests {
             app.state.workspaces[1].tabs[0].layout.focused(),
             second_pane
         );
+    }
+
+    #[test]
+    fn clicking_collapsed_workspace_glance_uses_priority_spaces_sort() {
+        let mut app = app_for_mouse_test();
+        let idle = Workspace::test_new("idle");
+        let idle_pane = idle.tabs[0].root_pane;
+        let working = Workspace::test_new("working");
+        let working_pane = working.tabs[0].root_pane;
+        let blocked = Workspace::test_new("blocked");
+        let blocked_pane = blocked.tabs[0].root_pane;
+
+        app.state.workspaces = vec![idle, working, blocked];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.sidebar_collapsed = true;
+        app.state.spaces_sort = SpacesSort::Priority;
+        app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
+        app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
+
+        let set_state = |app: &mut crate::app::App, ws_idx: usize, pane_id, state| {
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        };
+        set_state(&mut app, 0, idle_pane, AgentState::Idle);
+        set_state(&mut app, 1, working_pane, AgentState::Working);
+        set_state(&mut app, 2, blocked_pane, AgentState::Blocked);
+
+        let (ws_area, _, _) =
+            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        // Top glance row is the blocked workspace (idx 2) under priority sort.
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            ws_area.x,
+            ws_area.y,
+        ));
+
+        assert_eq!(app.state.active, Some(2));
+        assert_eq!(app.state.selected, 2);
     }
 
     #[test]

@@ -776,6 +776,16 @@
           ]
         },
         {
+          "key": "ui.spaces_sort",
+          "type": "enum",
+          "default": "\"manual\"",
+          "description": "Spaces sidebar ordering. Saved values are \"manual\" or \"priority\". Manual keeps the order in which spaces were added or reordered.",
+          "values": [
+            "manual",
+            "priority"
+          ]
+        },
+        {
           "key": "ui.status_indicators",
           "type": "enum",
           "default": "\"dots\"",

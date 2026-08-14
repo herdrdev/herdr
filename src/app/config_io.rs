@@ -125,4 +125,25 @@ impl App {
             self.apply_config_from_disk(false);
         }
     }
+
+    pub(super) fn save_spaces_sort(&mut self, sort: crate::app::state::SpacesSort) {
+        let value = match sort {
+            crate::app::state::SpacesSort::Manual => {
+                crate::config::SpacesSortConfig::Manual.as_str()
+            }
+            crate::app::state::SpacesSort::Priority => {
+                crate::config::SpacesSortConfig::Priority.as_str()
+            }
+        };
+        if self.update_config_file("spaces sort", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "ui",
+                "spaces_sort",
+                &format!("\"{value}\""),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
 }

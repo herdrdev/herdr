@@ -12,7 +12,7 @@ use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
 use super::status::{state_icon, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
-use crate::app::state::{AgentPanelSort, Palette};
+use crate::app::state::{AgentPanelSort, Palette, SpacesSort};
 use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
@@ -86,21 +86,32 @@ fn agent_panel_sort_label(sort: AgentPanelSort) -> &'static str {
 }
 
 pub(crate) fn agent_panel_toggle_rect(area: Rect, sort: AgentPanelSort) -> Rect {
-    agent_panel_header_label_rect(area, agent_panel_sort_label(sort))
+    agent_panel_header_label_rect(area, agent_panel_sort_label(sort), 1)
 }
 
-fn agent_panel_header_label_rect(area: Rect, label: &str) -> Rect {
-    if area.width == 0 || area.height < 2 {
+fn agent_panel_header_label_rect(area: Rect, label: &str, row_offset: u16) -> Rect {
+    if area.width == 0 || area.height <= row_offset {
         return Rect::default();
     }
 
     let width = display_width_u16(label).min(area.width);
     Rect::new(
         area.x + area.width.saturating_sub(width),
-        area.y + 1,
+        area.y + row_offset,
         width,
         1,
     )
+}
+
+fn spaces_sort_label(sort: SpacesSort) -> &'static str {
+    match sort {
+        SpacesSort::Manual => "manual",
+        SpacesSort::Priority => "priority",
+    }
+}
+
+pub(crate) fn spaces_sort_toggle_rect(area: Rect, sort: SpacesSort) -> Rect {
+    agent_panel_header_label_rect(area, spaces_sort_label(sort), 0)
 }
 
 fn active_agent_view_label(app: &AppState) -> Option<&str> {
@@ -248,6 +259,31 @@ fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
     }
 }
 
+fn workspace_priority_rank(app: &AppState, ws_idx: usize) -> u8 {
+    let Some(ws) = app.workspaces.get(ws_idx) else {
+        return 0;
+    };
+    let (state, seen) = ws.aggregate_state(&app.terminals);
+    workspace_attention_priority(state, seen)
+}
+
+/// Workspace indices in sidebar display order. In `Priority` sort mode the
+/// order follows agent attention (most urgent first); otherwise natural index
+/// order. Shared by the expanded list and the collapsed sidebar glance.
+pub(crate) fn workspace_index_order(app: &AppState) -> Vec<usize> {
+    if matches!(app.spaces_sort, SpacesSort::Priority) {
+        let mut order = (0..app.workspaces.len()).collect::<Vec<_>>();
+        order.sort_by(|&a, &b| {
+            workspace_priority_rank(app, b)
+                .cmp(&workspace_priority_rank(app, a))
+                .then(a.cmp(&b))
+        });
+        order
+    } else {
+        (0..app.workspaces.len()).collect()
+    }
+}
+
 fn space_aggregate_state(app: &AppState, key: &str) -> (AgentState, bool) {
     app.workspaces
         .iter()
@@ -373,7 +409,9 @@ fn workspace_list_entries_inner(app: &AppState, force_expanded: bool) -> Vec<Wor
 
     let mut emitted_groups = std::collections::HashSet::<String>::new();
     let mut entries = Vec::new();
-    for (ws_idx, ws) in app.workspaces.iter().enumerate() {
+    let order = workspace_index_order(app);
+    for ws_idx in order {
+        let ws = &app.workspaces[ws_idx];
         let Some(space) = ws
             .worktree_space()
             .filter(|space| grouped_keys.contains(&space.key))
@@ -778,15 +816,16 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         return;
     }
 
-    for (visible_idx, ws) in app.workspaces.iter().enumerate() {
+    for (visible_idx, ws_idx) in workspace_index_order(app).iter().enumerate() {
         let y = ws_area.y + visible_idx as u16;
         if y >= ws_area.y + ws_area.height {
             break;
         }
+        let ws = &app.workspaces[*ws_idx];
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
         let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
-        let is_selected = visible_idx == app.selected && is_navigating;
-        let is_active = Some(visible_idx) == app.active;
+        let is_selected = *ws_idx == app.selected && is_navigating;
+        let is_active = Some(*ws_idx) == app.active;
         let row_style = if is_selected {
             Style::default().bg(p.surface0)
         } else if is_active {
@@ -1228,6 +1267,18 @@ fn render_workspace_list(
             )])),
             Rect::new(area.x, area.y, area.width, 1),
         );
+        let sort_label = spaces_sort_label(app.spaces_sort);
+        let sort_rect = spaces_sort_toggle_rect(area, app.spaces_sort);
+        if sort_rect != Rect::default() {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    sort_label,
+                    Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+                ))
+                .alignment(Alignment::Right),
+                sort_rect,
+            );
+        }
     }
 
     let metrics = workspace_list_scroll_metrics(app, area);
@@ -1447,7 +1498,7 @@ fn render_agent_detail(
     );
     let control_label = active_agent_view_label(app)
         .unwrap_or_else(|| agent_panel_sort_label(app.agent_panel_sort));
-    let toggle_rect = agent_panel_header_label_rect(area, control_label);
+    let toggle_rect = agent_panel_header_label_rect(area, control_label, 1);
     if toggle_rect != Rect::default() {
         let color = if app.agent_view_override.is_some() {
             p.accent
@@ -2204,6 +2255,61 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
     }
 
+    #[test]
+    fn collapsed_sidebar_glance_follows_priority_spaces_sort() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("idle"),
+            Workspace::test_new("working"),
+            Workspace::test_new("blocked"),
+        ];
+        app.ensure_test_terminals();
+
+        let mut set_state = |ws_idx: usize, state: crate::detect::AgentState| {
+            let ws = &app.workspaces[ws_idx];
+            let pane = ws.tabs[0].root_pane;
+            let terminal_id = ws.terminal_id(pane).expect("pane terminal").clone();
+            let mut terminal = crate::terminal::TerminalState::new(
+                terminal_id.clone(),
+                std::path::PathBuf::from("/tmp"),
+            );
+            terminal.state = state;
+            app.terminals.insert(terminal_id, terminal);
+        };
+        set_state(0, crate::detect::AgentState::Idle);
+        set_state(1, crate::detect::AgentState::Working);
+        set_state(2, crate::detect::AgentState::Blocked);
+
+        // Manual (default) keeps natural order.
+        app.spaces_sort = SpacesSort::Manual;
+        assert_eq!(workspace_index_order(&app), vec![0, 1, 2]);
+
+        // Priority sorts most urgent first: blocked (2), working (1), idle (0).
+        app.spaces_sort = SpacesSort::Priority;
+        assert_eq!(workspace_index_order(&app), vec![2, 1, 0]);
+
+        // The selected blocked workspace is rendered at the top glance row and
+        // numbered 1, so the glance is not purely numeric.
+        app.active = None;
+        app.selected = 2;
+        app.mode = Mode::Navigate;
+        app.palette.sidebar_bg = ratatui::style::Color::Rgb(12, 34, 56);
+        let area = Rect::new(0, 0, 4, 12);
+        let (ws_area, _, _) = collapsed_sidebar_sections(area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(ws_area.x, ws_area.y)].symbol(), "1");
+        assert_eq!(buffer[(ws_area.x, ws_area.y + 1)].symbol(), "2");
+        assert_eq!(buffer[(ws_area.x, ws_area.y + 2)].symbol(), "3");
+        assert_eq!(buffer[(ws_area.x, ws_area.y)].bg, app.palette.surface0);
+        assert_eq!(buffer[(ws_area.x, ws_area.y + 2)].bg, app.palette.sidebar_bg);
+    }
+
     /// Two agent panes in one workspace plus a second workspace, so the
     /// assertions can tell pane-level highlighting apart from workspace-level.
     fn collapsed_agent_app() -> (crate::app::state::AppState, PaneId, PaneId) {
@@ -2585,6 +2691,40 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 15, 6), false)
             })
             .expect("workspace list should render");
+    }
+
+    #[test]
+    fn spaces_header_keeps_title_and_sort_toggle_on_the_same_row() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
+        app.view.workspace_card_areas = vec![crate::app::state::WorkspaceCardArea {
+            ws_idx: 0,
+            rect: Rect::new(0, 2, 20, 2),
+            indented: false,
+        }];
+
+        let mut terminal = Terminal::new(TestBackend::new(20, 6)).expect("test terminal");
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        terminal
+            .draw(|frame| {
+                render_workspace_list(&app, &runtimes, frame, Rect::new(0, 0, 20, 6), false)
+            })
+            .expect("workspace list should render");
+
+        let buffer = terminal.backend().buffer();
+        let header_row = row_text(buffer, 0, 20);
+        assert!(
+            header_row.contains("spaces") && header_row.contains("manual"),
+            "expected title and sort toggle on the same header row, got {header_row:?}"
+        );
+        let second_row = row_text(buffer, 1, 20);
+        assert!(
+            !second_row.contains("manual"),
+            "sort toggle must not sit on its own row below the title, got {second_row:?}"
+        );
     }
 
     fn workspace_with_worktree_space(
@@ -2986,6 +3126,71 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 WorkspaceListEntry::Workspace {
                     ws_idx: 1,
                     indented: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn workspace_list_priority_sort_orders_by_attention() {
+        let mut app = AppState::test_new();
+        let ws_idle = Workspace::test_new("idle");
+        let ws_working = Workspace::test_new("working");
+        let ws_blocked = Workspace::test_new("blocked");
+        // Manual order is reversed relative to attention so the sort is visible.
+        app.workspaces = vec![ws_idle, ws_working, ws_blocked];
+
+        let mut set_state = |ws_idx: usize, state: crate::detect::AgentState| {
+            let ws = &app.workspaces[ws_idx];
+            let pane = ws.tabs[0].root_pane;
+            let terminal_id = ws.terminal_id(pane).expect("pane terminal").clone();
+            let mut terminal = crate::terminal::TerminalState::new(
+                terminal_id.clone(),
+                std::path::PathBuf::from("/tmp"),
+            );
+            terminal.state = state;
+            app.terminals.insert(terminal_id, terminal);
+        };
+        set_state(1, crate::detect::AgentState::Working);
+        set_state(2, crate::detect::AgentState::Blocked);
+        set_state(0, crate::detect::AgentState::Idle);
+
+        // Manual (default) keeps workspace order.
+        app.spaces_sort = SpacesSort::Manual;
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false
+                },
+            ]
+        );
+
+        // Priority sorts most urgent first: blocked, working, idle.
+        app.spaces_sort = SpacesSort::Priority;
+        assert_eq!(
+            workspace_list_entries(&app),
+            vec![
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 2,
+                    indented: false
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 1,
+                    indented: false
+                },
+                WorkspaceListEntry::Workspace {
+                    ws_idx: 0,
+                    indented: false
                 },
             ]
         );
