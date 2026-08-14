@@ -1,0 +1,129 @@
+id = "bob"
+version = "2026.08.14.5"
+min_engine_version = 1
+updated_at = "2026-08-14T00:00:00Z"
+aliases = ["bobshell", "bob-shell"]
+
+# Evidence: bobshell 2.0.1 (release 2026-08-13) source analysis and live UI inspection.
+#
+# Bob Shell (IBM) renders a React/Ink TUI with a chat-style interface.
+# The executable is `bob` (from the `bobshell` npm package, bin: bob.js).
+#
+# Working state:
+#   When a task is running/streaming, the bottom of the chat shows a dots spinner
+#   followed by one of:
+#     "Processing… (Enter to steer, Tab to queue)"  — normal task mode
+#     "Processing…"                                  — editing queued message mode
+#   The spinner uses Ink's built-in "dots" type.
+#
+# Blocked — action approval dialogs (live evidence):
+#   Two variants share the same options/footer structure:
+#
+#   Command execution:
+#     Title:   "Execute Command"
+#     Section: "Approve commands:"
+#     Options: "→ Approve Once" / "Always Allow Command for task" / "Reject"
+#     Footer:  "Press Enter to confirm"
+#     Extra:   "Wait for input after execution: No (Tab to toggle)"
+#
+#   Skill use:
+#     Title:   "Use Skill <name>"
+#     Options: "→ Approve Once" / "Approve skill tools for task" / "Reject"
+#     Footer:  "Press Enter to confirm"
+#     Extra:   "Wait for input after execution: No (Tab to toggle)"
+#
+#   Invariants across both: "approve once", "reject", "press enter to confirm"
+#
+# Blocked — tool use approval (older inline style):
+#   Bob presents tool approval options inline:
+#     "Allow once"  "Always allow"  "Reject"  "Always reject"
+#   with footer "Enter to select · Esc to cancel"
+#
+# Blocked — folder trust prompt (on first run in a directory):
+#   Title: "Do you trust this folder?"
+#   Options: "Trust folder (name)", "Trust parent folder (name)", "Don't trust"
+#   Footer: "Press ESC or CTRL+C to exit"
+#
+# Blocked — task limit / cost limit error banners:
+#   "Task limit reached" with "Continue to double the limit"
+#   "Cost limit reached" with "Continue to double the limit"
+#
+# Blocked — content filter:
+#   "Request Blocked" shown in the chat
+#
+# Idle:
+#   No reliable single idle indicator exists beyond absence of working/blocked
+#   signals. The manifest relies on the working/blocked rules exhausting first
+#   and the known-agent fallback to idle.
+
+[[rules]]
+id = "processing_working"
+state = "working"
+priority = 880
+region = "bottom_non_empty_lines(3)"
+visible_working = true
+contains = ["Processing…"]
+not = [
+  { contains = ["editing queued message"] },
+]
+
+[[rules]]
+id = "processing_steer_hint_working"
+state = "working"
+priority = 860
+region = "whole_recent"
+visible_working = true
+contains = ["Processing…", "Enter to steer"]
+
+[[rules]]
+id = "approval_dialog_blocked"
+state = "blocked"
+priority = 820
+region = "whole_recent"
+visible_blocker = true
+contains = ["approve once", "press enter to confirm"]
+
+[[rules]]
+id = "tool_approval_footer_blocked"
+state = "blocked"
+priority = 800
+region = "whole_recent"
+visible_blocker = true
+contains = ["enter to select"]
+any = [
+  { contains = ["allow once"] },
+  { contains = ["always allow"] },
+  { contains = ["reject"] },
+]
+
+[[rules]]
+id = "trust_folder_blocked"
+state = "blocked"
+priority = 780
+region = "whole_recent"
+visible_blocker = true
+contains = ["do you trust this folder?"]
+any = [
+  { contains = ["trust folder"] },
+  { contains = ["don't trust"] },
+]
+
+[[rules]]
+id = "task_limit_blocked"
+state = "blocked"
+priority = 750
+region = "whole_recent"
+visible_blocker = true
+contains = ["continue to double the limit"]
+any = [
+  { contains = ["task limit reached"] },
+  { contains = ["cost limit reached"] },
+]
+
+[[rules]]
+id = "request_blocked"
+state = "blocked"
+priority = 700
+region = "whole_recent"
+visible_blocker = true
+contains = ["request blocked", "content filter"]
