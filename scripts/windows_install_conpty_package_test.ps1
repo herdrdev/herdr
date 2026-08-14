@@ -113,10 +113,56 @@ try {
         }
     }
 
-    & "$PSScriptRoot\..\website\install.ps1" `
-        -ManifestUrl $manifestUrl `
-        -InstallDir $installDir `
-        -ExpectedBuildId "installer-test"
+    # Keep the existing positional web-installer contract, including Retain in slot five.
+    & "$PSScriptRoot\..\website\install.ps1" "preview" $manifestUrl $installDir "installer-test" 3
+
+    $localInstallDir = Join-Path $root "local-bin"
+    $env:HERDR_HOME = Join-Path $root "local-home"
+    $partialLocalModeRejected = $false
+    try {
+        & $installerPath `
+            -InstallDir $localInstallDir `
+            -LocalPackagePath $archive
+    } catch {
+        if ($_.Exception.Message -notlike "Local package mode requires*") {
+            throw
+        }
+        $partialLocalModeRejected = $true
+    }
+    if (-not $partialLocalModeRejected) {
+        throw "installer accepted partial local-package inputs"
+    }
+
+    $badLocalChecksumRejected = $false
+    try {
+        & $installerPath `
+            -ManifestUrl "$manifestUrl/unused" `
+            -InstallDir $localInstallDir `
+            -LocalPackagePath $archive `
+            -LocalPackageFormat "zip" `
+            -LocalPackageIdentity "0.0.0-preview.local-package" `
+            -LocalPackageSha256 ("0" * 64)
+    } catch {
+        if ($_.Exception.Message -notlike "Downloaded Herdr checksum did not match.*") {
+            throw
+        }
+        $badLocalChecksumRejected = $true
+    }
+    if (-not $badLocalChecksumRejected) {
+        throw "installer accepted a local package with the wrong checksum"
+    }
+
+    & $installerPath `
+        -ManifestUrl "$manifestUrl/unused" `
+        -InstallDir $localInstallDir `
+        -LocalPackagePath $archive `
+        -LocalPackageFormat "zip" `
+        -LocalPackageIdentity "0.0.0-preview.local-package" `
+        -LocalPackageSha256 $hash
+    if (-not (Test-Path -LiteralPath (Join-Path $localInstallDir "herdr.exe") -PathType Leaf)) {
+        throw "installer did not activate the verified local package"
+    }
+    $env:HERDR_HOME = $herdrHome
 
     $required = @(
         "herdr.exe",
