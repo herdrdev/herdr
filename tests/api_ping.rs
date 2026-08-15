@@ -2531,3 +2531,101 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
 
     cleanup_spawned_herdr(child, base);
 }
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn pane_move_and_split_direction_round_trip_over_public_api() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"create","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let source_tab_id = created["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let source_pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let source_terminal_id = created["result"]["root_pane"]["terminal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let created_tab = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"tab","method":"tab.create","params":{{"workspace_id":"{}","focus":true}}}}"#,
+            workspace_id
+        ),
+    );
+    let target_tab_id = created_tab["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target_pane_id = created_tab["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let moved = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"move","method":"pane.move","params":{{"pane_id":"{}","destination":{{"type":"tab","tab_id":"{}","target_pane_id":"{}","split":"right"}},"focus":true}}}}"#,
+            source_pane_id, target_tab_id, target_pane_id
+        ),
+    );
+    assert_eq!(moved["result"]["type"], "pane_move");
+    assert_eq!(
+        moved["result"]["move_result"]["pane"]["pane_id"],
+        source_pane_id
+    );
+    assert_eq!(
+        moved["result"]["move_result"]["pane"]["terminal_id"],
+        source_terminal_id
+    );
+    assert_eq!(
+        moved["result"]["move_result"]["pane"]["tab_id"],
+        target_tab_id
+    );
+    assert_eq!(
+        moved["result"]["move_result"]["previous_tab_id"],
+        source_tab_id
+    );
+
+    let split = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"split","method":"pane.split","params":{{"target_pane_id":"{}","direction":"right","focus":false}}}}"#,
+            source_pane_id
+        ),
+    );
+    assert_eq!(split["result"]["type"], "pane_info");
+
+    let direction = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"direction","method":"layout.set_split_direction","params":{{"pane_id":"{}","direction":"down"}}}}"#,
+            source_pane_id
+        ),
+    );
+    assert_eq!(direction["result"]["type"], "layout_split_ratio_set");
+    assert!(direction["result"]["layout"]["root"].is_object());
+
+    cleanup_spawned_herdr(child, base);
+}

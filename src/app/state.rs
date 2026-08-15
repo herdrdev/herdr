@@ -1264,6 +1264,14 @@ impl ContextMenuState {
                 if source_pane_id.is_some() {
                     items.push("Swap with focused pane");
                 }
+                items.extend(["Swap to horizontal", "Swap to vertical"]);
+                items.extend([
+                    "Move to previous tab",
+                    "Move to next tab",
+                    "Move to previous workspace",
+                    "Move to next workspace",
+                    "Move to new workspace",
+                ]);
                 items.extend(["Split right", "Split down", "Zoom"]);
                 items.push(if right_click_passthrough {
                     "Use Herdr right-click menu"

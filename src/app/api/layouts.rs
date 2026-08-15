@@ -4,7 +4,8 @@ use ratatui::layout::Direction;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, LayoutApplyParams, LayoutDescription, LayoutExportParams,
-    LayoutNode, LayoutPane, LayoutSetSplitRatioParams, ResponseResult, SplitDirection,
+    LayoutNode, LayoutPane, LayoutSetSplitDirectionParams, LayoutSetSplitRatioParams,
+    ResponseResult, SplitDirection,
 };
 use crate::app::{App, Mode};
 use crate::layout::{Node, PaneId};
@@ -243,6 +244,43 @@ impl App {
             return encode_error(id, "split_not_found", "split path not found");
         }
 
+        self.schedule_session_save();
+        let Some(layout) = self.layout_description(ws_idx, tab_idx) else {
+            return encode_error(id, "layout_not_found", "layout unavailable");
+        };
+        self.emit_layout_updated_event(ws_idx, tab_idx);
+        encode_success(id, ResponseResult::LayoutSplitRatioSet { layout })
+    }
+
+    pub(super) fn handle_layout_set_split_direction(
+        &mut self,
+        id: String,
+        params: LayoutSetSplitDirectionParams,
+    ) -> String {
+        let Some((ws_idx, tab_idx)) = self.parse_pane_id(&params.pane_id).and_then(|(ws, pane)| {
+            self.state.workspaces[ws]
+                .find_tab_index_for_pane(pane)
+                .map(|tab| (ws, tab))
+        }) else {
+            return encode_error(id, "pane_not_found", "pane target not found");
+        };
+        let Some((_, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return encode_error(id, "pane_not_found", "pane target not found");
+        };
+        let direction = match params.direction {
+            SplitDirection::Right => ratatui::layout::Direction::Horizontal,
+            SplitDirection::Down => ratatui::layout::Direction::Vertical,
+        };
+        let changed = self.state.workspaces[ws_idx].tabs[tab_idx]
+            .layout
+            .set_split_direction_for_pane(pane_id, direction);
+        if !changed {
+            return encode_error(
+                id,
+                "split_not_found",
+                "split orientation unchanged or unavailable",
+            );
+        }
         self.schedule_session_save();
         let Some(layout) = self.layout_description(ws_idx, tab_idx) else {
             return encode_error(id, "layout_not_found", "layout unavailable");

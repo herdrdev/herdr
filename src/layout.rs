@@ -276,6 +276,11 @@ impl TileLayout {
         set_ratio_at(&mut self.root, path, ratio.clamp(0.1, 0.9))
     }
 
+    /// Set the nearest split containing `pane` to the requested orientation.
+    pub fn set_split_direction_for_pane(&mut self, pane: PaneId, direction: Direction) -> bool {
+        set_split_direction_for_pane(&mut self.root, pane, direction)
+    }
+
     /// Adjust the nearest split in the given direction for the focused pane.
     /// `delta` is positive to grow, negative to shrink.
     pub fn resize_focused(&mut self, nav: NavDirection, delta: f32, area: Rect) {
@@ -477,6 +482,37 @@ fn count_panes(node: &Node) -> usize {
     match node {
         Node::Pane(_) => 1,
         Node::Split { first, second, .. } => count_panes(first) + count_panes(second),
+    }
+}
+
+fn set_split_direction_for_pane(node: &mut Node, pane: PaneId, direction: Direction) -> bool {
+    match node {
+        Node::Pane(_) => false,
+        Node::Split {
+            direction: current,
+            first,
+            second,
+            ..
+        } => {
+            if contains_pane(first, pane) || contains_pane(second, pane) {
+                if *current == direction {
+                    return false;
+                }
+                *current = direction;
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn contains_pane(node: &Node, pane: PaneId) -> bool {
+    match node {
+        Node::Pane(id) => *id == pane,
+        Node::Split { first, second, .. } => {
+            contains_pane(first, pane) || contains_pane(second, pane)
+        }
     }
 }
 

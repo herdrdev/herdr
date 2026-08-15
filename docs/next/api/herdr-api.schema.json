@@ -2264,6 +2264,21 @@
             }
           ]
         },
+        "LayoutSetSplitDirectionParams": {
+          "properties": {
+            "direction": {
+              "$ref": "#/schemas/request/$defs/SplitDirection"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "direction"
+          ],
+          "type": "object"
+        },
         "LayoutSetSplitRatioParams": {
           "properties": {
             "pane_id": {
@@ -5235,6 +5250,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/LayoutSetSplitRatioParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "layout.set_split_direction",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/LayoutSetSplitDirectionParams"
             }
           },
           "required": [

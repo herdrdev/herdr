@@ -1093,6 +1093,9 @@ impl App {
             Method::LayoutSetSplitRatio(params) => {
                 return self.handle_layout_set_split_ratio(request.id, params);
             }
+            Method::LayoutSetSplitDirection(params) => {
+                return self.handle_layout_set_split_direction(request.id, params);
+            }
             Method::PaneNeighbor(params) => return self.handle_pane_neighbor(request.id, params),
             Method::PaneEdges(params) => return self.handle_pane_edges(request.id, params),
             Method::PaneFocusDirection(params) => {

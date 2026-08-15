@@ -299,7 +299,38 @@ pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
     let items: Vec<ListItem> = menu
         .items()
         .iter()
-        .map(|item| ListItem::new(Line::from(*item)))
+        .map(|item| {
+            let enabled = match (&menu.kind, *item) {
+                (
+                    crate::app::state::ContextMenuKind::Pane { tab_idx, .. },
+                    "Move to previous tab",
+                ) => *tab_idx > 0,
+                (
+                    crate::app::state::ContextMenuKind::Pane {
+                        ws_idx, tab_idx, ..
+                    },
+                    "Move to next tab",
+                ) => app
+                    .workspaces
+                    .get(*ws_idx)
+                    .is_some_and(|ws| *tab_idx + 1 < ws.tabs.len()),
+                (
+                    crate::app::state::ContextMenuKind::Pane { ws_idx, .. },
+                    "Move to previous workspace",
+                ) => *ws_idx > 0,
+                (
+                    crate::app::state::ContextMenuKind::Pane { ws_idx, .. },
+                    "Move to next workspace",
+                ) => *ws_idx + 1 < app.workspaces.len(),
+                _ => true,
+            };
+            let style = if enabled {
+                Style::default().fg(p.text)
+            } else {
+                Style::default().fg(p.overlay0)
+            };
+            ListItem::new(Line::from(*item).style(style))
+        })
         .collect();
     let list = List::new(items)
         .style(Style::default().fg(p.text))

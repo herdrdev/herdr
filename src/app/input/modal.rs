@@ -1273,6 +1273,88 @@ impl App {
                 ContextMenuKind::Pane {
                     ws_idx, pane_id, ..
                 },
+                Some("Swap to horizontal"),
+            ) => self.set_context_pane_split_direction(
+                ws_idx,
+                pane_id,
+                crate::api::schema::SplitDirection::Right,
+            ),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some("Swap to vertical"),
+            ) => self.set_context_pane_split_direction(
+                ws_idx,
+                pane_id,
+                crate::api::schema::SplitDirection::Down,
+            ),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx,
+                    tab_idx,
+                    pane_id,
+                    ..
+                },
+                Some("Move to previous tab"),
+            ) => self.move_context_pane_to_tab(ws_idx, pane_id, tab_idx.checked_sub(1)),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx,
+                    tab_idx,
+                    pane_id,
+                    ..
+                },
+                Some("Move to next tab"),
+            ) => self.move_context_pane_to_tab(
+                ws_idx,
+                pane_id,
+                self.state
+                    .workspaces
+                    .get(ws_idx)
+                    .and_then(|ws| (tab_idx + 1 < ws.tabs.len()).then_some(tab_idx + 1)),
+            ),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some("Move to previous workspace"),
+            ) => self.move_context_pane_to_workspace(ws_idx, pane_id, ws_idx.checked_sub(1)),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some("Move to next workspace"),
+            ) => self.move_context_pane_to_workspace(
+                ws_idx,
+                pane_id,
+                (ws_idx + 1 < self.state.workspaces.len()).then_some(ws_idx + 1),
+            ),
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some("Move to new workspace"),
+            ) => {
+                if let Some(source_pane_id) = self.public_pane_id(ws_idx, pane_id) {
+                    self.runtime_pane_move(
+                        "tui.pane.move.new_workspace",
+                        crate::api::schema::PaneMoveParams {
+                            pane_id: source_pane_id,
+                            destination: crate::api::schema::PaneMoveDestination::NewWorkspace {
+                                label: None,
+                                tab_label: None,
+                            },
+                            focus: true,
+                        },
+                    );
+                }
+                self.state.mode = Mode::Terminal;
+            }
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
                 Some("Clear pane name"),
             ) => {
                 if let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) {
@@ -1381,6 +1463,103 @@ impl App {
             }
             _ => leave_modal(&mut self.state),
         }
+    }
+
+    fn move_context_pane_to_tab(
+        &mut self,
+        source_ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        target_tab_idx: Option<usize>,
+    ) {
+        let Some(target_tab_idx) = target_tab_idx else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let Some(source_pane_id) = self.public_pane_id(source_ws_idx, pane_id) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let Some(tab_id) = self.public_tab_id(source_ws_idx, target_tab_idx) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let target_pane = self.state.workspaces[source_ws_idx].tabs[target_tab_idx]
+            .layout
+            .focused();
+        let Some(target_pane_id) = self.public_pane_id(source_ws_idx, target_pane) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        self.runtime_pane_move(
+            "tui.pane.move.tab",
+            crate::api::schema::PaneMoveParams {
+                pane_id: source_pane_id,
+                destination: crate::api::schema::PaneMoveDestination::Tab {
+                    tab_id,
+                    target_pane_id: Some(target_pane_id),
+                    split: crate::api::schema::SplitDirection::Right,
+                    ratio: None,
+                },
+                focus: true,
+            },
+        );
+        self.state.mode = Mode::Terminal;
+    }
+
+    fn set_context_pane_split_direction(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        direction: crate::api::schema::SplitDirection,
+    ) {
+        if let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) {
+            self.runtime_layout_set_split_direction(
+                "tui.layout.set_split_direction",
+                crate::api::schema::LayoutSetSplitDirectionParams { pane_id, direction },
+            );
+        }
+        self.state.mode = Mode::Terminal;
+    }
+
+    fn move_context_pane_to_workspace(
+        &mut self,
+        source_ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        target_ws_idx: Option<usize>,
+    ) {
+        let Some(target_ws_idx) = target_ws_idx else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let Some(source_pane_id) = self.public_pane_id(source_ws_idx, pane_id) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let Some(tab_id) = self.public_tab_id(target_ws_idx, 0) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        let target_pane = self.state.workspaces[target_ws_idx].tabs[0]
+            .layout
+            .focused();
+        let Some(target_pane_id) = self.public_pane_id(target_ws_idx, target_pane) else {
+            self.state.mode = Mode::Terminal;
+            return;
+        };
+        self.runtime_pane_move(
+            "tui.pane.move.workspace",
+            crate::api::schema::PaneMoveParams {
+                pane_id: source_pane_id,
+                destination: crate::api::schema::PaneMoveDestination::Tab {
+                    tab_id,
+                    target_pane_id: Some(target_pane_id),
+                    split: crate::api::schema::SplitDirection::Right,
+                    ratio: None,
+                },
+                focus: true,
+            },
+        );
+        self.state.mode = Mode::Terminal;
     }
 }
 

@@ -165,6 +165,12 @@ pub struct LayoutSetSplitRatioParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LayoutSetSplitDirectionParams {
+    pub pane_id: String,
+    pub direction: SplitDirection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LayoutDescription {
     pub workspace_id: String,
     pub tab_id: String,
