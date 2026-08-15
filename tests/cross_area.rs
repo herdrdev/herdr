@@ -1335,17 +1335,13 @@ fn pane_context_menu_moves_pane_to_new_workspace_in_live_tui() {
 
     // Write a marker into the pane so we can prove the process survived the move.
     let marker = "herdr_move_marker_9137";
-    pane_send_text(&api_socket, &root_pane, &format!("echo {marker}\n"));
-    assert!(
-        pane_read_recent_contains(&api_socket, &root_pane, marker, Duration::from_secs(10)),
-        "marker should appear in the source pane before moving"
-    );
 
     let workspaces_before = workspace_count(&api_socket);
 
     let mut client = UnixStream::connect(&client_socket).expect("client should connect");
     client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
     assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+    seed_pane_marker(&api_socket, &root_pane, marker);
 
     // Rename pane, Swap to horizontal, Swap to vertical, Move to previous tab,
     // Move to next tab, Move to previous workspace, Move to next workspace,
@@ -1374,6 +1370,435 @@ fn pane_context_menu_moves_pane_to_new_workspace_in_live_tui() {
     assert!(
         pane_read_recent_contains(&api_socket, moved, marker, Duration::from_secs(10)),
         "moved pane {moved} must keep its live terminal contents after the move"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+fn tab_create(socket_path: &Path, workspace_id: &str, focus: bool) -> Value {
+    send_json_request(
+        socket_path,
+        "tab_create",
+        "tab.create",
+        json!({ "workspace_id": workspace_id, "focus": focus }),
+    )
+}
+
+fn tab_ids(socket_path: &Path, workspace_id: &str) -> Vec<String> {
+    tab_list(socket_path, workspace_id)["result"]["tabs"]
+        .as_array()
+        .expect("tabs array")
+        .iter()
+        .filter_map(|tab| tab["tab_id"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Right-clicks a pane and returns the rendered frame text of the context menu,
+/// without activating anything. Used to assert entry presence and edge state.
+fn right_click_menu_text(client: &mut UnixStream, col: u16, row: u16) -> String {
+    drain_server_messages(client, Duration::from_millis(200));
+    send_client_input(client, &sgr_right_click(col, row));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        match read_server_message_payload(client, Duration::from_millis(120)) {
+            Ok((1, payload)) => {
+                if let Ok(frame) = decode_frame_payload(&payload) {
+                    let width = frame.width.max(1) as usize;
+                    let mut text = String::new();
+                    for chunk in frame.cells.chunks(width) {
+                        for cell in chunk {
+                            text.push_str(&cell.symbol);
+                        }
+                        text.push('\n');
+                    }
+                    if text.contains("Move to new workspace") {
+                        return text;
+                    }
+                    last = text;
+                }
+            }
+            Ok(_) => {}
+            Err(err) if is_timeout(&err) => {}
+            Err(_) => break,
+        }
+    }
+    last
+}
+
+fn close_menu(client: &mut UnixStream) {
+    send_client_input(client, b"\x1b");
+    thread::sleep(Duration::from_millis(200));
+    drain_server_messages(client, Duration::from_millis(200));
+}
+
+/// Writes a marker into a pane's live shell, retrying until it is readable.
+/// A freshly spawned pane may not have its shell ready on the first write,
+/// which otherwise makes marker-based identity checks flaky under load.
+fn seed_pane_marker(socket_path: &Path, pane_id: &str, marker: &str) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut attempt = 0;
+    while Instant::now() < deadline {
+        attempt += 1;
+        pane_send_text(socket_path, pane_id, &format!("echo {marker}\n"));
+        if pane_read_recent_contains(socket_path, pane_id, marker, Duration::from_secs(3)) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    panic!("marker {marker} never appeared in pane {pane_id} after {attempt} attempts");
+}
+
+/// Every new context-menu entry must render for a pane, and the tab/workspace
+/// movement entries must be present regardless of whether they are enabled.
+#[test]
+fn pane_context_menu_renders_all_new_entries_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "entries");
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    let text = right_click_menu_text(&mut client, 40, 6);
+    for entry in [
+        "Swap to horizontal",
+        "Swap to vertical",
+        "Move to previous tab",
+        "Move to next tab",
+        "Move to previous workspace",
+        "Move to next workspace",
+        "Move to new workspace",
+    ] {
+        assert!(
+            text.contains(entry),
+            "pane context menu must render {entry:?}; menu frame was:\n{text}"
+        );
+    }
+
+    close_menu(&mut client);
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// Activating a disabled edge entry must be a no-op rather than moving the
+/// pane. This is set up so a broken guard would have somewhere to move: the
+/// workspace has a second tab and a second workspace exists, but the pane sits
+/// on the FIRST tab of the FIRST workspace, where "previous" is out of range.
+/// A guard that clamps instead of refusing would relocate the pane and fail.
+#[test]
+fn pane_context_menu_edge_entries_are_inert_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "edges");
+    let ws_id = workspace_id_by_label(&workspace_list(&api_socket), "edges");
+    let first_tab = tab_ids(&api_socket, &ws_id)
+        .first()
+        .cloned()
+        .expect("first tab");
+
+    // Give a clamping bug a real destination: a second tab in this workspace.
+    tab_create(&api_socket, &ws_id, false);
+    let tabs = tab_ids(&api_socket, &ws_id);
+    assert_eq!(tabs.len(), 2, "expected a second tab; got {tabs:?}");
+    let second_tab = tabs[1].clone();
+
+    // Split so the pane could legally move without collapsing the tab.
+    let root_pane = tab_pane_ids(&api_socket, &first_tab)
+        .first()
+        .cloned()
+        .expect("root pane");
+    pane_split(&api_socket, &root_pane, "right");
+
+    // Refocus the first tab and its original pane so the right-click targets it.
+    send_json_request(
+        &api_socket,
+        "tab_focus",
+        "tab.focus",
+        json!({ "tab_id": first_tab }),
+    );
+    send_json_request(
+        &api_socket,
+        "pane_focus",
+        "pane.focus",
+        json!({ "pane_id": root_pane }),
+    );
+
+    let panes_before = tab_pane_ids(&api_socket, &first_tab);
+    let second_before = tab_pane_ids(&api_socket, &second_tab);
+    let workspaces_before = workspace_count(&api_socket);
+    assert_eq!(panes_before.len(), 2, "source tab should hold two panes");
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    // Index 3 = "Move to previous tab", disabled because this is the first tab.
+    right_click_and_activate(&mut client, 40, 6, "Move to previous tab", 3);
+    assert_eq!(
+        tab_pane_ids(&api_socket, &first_tab),
+        panes_before,
+        "'Move to previous tab' on the first tab must not move the pane"
+    );
+    assert_eq!(
+        tab_pane_ids(&api_socket, &second_tab),
+        second_before,
+        "'Move to previous tab' on the first tab must not leak the pane into another tab"
+    );
+
+    // Index 5 = "Move to previous workspace", disabled on the first workspace.
+    right_click_and_activate(&mut client, 40, 6, "Move to previous workspace", 5);
+    assert_eq!(
+        tab_pane_ids(&api_socket, &first_tab),
+        panes_before,
+        "'Move to previous workspace' on the first workspace must not move the pane"
+    );
+    assert_eq!(
+        workspace_count(&api_socket),
+        workspaces_before,
+        "disabled edge entries must not create workspaces"
+    );
+    assert_eq!(
+        tab_ids(&api_socket, &ws_id).len(),
+        2,
+        "disabled edge entries must not create tabs"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// "Move to next tab" must relocate the pane into the adjacent tab and keep the
+/// live shell process attached to it.
+#[test]
+fn pane_context_menu_moves_pane_to_next_tab_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "nexttab");
+    let ws_id = workspace_id_by_label(&workspace_list(&api_socket), "nexttab");
+    let first_tab = tab_ids(&api_socket, &ws_id)
+        .first()
+        .cloned()
+        .expect("first tab");
+
+    // A second tab to move into, then return focus to the first tab.
+    tab_create(&api_socket, &ws_id, false);
+    let tabs = tab_ids(&api_socket, &ws_id);
+    assert_eq!(tabs.len(), 2, "expected two tabs; got {tabs:?}");
+    let second_tab = tabs[1].clone();
+
+    // Split so the source tab survives losing a pane.
+    let root_pane = tab_pane_ids(&api_socket, &first_tab)
+        .first()
+        .cloned()
+        .expect("root pane");
+    pane_split(&api_socket, &root_pane, "right");
+
+    let panes_before = tab_pane_ids(&api_socket, &first_tab);
+    assert_eq!(panes_before.len(), 2);
+    let second_before = tab_pane_ids(&api_socket, &second_tab);
+
+    let marker = "herdr_next_tab_marker_5521";
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+    seed_pane_marker(&api_socket, &root_pane, marker);
+
+    // Index 4 = "Move to next tab".
+    right_click_and_activate(&mut client, 40, 6, "Move to next tab", 4);
+
+    let panes_after = tab_pane_ids(&api_socket, &first_tab);
+    let second_after = tab_pane_ids(&api_socket, &second_tab);
+    assert_eq!(
+        panes_after.len(),
+        1,
+        "pane must leave the source tab; before={panes_before:?} after={panes_after:?}"
+    );
+    assert_eq!(
+        second_after.len(),
+        second_before.len() + 1,
+        "destination tab must gain the pane; before={second_before:?} after={second_after:?}"
+    );
+
+    let moved = second_after
+        .iter()
+        .find(|id| !second_before.contains(id))
+        .expect("destination tab should have exactly one new pane");
+    assert!(
+        pane_read_recent_contains(&api_socket, moved, marker, Duration::from_secs(10)),
+        "pane moved to the next tab must keep its live terminal contents"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// "Move to next workspace" must relocate the pane across workspaces and keep
+/// its live process.
+#[test]
+fn pane_context_menu_moves_pane_to_next_workspace_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "ws-source");
+    workspace_create(&api_socket, "ws-dest");
+    let source_id = workspace_id_by_label(&workspace_list(&api_socket), "ws-source");
+    let dest_id = workspace_id_by_label(&workspace_list(&api_socket), "ws-dest");
+
+    let source_tab = tab_ids(&api_socket, &source_id)
+        .first()
+        .cloned()
+        .expect("source tab");
+    let dest_tab = tab_ids(&api_socket, &dest_id)
+        .first()
+        .cloned()
+        .expect("dest tab");
+
+    let root_pane = tab_pane_ids(&api_socket, &source_tab)
+        .first()
+        .cloned()
+        .expect("root pane");
+    pane_split(&api_socket, &root_pane, "down");
+
+    let panes_before = tab_pane_ids(&api_socket, &source_tab);
+    assert_eq!(panes_before.len(), 2);
+    let dest_before = tab_pane_ids(&api_socket, &dest_tab);
+
+    let marker = "herdr_next_ws_marker_7744";
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+    seed_pane_marker(&api_socket, &root_pane, marker);
+
+    // Focus the source workspace pane, then index 6 = "Move to next workspace".
+    right_click_and_activate(&mut client, 40, 6, "Move to next workspace", 6);
+
+    let panes_after = tab_pane_ids(&api_socket, &source_tab);
+    let dest_after = tab_pane_ids(&api_socket, &dest_tab);
+
+    assert_eq!(
+        panes_after.len() + dest_after.len(),
+        panes_before.len() + dest_before.len(),
+        "moving across workspaces must conserve pane count; \
+         source before={panes_before:?} after={panes_after:?}, \
+         dest before={dest_before:?} after={dest_after:?}"
+    );
+    assert_eq!(
+        panes_after.len(),
+        1,
+        "pane must leave the source workspace tab"
+    );
+    assert_eq!(
+        dest_after.len(),
+        dest_before.len() + 1,
+        "destination workspace must gain the pane"
+    );
+
+    let moved = dest_after
+        .iter()
+        .find(|id| !dest_before.contains(id))
+        .expect("destination workspace should have exactly one new pane");
+    assert!(
+        pane_read_recent_contains(&api_socket, moved, marker, Duration::from_secs(10)),
+        "pane moved across workspaces must keep its live terminal contents"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// "Swap to horizontal" must flip a vertical split back to horizontal, the
+/// mirror of the vertical case.
+#[test]
+fn pane_context_menu_swaps_to_horizontal_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "horizontal");
+    let ws_id = workspace_id_by_label(&workspace_list(&api_socket), "horizontal");
+    let tab_id = tab_ids(&api_socket, &ws_id)
+        .first()
+        .cloned()
+        .expect("tab id");
+    let root_pane = tab_pane_ids(&api_socket, &tab_id)
+        .first()
+        .cloned()
+        .expect("root pane");
+
+    pane_split(&api_socket, &root_pane, "down");
+    let before = layout_export(&api_socket, &tab_id);
+    assert_eq!(
+        root_split_direction(&before).as_deref(),
+        Some("down"),
+        "split down should produce a vertical root split; layout: {before}"
+    );
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    // Index 1 = "Swap to horizontal".
+    right_click_and_activate(&mut client, 40, 6, "Swap to horizontal", 1);
+
+    let after = layout_export(&api_socket, &tab_id);
+    assert_eq!(
+        root_split_direction(&after).as_deref(),
+        Some("right"),
+        "context-menu 'Swap to horizontal' must flip the layout to a horizontal split; \
+         before={before}, after={after}"
     );
 
     send_client_detach(&mut client);
