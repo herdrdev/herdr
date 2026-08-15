@@ -1805,3 +1805,183 @@ fn pane_context_menu_swaps_to_horizontal_in_live_tui() {
     drop(client);
     cleanup_spawned_herdr(server, base);
 }
+
+/// "Move to previous tab" must relocate the pane into the preceding tab when it
+/// is enabled. The pane is placed on the SECOND tab so "previous" is in range.
+#[test]
+fn pane_context_menu_moves_pane_to_previous_tab_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "prevtab");
+    let ws_id = workspace_id_by_label(&workspace_list(&api_socket), "prevtab");
+    let first_tab = tab_ids(&api_socket, &ws_id)
+        .first()
+        .cloned()
+        .expect("first tab");
+
+    // Focus a second tab; its pane is the one we move backwards.
+    tab_create(&api_socket, &ws_id, true);
+    let tabs = tab_ids(&api_socket, &ws_id);
+    assert_eq!(tabs.len(), 2, "expected two tabs; got {tabs:?}");
+    let second_tab = tabs[1].clone();
+
+    // Split the second tab so it survives losing a pane.
+    let second_root = tab_pane_ids(&api_socket, &second_tab)
+        .first()
+        .cloned()
+        .expect("second tab root pane");
+    pane_split(&api_socket, &second_root, "right");
+    send_json_request(
+        &api_socket,
+        "pane_focus",
+        "pane.focus",
+        json!({ "pane_id": second_root }),
+    );
+
+    let source_before = tab_pane_ids(&api_socket, &second_tab);
+    let dest_before = tab_pane_ids(&api_socket, &first_tab);
+    assert_eq!(source_before.len(), 2, "source tab should hold two panes");
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    let marker = "herdr_prev_tab_marker_3310";
+    seed_pane_marker(&api_socket, &second_root, marker);
+
+    // Index 3 = "Move to previous tab".
+    right_click_and_activate(&mut client, 40, 6, "Move to previous tab", 3);
+
+    let source_after = tab_pane_ids(&api_socket, &second_tab);
+    let dest_after = tab_pane_ids(&api_socket, &first_tab);
+    assert_eq!(
+        source_after.len(),
+        1,
+        "pane must leave the source tab; before={source_before:?} after={source_after:?}"
+    );
+    assert_eq!(
+        dest_after.len(),
+        dest_before.len() + 1,
+        "previous tab must gain the pane; before={dest_before:?} after={dest_after:?}"
+    );
+
+    let moved = dest_after
+        .iter()
+        .find(|id| !dest_before.contains(id))
+        .expect("previous tab should have exactly one new pane");
+    assert!(
+        pane_read_recent_contains(&api_socket, moved, marker, Duration::from_secs(10)),
+        "pane moved to the previous tab must keep its live terminal contents"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// "Move to previous workspace" must relocate the pane into the preceding
+/// workspace when enabled. The pane starts in the SECOND workspace.
+#[test]
+fn pane_context_menu_moves_pane_to_previous_workspace_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "ws-earlier");
+    workspace_create(&api_socket, "ws-later");
+    let earlier_id = workspace_id_by_label(&workspace_list(&api_socket), "ws-earlier");
+    let later_id = workspace_id_by_label(&workspace_list(&api_socket), "ws-later");
+
+    let earlier_tab = tab_ids(&api_socket, &earlier_id)
+        .first()
+        .cloned()
+        .expect("earlier tab");
+    let later_tab = tab_ids(&api_socket, &later_id)
+        .first()
+        .cloned()
+        .expect("later tab");
+
+    let later_root = tab_pane_ids(&api_socket, &later_tab)
+        .first()
+        .cloned()
+        .expect("later root pane");
+    pane_split(&api_socket, &later_root, "down");
+
+    // Focus the later workspace and its original pane.
+    send_json_request(
+        &api_socket,
+        "workspace_focus",
+        "workspace.focus",
+        json!({ "workspace_id": later_id }),
+    );
+    send_json_request(
+        &api_socket,
+        "pane_focus",
+        "pane.focus",
+        json!({ "pane_id": later_root }),
+    );
+
+    let source_before = tab_pane_ids(&api_socket, &later_tab);
+    let dest_before = tab_pane_ids(&api_socket, &earlier_tab);
+    assert_eq!(source_before.len(), 2);
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    let marker = "herdr_prev_ws_marker_8802";
+    seed_pane_marker(&api_socket, &later_root, marker);
+
+    // Index 5 = "Move to previous workspace".
+    right_click_and_activate(&mut client, 40, 6, "Move to previous workspace", 5);
+
+    let source_after = tab_pane_ids(&api_socket, &later_tab);
+    let dest_after = tab_pane_ids(&api_socket, &earlier_tab);
+
+    assert_eq!(
+        source_after.len() + dest_after.len(),
+        source_before.len() + dest_before.len(),
+        "moving to the previous workspace must conserve pane count; \
+         source before={source_before:?} after={source_after:?}, \
+         dest before={dest_before:?} after={dest_after:?}"
+    );
+    assert_eq!(
+        source_after.len(),
+        1,
+        "pane must leave the later workspace tab"
+    );
+    assert_eq!(
+        dest_after.len(),
+        dest_before.len() + 1,
+        "earlier workspace must gain the pane"
+    );
+
+    let moved = dest_after
+        .iter()
+        .find(|id| !dest_before.contains(id))
+        .expect("earlier workspace should have exactly one new pane");
+    assert!(
+        pane_read_recent_contains(&api_socket, moved, marker, Duration::from_secs(10)),
+        "pane moved to the previous workspace must keep its live terminal contents"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
