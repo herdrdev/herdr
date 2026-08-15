@@ -105,7 +105,7 @@ Raw socket method names use dot notation:
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.graphics.info`, `pane.graphics.set`, `pane.graphics.clear`, `pane.graphics.stream`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
-| Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
+| Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio`, `layout.set_split_direction` |
 | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
 | Events | `events.subscribe`, `events.wait` |
 | Integrations | `integration.install`, `integration.uninstall` |
@@ -293,6 +293,16 @@ is `type: "layout_split_ratio_set"` with the updated portable `layout`.
 
 ```json
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+```
+
+`layout.set_split_direction` flips the orientation of the split that contains a
+pane, turning a side-by-side split into a stacked one and back. The response is
+`type: "layout_split_ratio_set"` with the updated portable `layout`. It returns
+`split_not_found` when the pane has no enclosing split or already uses the
+requested orientation.
+
+```json
+{"id":"req_dir","method":"layout.set_split_direction","params":{"pane_id":"w1:p1","direction":"down"}}
 ```
 
 Process-launching methods accept an `env` object. Herdr applies those key/value

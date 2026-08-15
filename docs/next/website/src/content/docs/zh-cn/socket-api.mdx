@@ -101,7 +101,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 标签页 | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
 | 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | 弹窗 | `popup.close` |
-| 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
+| 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio`、`layout.set_split_direction` |
 | 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
 | 事件 | `events.subscribe`、`events.wait` |
 | 集成 | `integration.install`、`integration.uninstall` |
@@ -209,6 +209,12 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 
 ```json
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+```
+
+`layout.set_split_direction` 翻转包含某个窗格的分割方向,在左右分割与上下分割之间切换。响应是 `type: "layout_split_ratio_set"`,并包含更新后的可移植 `layout`。当窗格没有父级分割,或已经是所请求的方向时,返回 `split_not_found`。
+
+```json
+{"id":"req_dir","method":"layout.set_split_direction","params":{"pane_id":"w1:p1","direction":"down"}}
 ```
 
 启动进程的方法接受一个 `env` 对象。Herdr 只把这些键值对应用到新启动的进程。Herdr 还向受管窗格进程注入 `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID`。与调用方提供的环境变量冲突时,Herdr 管理的变量保持权威。

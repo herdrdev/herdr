@@ -101,7 +101,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | タブ | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
 | ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | ポップアップ | `popup.close` |
-| レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
+| レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio`、`layout.set_split_direction` |
 | エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
 | イベント | `events.subscribe`、`events.wait` |
 | インテグレーション | `integration.install`、`integration.uninstall` |
@@ -209,6 +209,12 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 
 ```json
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
+```
+
+`layout.set_split_direction` は、ペインを含む分割の向きを反転し、左右分割と上下分割を切り替えます。レスポンスは、更新済みの移植可能な `layout` を含む `type: "layout_split_ratio_set"` です。ペインに親の分割がない場合、または既に指定した向きの場合は `split_not_found` を返します。
+
+```json
+{"id":"req_dir","method":"layout.set_split_direction","params":{"pane_id":"w1:p1","direction":"down"}}
 ```
 
 プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Herdr はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Herdr は管理下のペインプロセスに `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Herdr 管理の変数が権威を持ちます。

@@ -3662,19 +3662,29 @@ mod tests {
         app.state.selected = 0;
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let runtime_count = app.terminal_runtimes.len();
-        app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Pane {
-                ws_idx: 0,
-                tab_idx: 0,
-                pane_id,
-                source_pane_id: None,
-                has_manual_label: false,
-                right_click_passthrough: false,
-            },
+        let menu_kind = ContextMenuKind::Pane {
+            ws_idx: 0,
+            tab_idx: 0,
+            pane_id,
+            source_pane_id: None,
+            has_manual_label: false,
+            right_click_passthrough: false,
+        };
+        let mut menu = ContextMenuState {
+            kind: menu_kind,
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
-        });
+            list: MenuListState::new(0),
+        };
+        // Resolve by label rather than a hardcoded index so adding menu entries
+        // cannot silently repoint this test at a different action.
+        let split_right_idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == "Split right")
+            .expect("pane context menu should offer 'Split right'");
+        menu.list = MenuListState::new(split_right_idx);
+        app.state.context_menu = Some(menu);
         app.state.mode = Mode::ContextMenu;
 
         handle_context_menu_key(
