@@ -1,0 +1,17 @@
+# dsh (DeepSeek Harness) is a web-UI harness: its terminal process only prints
+# a launcher banner and serves a browser UI, so there is no interactive TUI to
+# detect per screen state. State defaults to the known-agent idle fallback; the
+# launcher banner rule below is diagnostic working evidence only.
+id = "dsh"
+version = "2026.08.16.1"
+min_engine_version = 1
+updated_at = "2026-08-16T00:00:00Z"
+aliases = ["deepseek-harness"]
+
+[[rules]]
+id = "web_launcher_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+contains = ["dsh web: http://"]
