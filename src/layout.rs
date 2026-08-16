@@ -494,12 +494,18 @@ fn set_split_direction_for_pane(node: &mut Node, pane: PaneId, direction: Direct
             second,
             ..
         } => {
-            if contains_pane(first, pane) || contains_pane(second, pane) {
+            let pane_is_direct_child = matches!(first.as_ref(), Node::Pane(id) if *id == pane)
+                || matches!(second.as_ref(), Node::Pane(id) if *id == pane);
+            if pane_is_direct_child {
                 if *current == direction {
                     return false;
                 }
                 *current = direction;
                 true
+            } else if contains_pane(first, pane) {
+                set_split_direction_for_pane(first, pane, direction)
+            } else if contains_pane(second, pane) {
+                set_split_direction_for_pane(second, pane, direction)
             } else {
                 false
             }
@@ -874,6 +880,30 @@ mod tests {
         assert_eq!(splits.len(), 1);
         assert_eq!(splits[0].0, Direction::Horizontal);
         assert!((splits[0].1 - 0.333).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn set_split_direction_for_pane_changes_nearest_enclosing_split() {
+        let mut layout = sample_layout();
+
+        assert!(layout.set_split_direction_for_pane(pane(3), Direction::Vertical));
+
+        let splits = split_snapshot(&layout);
+        assert_eq!(
+            splits[0].0,
+            Direction::Horizontal,
+            "root split must remain unchanged"
+        );
+        assert_eq!(
+            splits[1].0,
+            Direction::Vertical,
+            "outer nested split must remain unchanged"
+        );
+        assert_eq!(
+            splits[2].0,
+            Direction::Vertical,
+            "pane's immediate parent split must change"
+        );
     }
 
     #[test]

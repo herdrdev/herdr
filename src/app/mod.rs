@@ -4034,6 +4034,15 @@ mod tests {
                 crate::api::schema::AgentViewClearParams::default(),
             ),
         };
+        let split_direction = crate::api::schema::Request {
+            id: "req_10".into(),
+            method: crate::api::schema::Method::LayoutSetSplitDirection(
+                crate::api::schema::LayoutSetSplitDirectionParams {
+                    pane_id: "w1:p1".into(),
+                    direction: crate::api::schema::SplitDirection::Right,
+                },
+            ),
+        };
 
         assert!(!crate::api::request_changes_ui(&read_only));
         assert!(!crate::api::request_changes_ui(&worktree_list));
@@ -4044,6 +4053,7 @@ mod tests {
         assert!(crate::api::request_changes_ui(&pane_focus_direction));
         assert!(crate::api::request_changes_ui(&pane_resize));
         assert!(crate::api::request_changes_ui(&agent_view));
+        assert!(crate::api::request_changes_ui(&split_direction));
     }
 
     #[test]
