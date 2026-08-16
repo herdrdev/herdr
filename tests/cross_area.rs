@@ -1985,3 +1985,108 @@ fn pane_context_menu_moves_pane_to_previous_workspace_in_live_tui() {
     drop(client);
     cleanup_spawned_herdr(server, base);
 }
+
+/// The NEXT-side edges must also refuse rather than clamp. The pane sits on the
+/// LAST tab of the LAST workspace, with an earlier tab and an earlier workspace
+/// present so a clamping bug would have a visible destination to move into.
+#[test]
+fn pane_context_menu_next_edge_entries_are_inert_in_live_tui() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    workspace_create(&api_socket, "ws-first");
+    workspace_create(&api_socket, "ws-last");
+    let first_ws = workspace_id_by_label(&workspace_list(&api_socket), "ws-first");
+    let last_ws = workspace_id_by_label(&workspace_list(&api_socket), "ws-last");
+
+    let first_ws_tab = tab_ids(&api_socket, &first_ws)
+        .first()
+        .cloned()
+        .expect("first workspace tab");
+
+    // Two tabs in the last workspace; the pane goes on the LAST one.
+    tab_create(&api_socket, &last_ws, true);
+    let tabs = tab_ids(&api_socket, &last_ws);
+    assert_eq!(tabs.len(), 2, "expected two tabs; got {tabs:?}");
+    let earlier_tab = tabs[0].clone();
+    let last_tab = tabs[1].clone();
+
+    // Split so a move would be legal if the guard wrongly allowed it.
+    let last_root = tab_pane_ids(&api_socket, &last_tab)
+        .first()
+        .cloned()
+        .expect("last tab root pane");
+    pane_split(&api_socket, &last_root, "right");
+
+    send_json_request(
+        &api_socket,
+        "workspace_focus",
+        "workspace.focus",
+        json!({ "workspace_id": last_ws }),
+    );
+    send_json_request(
+        &api_socket,
+        "tab_focus",
+        "tab.focus",
+        json!({ "tab_id": last_tab }),
+    );
+    send_json_request(
+        &api_socket,
+        "pane_focus",
+        "pane.focus",
+        json!({ "pane_id": last_root }),
+    );
+
+    let source_before = tab_pane_ids(&api_socket, &last_tab);
+    let earlier_tab_before = tab_pane_ids(&api_socket, &earlier_tab);
+    let first_ws_before = tab_pane_ids(&api_socket, &first_ws_tab);
+    let workspaces_before = workspace_count(&api_socket);
+    assert_eq!(source_before.len(), 2, "source tab should hold two panes");
+
+    let mut client = UnixStream::connect(&client_socket).expect("client should connect");
+    client_handshake(&mut client, CURRENT_PROTOCOL, 120, 32);
+    assert!(wait_for_frame(&mut client, Duration::from_secs(5)));
+
+    // Index 4 = "Move to next tab", disabled because this is the last tab.
+    right_click_and_activate(&mut client, 40, 6, "Move to next tab", 4);
+    assert_eq!(
+        tab_pane_ids(&api_socket, &last_tab),
+        source_before,
+        "'Move to next tab' on the last tab must not move the pane"
+    );
+    assert_eq!(
+        tab_pane_ids(&api_socket, &earlier_tab),
+        earlier_tab_before,
+        "'Move to next tab' on the last tab must not clamp back into an earlier tab"
+    );
+
+    // Index 6 = "Move to next workspace", disabled on the last workspace.
+    right_click_and_activate(&mut client, 40, 6, "Move to next workspace", 6);
+    assert_eq!(
+        tab_pane_ids(&api_socket, &last_tab),
+        source_before,
+        "'Move to next workspace' on the last workspace must not move the pane"
+    );
+    assert_eq!(
+        tab_pane_ids(&api_socket, &first_ws_tab),
+        first_ws_before,
+        "'Move to next workspace' on the last workspace must not clamp into an earlier workspace"
+    );
+    assert_eq!(
+        workspace_count(&api_socket),
+        workspaces_before,
+        "disabled next-side entries must not create workspaces"
+    );
+
+    send_client_detach(&mut client);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
