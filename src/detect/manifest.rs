@@ -257,6 +257,7 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("qodercli", include_str!("manifests/qodercli.toml")),
     ("qwen", include_str!("manifests/qwen.toml")),
     ("copilot", include_str!("manifests/github-copilot.toml")),
+    ("minimax", include_str!("manifests/minimax.toml")),
 ];
 
 static MANIFEST_CACHE: OnceLock<RwLock<ManifestCache>> = OnceLock::new();

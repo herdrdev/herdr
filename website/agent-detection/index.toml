@@ -61,6 +61,10 @@ id = "maki"
 path = "maki.toml"
 
 [[agents]]
+id = "minimax"
+path = "minimax.toml"
+
+[[agents]]
 id = "opencode"
 path = "opencode.toml"
 

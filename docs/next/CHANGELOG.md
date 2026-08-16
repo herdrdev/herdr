@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added MiniMax Code detection for idle, working, and permission-prompt states, covering the `mcode` shim on Windows and the `node <install>/node_modules/@minimax-ai/code/cli` package entry for non-symlinked installs.
 - CLI help now points coding agents to Herdr's plain-text guide, documentation index, and built-in control skill.
 - Added Qwen Code detection for idle, working, and user-confirmation states, plus optional native session restore.
 - Herdr now keeps the outer terminal window title in sync with the session through `ui.window_title`, so window managers and terminal tab bars show the active workspace and the host the panes actually run on.

@@ -1,0 +1,136 @@
+# MiniMax Code detection manifest.
+#
+# Notes for future editors (v0.1.2):
+# - Status bar has TWO independent mode fields: `│ PLAN │ Ask │` (or any
+#   combo of {Default, PLAN} × {Ask, Auto, Full access}). PLAN is the
+#   operational mode, Ask/Auto/Full access is the permission mode. They
+#   are toggled by /plan (or Shift+Tab) and Alt+M (or /permission).
+# - In PLAN mode the agent first writes a plan, then calls ExitPlanMode
+#   to surface the "Plan Review" dialog. The agent may also insert one
+#   or more "Ask" dialogs before the plan to clarify design forks.
+# - The `Esc stop` marker in the working footer (Thinking / Running) is
+#   the v0.1.2 spelling — earlier builds used "esc to cancel". Match on
+#   the live spelling only.
+# - `WebSearch` and other read-only tools are auto-allowed in PLAN mode
+#   even with permission mode = Ask, so a Plan-mode Ask dialog never
+#   surfaces a `◆ Approval needed` for them. Permission dialogs in PLAN
+#   still fire for write / execute tools.
+# - Idle footer "Message · Enter send · Shift+Enter newline" and working
+#   footer "Esc stop" both leave the prompt box (`›`) in their last
+#   visible state. `prompt_box_idle` only fires when the box is empty
+#   or composing; while the working footer is up the working rule wins.
+
+id = "minimax"
+version = "2026.08.17.1"
+min_engine_version = 2
+updated_at = "2026-08-17T00:00:00Z"
+aliases = ["minimax-code", "minimax code"]
+
+# Live active turn: MiniMax Code shows one of two footer variants while a
+# turn is in flight:
+#   - Thinking:    ⠸ Loading Ns · Enter queue · Ctrl+X steer · Ctrl+O details · Esc stop
+#   - Running tool: ⠸ Running Ns · ⚡ ~X.X tok/s · Enter queue · Esc stop
+# Both sit directly above the status bar and replace the input box. The
+# "Enter queue" + "Esc stop" pair is shared by both variants and is unique
+# to the working footer; the "ctrl+x steer" / "ctrl+o details" pair is only
+# present in the Thinking variant. We match either shape so the rule fires
+# regardless of which sub-state the turn is in.
+
+[[rules]]
+id = "working_active_turn_footer"
+state = "working"
+priority = 950
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+any = [
+  { contains = ["ctrl+x steer", "ctrl+o details", "esc stop"] },
+  { contains = ["enter queue", "esc stop"] },
+]
+
+# Permission request dialog. MiniMax Code only shows this in permission modes
+# stricter than "Full access" (i.e. "Ask" or "Auto"), so this rule is
+# best-effort. The dialog is structured as a centered "◆ Approval needed"
+# header followed by a boxed action card with three options
+# (1 Allow for this conversation / 2 Always allow this action / 3 Deny) and
+# navigation hints ("enter confirm · esc deny"). The working footer is
+# replaced by this dialog when shown, so we explicitly exclude its markers.
+
+[[rules]]
+id = "permission_prompt_blocked"
+state = "blocked"
+priority = 1100
+region = "bottom_non_empty_lines(15)"
+visible_blocker = true
+any = [
+  { contains = ["approval needed"] },
+  { contains = ["allow for this conversation"] },
+  { contains = ["always allow this action"] },
+]
+all = [
+  { any = [
+    { contains = ["enter confirm"] },
+    { contains = ["esc deny"] },
+  ] },
+]
+not = [
+  { contains = ["ctrl+x steer"] },
+  { contains = ["esc stop"] },
+]
+
+# Plan mode dialog: 4 variants in MiniMax Code v0.1.2+ that all
+# require the user to respond before the agent continues. Each
+# variant draws a `╭─ ... ─╮` rounded box that replaces the working
+# footer and prompt box, so neither working nor idle rules can
+# match. The dialog chrome is locale-stable (it comes from the TUI
+# shell, not the model):
+#   1. "Use Plan mode?"             — entry confirmation in non-PLAN
+#   2. "Ask ─ 0/N answered"         — multi-question clarification in PLAN
+#   3. "Ask ─ 1 of 1"               — single-question clarification in PLAN
+#   4. "Plan Review ─ Frozen Runtime snapshot" — plan approval gate in PLAN
+# We anchor on chrome, not on bare words: "answered" is a substring
+# of "unanswered", and " of 1 " appears in natural English, so chat
+# text above the dialog can false-positive earlier versions of this
+# rule. The "ask" + box-drawing hyphen (U+2500) sequence is
+# locale- and prose-stable — chat text won't contain that exact
+# two-char combo. Priority 1050 sits between working (950) and
+# permission (1100) so a `◆ Approval needed` dialog (if shown
+# during PLAN mode) still wins. Region 20 matches qwen's setting
+# for the same dialog class; the current 13-row-tall dialogs in
+# v0.1.2 leave 7 rows of headroom so a new option row won't push
+# the title out of the match window.
+
+[[rules]]
+id = "plan_mode_dialog_blocked"
+state = "blocked"
+priority = 1050
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+any = [
+  { contains = ["Use Plan mode?"] },
+  { contains = ["ask ─"] },
+  { contains = ["Frozen Runtime snapshot"] },
+]
+not = [
+  { contains = ["esc stop"] },
+]
+
+# Idle: the input box holds just the `›` marker (U+203A), either empty or
+# followed by a composed prompt, between the two horizontal rules. The working
+# footer replaces this region while a turn is in flight, so a clean prompt
+# box body is a strong idle signature.
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 700
+region = "prompt_box_body"
+visible_idle = true
+any = [
+  { line_regex = ['^\s*›\s*$'] },
+  { line_regex = ['^\s*›\s*\S'] },
+]
+not = [
+  { contains = ["do you want to proceed"] },
+  { contains = ["ctrl+x steer"] },
+  { contains = ["esc stop"] },
+]

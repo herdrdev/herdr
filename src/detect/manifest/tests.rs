@@ -360,6 +360,191 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
 }
 
 #[test]
+fn minimax_manifest_detects_idle_working_and_blocked_states() {
+    // Working (thinking): the "Loading" footer replaces the input box.
+    // All three markers — "Ctrl+X steer", "Ctrl+O details", "Esc stop" —
+    // are present together only in this sub-state.
+    let working_thinking = explain(
+        Agent::MiniMax,
+        "    └ Completed in 7s · ⚡ 105.2 tok/s\n\n   › list the contents of the /etc directory\n\n  └ • Thinking…\n\n    ⠸ Loading 1s · Enter queue · Ctrl+X steer · Ctrl+O details · Esc stop\n  ────────────────────────────────────────────────────────────────────────\n  ›\n  ────────────────────────────────────────────────────────────────────────\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(working_thinking.state, AgentState::Working);
+    assert!(working_thinking.visible_working);
+    assert_eq!(
+        working_thinking
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("working_active_turn_footer")
+    );
+
+    // Working (running tool): the "Running" footer omits the steer/
+    // details pair but still carries "Enter queue" + "Esc stop". The
+    // rule must match this sub-state too — otherwise the agent
+    // silently regresses to "idle" while a tool is in flight (the
+    // input box is still visible, so the prompt_box_idle rule would
+    // otherwise win).
+    let working_running = explain(
+        Agent::MiniMax,
+        "  └ • Running  date · 1 output line\n\n    ⠸ Running 7s · ⚡ ~278.4 tok/s · Enter queue · Esc stop\n  ────────────────────────────────────────────────────────────────────────\n  ›\n  ────────────────────────────────────────────────────────────────────────\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(working_running.state, AgentState::Working);
+    assert_eq!(
+        working_running
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("working_active_turn_footer")
+    );
+
+    // Idle: empty prompt box between the two horizontal rules.
+    let idle = explain(
+        Agent::MiniMax,
+        "    VirtualBox guest artifacts\n    - 7× .vboxclient-*.pid files\n\n    Anything specific you want to dig into?\n\n  ↓ End to latest · ↑ 75 earlier rows · PgUp · ↓ 1 newer row · PgDn\n\n    Message · Enter send · Shift+Enter newline\n  ────────────────────────────────────────────────────────────────────────\n  ›\n  ────────────────────────────────────────────────────────────────────────\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+    assert_eq!(
+        idle.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("prompt_box_idle")
+    );
+
+    // User composing input inside the prompt box; still idle.
+    let idle_composing = explain(
+        Agent::MiniMax,
+        "    Want me to add that for you?\n\n  ↓ End to latest · ↑ 42 earlier rows · PgUp · ↓ 1 newer row · PgDn\n\n    Message · Enter send · Shift+Enter newline\n  ────────────────────────────────────────────────────────────────────────\n  ›  list files in\n  ────────────────────────────────────────────────────────────────────────\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(idle_composing.state, AgentState::Idle);
+    assert!(idle_composing.visible_idle);
+
+    // Historical completion lines in the scrollback must not regress to
+    // working state when the active-turn footer is absent.
+    let historical = explain(
+        Agent::MiniMax,
+        "  ├ • Thought for 4.5s\n  └ • Running  cat /etc/passwd",
+    );
+    assert_eq!(historical.state, AgentState::Idle);
+    assert!(!historical.visible_working);
+
+    // Blocked: the permission request dialog appears when the user is in
+    // a permission mode stricter than "Full access" (i.e. "Ask" or
+    // "Auto"). The dialog is structured as a centered "◆ Approval
+    // needed" header followed by a boxed action card with three options
+    // (1 Allow for this conversation / 2 Always allow this action / 3
+    // Deny) and navigation hints ("enter confirm · esc deny"). The
+    // action label (e.g. "Bash", "Read") and question ("Run this
+    // command?" / "Allow read?") vary by action type, but the option
+    // labels and nav hints are stable across all action types.
+    let blocked = explain(
+        Agent::MiniMax,
+        "   › show me the contents of /etc/passwd\n\n  ├ • Thought for 4.5s\n  └ • Running  cat /etc/passwd\n\n  ◆ Approval needed  bash\n\n  │ Approval needed                                                                     Bash\n  │ Run this command?\n  │   $ {\"command\":\"cat /etc/passwd\"}\n  │   Reason: Needs confirmation: filesystem path is outside the workspace or configured\n  │   allow paths. Path: /etc/passwd\n  │\n  │ → 1 Allow for this conversation  Ask again in a new conversation\n  │   2 Always allow this action     Review and save the exact scope\n  │   3 Deny                         Optionally tell MCode what to do instead\n  │\n  │ ↑/↓ select · 1/2/3 choose · enter confirm · esc deny · ctrl+c stop\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+    assert_eq!(
+        blocked.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("permission_prompt_blocked")
+    );
+}
+
+#[test]
+fn minimax_manifest_detects_plan_mode_dialogs() {
+    // 1. "Use Plan mode?" — entry confirmation in non-PLAN mode. The
+    // agent offers to enter plan mode for a non-trivial task; the user
+    // must confirm. Real v0.1.2 capture.
+    let plan_confirm = explain(
+        Agent::MiniMax,
+        "  ● Let me enter Plan Mode so I can investigate the workspace, ask a couple of high-leverage design questions, and hand you a concrete, approval-ready plan first.\n\n  └ • Enterplanmode\n\n    └ Completed in 12s · ⚡ 99.2 tok/s\n\n  ╭─ Use Plan mode? ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n  │ Plan mode structures complex tasks before execution.                                                                                                                    │\n  │                                                                                                                                                                         │\n  │ › Continue with plan                                                                                                                                                    │\n  │   Deny                                                                                                                                                                  │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ ↑/↓ select · Enter confirm · Esc deny                                                                                                                                   │\n  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(plan_confirm.state, AgentState::Blocked);
+    assert!(plan_confirm.visible_blocker);
+    assert_eq!(
+        plan_confirm
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("plan_mode_dialog_blocked")
+    );
+
+    // 2. "Ask ─ 0/3 answered" — multi-question clarification dialog in
+    // PLAN mode. Real v0.1.2 capture (3 tabs: Worker deliver / Trigger
+    // types / Service topolo).
+    let ask_multi = explain(
+        Agent::MiniMax,
+        "  ● The workspace is essentially empty (just 3 unrelated .txt files), so this is a clean greenfield project. Before I write the plan, I need to lock down three high-leverage design decisions that will materially change the architecture.\n\n  ╭─ Ask ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 0/3 answered ─╮\n  │  ● Worker deliver   ○ Trigger types    ○ Service topolo                                                                                                                 │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ How should the scheduler deliver jobs to handlers?                                                                                                                      │\n  │                                                                                                                                                                         │\n  │ › 1  Embedded handlers (Recommended)  Handlers are Spring beans registered with @JobHandler in the same JVM. Scheduler pulls from DB/Redis and invokes locally.         │\n  │   2  HTTP webhook push                Scheduler POSTs job payloads to registered HTTP endpoints.                                                                          │\n  │   3  Both (mixed)                     Default embedded; an explicit webhook handler type POSTs externally.                                                              │\n  │   4  Other…                           Others...                                                                                                                         │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ ↑↓ move · 1-4 select · Enter next · Tab/←/→ questions · Esc cancel                                                                                                      │\n  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n  ~ │ ◇ … │ PLAN │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(ask_multi.state, AgentState::Blocked);
+    assert!(ask_multi.visible_blocker);
+    assert_eq!(
+        ask_multi.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("plan_mode_dialog_blocked")
+    );
+
+    // 3. "Ask ─ 1 of 1" — single-question clarification dialog in PLAN
+    // mode. Real v0.1.2 capture. Footer is "Enter send" (vs. "Enter
+    // next" in multi-question).
+    let ask_single = explain(
+        Agent::MiniMax,
+        "  ● I'll ask you to make the call.\n\n    └ Completed in 13s · ⚡ 109.9 tok/s\n\n  ╭─ Ask ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 of 1 ─╮\n  │ Auth strategy                                                                                                                                                           │\n  │ Which auth strategy should the new Spring Boot 3.5 service use?                                                                                                         │\n  │ Pick one. I'll update the plan to match.                                                                                                                                │\n  │                                                                                                                                                                         │\n  │ › 1  Spring Security + custom JWT          Service issues and validates its own JWTs (HMAC or RSA). No separate auth server. Simpler, fewer moving parts.               │\n  │   2  Spring Authorization Server (OAuth2)  Full OAuth2 Authorization Server with /oauth2/token, registered clients, scopes, grant types. Heavier, but standardized for  │\n  │                                            multi-client / third-party / open-platform use.                                                                              │\n  │   3  Other…                                Others...                                                                                                                    │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ ↑↓ move · 1-3 select · Enter send · Esc cancel                                                                                                                          │\n  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n  ~ │ ◇ … │ PLAN │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(ask_single.state, AgentState::Blocked);
+    assert!(ask_single.visible_blocker);
+    assert_eq!(
+        ask_single
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("plan_mode_dialog_blocked")
+    );
+
+    // 4. "Plan Review ─ Frozen Runtime snapshot" — plan approval gate
+    // shown after the agent writes the plan and calls ExitPlanMode. The
+    // "Frozen Runtime snapshot" subtitle is locale-stable chrome. Real
+    // v0.1.2 capture.
+    let plan_review = explain(
+        Agent::MiniMax,
+        "  ● The plan is fully written to the canonical file (31.9 KB, 14 numbered sections plus build/run notes). The ExitPlanMode tool keeps returning a queued work must drain error.\n\n  ╭─ Plan Review ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Frozen Runtime snapshot ─╮\n  │ Lines 1-35 of 648 · wheel/PgUp/PgDn scroll                                                                                                                              │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ Plan ── implementation plan ──                                                                                                                        │\n  │                                                                                                                                                                         │\n  │ Plan complete. What would you like to do?                                                                                                                               │\n  │ › Agree and start implementation                                                                                                                                        │\n  │   Skip for now                                                                                                                                                          │\n  │   Add context to revise                                                                                                                                                 │\n  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤\n  │ ↑/↓ select · Enter confirm · Esc skip · PgUp/PgDn scroll                                                                                                                │\n  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\n  ~ │ ◇ … │ PLAN │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(plan_review.state, AgentState::Blocked);
+    assert!(plan_review.visible_blocker);
+    assert_eq!(
+        plan_review
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("plan_mode_dialog_blocked")
+    );
+
+    // 5. Sanity: when ONLY a working footer is present (no dialog), the
+    // rule must NOT match — that's working, not blocked.
+    let working_only = explain(
+        Agent::MiniMax,
+        "  ⠸ Running 7s · ⚡ ~278.4 tok/s · Enter queue · Esc stop\n  ────────────────────────────────────────────────────────────────────────\n  ›\n  ────────────────────────────────────────────────────────────────────────\n\n  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(working_only.state, AgentState::Working);
+
+    // 6. Anti-regression: idle chat text containing bare
+    // "answered" (substring of "unanswered") and " of 1 " (a
+    // common English phrase) must NOT match the rule. The
+    // chrome anchor "ask ─" (Ask followed by U+2500) is the
+    // only Ask-related needle, so free-form prose never fires
+    // it. The screen ends with the prompt box `›` so the
+    // fallback prompt_box_idle rule should win.
+    let false_positive_bare = explain(
+        Agent::MiniMax,
+        "  ● 1 of 1 user reply was unanswered, will follow up tomorrow.
+
+    Message · Enter send · Shift+Enter newline
+  ────────────────────────────────────────────────────────────────────────
+  ›
+  ────────────────────────────────────────────────────────────────────────
+
+  ~ │ ◇ … │ Ask │ ✦ MiniMax-M3 · Thinking On",
+    );
+    assert_eq!(false_positive_bare.state, AgentState::Idle);
+}
+
+#[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
         r#"

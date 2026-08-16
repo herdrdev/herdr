@@ -63,10 +63,11 @@ pub enum Agent {
     Qodercli,
     Qwen,
     Maki,
+    MiniMax,
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,9 +90,10 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::MiniMax,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -112,6 +114,7 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::MiniMax,
     ];
 }
 
@@ -139,6 +142,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::MiniMax => "minimax",
     }
 }
 
@@ -172,6 +176,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::MiniMax => "mcode",
     }
 }
 
@@ -209,6 +214,9 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
+        // Aliases cover the stable MiniMax Code binary ("minimax") and
+        // a few rebrands seen in the wild: "mcode" (Linux/CLI shim).
+        "minimax" | "minimax-code" | "minimax code" | "mcode" => Some(Agent::MiniMax),
         _ => None,
     }
 }
@@ -577,6 +585,15 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
         if window == ["node_modules", "mastracode", "dist", "cli"] {
             return Some(agent_label(Agent::Mastracode).to_string());
         }
+        // MiniMax Code CLI: `mcode` shim launches
+        // `node <install>/node_modules/@minimax-ai/code/cli.js`. The basename
+        // is just `node`, so the basename-based path detection does not match;
+        // match the package path instead. Four consecutive components
+        // disambiguate from any other `@minimax-ai/*` package and from a
+        // generic "code" directory name.
+        if window == ["node_modules", "@minimax-ai", "code", "cli"] {
+            return Some(agent_label(Agent::MiniMax).to_string());
+        }
     }
     None
 }
@@ -734,6 +751,11 @@ mod tests {
         assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
         assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+        assert_eq!(identify_agent("minimax"), Some(Agent::MiniMax));
+        assert_eq!(identify_agent("minimax-code"), Some(Agent::MiniMax));
+        assert_eq!(identify_agent("minimax code"), Some(Agent::MiniMax));
+        assert_eq!(identify_agent("mcode"), Some(Agent::MiniMax));
+        assert_eq!(identify_agent("MiniMax"), Some(Agent::MiniMax));
     }
 
     #[test]
@@ -804,6 +826,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
+            (Agent::MiniMax, "mcode"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
@@ -1115,6 +1138,149 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Claude, "claude".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_minimax_package_cli() {
+        // Windows mcode.cmd shim launches node with the package entry directly;
+        // the basename is just `node`, so the path must match by package layout.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\.minimax-code\\node_modules\\@minimax-ai\\code\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::MiniMax, "minimax".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_windows_cmd_wrapped_minimax() {
+        // PowerShell runs `mcode` which resolves to mcode.cmd; cmd.exe /c the
+        // batch and the basename of the .cmd matches the `mcode` alias.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                1,
+                "cmd.exe",
+                &[
+                    "cmd.exe",
+                    "/D",
+                    "/S",
+                    "/C",
+                    "C:\\Users\\herdr\\.minimax-code\\mcode.cmd --model m2.7",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::MiniMax, "minimax".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_bun_wrapped_minimax_package_cli() {
+        // Bun is the other Node-compatible runtime herdr unwraps; same
+        // package layout must be recognized regardless of runtime.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "bun",
+                &[
+                    "bun",
+                    "/home/user/.minimax-code/node_modules/@minimax-ai/code/cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::MiniMax, "minimax".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_ignores_minimax_code_fmt_package() {
+        // Disambiguation: the 4-window gate must not match a sibling
+        // `@minimax-ai/code-fmt` package; only the bare `code` directory
+        // resolves to MiniMax Code.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\.minimax-code\\node_modules\\@minimax-ai\\code-fmt\\dist\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn identify_agent_in_job_ignores_minimax_code_server_package() {
+        // Same as code-fmt: a different `@minimax-ai/*` subdir must not
+        // be misclassified as MiniMax Code.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\.minimax-code\\node_modules\\@minimax-ai\\code-server\\out\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(identify_agent_in_job(&job), None);
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_minimax_via_bare_mcode_basename() {
+        // Basename path: the mcode binary on its own (e.g. a symlink
+        // `mcode -> ...cli.js` exposed as a top-level command) is
+        // resolved through the alias arm, not the package path.
+        // The returned label is the original-case process name
+        // (matches the opencode2 convention), not the canonical label.
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(123, "mcode", &["mcode"])],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::MiniMax, "mcode".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_minimax_via_bare_minimax_basename() {
+        // The stable product binary name resolves through the canonical
+        // label; verify both lowercase and PascalCase normalize to the
+        // same agent. Returned label preserves the original case
+        // (matches the opencode2 convention), so we expect "MiniMax".
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(123, "MiniMax", &["MiniMax"])],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::MiniMax, "MiniMax".to_string()))
         );
     }
 
