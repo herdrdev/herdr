@@ -90,7 +90,7 @@
             window.herdrGround.apply(window.herdrGround.read());
         </script>
         <link rel="stylesheet" href="/css/style.css?v=59" />
-        <link rel="stylesheet" href="/css/site.css?v=61" />
+        <link rel="stylesheet" href="/css/site.css?v=64" />
     </head>
     <body class="site">
     <div class="hd-frame">
@@ -101,6 +101,7 @@
             <a class="lnk" href="/docs/">Docs</a>
             <a class="lnk" href="/plugins/">Plugins</a>
             <a class="lnk" href="/blog/">Blog</a>
+            <a class="lnk" href="/compare/">Compare</a>
             <a class="ico wide" href="https://github.com/herdrdev/herdr" aria-label="Herdr on GitHub — star count">
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.64 7.64 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
                 <b data-stars><!--N_STARS--></b>
@@ -122,6 +123,7 @@
             <a href="/docs/">Docs</a>
             <a href="/plugins/">Plugins</a>
             <a href="/blog/">Blog</a>
+            <a href="/compare/">Compare</a>
             <a href="https://x.com/herdrdev">@herdrdev</a>
             <div class="sheet-ground">
                 <span>Ground</span>
@@ -401,8 +403,6 @@
                     <h3>Always running.&nbsp;<b class="arw">&#8594;</b></h3>
                     <p>Herdr isn't an app you keep open. It's a server running in the background, and the terminals live inside it. Close the lid or drop the network and the agents keep working; restart the machine and Herdr brings the layout back and resumes their sessions.</p>
                 </div>
-                <!-- the evidence column describes the session in the plate above,
-                     so the two never state different numbers -->
                 <div class="ev" aria-hidden="true">
                     <div class="ev-row"><span>herdr-server</span><b><i class="beat"></i>up</b></div>
                     <div class="ev-note">3 workspaces &middot; 4 agents &middot; nobody attached</div>
@@ -426,8 +426,6 @@
                     <h3>Agent-native.&nbsp;<b class="arw">&#8594;</b></h3>
                     <p>The CLI and the socket API are the same surface agents drive. They split panes, start each other, prompt each other, and wait until another agent is genuinely blocked instead of firing keystrokes and hoping.</p>
                 </div>
-                <!-- real lines from docs/agent-automation, in the order a
-                     review workflow actually runs them -->
                 <div class="ev">
                     <div class="tape" aria-hidden="true"><b>$</b><span data-tape></span></div>
                 </div>
@@ -439,9 +437,6 @@
                     <p>Claude Code, Codex, Cursor, opencode, Grok and the rest. Herdr doesn't wrap them or replace them, it just owns their terminals — one binary, macOS and Linux, Windows in beta.</p>
                 </div>
                 <div class="ev">
-                    <!-- named, not bare marks: several of these silhouettes are
-                         unreadable at this size on their own, and the name is
-                         what a visitor is scanning for anyway -->
                     <div class="herd">
                         <span><i style="--m: url('/assets/agent-icons/claude.svg')"></i>Claude Code</span>
                         <span><i style="--m: url('/assets/agent-icons/codex-mask.svg')"></i>Codex</span>
@@ -455,26 +450,18 @@
                     <div class="ev-note"><!--AGENTS_NOTE--></div>
                 </div>
             </a>
-            <!-- 05 stays redacted. There is no reveal and no link: the whole
-                 point is that something is there and it isn't saying what.
-                 The real copy is deliberately not in this page at all — not in
-                 a hidden element and not in a comment — because view-source
-                 ships to everyone and the product hasn't launched. The only
-                 thing that leaks is the shape of a command, which is the
-                 tease. Blocks are aria-hidden so a screen reader gets the
-                 caption instead of a mouthful of gibberish. -->
-            <div class="cap cap-soon">
-                <div class="n"><span>05</span></div>
+            <a class="cap cap-soon" href="/blog/herdr-is-joining-y-combinator/#where-were-going">
+                <div class="n"><span>05</span><span class="soon-tag">soon</span></div>
                 <div class="cap-in">
-                    <h3 aria-hidden="true"><span class="mask">█████ ██████</span></h3>
+                    <h3>Where do agents run while you sleep?&nbsp;<b class="arw">&#8594;</b></h3>
                     <p aria-hidden="true"><span class="mask">████ █████████ █████████ ████ █ ████████ ████ ███ ██ ██ ██████ ███ ███ ██████ █████ █████ █████</span></p>
-                    <p class="sr">Redacted. Something is coming.</p>
+                    <p class="sr">The answer is redacted for now. Read where Herdr is going in the Y Combinator announcement.</p>
                 </div>
                 <div class="ev">
                     <div class="tape" aria-hidden="true"><b>$</b><span class="mask">█████ █████ █████</span></div>
                     <div class="ev-note" aria-hidden="true"><span class="mask">███████ ███ █████ █████</span></div>
                 </div>
-            </div>
+            </a>
         </div>
 
         <section class="end" id="install">
@@ -497,6 +484,7 @@
             <a href="/docs/">docs</a>
             <a href="/plugins/">plugins</a>
             <a href="/blog/">blog</a>
+            <a href="/compare/">compare</a>
             <span>built in the terminal · © 2026 Herdr, Inc.</span>
             <span class="fact"><!--FACTS--></span>
             <span class="out">

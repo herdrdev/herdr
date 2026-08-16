@@ -28,10 +28,10 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
 
 **the runtime your coding agents live on.**
 
-- **always running** — herdr is a background server; the terminals live inside it. close the lid, drop the network, restart the machine — agents keep working and sessions come back. reattach from any terminal, or over ssh.
+- **always running** — herdr is a background server; the terminals live inside it. close the lid, drop the network, or restart the machine; agents keep working and sessions come back. reattach from any terminal, or over ssh.
 - **never hunt for the stuck one** — every pane is marked working, blocked, or idle. when an agent stops and needs an answer, herdr says so.
-- **agent-native** — the cli and socket api are the same surface agents drive: spawn panes, prompt each other, wait until another agent is genuinely blocked. [agent skill →](https://herdr.dev/docs/agent-skill/)
-- **runs what you already run** — claude code, codex, cursor, opencode, grok and the rest. herdr doesn't wrap or replace them, it just owns their terminals.
+- **agent-native** — agents drive herdr through the cli and socket api: they can spawn panes, prompt each other, and wait until another agent is genuinely blocked. [agent skill →](https://herdr.dev/docs/agent-skill/)
+- **runs what you already run** — claude code, codex, cursor, opencode, grok and the rest. herdr doesn't wrap or replace them; it owns their terminals.
 - **keyboard and mouse, both first-class** — tmux-style prefix keys *and* click, drag, split. pick per moment, not per tool.
 - **plugins** — extend panes and workflows. [browse the marketplace →](https://herdr.dev/plugins/)
 - **one rust binary, no electron** — runs in whatever terminal you already use.
@@ -60,9 +60,7 @@ everything lives at [herdr.dev/docs](https://herdr.dev/docs/): [quick start](htt
 
 ## thanks
 
-<a href="https://terminaltrove.com/"><img src="assets/sponsors/terminal-trove.png" alt="Terminal Trove" width="200" /></a>
-
-[Terminal Trove](https://terminaltrove.com/) and every backer listed in [SPONSORS.md](./SPONSORS.md) — thank you 🐑
+every past sponsor and backer is listed in [SPONSORS.md](./SPONSORS.md) — thank you 🐑
 
 enterprise / partnership: hey@herdr.dev
 

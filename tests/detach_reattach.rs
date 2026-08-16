@@ -19,6 +19,19 @@ use support::{
     wait_for_disconnect, wait_for_message_variant, wait_for_socket, wait_until, CURRENT_PROTOCOL,
 };
 
+const CUSTOM_HEADLESS_SIZE_CONFIG: &str = r#"onboarding = false
+
+[server]
+headless_cols = 132
+headless_rows = 41
+
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+hide_tab_bar_when_single_tab = true
+pane_scrollbars = false
+"#;
+
 fn unique_test_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -73,16 +86,28 @@ fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
+    client_socket_path: &PathBuf,
+) -> SpawnedHerdr {
+    spawn_server_with_config(
+        config_home,
+        runtime_dir,
+        api_socket_path,
+        client_socket_path,
+        "onboarding = false\n",
+    )
+}
+
+fn spawn_server_with_config(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
     _client_socket_path: &PathBuf,
+    config: &str,
 ) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join("herdr")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
-        "onboarding = false\n",
-    )
-    .unwrap();
+    fs::write(config_home.join("herdr/config.toml"), config).unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -99,6 +124,7 @@ fn spawn_server(
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("HERDR_SOCKET_PATH", api_socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("HERDR_CONFIG_PATH", config_home.join("herdr/config.toml"));
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
 
@@ -634,6 +660,115 @@ fn server_persists_after_client_connection_drop() {
         .expect("reattach handshake should succeed");
     assert_eq!(version, CURRENT_PROTOCOL);
     assert!(error.is_none(), "reattach should succeed: {:?}", error);
+
+    cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
+fn pane_created_without_client_uses_configured_headless_size() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let spawned = spawn_server_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        CUSTOM_HEADLESS_SIZE_CONFIG,
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+
+    let create = workspace_create(&api_socket, "headless-size");
+    let pane_id = create["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id")
+        .to_string();
+
+    // A second request cannot run until the full render triggered by workspace
+    // creation has applied the virtual headless geometry.
+    assert!(ping_socket(&api_socket).contains("pong"));
+    let size = read_pane_tty_size_after_marker(
+        &api_socket,
+        &pane_id,
+        "HEADLESS_SIZE",
+        Duration::from_secs(5),
+    );
+
+    assert_eq!(size, (41, 132));
+
+    cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
+fn pane_created_after_detach_uses_configured_headless_size() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let spawned = spawn_server_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        CUSTOM_HEADLESS_SIZE_CONFIG,
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let mut stream = UnixStream::connect(&client_socket).expect("client should connect");
+    let (version, error) =
+        client_handshake(&mut stream, CURRENT_PROTOCOL, 160, 50).expect("handshake should succeed");
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none(), "{error:?}");
+    drain_messages(&mut stream);
+
+    let first = workspace_create(&api_socket, "attached-size");
+    let first_pane_id = first["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("first root pane id")
+        .to_string();
+    let attached_size = read_pane_tty_size_after_marker(
+        &api_socket,
+        &first_pane_id,
+        "ATTACHED_SIZE",
+        Duration::from_secs(5),
+    );
+    assert_eq!(attached_size, (50, 160));
+
+    send_detach(&mut stream).expect("send detach");
+    assert!(
+        wait_for_disconnect(&mut stream, Duration::from_secs(2)).expect("wait for detach"),
+        "detached client connection should close"
+    );
+    drop(stream);
+
+    let second = workspace_create(&api_socket, "headless-size");
+    let second_pane_id = second["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("second root pane id")
+        .to_string();
+    let headless_size = read_pane_tty_size_after_marker(
+        &api_socket,
+        &second_pane_id,
+        "HEADLESS_SIZE_AFTER_DETACH",
+        Duration::from_secs(5),
+    );
+    let preserved_size = read_pane_tty_size_after_marker(
+        &api_socket,
+        &first_pane_id,
+        "PRESERVED_SIZE_AFTER_DETACH",
+        Duration::from_secs(5),
+    );
+
+    assert_eq!(headless_size, (41, 132));
+    assert_eq!(preserved_size, attached_size);
 
     cleanup_spawned_herdr(spawned, base);
 }

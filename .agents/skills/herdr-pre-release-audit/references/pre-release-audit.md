@@ -69,16 +69,18 @@ Process:
    - Compare English next-release website docs against `docs/next/website/src/content/docs/ja/` and `docs/next/website/src/content/docs/zh-cn/`. Flag missing localized files, stale localized files, and heading-outline drift where translated docs do not have the same section structure as English.
    - Compare `docs/next/README.md` and the next website draft against current stable docs. Flag each difference as intended to ship, stale, or needing user decision. Do not require the draft and stable trees to match before release.
    - Also audit example config snippets for release readiness.
+   - Audit `skills/herdr/SKILL.md` against shipped changes to the CLI, public IDs, pane and agent workflows, lifecycle semantics, and safety guidance. Flag stale commands, options, examples, or behavioral claims. The binary bundles this exact file, so review semantic freshness rather than file synchronization.
 
 8. Verify finalization state.
    - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `website/src/content/docs/` or `docs/preview/`.
    - `nix/package.nix` imports `Cargo.lock` through `cargoLock.lockFile`; normal version and lockfile updates do not require a separate cargo hash refresh. If git dependencies are introduced, verify the required `cargoLock.outputHashes` entries.
    - Run or recommend:
      ```bash
-     just release-docs-check
+     just pre-release-check
      ```
-   - This check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
-   - Do not run `just release` unless the working tree is clean and the docs check passes.
+   - The docs check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
+   - The render benchmark has no automatic timing threshold, but reviewing it is a required release checkpoint. Record the 1, 15, and 50-count median and p95 results for background-workspace resize/layout and active panes, compare their scaling ratios, and treat a material regression as a release blocker until investigated rather than relying on absolute timing across machines.
+   - Do not run `just release` unless the working tree is clean, the docs check passes, and the render-scale result has been reviewed.
 
 9. Apply changes only when asked.
    - Do not edit files during the audit unless the user explicitly asks you to apply fixes.
@@ -115,8 +117,14 @@ Accepted/no action:
 Root docs finalized: YES | NO
 <result of just release-docs-check or why it was not run>
 
+Agent skill: UP TO DATE | NEEDS UPDATE | NOT CHECKED
+<whether skills/herdr/SKILL.md matches the shipped CLI and agent-control behavior>
+
 Nix Cargo lock integration: OK | NEEDS ATTENTION | NOT CHECKED
 <result of nix flake check or any required cargoLock.outputHashes status>
+
+Render scaling: OK | NEEDS ATTENTION | NOT CHECKED
+<1, 15, and 50-count median/p95 results and ratios for background-workspace resize/layout and active panes>
 
 Required before release:
 1. <short action>

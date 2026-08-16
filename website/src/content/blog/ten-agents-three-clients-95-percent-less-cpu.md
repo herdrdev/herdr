@@ -6,11 +6,11 @@ ogImage: /assets/og-blog-frames-v1.png
 draft: false
 ---
 
-Across workloads dominated by unnecessary rendering, total CPU for the Herdr server and its attached clients fell by 89 to 95 percent. The renderer still runs at the same speed. Herdr now asks it to draw fewer frames.
+In workloads dominated by unnecessary rendering, total CPU for the Herdr server and its attached clients fell by 89 to 95 percent. The renderer still runs at the same speed. Herdr now asks it to draw fewer frames.
 
-The saving grows with the session. With one agent and one client, total CPU fell 91 percent. With ten agents producing background output and three clients, it fell 95 percent. Every frame the server skips is also one less frame to serialize, transmit, and apply in each client.
+The savings grow with the session. With one agent and one client, total CPU fell 91 percent. With ten agents producing background output and three clients, it fell 95 percent. Every frame the server skips is also one less frame to serialize, transmit, and apply in each client.
 
-Three changes got us there, and none came from a profiler. The first started as a complaint and gave us a rule. Motion should mean something changed.
+We found all three changes without a profiler. The first started as a complaint and gave us a rule: motion should mean something changed.
 
 ## The spinner was a complaint before it was a cost
 

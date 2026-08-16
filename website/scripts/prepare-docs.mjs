@@ -53,8 +53,12 @@ if (process.argv[2] === '--rewrite-preview-doc-fixture') {
   if (unsupported.length > 0) {
     throw new Error('usage: node website/scripts/prepare-docs.mjs [--docs-only] [--draft]');
   }
-  if (!process.argv.includes('--docs-only')) await preparePublicAssets();
-  await prepareDocs({ draft: process.argv.includes('--draft') });
+  const docsOnly = process.argv.includes('--docs-only');
+  if (!docsOnly) await preparePublicAssets();
+  await prepareDocs({
+    draft: process.argv.includes('--draft'),
+    publishAgentIndexes: !docsOnly,
+  });
 }
 
 async function preparePublicAssets() {
@@ -86,7 +90,7 @@ async function preparePublicAssets() {
   }
 }
 
-async function prepareDocs({ draft }) {
+async function prepareDocs({ draft, publishAgentIndexes }) {
   const manifest = JSON.parse(await readFile(versionsManifestPath, 'utf8'));
   if (
     manifest.schema_version !== 1 ||
@@ -195,6 +199,136 @@ async function prepareDocs({ draft }) {
     `${JSON.stringify(configReferences, null, 2)}\n`,
     'utf8',
   );
+
+  if (publishAgentIndexes) {
+    if (typeof currentEntry.tag !== 'string' || typeof currentEntry.source !== 'string') {
+      throw new Error(`current docs version ${manifest.current} is missing its tag or source`);
+    }
+    const stableSourceDir = resolve(versionsDir, manifest.current, 'website/src/content/docs');
+    const previewRef = draft ? 'master' : previewManifest.commit;
+    const previewBuild = draft ? 'draft' : previewManifest.build_id;
+    await Promise.all([
+      writeAgentDocsIndex({
+        output: resolve(publicDir, 'llms.txt'),
+        heading: 'Herdr stable documentation index',
+        summary: `Current stable release: ${manifest.current}.`,
+        sourceDir: stableSourceDir,
+        ref: currentEntry.tag,
+        repositoryPath: currentEntry.source,
+        extraSections: [
+          '## Optional bundles',
+          '- [Abridged documentation](https://herdr.dev/llms-small.txt)',
+          '- [Complete documentation](https://herdr.dev/llms-full.txt)',
+          '',
+          '## Other resources',
+          '- [Agent guide](https://herdr.dev/agent-guide.md): help a human understand, set up, or troubleshoot Herdr',
+          '- [Preview documentation](https://herdr.dev/llms-preview.txt): use only for the preview channel',
+        ],
+      }),
+      writeAgentDocsIndex({
+        output: resolve(publicDir, 'llms-preview.txt'),
+        heading: 'Herdr preview documentation index',
+        summary: `Active preview build: ${previewBuild} (${previewRef.slice(0, 12)}).`,
+        sourceDir: previewDocsSourceDir,
+        ref: previewRef,
+        repositoryPath: 'docs/next/website/src/content/docs',
+        extraSections: [
+          '## Other resources',
+          '- [Stable documentation](https://herdr.dev/llms.txt): use unless the human is running the preview channel',
+          '- [Agent guide](https://herdr.dev/agent-guide.md): help a human understand, set up, or troubleshoot Herdr',
+        ],
+      }),
+    ]);
+  }
+}
+
+async function writeAgentDocsIndex({
+  output,
+  heading,
+  summary,
+  sourceDir,
+  ref,
+  repositoryPath,
+  extraSections,
+}) {
+  const pages = await collectAgentDocs(sourceDir);
+  const rawRoot = `https://raw.githubusercontent.com/herdrdev/herdr/${ref}`;
+  const rawBase = `${rawRoot}/${repositoryPath}`;
+  const configDataPath = repositoryPath.replace(
+    /\/content\/docs$/,
+    '/data/config-reference.json',
+  );
+  if (configDataPath === repositoryPath) {
+    throw new Error(`cannot derive config reference path from ${repositoryPath}`);
+  }
+
+  const lines = [
+    `# ${heading}`,
+    '',
+    `> ${summary}`,
+    '',
+    'Open only the pages relevant to the current task. Links return raw MDX from the exact documented source revision. For another topic, return to this index instead of following `/docs/` links inside a page, which serve human-facing HTML.',
+    '',
+    '## Documentation',
+    '',
+    ...pages.map(
+      ({ title, description, path }) =>
+        `- [${title}](${rawBase}/${path})${description ? `: ${description}` : ''}`,
+    ),
+    '',
+    '## Generated reference data',
+    '',
+    `- [Config reference data](${rawRoot}/${configDataPath}): every canonical config.toml key, type, default, and description`,
+    '',
+    ...extraSections,
+    '',
+  ];
+  await writeFile(output, lines.join('\n'), 'utf8');
+}
+
+async function collectAgentDocs(sourceDir) {
+  const pages = [];
+
+  async function walk(directory, prefix = '') {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!prefix && entry.isDirectory() && ['ja', 'zh-cn'].includes(entry.name)) continue;
+      const path = join(directory, entry.name);
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(path, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !['.md', '.mdx'].includes(extname(entry.name).toLowerCase())) {
+        continue;
+      }
+      const content = await readFile(path, 'utf8');
+      const title = frontmatterValue(content, 'title');
+      if (!title) throw new Error(`${path} is missing a frontmatter title`);
+      pages.push({
+        title,
+        description: frontmatterValue(content, 'description'),
+        path: relativePath,
+      });
+    }
+  }
+
+  await walk(sourceDir);
+  pages.sort((a, b) => {
+    if (a.path === 'index.mdx' || a.path === 'index.md') return -1;
+    if (b.path === 'index.mdx' || b.path === 'index.md') return 1;
+    return a.title.localeCompare(b.title, 'en');
+  });
+  return pages;
+}
+
+function frontmatterValue(content, key) {
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
+  const value = frontmatter?.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]?.trim();
+  if (!value) return undefined;
+  const quote = value[0];
+  return (quote === '"' || quote === "'") && value.endsWith(quote)
+    ? value.slice(1, -1)
+    : value;
 }
 
 async function copyPreparedDocs(sourceDir, destinationDir, rewrite, pathPrefix = '') {

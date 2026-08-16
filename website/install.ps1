@@ -4,7 +4,11 @@ param(
     [string]$ManifestUrl = $env:HERDR_MANIFEST_URL,
     [string]$InstallDir = $env:HERDR_INSTALL_DIR,
     [string]$ExpectedBuildId = $env:HERDR_EXPECTED_BUILD_ID,
-    [int]$Retain = 3
+    [int]$Retain = 3,
+    [string]$LocalPackagePath,
+    [string]$LocalPackageFormat,
+    [string]$LocalPackageIdentity,
+    [string]$LocalPackageSha256
 )
 
 Set-StrictMode -Version Latest
@@ -18,6 +22,21 @@ if ([string]::IsNullOrWhiteSpace($Channel)) {
 if ($Channel -notin @("stable", "preview")) {
     Write-Error "Invalid Herdr channel '$Channel'. Use 'preview'."
     exit 1
+}
+
+$localPackageValueCount = @(
+    $LocalPackagePath,
+    $LocalPackageFormat,
+    $LocalPackageIdentity,
+    $LocalPackageSha256 |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+).Count
+if ($localPackageValueCount -notin @(0, 4)) {
+    throw "Local package mode requires path, format, identity, and SHA-256."
+}
+$useLocalPackage = $localPackageValueCount -eq 4
+if ($useLocalPackage -and $LocalPackageFormat -notin @("zip", "exe")) {
+    throw "Local Herdr package has unsupported format '$LocalPackageFormat'."
 }
 
 function Write-Step {
@@ -154,12 +173,21 @@ function Get-ManifestAsset {
         throw "Release manifest does not include a binary for $Target."
     }
 
+    $sha256 = $null
+    $shaMapProperty = $Manifest.PSObject.Properties["sha256"]
+    if ($null -ne $shaMapProperty -and $null -ne $shaMapProperty.Value) {
+        $targetShaProperty = $shaMapProperty.Value.PSObject.Properties[$Target]
+        if ($null -ne $targetShaProperty -and -not [string]::IsNullOrWhiteSpace([string]$targetShaProperty.Value)) {
+            $sha256 = [string]$targetShaProperty.Value
+        }
+    }
+
     $asset = $property.Value
     if ($asset -is [string]) {
         $url = [string]$asset
         return [PSCustomObject]@{
             Url = $url
-            Sha256 = $null
+            Sha256 = $sha256
             Format = if ($url.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) { "zip" } else { "exe" }
         }
     }
@@ -180,10 +208,8 @@ function Get-ManifestAsset {
         throw "Release manifest asset $Target has unsupported format '$format'."
     }
     $shaProperty = $asset.PSObject.Properties["sha256"]
-    $sha256 = if ($null -eq $shaProperty -or [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
-        $null
-    } else {
-        [string]$shaProperty.Value
+    if ($null -ne $shaProperty -and -not [string]::IsNullOrWhiteSpace([string]$shaProperty.Value)) {
+        $sha256 = [string]$shaProperty.Value
     }
 
     return [PSCustomObject]@{
@@ -541,7 +567,7 @@ switch ($architecture) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($ManifestUrl)) {
+if (-not $useLocalPackage -and [string]::IsNullOrWhiteSpace($ManifestUrl)) {
     $ManifestUrl = if ($Channel -eq "preview") {
         "https://herdr.dev/preview.json"
     } else {
@@ -582,13 +608,21 @@ if (-not [string]::IsNullOrWhiteSpace($existingHerdr) -and -not (Test-PathStarts
     Write-WarningStep "PATH order decides which Herdr runs. This installer will put $visibleBinDir first for future and current PowerShell sessions."
 }
 
-Write-Step "Fetching Herdr $Channel manifest"
-$manifest = ConvertTo-ManifestObject -Manifest (Invoke-RestMethod -Uri $ManifestUrl)
-if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and [string]$manifest.build_id -ne $ExpectedBuildId) {
-    throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run herdr update again."
+if ($useLocalPackage) {
+    $versionIdentity = $LocalPackageIdentity
+    $asset = [PSCustomObject]@{
+        Sha256 = $LocalPackageSha256
+        Format = $LocalPackageFormat
+    }
+} else {
+    Write-Step "Fetching Herdr $Channel manifest"
+    $manifest = ConvertTo-ManifestObject -Manifest (Invoke-RestMethod -Uri $ManifestUrl)
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedBuildId) -and [string]$manifest.build_id -ne $ExpectedBuildId) {
+        throw "Preview manifest changed while updating. Expected build $ExpectedBuildId but found $($manifest.build_id). Run herdr update again."
+    }
+    $versionIdentity = Resolve-HerdrVersion -Manifest $manifest -SelectedChannel $Channel
+    $asset = Get-ManifestAsset -Manifest $manifest -Target $target
 }
-$versionIdentity = Resolve-HerdrVersion -Manifest $manifest -SelectedChannel $Channel
-$asset = Get-ManifestAsset -Manifest $manifest -Target $target
 $safeVersionIdentity = $versionIdentity -replace '[^0-9A-Za-z._-]', '-'
 $releaseName = "$safeVersionIdentity-$targetTriple"
 $releaseDir = Join-Path $releasesDir $releaseName
@@ -602,10 +636,16 @@ try {
         Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 
         if (-not (Test-HerdrReleaseComplete -ReleaseDir $releaseDir -Format $asset.Format)) {
-            $downloadPath = Join-Path $tempDir "herdr-download.$($asset.Format)"
+            $downloadPath = if ($useLocalPackage) {
+                $LocalPackagePath
+            } else {
+                Join-Path $tempDir "herdr-download.$($asset.Format)"
+            }
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
-            Write-Step "Downloading Herdr"
-            Invoke-WebRequest -Uri $asset.Url -OutFile $downloadPath
+            if (-not $useLocalPackage) {
+                Write-Step "Downloading Herdr"
+                Invoke-WebRequest -Uri $asset.Url -OutFile $downloadPath
+            }
             Test-FileDigest -Path $downloadPath -ExpectedDigest $asset.Sha256
 
             if ($asset.Format -eq "zip") {
@@ -625,14 +665,15 @@ try {
             $backupDir = $null
             if (Test-Path -LiteralPath $releaseDir) {
                 $backupDir = Join-Path $releasesDir ".backup.$releaseName.$([System.Guid]::NewGuid().ToString('N'))"
-                Move-Item -LiteralPath $releaseDir -Destination $backupDir
+                [System.IO.Directory]::Move($releaseDir, $backupDir)
             }
             try {
-                Move-Item -LiteralPath $stagingDir -Destination $releaseDir
+                [System.IO.Directory]::Move($stagingDir, $releaseDir)
             } catch {
                 if ($null -ne $backupDir -and -not (Test-Path -LiteralPath $releaseDir)) {
-                    Move-Item -LiteralPath $backupDir -Destination $releaseDir
+                    [System.IO.Directory]::Move($backupDir, $releaseDir)
                 }
+                Write-WarningStep "Windows could not activate the downloaded release. Another process may have a package file open, such as antivirus or indexing. No incomplete release was activated. Run herdr update again."
                 throw
             }
             if ($null -ne $backupDir) {

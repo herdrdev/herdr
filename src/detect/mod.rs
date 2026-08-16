@@ -61,11 +61,12 @@ pub enum Agent {
     Hermes,
     Kilo,
     Qodercli,
+    Qwen,
     Maki,
 }
 
 impl Agent {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -86,10 +87,11 @@ impl Agent {
         Self::Hermes,
         Self::Kilo,
         Self::Qodercli,
+        Self::Qwen,
         Self::Maki,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 19] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -108,6 +110,7 @@ impl Agent {
         Self::Hermes,
         Self::Kilo,
         Self::Qodercli,
+        Self::Qwen,
         Self::Maki,
     ];
 }
@@ -134,6 +137,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
+        Agent::Qwen => "qwen",
         Agent::Maki => "maki",
     }
 }
@@ -144,7 +148,13 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Claude => "claude",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor-agent",
+        Agent::Cursor => {
+            if cfg!(windows) {
+                "cursor-agent.cmd"
+            } else {
+                "cursor-agent"
+            }
+        }
         Agent::Devin => "devin",
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
@@ -160,6 +170,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
+        Agent::Qwen => "qwen",
         Agent::Maki => "maki",
     }
 }
@@ -196,6 +207,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
+        "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
         _ => None,
     }
@@ -295,7 +307,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:antigravity_cli", "agy")
+        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
     )
 }
 
@@ -337,6 +349,19 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
 
     if identify_agent(effective).is_some() {
         return effective.to_string();
+    }
+
+    if let Some(runtime) = process.argv.as_deref().and_then(|argv| argv.first()) {
+        let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
+        if matches!(runtime_name.as_str(), "node" | "bun") {
+            if let Some(wrapped_agent) =
+                wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
+            {
+                if identify_agent(&wrapped_agent) == Some(Agent::Qwen) {
+                    return wrapped_agent;
+                }
+            }
+        }
     }
 
     if let Some(wrapped_agent) = argv0_agent_name(process.argv.as_deref())
@@ -544,6 +569,14 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
         {
             return Some(agent_label(Agent::Pi).to_string());
         }
+        if window == ["node_modules", "@qwen-code", "qwen-code", "dist", "index"] {
+            return Some(agent_label(Agent::Qwen).to_string());
+        }
+    }
+    for window in components.windows(4) {
+        if window == ["node_modules", "mastracode", "dist", "cli"] {
+            return Some(agent_label(Agent::Mastracode).to_string());
+        }
     }
     None
 }
@@ -698,6 +731,8 @@ mod tests {
         assert_eq!(identify_agent("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
+        assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
     }
 
@@ -723,6 +758,7 @@ mod tests {
         assert_eq!(parse_agent_label("kiro-cli"), Some(Agent::Kiro));
         assert_eq!(parse_agent_label("grok-build"), Some(Agent::Grok));
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
+        assert_eq!(parse_agent_label("qwen-code"), Some(Agent::Qwen));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
     }
@@ -743,7 +779,14 @@ mod tests {
             (Agent::Claude, "claude"),
             (Agent::Codex, "codex"),
             (Agent::Gemini, "gemini"),
-            (Agent::Cursor, "cursor-agent"),
+            (
+                Agent::Cursor,
+                if cfg!(windows) {
+                    "cursor-agent.cmd"
+                } else {
+                    "cursor-agent"
+                },
+            ),
             (Agent::Devin, "devin"),
             (Agent::Antigravity, "agy"),
             (Agent::Cline, "cline"),
@@ -759,6 +802,7 @@ mod tests {
             (Agent::Hermes, "hermes"),
             (Agent::Kilo, "kilo"),
             (Agent::Qodercli, "qodercli"),
+            (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
@@ -788,6 +832,7 @@ mod tests {
     fn session_identity_integrations_leave_state_to_screen_detection() {
         for (source, label, agent) in [
             ("herdr:hermes", "hermes", Agent::Hermes),
+            ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
@@ -826,6 +871,27 @@ mod tests {
             identify_agent_in_job(&job),
             Some((Agent::Codex, "codex".to_string()))
         );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_qwen() {
+        for argv in [
+            vec!["node", "/home/user/.fnm/bin/qwen"],
+            vec![
+                "node.exe",
+                r"C:\Users\user\AppData\Roaming\npm\node_modules\@qwen-code\qwen-code\dist\index.js",
+            ],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "MainThread", &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Qwen, "qwen".to_string()))
+            );
+        }
     }
 
     #[test]
@@ -967,6 +1033,26 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Pi, "pi".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_mastracode_package_cli() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    "node.exe",
+                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\mastracode\\dist\\cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Mastracode, "mastracode".to_string()))
         );
     }
 

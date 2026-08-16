@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 if ($env:HERDR_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)) { exit 0 }
@@ -49,4 +49,5 @@ if ([string]::IsNullOrWhiteSpace($sessionId)) {
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-& herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null
+$herdr = if ([string]::IsNullOrWhiteSpace($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
+& $herdr pane report-agent-session $env:HERDR_PANE_ID --source herdr:copilot --agent copilot --agent-session-id $sessionId --seq $seq 2>$null | Out-Null

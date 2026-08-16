@@ -41,9 +41,9 @@ review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 可用的 shell 窗格必须停在交互式 shell 提示符,由 shell 自身占用前台,没有正在前台运行的命令、编辑器或智能体。调用 `agent start` 前先让窗格回到提示符。
 
-`--kind` 选择受支持的智能体及其标准可执行文件。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli` 和 `maki`。`--` 后的参数会原样传给该可执行文件。
+`--kind` 选择受支持的智能体及其标准可执行文件。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen` 和 `maki`。`--` 后的参数会原样传给该可执行文件。
 
-`agent start` 只有在 Herdr 于同一终端检测到预期智能体,并确认它可接受交互输入后才返回。默认等待启动 30 秒;`--timeout` 必须大于 3000 且不超过 300000 毫秒。
+成功的 `agent start` 只有在 Herdr 于同一终端检测到预期智能体,并确认它可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认等待启动 30 秒;`--timeout` 必须大于 3000 且不超过 300000 毫秒。
 
 ```bash
 herdr agent start reviewer --kind codex --pane "$review_pane" -- -m gpt-5.4
@@ -69,11 +69,11 @@ herdr agent rename w1:p2 reviewer
 | 向智能体交互界面发送按键 | `agent send-keys` |
 | 等待智能体生命周期状态 | `agent wait` |
 
-`agent prompt` 会提交文本和编码后的 Enter,并遵循终端当前的 bracketed paste 模式。即使智能体正在 working 也可以提交。使用 `agent send-keys` 进行 `esc`、`up`、`enter`、`ctrl+c` 等交互;`escape` 也是 `esc` 的别名。只有在明确需要原始终端控制时才使用窗格输入命令。
+`agent prompt` 会先发送文本,短暂延迟后再发送编码后的 Enter,并遵循终端当前的 bracketed paste 模式。即使智能体正在 working 也可以提交。如果智能体已经是 `blocked`,它不会发送任何终端输入,而是返回 `agent_blocked`;请先检查对话框,再用 `agent send-keys` 明确作出响应。使用 `agent send-keys` 进行 `esc`、`up`、`enter`、`ctrl+c` 等交互;`escape` 也是 `esc` 的别名。只有在明确需要原始终端控制时才使用窗格输入命令。
 
 窗格输入直接指定终端,不关心当前进程。智能体输入会解析实时智能体;如果该智能体已不再控制此窗格,操作会被拒绝。
 
-`agent prompt --wait` 会立即提交提示。智能体从非 working 状态开始时，Herdr 首先要求在五秒内观察到生命周期变化。如果状态序列没有前进，它会返回 `agent_prompt_stalled`，而不是无限等待；调用方设置的 `--timeout` 不超过五秒时，仍返回普通的 `timeout` 错误。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。独立的 `agent wait` 会观察当前智能体；如果状态已经匹配，就会立即返回。两者默认匹配 `idle`、`done` 或 `blocked`。可以重复使用 `--until` 接受多个精确状态，例如 `--until idle --until done`；需要 `unknown` 时请明确使用 `--until unknown`。在 `agent prompt` 中，`--until` 必须与 `--wait` 一起使用。
+除非智能体已经是 `blocked`,`agent prompt --wait` 会立即提交提示。已经是 `blocked` 时,它不会开始等待,而是返回 `agent_blocked`。已接受的提示从其他非 working 状态开始时,Herdr 首先要求在五秒内观察到生命周期变化。如果状态序列没有前进，它会返回 `agent_prompt_stalled`，而不是无限等待；调用方设置的 `--timeout` 不超过五秒时，仍返回普通的 `timeout` 错误。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。独立的 `agent wait` 会观察当前智能体；如果状态已经匹配，就会立即返回。两者默认匹配 `idle`、`done` 或 `blocked`。可以重复使用 `--until` 接受多个精确状态，例如 `--until idle --until done`；需要 `unknown` 时请明确使用 `--until unknown`。在 `agent prompt` 中，`--until` 必须与 `--wait` 一起使用。
 
 `idle` 表示智能体正等待输入,且其标签页已在聚焦的 Herdr 界面中显示。`done` 是相同的底层 idle 状态,但用于后台工作完成后,直到该标签页获得焦点或 `pane focus` / `agent focus` 指向它。仅通过 CLI 读取不会把它标记为已查看。`blocked` 表示 Herdr 识别到了审批或提问界面。`unknown` 表示智能体存在,但 Herdr 无法可靠判断其生命周期;它不代表工作成功完成。区别重要时,请指定精确的 `--until` 状态。
 

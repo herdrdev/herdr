@@ -1,6 +1,7 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 const repoBlob = 'https://github.com/herdrdev/herdr/blob/master/';
 const nonCanonicalDocsPath = /^\/(?:ja\/|zh-cn\/)?docs\/(?:preview|\d+\.\d+\.\d+)(?:\/|$)/;
@@ -92,6 +93,21 @@ export default defineConfig({
         Sidebar: './src/components/Sidebar.astro',
         SiteTitle: './src/components/SiteTitle.astro',
       },
+      plugins: [
+        starlightLlmsTxt({
+          projectName: 'Herdr',
+          description: 'Terminal workspace manager and runtime for AI coding agents.',
+          details: 'These files document the current stable Herdr release. Preview and archived release documentation are intentionally excluded.',
+          exclude: ['docs/preview{,/**}', 'docs/+([0-9]).+([0-9]).+([0-9]){,/**}'],
+          optionalLinks: [
+            {
+              label: 'Agent guide',
+              url: 'https://herdr.dev/agent-guide.md',
+              description: 'help a human understand, set up, or troubleshoot Herdr',
+            },
+          ],
+        }),
+      ],
       customCss: ['./src/styles/starlight.css'],
       head: [
         // the brand display face; Starlight owns its own <head>, so the

@@ -10,6 +10,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "keys",
     "onboarding",
     "remote",
+    "server",
     "session",
     "terminal",
     "theme",
@@ -294,6 +295,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
     load_live_section(
         table,
+        "server",
+        "server config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.server = section,
+    );
+    load_live_section(
+        table,
         "update",
         "update config",
         &mut diagnostics,
@@ -340,6 +349,8 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut invalid_sections,
         |section| config.remote = section,
     );
+
+    diagnostics.extend(config.theme.diagnostics());
 
     Ok(LoadedConfig {
         config,
@@ -861,6 +872,20 @@ resume_agents_on_restore = true
         assert!(loaded.config.session.resume_agents_on_restore);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn load_live_config_warns_about_unknown_theme_names() {
+        let loaded = load_live_config_from_str(
+            r#"
+[theme]
+name = "catppucin"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.diagnostics.len(), 1);
+        assert!(loaded.diagnostics[0].contains("theme.name = \"catppucin\""));
     }
 
     #[test]

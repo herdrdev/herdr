@@ -9,7 +9,7 @@ To coordinate agents from scripts or from another agent, see [Agent automation](
 
 ## Supported agents
 
-Automatic detection works out of the box for common coding agents. The important difference is not whether Herdr can see an agent. It is which signal is allowed to author `idle`, `working`, and `blocked`.
+Automatic detection works out of the box for common coding agents. The table shows which signal determines `idle`, `working`, and `blocked` for each one.
 
 | Agent | State authority | Integration role |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ Automatic detection works out of the box for common coding agents. The important
 | Kimi Code CLI | lifecycle hooks when installed; otherwise screen manifest | state and session |
 | Hermes Agent | screen manifest | session |
 | Qoder CLI | screen manifest | session |
+| Qwen Code | screen manifest | session |
 | Droid | screen manifest | session |
 | OpenCode | lifecycle plugin when installed; otherwise screen manifest | state and session |
 | Kilo Code CLI | lifecycle plugin when installed; otherwise screen manifest | state and session |
@@ -49,7 +50,7 @@ Integrations marked `session` in the table above are intentionally not lifecycle
 
 ## VMs and sandbox wrappers
 
-On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint is scoped to that foreground process; setting it only inside a VM or container is not visible to Herdr, and you should avoid exporting it globally unless every inherited foreground process should be treated as that agent.
+On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint applies only to that foreground process. Herdr cannot see it if you set it only inside a VM or container. Avoid exporting it globally unless every inherited foreground process should be treated as that agent.
 
 Some restricted Linux runtimes do not expose a terminal foreground process group. Start the Herdr server with `HERDR_PROCESS_DETECTION=child-groups` to opt into direct child-process-group inference when native detection is unavailable. Native detection remains preferred, and the default `native` mode never performs this inference. The opt-in mode is best effort: a newer background job can be mistaken for the foreground job. The variable is read by the server and requires a restart; set it in the remote server environment rather than on an attaching client.
 
@@ -57,7 +58,7 @@ Some restricted Linux runtimes do not expose a terminal foreground process group
 
 Blocked detection is deliberately strict for screen-manifest agents. Herdr only marks `blocked` when the live bottom-buffer snapshot matches known visible approval, question, or permission UI. If no manifest rule matches for a known agent, Herdr falls back to `idle` and labels that fallback as `default_known_agent_idle_fallback` in explain output.
 
-This means unusual new agent prompts may initially show as `idle` instead of `blocked` until Herdr learns that screen shape. Those interactions should not make Herdr send input or take destructive action; they only affect the visible status and waits.
+This means unusual new agent prompts may initially show as `idle` instead of `blocked` until Herdr learns that screen shape. The misclassification affects only the visible status and waits. It should not make Herdr send input or take destructive action.
 
 ## Detection manifests
 
@@ -96,7 +97,7 @@ This is the main Herdr workflow: start several agents, let them work in parallel
 
 ## Direct integrations
 
-Install the integration for each agent you use; it gives Herdr hook or plugin reports instead of screen detection alone:
+Install the integration for each agent you use to give Herdr hook or plugin reports instead of screen detection alone:
 
 ```bash
 herdr integration install claude

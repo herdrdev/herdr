@@ -13,9 +13,10 @@ use super::{
 };
 
 pub(crate) use super::unix_common::{
-    create_remote_private_dir, create_remote_ssh_config_dir, create_remote_ssh_config_file,
-    remote_bridge_endpoint_path, remote_private_temp_base, remote_reattach_argument,
-    remote_reattach_program, remote_ssh_config_paths,
+    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
+    create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
+    remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
+    remote_ssh_config_paths, status_commands_supported, StatusCommandGuard,
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
@@ -38,6 +39,10 @@ pub fn raise_server_nofile_limit() {}
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     running_inside_wsl()
+}
+
+pub(crate) fn should_query_host_terminal_palette() -> bool {
+    !running_inside_wsl()
 }
 
 fn running_inside_wsl() -> bool {

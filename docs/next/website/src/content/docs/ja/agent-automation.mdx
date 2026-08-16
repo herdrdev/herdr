@@ -41,9 +41,9 @@ review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 利用可能なシェルペインとは、対話シェルのプロンプトに戻っており、フォアグラウンドをシェル自身が所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていないペインです。`agent start` の前にプロンプトへ戻してください。
 
-`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`maki` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
+`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
 
-`agent start` は、同じターミナルで期待したエージェントを検出し、対話入力の準備ができたと Herdr が判断してから返ります。起動待機はデフォルトで 30 秒です。`--timeout` は 3000 より大きく 300000 以下のミリ秒で指定します。
+成功した `agent start` は、同じターミナルで期待したエージェントを検出し、対話入力の準備ができたと Herdr が判断してから返ります。起動中の検出状態が `blocked` の場合、コマンドは直ちに `agent_not_ready` を返します。名前は `agent read` と `agent send-keys` で引き続き使用でき、検出状態が `idle` になるとプロンプトを送信できるようになります。起動待機はデフォルトで 30 秒です。`--timeout` は 3000 より大きく 300000 以下のミリ秒で指定します。
 
 ```bash
 herdr agent start reviewer --kind codex --pane "$review_pane" -- -m gpt-5.4
@@ -69,11 +69,11 @@ herdr agent rename w1:p2 reviewer
 | エージェントの対話 UI にキーを送る | `agent send-keys` |
 | エージェントのライフサイクル状態を待つ | `agent wait` |
 
-`agent prompt` は文字列とエンコード済み Enter を送信し、ターミナルの現在の bracketed paste モードを尊重します。working 中のエージェントにも送信できます。`esc`、`up`、`enter`、`ctrl+c` のような操作には `agent send-keys` を使います。`escape` も `esc` のエイリアスとして使えます。意図的に生のターミナルを操作したい場合は、ペイン入力コマンドを使ってください。
+`agent prompt` はテキストを送信し、短い遅延の後にエンコード済み Enter を送信します。ターミナルの現在の bracketed paste モードを尊重します。working 中のエージェントにも送信できます。エージェントがすでに `blocked` の場合は、ターミナル入力を送信せずに `agent_blocked` を返します。ダイアログを確認し、意図した応答には `agent send-keys` を使ってください。`esc`、`up`、`enter`、`ctrl+c` のような操作には `agent send-keys` を使います。`escape` も `esc` のエイリアスとして使えます。意図的に生のターミナルを操作したい場合は、ペイン入力コマンドを使ってください。
 
 ペイン入力は、現在のプロセスに関係なくターミナルを指定します。エージェント入力はライブエージェントを解決し、そのエージェントがペインを制御しなくなっていれば操作を拒否します。
 
-`agent prompt --wait` はプロンプトをすぐ送信します。エージェントが non-working 状態から始まる場合、Herdr はまず 5 秒以内にライフサイクル変化が観測されることを要求します。状態シーケンスが進まなければ、無期限に待たず `agent_prompt_stalled` を返します。呼び出し側の `--timeout` が 5 秒以下なら、通常の `timeout` エラーを返します。活動を観測した後、要求された安定状態を待ちます。個々のターンは追跡しません。エージェントがすでに working の場合、進行中ターンの完了が待機を満たすことがあります。単独の `agent wait` は現在のエージェントを監視し、すでに状態が一致していれば即座に返ります。どちらもデフォルトでは `idle`、`done`、`blocked` を待ちます。複数の正確な状態を許可するには、`--until idle --until done` のように `--until` を繰り返します。`unknown` が必要な場合は `--until unknown` を明示してください。`agent prompt` では `--until` に `--wait` が必要です。
+`agent prompt --wait` は、エージェントがすでに `blocked` でない限り、プロンプトをすぐ送信します。すでに `blocked` の場合は待機を開始せずに `agent_blocked` を返します。受け付けたプロンプトが別の non-working 状態から始まる場合、Herdr はまず 5 秒以内にライフサイクル変化が観測されることを要求します。状態シーケンスが進まなければ、無期限に待たず `agent_prompt_stalled` を返します。呼び出し側の `--timeout` が 5 秒以下なら、通常の `timeout` エラーを返します。活動を観測した後、要求された安定状態を待ちます。個々のターンは追跡しません。エージェントがすでに working の場合、進行中ターンの完了が待機を満たすことがあります。単独の `agent wait` は現在のエージェントを監視し、すでに状態が一致していれば即座に返ります。どちらもデフォルトでは `idle`、`done`、`blocked` を待ちます。複数の正確な状態を許可するには、`--until idle --until done` のように `--until` を繰り返します。`unknown` が必要な場合は `--until unknown` を明示してください。`agent prompt` では `--until` に `--wait` が必要です。
 
 `idle` は、エージェントが入力待ちで、そのタブがフォーカス中の Herdr UI ですでに表示済みであることを示します。`done` は同じ基礎的な idle 状態ですが、バックグラウンド作業が完了してから、そのタブをフォーカスするか `pane focus` / `agent focus` で対象にするまで使われます。CLI で読み取るだけでは表示済みになりません。`blocked` は承認または質問 UI を Herdr が認識した状態です。`unknown` はエージェントが存在するもののライフサイクルを確実に分類できない状態で、成功完了を意味しません。違いが重要なら正確な `--until` を指定してください。
 

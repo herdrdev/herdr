@@ -29,6 +29,15 @@ const TERMINAL_SESSION_OBSERVE_USAGE: &str =
     "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
     "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
+pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
+    "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
+    "  Help a human understand or set up Herdr for the first time:\n",
+    "    https://herdr.dev/agent-guide.md\n",
+    "  Debug or investigate a problem with Herdr:\n",
+    "    https://herdr.dev/llms.txt\n",
+    "  Control Herdr panes, agents, or workspaces:\n",
+    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill",
+);
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
     let Some((key, value)) = raw.split_once('=') else {

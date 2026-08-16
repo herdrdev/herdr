@@ -83,12 +83,19 @@ impl WorkspaceGitStatusSnapshot {
         status_cache_key: PathBuf,
         demand: GitStatusRefreshDemand,
     ) -> WorkspaceGitStatus {
+        let auto_label = self
+            .space
+            .as_ref()
+            .map(|space| {
+                self::git::automatic_workspace_label(&resolved_identity_cwd, &space.repo_root)
+            })
+            .unwrap_or_else(|| fallback_label_from_cwd(&resolved_identity_cwd));
         WorkspaceGitStatus {
             workspace_id,
             resolved_identity_cwd,
             status_cache_key,
             demand,
-            auto_label: self.auto_label,
+            auto_label,
             branch: self.branch,
             ahead_behind: self.ahead_behind,
             space: self.space,
@@ -1183,6 +1190,12 @@ impl Workspace {
 
     pub fn pane_state(&self, pane_id: PaneId) -> Option<&PaneState> {
         self.tabs.iter().find_map(|tab| tab.panes.get(&pane_id))
+    }
+
+    pub fn pane_state_mut(&mut self, pane_id: PaneId) -> Option<&mut PaneState> {
+        self.tabs
+            .iter_mut()
+            .find_map(|tab| tab.panes.get_mut(&pane_id))
     }
 
     pub fn terminal_id(&self, pane_id: PaneId) -> Option<&TerminalId> {

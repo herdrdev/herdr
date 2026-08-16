@@ -239,6 +239,8 @@ dark_name = "catppuccin"
 ```toml
 [theme.custom]
 sidebar_bg = "#181825"
+active_row_bg = "#1e1e2e"
+selection_bg = "#313244"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -247,13 +249,28 @@ red = "#f38ba8"
 yellow = "#f9e2af"
 ```
 
-`sidebar_bg` 可单独设置桌面侧边栏的背景色。省略时，侧边栏继续使用宿主终端背景。
+`sidebar_bg` 可单独设置桌面侧边栏的背景色。省略时，侧边栏继续使用宿主终端背景。`active_row_bg` 可更改当前 Space 和已聚焦 Agent 行的背景色，而不会影响分隔线或滚动条轨道。`selection_bg` 可更改侧边栏中 Navigate 模式光标行的背景色。
 
 颜色值支持十六进制、命名颜色、`rgb(r,g,b)`，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
 
 ## UI 与侧边栏
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
+
+### 外层终端窗口标题
+
+Herdr 会模拟各窗格中的终端，因此窗格内写入的 `OSC 0`/`OSC 2` 标题只会停留在 Herdr。Herdr 会向自己所运行的终端写入自己的标题，窗口管理器和终端标签栏读取的正是这个标题：
+
+```toml
+[ui]
+window_title = "{hostname}: {workspace}"
+```
+
+可用记号为 `{hostname}`、`{workspace}`、`{tab}`、`{pane}`（聚焦窗格的手动名称）和 `{terminal_title}`（聚焦窗格自身的终端标题，已去除加载动画字符）。用 `{{` 和 `}}` 表示字面花括号。没有值的记号会渲染为空。
+
+标题在 Herdr 服务器上生成，因此即使通过 `herdr --remote` 连接或经由 SSH 运行 `herdr`，`{hostname}` 仍然指向运行窗格的那台机器。设置 `window_title = ""` 可以不改动外层终端标题。
+
+`client.window_title.set` 会覆盖配置的标题，直到 `client.window_title.clear` 将其交还。
 
 ### 侧边栏行布局
 

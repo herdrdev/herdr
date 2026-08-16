@@ -16,7 +16,7 @@ Herdr has a different problem. It is a terminal multiplexer, sure, but it is als
 
 It gets frequent fixes for agent detection (isn't it cool that we have all the labs building their own CLIs, plugins, and hooks in their own broken way?), terminal behavior, remote workflows, worktrees, mobile use, update flows, and integrations. Users should not have to choose between getting those fixes and killing every pane in a running session.
 
-That's a problem: Herdr needed to update like an app while preserving processes like a terminal multiplexer.
+Herdr needed to update like an app while preserving processes like a terminal multiplexer.
 
 ## The update problem
 
@@ -34,7 +34,7 @@ Tmux has the same class of version-skew behavior. Users hit protocol mismatch er
 
 As far as I can tell, mainstream terminal multiplexers do not do in-place server binary replacement while keeping arbitrary live pane processes attached.
 
-So, that is a small breakthrough, but a real one.
+That is a small breakthrough, but a real one.
 
 ## The important detail is PTY ownership
 
@@ -96,7 +96,7 @@ Full-screen terminal apps are different. Herdr does not fake replay for alternat
 
 ## The invariants
 
-The hard part was not sending FDs. The hard part was making the transaction safe.
+Sending FDs was easier than making the transaction safe.
 
 These were the rules:
 
@@ -116,12 +116,10 @@ This is not checkpoint/restore. It does not survive a reboot. It does not migrat
 
 It is a same-machine Unix handoff. The running pane process stays attached to its PTY slave. The old Herdr server transfers the PTY master to the new Herdr server. The server binary changes; the pane process keeps running.
 
-That is the useful boundary.
-
 ## Why this is cool
 
 Herdr users often keep the exact kind of work open that should not be casually restarted: coding agents, dev servers, shells, REPLs, SSH sessions, debugging sessions, long builds, and local experiments.
 
 A terminal multiplexer should make that work safer, not make updates feel dangerous.
 
-The interesting part is not that Herdr remembers your layout. The interesting part is that the process inside the pane does not have to know an update happened.
+The process inside the pane does not have to know an update happened.

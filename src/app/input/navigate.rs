@@ -320,6 +320,18 @@ impl App {
                     leave_navigate_mode(&mut self.state);
                 }
             }
+            NavigateAction::MoveTabPrevious => {
+                if let Some((ws_idx, source, insert)) = self.active_tab_move(-1) {
+                    self.move_tab_via_api(ws_idx, source, insert);
+                }
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::MoveTabNext => {
+                if let Some((ws_idx, source, insert)) = self.active_tab_move(1) {
+                    self.move_tab_via_api(ws_idx, source, insert);
+                }
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::CloseTab => {
                 if !self.close_active_tab_via_api_requires_confirmation() {
                     leave_navigate_mode(&mut self.state);
@@ -383,6 +395,22 @@ impl App {
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::EnterResizeMode => self.state.mode = Mode::Resize,
+            NavigateAction::ResizePaneLeft => {
+                self.resize_pane_direction_via_api(NavDirection::Left);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::ResizePaneDown => {
+                self.resize_pane_direction_via_api(NavDirection::Down);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::ResizePaneUp => {
+                self.resize_pane_direction_via_api(NavDirection::Up);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::ResizePaneRight => {
+                self.resize_pane_direction_via_api(NavDirection::Right);
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::ToggleSidebar => {
                 self.state.sidebar_collapsed = !self.state.sidebar_collapsed;
                 leave_navigate_mode(&mut self.state);
@@ -537,6 +565,17 @@ impl App {
         }
     }
 
+    pub(crate) fn resize_pane_direction_via_api(&mut self, direction: NavDirection) {
+        self.runtime_pane_resize(
+            "tui.pane.resize",
+            crate::api::schema::PaneResizeParams {
+                pane_id: None,
+                direction: api_pane_direction(direction),
+                amount: None,
+            },
+        );
+    }
+
     pub(crate) fn swap_pane_direction_via_api(&mut self, direction: NavDirection) {
         if let Some((ws_idx, source, target)) = self.directional_pane_swap_from_view(direction) {
             let source_pane_id = self.public_pane_id(ws_idx, source);
@@ -578,6 +617,7 @@ impl App {
                 ratio: None,
                 cwd: None,
                 focus: true,
+                right_click: Default::default(),
                 env: Default::default(),
             },
         );
@@ -721,6 +761,14 @@ impl App {
         order.get(next).copied()
     }
 
+    fn active_tab_move(&self, delta: isize) -> Option<(usize, usize, usize)> {
+        let ws_idx = self.state.active?;
+        let ws = self.state.workspaces.get(ws_idx)?;
+        let source = ws.active_tab;
+        let insert = tab_move_insert_index(ws.tabs.len(), source, delta)?;
+        Some((ws_idx, source, insert))
+    }
+
     fn relative_tab(&self, delta: isize) -> Option<usize> {
         let ws = self
             .state
@@ -830,7 +878,7 @@ impl App {
         )
     }
 
-    fn custom_command_env(&self) -> (Vec<(String, String)>, Option<std::path::PathBuf>) {
+    pub(crate) fn custom_command_env(&self) -> (Vec<(String, String)>, Option<std::path::PathBuf>) {
         let mut env = vec![(
             crate::api::SOCKET_PATH_ENV_VAR.to_string(),
             crate::api::socket_path().display().to_string(),
@@ -927,7 +975,8 @@ impl App {
             .state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
             .ok_or_else(|| std::io::Error::other("focused pane has no scrollback runtime"))?
-            .recent_text(usize::MAX);
+            .recent_unwrapped_text_snapshot(usize::MAX)
+            .text;
 
         let path = write_scrollback_temp_file(&scrollback)?;
 
@@ -1349,6 +1398,8 @@ pub(crate) enum NavigateAction {
     RenameTab,
     PreviousTab,
     NextTab,
+    MoveTabPrevious,
+    MoveTabNext,
     CloseTab,
     RenamePane,
     FocusPaneLeft,
@@ -1366,6 +1417,10 @@ pub(crate) enum NavigateAction {
     CopyMode,
     Zoom,
     EnterResizeMode,
+    ResizePaneLeft,
+    ResizePaneDown,
+    ResizePaneUp,
+    ResizePaneRight,
     ToggleSidebar,
     CyclePaneNext,
     CyclePanePrevious,
@@ -1490,6 +1545,8 @@ fn non_indexed_action_for_key(
         (&kb.rename_tab, NavigateAction::RenameTab),
         (&kb.previous_tab, NavigateAction::PreviousTab),
         (&kb.next_tab, NavigateAction::NextTab),
+        (&kb.move_tab_previous, NavigateAction::MoveTabPrevious),
+        (&kb.move_tab_next, NavigateAction::MoveTabNext),
         (&kb.close_tab, NavigateAction::CloseTab),
         (&kb.rename_pane, NavigateAction::RenamePane),
         (&kb.edit_scrollback, NavigateAction::EditScrollback),
@@ -1510,6 +1567,10 @@ fn non_indexed_action_for_key(
         (&kb.close_pane, NavigateAction::ClosePane),
         (&kb.zoom, NavigateAction::Zoom),
         (&kb.resize_mode, NavigateAction::EnterResizeMode),
+        (&kb.resize_pane_left, NavigateAction::ResizePaneLeft),
+        (&kb.resize_pane_down, NavigateAction::ResizePaneDown),
+        (&kb.resize_pane_up, NavigateAction::ResizePaneUp),
+        (&kb.resize_pane_right, NavigateAction::ResizePaneRight),
         (&kb.toggle_sidebar, NavigateAction::ToggleSidebar),
         (&kb.reload_config, NavigateAction::ReloadConfig),
         (
@@ -1687,6 +1748,14 @@ pub(super) fn execute_navigate_action_in_context(
             state.next_tab();
             leave_navigate_mode(state);
         }
+        NavigateAction::MoveTabPrevious => {
+            move_active_tab_relative(state, -1);
+            leave_navigate_mode(state);
+        }
+        NavigateAction::MoveTabNext => {
+            move_active_tab_relative(state, 1);
+            leave_navigate_mode(state);
+        }
         NavigateAction::CloseTab => {
             if !state.close_tab() {
                 leave_navigate_mode(state);
@@ -1741,6 +1810,22 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
         }
         NavigateAction::EnterResizeMode => state.mode = Mode::Resize,
+        NavigateAction::ResizePaneLeft => {
+            state.resize_pane(NavDirection::Left);
+            leave_navigate_mode(state);
+        }
+        NavigateAction::ResizePaneDown => {
+            state.resize_pane(NavDirection::Down);
+            leave_navigate_mode(state);
+        }
+        NavigateAction::ResizePaneUp => {
+            state.resize_pane(NavDirection::Up);
+            leave_navigate_mode(state);
+        }
+        NavigateAction::ResizePaneRight => {
+            state.resize_pane(NavDirection::Right);
+            leave_navigate_mode(state);
+        }
         NavigateAction::ToggleSidebar => {
             state.sidebar_collapsed = !state.sidebar_collapsed;
             leave_navigate_mode(state);
@@ -1807,6 +1892,40 @@ fn workspace_can_start_worktree_action(
             .and_then(crate::workspace::git_space_metadata)
     });
     !git_space.is_some_and(|space| space.is_linked_worktree)
+}
+
+// Translate a one-step move into the pre-removal insertion slot that
+// Workspace::move_tab expects, wrapping at either end. None when there is
+// nothing to move.
+fn tab_move_insert_index(len: usize, source: usize, delta: isize) -> Option<usize> {
+    if len <= 1 {
+        return None;
+    }
+    Some(if delta > 0 {
+        if source + 1 >= len {
+            0
+        } else {
+            source + 2
+        }
+    } else if source == 0 {
+        len
+    } else {
+        source - 1
+    })
+}
+
+#[cfg(test)]
+fn move_active_tab_relative(state: &mut AppState, delta: isize) {
+    let Some(ws) = state
+        .active
+        .and_then(|ws_idx| state.workspaces.get_mut(ws_idx))
+    else {
+        return;
+    };
+    let source = ws.active_tab;
+    if let Some(insert) = tab_move_insert_index(ws.tabs.len(), source, delta) {
+        ws.move_tab(source, insert);
+    }
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
@@ -1901,7 +2020,12 @@ mod tests {
     use super::super::{state_with_workspaces, unique_temp_path};
     use super::*;
     use crate::{
-        app::App, config::Config, input::TerminalKey, terminal::TerminalState, workspace::Workspace,
+        app::App,
+        config::Config,
+        input::TerminalKey,
+        raw_input::{parse_raw_input_bytes_sync, RawInputEvent},
+        terminal::TerminalState,
+        workspace::Workspace,
     };
 
     fn mark_worktree_space_member(state: &mut AppState, ws_idx: usize, key: &str) {
@@ -2564,6 +2688,122 @@ navigate_pane_right = "ctrl+l"
     }
 
     #[test]
+    fn terminal_direct_resize_pane_shortcut_maps_to_navigation_action() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds.resize_pane_right =
+            crate::config::ActionKeybinds::direct("ctrl+shift+alt+right");
+
+        let action = terminal_direct_navigation_action(
+            &state,
+            TerminalKey::new(
+                KeyCode::Right,
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
+            ),
+        );
+
+        assert_eq!(action, Some(NavigateAction::ResizePaneRight));
+    }
+
+    #[test]
+    fn prefix_resize_pane_binding_maps_to_navigation_action() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+resize_pane_left = "prefix+shift+left"
+"#,
+        )
+        .unwrap();
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds = config.keybinds();
+
+        let action = action_for_key(
+            &state,
+            TerminalKey::new(KeyCode::Left, KeyModifiers::SHIFT),
+            BindingDispatch::Prefix,
+        );
+
+        assert_eq!(action, Some(NavigateAction::ResizePaneLeft));
+    }
+
+    #[test]
+    fn terminal_direct_move_tab_shortcut_maps_to_navigation_action() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds.move_tab_next = crate::config::ActionKeybinds::direct("alt+shift+right");
+
+        let action = terminal_direct_navigation_action(
+            &state,
+            TerminalKey::new(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT),
+        );
+
+        assert_eq!(action, Some(NavigateAction::MoveTabNext));
+    }
+
+    fn tab_labels(state: &AppState) -> Vec<String> {
+        let ws = &state.workspaces[0];
+        (0..ws.tabs.len())
+            .map(|tab_idx| ws.tab_display_name(tab_idx).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn move_tab_actions_reorder_and_wrap_the_active_tab() {
+        let mut state = state_with_workspaces(&["test"]);
+        {
+            let ws = &mut state.workspaces[0];
+            ws.tabs[0].set_custom_name("a".into());
+            ws.test_add_tab(Some("b"));
+            ws.test_add_tab(Some("c"));
+            ws.switch_tab(1);
+        }
+
+        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
+        assert_eq!(tab_labels(&state), vec!["a", "c", "b"]);
+        assert_eq!(state.workspaces[0].active_tab, 2);
+
+        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
+        assert_eq!(tab_labels(&state), vec!["b", "a", "c"]);
+        assert_eq!(state.workspaces[0].active_tab, 0);
+
+        execute_navigate_action(&mut state, NavigateAction::MoveTabPrevious);
+        assert_eq!(tab_labels(&state), vec!["a", "c", "b"]);
+        assert_eq!(state.workspaces[0].active_tab, 2);
+        state.workspaces[0].assert_invariants_for_test();
+    }
+
+    #[test]
+    fn move_tab_is_a_noop_with_a_single_tab() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.workspaces[0].tabs[0].set_custom_name("only".into());
+
+        execute_navigate_action(&mut state, NavigateAction::MoveTabNext);
+
+        assert_eq!(tab_labels(&state), vec!["only"]);
+        assert_eq!(state.workspaces[0].active_tab, 0);
+    }
+
+    #[test]
+    fn move_tab_with_a_single_tab_still_exits_navigate_mode() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            event_hub,
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("solo")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+
+        app.execute_tui_navigate_action(NavigateAction::MoveTabNext, ActionContext::Navigate);
+
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
     fn terminal_direct_last_pane_shortcut_maps_to_navigation_action() {
         let mut state = state_with_workspaces(&["test"]);
         state.keybinds.last_pane = crate::config::ActionKeybinds::direct("alt+l");
@@ -2574,6 +2814,39 @@ navigate_pane_right = "ctrl+l"
         );
 
         assert_eq!(action, Some(NavigateAction::LastPane));
+    }
+
+    #[test]
+    fn shifted_backslash_layout_prefers_horizontal_split_binding() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+split_vertical = "prefix+|"
+split_horizontal = 'prefix+\'
+"#,
+        )
+        .unwrap();
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds = config.keybinds();
+        let key = crate::input::parse_terminal_key_sequence("\x1b[124:92;2:1u").unwrap();
+        assert_eq!(key.code, KeyCode::Char('|'));
+        assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+        assert_eq!(key.shifted_codepoint, Some('\\' as u32));
+        assert!(state.keybinds.split_horizontal.matches_prefix_key(&key));
+        assert!(!state.keybinds.split_vertical.matches_prefix_key(&key));
+
+        assert_eq!(
+            action_for_key(&state, key, BindingDispatch::Prefix),
+            Some(NavigateAction::SplitHorizontal)
+        );
+        assert_eq!(
+            action_for_key(
+                &state,
+                TerminalKey::new(KeyCode::Char('|'), KeyModifiers::empty()),
+                BindingDispatch::Prefix,
+            ),
+            Some(NavigateAction::SplitVertical)
+        );
     }
 
     #[test]
@@ -2838,6 +3111,35 @@ command = "printf literal > '{}'"
         app.handle_navigate_key(TerminalKey::new(KeyCode::Char('W'), KeyModifiers::empty()));
 
         assert_eq!(app.state.mode, Mode::RenameWorkspace);
+    }
+
+    #[tokio::test]
+    async fn kitty_shifted_alternate_without_modifier_prefers_reload_over_resize() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Prefix;
+
+        let mut events = parse_raw_input_bytes_sync(b"\x1b[114:82;1u");
+        assert_eq!(events.len(), 1);
+        let RawInputEvent::Key(key) = events.remove(0) else {
+            panic!("expected key event");
+        };
+        assert_eq!(
+            action_for_key(&app.state, key.clone(), BindingDispatch::Prefix),
+            Some(NavigateAction::ReloadConfig)
+        );
+        app.handle_prefix_key(key);
+
+        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[tokio::test]
@@ -3360,7 +3662,7 @@ navigate_pane_down = "ctrl+j"
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn edit_scrollback_key_opens_focused_runtime_scrollback_in_editor_pane() {
+    async fn edit_scrollback_key_preserves_logical_lines_in_editor_pane() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -3374,10 +3676,10 @@ navigate_pane_down = "ctrl+j"
         workspace.tabs[0].runtimes.insert(
             root_pane,
             crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
-                20,
+                5,
                 5,
                 4096,
-                b"alpha\nbeta\n",
+                b"ABCDEFGHIJ\r\nKLMNO",
             ),
         );
         app.state.workspaces = vec![workspace];
@@ -3407,8 +3709,7 @@ navigate_pane_down = "ctrl+j"
         }
 
         let content = wait_for_file(&output_path);
-        assert!(content.contains("alpha"));
-        assert!(content.contains("beta"));
+        assert_eq!(content, "ABCDEFGHIJ\nKLMNO");
         assert_eq!(app.state.mode, Mode::Terminal);
         assert!(
             app.state.terminals.values().any(|terminal| terminal

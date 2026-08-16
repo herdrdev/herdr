@@ -79,12 +79,14 @@ impl TerminalTheme {
     }
 }
 
-pub fn host_terminal_theme_query_sequence() -> String {
+pub fn host_terminal_theme_query_sequence(include_palette: bool) -> String {
     use std::fmt::Write as _;
 
     let mut sequence = String::from(HOST_COLOR_QUERY_SEQUENCE);
-    for index in 0..=u8::MAX {
-        let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
+    if include_palette {
+        for index in 0..=u8::MAX {
+            let _ = write!(sequence, "\x1b]4;{index};?\x1b\\");
+        }
     }
     sequence
 }
@@ -218,11 +220,16 @@ mod tests {
             ))
         );
 
-        let query = host_terminal_theme_query_sequence();
+        let query = host_terminal_theme_query_sequence(true);
         assert!(query.starts_with(HOST_COLOR_QUERY_SEQUENCE));
         assert!(query.contains("\x1b]4;0;?\x1b\\"));
         assert!(query.ends_with("\x1b]4;255;?\x1b\\"));
         assert_eq!(query.matches("\x1b]4;").count(), 256);
+
+        assert_eq!(
+            host_terminal_theme_query_sequence(false),
+            HOST_COLOR_QUERY_SEQUENCE
+        );
     }
 
     #[test]

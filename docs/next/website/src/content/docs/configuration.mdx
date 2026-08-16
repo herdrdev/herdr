@@ -5,7 +5,7 @@ description: Configure Herdr keybindings, themes, sidebar behavior, notification
 
 Herdr works without a config file. Add one when you want custom keys, themes, sidebar layouts, notifications, or advanced behavior.
 
-Looking for any setting or keybinding? Search the [Config reference](/docs/config-reference/) for every key, type, default, and allowed value. This page focuses on setup, common recipes, and configuration structures that need more explanation than a reference row.
+The [Config reference](/docs/config-reference/) lists every setting and keybinding, with types, defaults, and allowed values. This page covers setup, common recipes, and configuration structures that need more explanation than a reference row.
 
 ## Config file
 
@@ -32,7 +32,7 @@ herdr --default-config > ~/.config/herdr/config.toml
 
 If a config value is invalid, Herdr falls back to a safe default and shows a startup warning.
 
-Herdr shows first-run setup when `onboarding` is missing or true. Continuing from onboarding writes `onboarding = false` and opens settings on the integrations tab. Set it when you want to skip that flow after setup.
+Herdr shows first-run setup when `onboarding` is missing or true. Continuing from onboarding writes `onboarding = false` and opens settings on the integrations tab. Set `onboarding = false` to skip that flow after setup.
 
 ```toml
 onboarding = false
@@ -49,6 +49,18 @@ herdr server reload-config
 You can also open the global menu in Herdr and choose `reload config`.
 
 Reload applies most UI settings without restarting panes. Startup-only settings still need a restart.
+
+## Headless terminal size
+
+When no client is attached, the server uses a 120×40 virtual terminal for layout and newly created panes. Change that fallback for headless orchestration with:
+
+```toml
+[server]
+headless_cols = 160
+headless_rows = 50
+```
+
+An attached client remains authoritative for the shared runtime size. After it detaches, existing pane PTYs retain their last attached size while new headless layout uses the configured fallback.
 
 ## Terminal defaults
 
@@ -68,7 +80,7 @@ Set how Herdr starts newly created interactive pane shells:
 shell_mode = "auto"
 ```
 
-`shell_mode = "auto"` starts login shells on macOS so login-only PATH setup such as `/usr/libexec/path_helper` and Homebrew shell initialization runs in new panes. On other platforms, it keeps the existing non-login shell behavior. Use `"login"` to force login-shell startup, or `"non_login"` to opt out. Command panes, detached custom command keybindings, and explicit argv launches keep their existing command execution paths.
+`shell_mode = "auto"` starts login shells on macOS so login-only PATH setup such as `/usr/libexec/path_helper` and Homebrew shell initialization runs in new panes. On other platforms, it keeps the existing non-login shell behavior. Use `"login"` to force login-shell startup or `"non_login"` to force non-login startup. Command panes, detached custom command keybindings, and explicit argv launches keep their existing command execution paths.
 
 Set the working directory policy for new panes, tabs, and workspaces:
 
@@ -90,11 +102,11 @@ directory = "~/.herdr/worktrees"
 
 Herdr creates checkouts under `<directory>/<repo>/<branch-slug>`. For sibling-style checkouts, set this to a directory such as `~/Projects/herdr-worktrees`. Relative values are resolved to an absolute path when the app applies the config.
 
-Worktree actions are available from Git workspace rows. `New worktree` creates a checkout, checks out an existing local branch when the entered branch already exists, otherwise creates the branch, opens it as a new Herdr workspace, and groups it under the source workspace. `Open worktree...` lists existing Git worktree checkouts for that repo; choosing an already-open checkout focuses it, and choosing a closed checkout opens it in the same group.
+Worktree actions are available from Git workspace rows. `New worktree` creates a checkout. It checks out an existing local branch when the entered branch exists; otherwise, it creates the branch. It then opens the checkout as a new Herdr workspace and groups it under the source workspace. `Open worktree...` lists existing Git worktree checkouts for that repo. Choosing an already-open checkout focuses it, while choosing a closed checkout opens it in the same group.
 
 Grouped worktrees still behave like normal Herdr workspaces: they can be focused, renamed, closed, and contain their own tabs and panes. The parent row is the original workspace. Closing the parent row closes the whole Herdr group, but it does not delete checkout folders or branches.
 
-Deleting a worktree checkout is explicit. Use `Delete worktree checkout...` on a grouped child workspace to run `git worktree remove`. Herdr first asks Git to remove safely. If Git refuses because the checkout has modified or untracked files, Herdr asks again before running the forced remove. Branches are not deleted.
+To delete a worktree checkout, use `Delete worktree checkout...` on a grouped child workspace. Herdr runs `git worktree remove`, first asking Git to remove safely. If Git refuses because the checkout has modified or untracked files, Herdr asks again before running the forced remove. Branches are not deleted.
 
 ## Remote attach
 
@@ -137,7 +149,15 @@ A binding may also be an array when one action needs multiple shortcuts:
 next_tab = ["prefix+n", "ctrl+alt+]"]
 ```
 
-Optional actions are unset by default. Bind them with `prefix+` for prefix-mode behavior, or use an explicit modified chord when you intentionally want a direct shortcut.
+Optional actions are unset by default. Bind them with `prefix+` for prefix-mode behavior, or use an explicit modified chord when you intentionally want a direct shortcut. For example, tmux-style one-keystroke pane resizing without entering resize mode:
+
+```toml
+[keys]
+resize_pane_left = "ctrl+shift+alt+left"
+resize_pane_down = "ctrl+shift+alt+down"
+resize_pane_up = "ctrl+shift+alt+up"
+resize_pane_right = "ctrl+shift+alt+right"
+```
 
 Key strings accept plain keys, modifier combinations such as `ctrl+a`, `shift+n`, `alt+1`, `cmd+k`, and special keys such as `enter`, `tab`, `esc`, `left`, `right`, `up`, and `down`. Named punctuation such as `minus`, `comma`, `ampersand`, `plus`, and `backtick` is also accepted. Plain direct printable keys such as `n` are unsafe because they intercept typing; use `prefix+n` unless you intentionally want a direct binding. The `navigate_workspace_*` and `navigate_pane_*` fields are navigate-mode-only and may use plain keys such as `j` or `k`; they must not use `prefix+`, `esc`, `enter`, `tab`, `shift+tab`, `left`, `right`, or unmodified `1` through `9`. Left and right arrows are permanent aliases for pane-left and pane-right navigation. These navigate-mode shortcuts are independent from general action bindings such as `focus_pane_down = "prefix+j"`; when both use the same key, the navigate-mode shortcut wins while navigate mode is open. Alt, Cmd/Super, and punctuation with modifiers depend on your terminal and tmux settings.
 
@@ -209,7 +229,7 @@ command = "example.layout.apply"
 description = "apply layout"
 ```
 
-An optional `description` can be provided. When specified, this description is displayed in the keybind help panel (opened with `prefix+?`) in place of the default `'custom command'` label.
+`description` is optional. When set, it appears in the keybind help panel (opened with `prefix+?`) instead of the default `'custom command'` label.
 
 Custom commands receive `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ACTIVE_WORKSPACE_ID`, `HERDR_ACTIVE_TAB_ID`, `HERDR_ACTIVE_PANE_ID`, and `HERDR_ACTIVE_PANE_CWD` when those values are available. Shell commands run from the focused pane's working directory when Herdr can detect it.
 
@@ -243,6 +263,8 @@ You can override individual colors:
 ```toml
 [theme.custom]
 sidebar_bg = "#181825"
+active_row_bg = "#1e1e2e"
+selection_bg = "#313244"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -251,7 +273,7 @@ red = "#f38ba8"
 yellow = "#f9e2af"
 ```
 
-`sidebar_bg` optionally gives the desktop sidebar its own background. When omitted, the sidebar keeps the host terminal background.
+`sidebar_bg` optionally gives the desktop sidebar its own background. When omitted, the sidebar keeps the host terminal background. `active_row_bg` changes the active Space and focused Agent row background without affecting separators or scrollbar tracks. `selection_bg` changes the Navigate-mode cursor row background in the sidebar.
 
 Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `reset`, `default`, `none`, and `transparent`.
 
@@ -260,6 +282,41 @@ Color values accept hex, named colors, `rgb(r,g,b)`, or reset aliases like `rese
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.
+
+Configure an ordered tmux-style status area at the right edge of the tab row:
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "zoom" },
+  { type = "hostname" },
+  { type = "datetime", format = "%H:%M" },
+  { type = "text", text = "prod" },
+  { type = "command", command = "~/.config/herdr/status.sh", interval_seconds = 5, timeout_seconds = 2 },
+]
+tab_bar_right_separator = " · "
+```
+
+The status area is empty by default. Add `zoom` to show a fixed `ZOOM` pill while the active tab is zoomed; the existing per-tab `Z` markers remain independent. `hostname`, `datetime`, and `command` resolve on the Herdr server, so `herdr --remote` shows the remote machine's values. Datetime entries use `strftime` formatting; directives that require a UTC offset or Unix timestamp, such as `%z` and `%s`, are rejected because the value is server-local wall-clock time.
+
+Command entries run immediately and then at `interval_seconds` without blocking rendering or overlapping a previous run. The interval can be 1–31,536,000 seconds and the timeout can be 1–3,600 seconds. Herdr uses the last line of successful output, clears it after failure, empty output, or `timeout_seconds`, and provides the same active workspace, tab, pane, socket, binary, and working-directory context as custom command keybindings. Commands are supported on Linux, macOS, and Windows, using `/bin/sh -lc` on Linux and macOS and `cmd.exe /d /c` on Windows.
+
+Separators appear only between visible entries. Set `tab_bar_right_separator = ""` for direct concatenation. On a narrow tab row, the complete status area yields to the tabs and their controls.
+
+### Outer terminal window title
+
+Herdr emulates the terminals in its panes, so an `OSC 0`/`OSC 2` title written inside a pane stops at Herdr. Herdr writes its own title to the terminal it runs in, which is what window managers and terminal tab bars read:
+
+```toml
+[ui]
+window_title = "{hostname}: {workspace}"
+```
+
+Tokens are `{hostname}`, `{workspace}`, `{tab}`, `{pane}` (the focused pane's manual name), and `{terminal_title}` (the focused pane's own terminal title with spinner frames stripped). Write `{{` and `}}` for literal braces. A token with no value renders empty.
+
+The title renders on the Herdr server, so `{hostname}` names the machine the panes run on, including when you attach with `herdr --remote` or run `herdr` over SSH. Set `window_title = ""` to leave the outer terminal title alone.
+
+`client.window_title.set` overrides the configured title until `client.window_title.clear` hands it back.
 
 Agent status uses compact colored dots by default. To distinguish blocked, working, done, idle, and unknown states by shape as well as color, choose **distinct symbols** in Settings or configure:
 
@@ -364,7 +421,7 @@ herdr pane report-metadata <pane_id> \
   --token summary="reviewing authentication"
 ```
 
-Use `herdr workspace report-metadata` in the same way for custom Space tokens. Unreported custom tokens simply disappear.
+Use `herdr workspace report-metadata` in the same way for custom Space tokens. Unreported custom tokens disappear.
 
 Metadata reporters provide values only; styling stays in the local sidebar configuration. See [CLI reference: report metadata](/docs/cli-reference/#panes) for limits, clearing, sequencing, and expiry.
 
@@ -383,13 +440,13 @@ delay_seconds = 1
 position = "bottom-right"
 ```
 
-Choose `herdr` for an in-app toast, `terminal` for an outer-terminal notification that works well over SSH, `system` for the local OS notification service, or `off` to disable popups. Herdr suppresses popups for the active tab. Search `ui.toast` in the [Config reference](/docs/config-reference/) for positions, delay behavior, and clipboard feedback settings.
+Choose `herdr` for an in-app toast, `terminal` for an outer-terminal notification that also works over SSH, `system` for the local OS notification service, or `off` to disable popups. Herdr suppresses popups for the active tab. Search `ui.toast` in the [Config reference](/docs/config-reference/) for positions, delay behavior, and clipboard feedback settings.
 
 On macOS, `system` tries `terminal-notifier` first and falls back to `/usr/bin/osascript` when it is unavailable or fails. The fallback appears as Script Editor in Notification Center and cannot activate the hosting terminal. Install `terminal-notifier` with `brew install terminal-notifier`. For a supported, detected terminal, it can activate the terminal app when you click the notification. Alternatively, choose `terminal` to let a supported outer terminal own the notification.
 
 ## Sound
 
-Sound notifications play through the local Herdr client. Custom sounds must be mp3 files; relative paths are resolved from the config file's directory.
+Sound notifications play through the local Herdr client. Custom sounds must be mp3 files; Herdr resolves relative paths from the config file's directory.
 
 ```toml
 [ui.sound]

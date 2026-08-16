@@ -626,6 +626,21 @@ fn claude_osc_title_braille_prefix_is_working() {
 }
 
 #[test]
+fn claude_osc_title_half_circle_frames_are_working() {
+    for frame in ['◐', '◓', '◑', '◒'] {
+        let title = format!("{frame} Initial conversation with Claude");
+        let result = osc_explain(Agent::Claude, "", &title, "");
+        assert_eq!(result.state, AgentState::Working, "frame {frame}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("osc_title_working"),
+            "frame {frame}"
+        );
+        assert!(result.visible_working, "frame {frame}");
+    }
+}
+
+#[test]
 fn claude_osc_title_static_prefix_is_idle() {
     // "✳" is U+2733, static prefix when Claude is not working
     let result = osc_explain(Agent::Claude, "", "✳ Claude Code", "");
@@ -731,6 +746,40 @@ fn codex_osc_title_plain_is_idle() {
         Some("osc_title_idle")
     );
     assert!(result.visible_idle);
+}
+
+#[test]
+fn codex_trust_directory_requires_live_top_region() {
+    let screen = "> You are in C:\\Users\\user\\project\n\n\
+        Do you trust the contents of this\n\
+        directory? Working with untrusted\n\
+        contents comes with higher risk of\n\
+        prompt injection. Trusting the\n\
+        directory allows project-local config,\n\
+        hooks, and exec policies to load.\n\n\
+        › 1. Yes, continue\n\
+          2. No, quit\n\n\
+        Press enter to continue\n";
+    let result = osc_explain(Agent::Codex, screen, "project", "");
+
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("trust_directory")
+    );
+    assert!(result.visible_blocker);
+
+    let transcript = "› > You are in C:\\Users\\user\\project\n\n\
+        Do you trust the contents of this\n\
+        directory? Working with untrusted contents comes with higher risk.\n";
+    let result = osc_explain(Agent::Codex, transcript, "project", "");
+
+    assert_eq!(result.state, AgentState::Idle);
+    assert_ne!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("trust_directory")
+    );
+    assert!(!result.visible_blocker);
 }
 
 #[test]

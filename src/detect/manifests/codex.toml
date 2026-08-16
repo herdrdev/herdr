@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.07.18.1"
-min_engine_version = 2
-updated_at = "2026-07-18T00:00:00Z"
+version = "2026.08.09.1"
+min_engine_version = 3
+updated_at = "2026-08-09T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -29,6 +29,17 @@ contains = ["↑/↓ to scroll", "pgup/pgdn to", "home/end to jump", "q to quit"
 any = [
   { contains = ["esc to edit prev"] },
   { contains = ["esc/← to edit prev"] },
+]
+
+[[rules]]
+id = "trust_directory"
+state = "blocked"
+priority = 950
+region = "top_non_empty_lines(20)"
+visible_blocker = true
+all = [
+  { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },
+  { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
 ]
 
 [[rules]]

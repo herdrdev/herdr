@@ -4,5 +4,18 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+if ! git diff --cached --quiet -- skills/herdr/SKILL.md; then
+    head_version="$(git show HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+    staged_version="$(git show :Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+    staged_skill="$(git rev-parse :skills/herdr/SKILL.md 2>/dev/null || true)"
+    released_skill="$(git rev-parse "v${staged_version}:skills/herdr/SKILL.md" 2>/dev/null || true)"
+
+    if [[ "$head_version" == "$staged_version" && "$staged_skill" != "$released_skill" ]]; then
+        echo "error: skills/herdr/SKILL.md may only change in a release commit" >&2
+        echo "update it while preparing the release and stage it with the Cargo.toml version bump" >&2
+        exit 1
+    fi
+fi
+
 echo "pre-commit: running just lint"
 just lint

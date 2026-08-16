@@ -311,8 +311,18 @@ impl TerminalRuntime {
         self.0.word_motion_target(row, col, motion)
     }
 
+    /// Collects the complete terminal input-mode snapshot.
+    ///
+    /// This performs multiple terminal queries and may format keyboard state.
+    /// Keep it out of render/layout and pane-scaled loops; add a narrow accessor
+    /// when only one terminal fact is needed.
     pub fn input_state(&self) -> Option<crate::pane::InputState> {
         self.0.input_state()
+    }
+
+    /// Reads only whether the alternate screen is active.
+    pub fn alternate_screen_active(&self) -> bool {
+        self.0.alternate_screen_active()
     }
 
     pub fn cursor_state(
@@ -349,10 +359,6 @@ impl TerminalRuntime {
 
     pub fn agent_osc_progress(&self) -> String {
         self.0.agent_osc_progress()
-    }
-
-    pub fn recent_text(&self, lines: usize) -> String {
-        self.0.recent_text(lines)
     }
 
     pub(crate) fn recent_text_snapshot(&self, lines: usize) -> crate::pane::TerminalReadSnapshot {
@@ -462,34 +468,56 @@ impl TerminalRuntime {
         Some((screen, crate::terminal::ScreenSnapshot { cols, rows }))
     }
 
+    pub(crate) fn screen_text_snapshot_with_seq(
+        &self,
+    ) -> Option<(
+        crate::ghostty::ActiveScreen,
+        crate::terminal::ScreenSnapshot,
+        u64,
+    )> {
+        for _ in 0..3 {
+            let before = self.content_seq();
+            if !before.is_multiple_of(2) {
+                continue;
+            }
+            let (screen, snapshot) = self.screen_text_snapshot()?;
+            let after = self.content_seq();
+            if before == after {
+                return Some((screen, snapshot, after));
+            }
+        }
+        None
+    }
+
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_button(kind, column, row, modifiers)
+        self.0.encode_mouse_button(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_motion(
+    pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_motion(kind, column, row, modifiers)
+        self.0.encode_mouse_motion(kind, position, modifiers)
     }
 
-    pub fn encode_mouse_wheel(
+    pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        column: u16,
-        row: u16,
+        position: crate::input::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
-        self.0.encode_mouse_wheel(kind, column, row, modifiers)
+        self.0.encode_mouse_wheel(kind, position, modifiers)
+    }
+
+    pub(crate) fn pixel_size(&self) -> Option<(u32, u32)> {
+        self.0.pixel_size()
     }
 
     pub fn encode_alternate_scroll(
@@ -517,6 +545,10 @@ impl TerminalRuntime {
 
     pub(crate) fn current_size(&self) -> (u16, u16) {
         self.0.current_size()
+    }
+
+    pub(crate) fn content_seq(&self) -> u64 {
+        self.0.content_seq()
     }
 }
 

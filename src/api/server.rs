@@ -23,7 +23,6 @@ use crate::ipc::{
 };
 
 mod pane_graphics_stream;
-pub(crate) use pane_graphics_stream::cancel_inactive_streams as cancel_inactive_pane_graphics_streams;
 
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -57,24 +56,34 @@ impl ServerHandle {
     }
 }
 
-pub fn start_server(
+pub(crate) fn start_server_with_stop_control(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
+    server_stop: Arc<AtomicBool>,
 ) -> std::io::Result<ServerHandle> {
-    start_server_with_capabilities(
-        api_tx,
-        event_hub,
-        Some(ServerCapabilities {
-            live_handoff: crate::platform::capabilities().live_handoff,
-            detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
-        }),
-    )
+    start_server_inner(api_tx, event_hub, default_capabilities(), Some(server_stop))
 }
 
 pub fn start_server_with_capabilities(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
     capabilities: Option<ServerCapabilities>,
+) -> std::io::Result<ServerHandle> {
+    start_server_inner(api_tx, event_hub, capabilities, None)
+}
+
+fn default_capabilities() -> Option<ServerCapabilities> {
+    Some(ServerCapabilities {
+        live_handoff: crate::platform::capabilities().live_handoff,
+        detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
+    })
+}
+
+fn start_server_inner(
+    api_tx: ApiRequestSender,
+    event_hub: EventHub,
+    capabilities: Option<ServerCapabilities>,
+    server_stop: Option<Arc<AtomicBool>>,
 ) -> std::io::Result<ServerHandle> {
     let path = socket_path();
     prepare_socket_path(&path)?;
@@ -93,14 +102,16 @@ pub fn start_server_with_capabilities(
                     let api_tx = api_tx.clone();
                     let event_hub = event_hub.clone();
                     let capabilities = capabilities.clone();
+                    let server_stop = server_stop.clone();
                     let connection_running = Arc::clone(&listener_running);
                     std::thread::spawn(move || {
-                        if let Err(err) = handle_connection(
+                        if let Err(err) = handle_connection_with_stop(
                             stream,
                             &api_tx,
                             &event_hub,
                             &connection_running,
                             capabilities,
+                            server_stop.as_ref(),
                         ) {
                             warn!(err = %err, "api connection failed");
                         }
@@ -136,12 +147,24 @@ fn restrict_socket_permissions(path: &Path) -> std::io::Result<()> {
     crate::ipc::restrict_socket_permissions(path, SOCKET_PERMISSION_MODE)
 }
 
+#[cfg(test)]
 fn handle_connection(
+    stream: LocalStream,
+    api_tx: &ApiRequestSender,
+    event_hub: &EventHub,
+    running: &Arc<AtomicBool>,
+    capabilities: Option<ServerCapabilities>,
+) -> std::io::Result<()> {
+    handle_connection_with_stop(stream, api_tx, event_hub, running, capabilities, None)
+}
+
+fn handle_connection_with_stop(
     mut stream: LocalStream,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
+    server_stop: Option<&Arc<AtomicBool>>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "api connection write timeout unavailable");
@@ -264,6 +287,7 @@ fn handle_connection(
                 },
                 api_tx,
                 capabilities,
+                server_stop,
                 Some(response_write_rx),
             );
             let result = write_text_line_allow_disconnect(&mut stream, &response);
@@ -317,10 +341,11 @@ fn handle_request(
     request: Request,
     api_tx: &ApiRequestSender,
     capabilities: Option<ServerCapabilities>,
+    server_stop: Option<&Arc<AtomicBool>>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 ) -> String {
-    match request.method {
-        Method::Ping(_) => serde_json::to_string(&SuccessResponse {
+    if matches!(&request.method, Method::Ping(_)) {
+        return serde_json::to_string(&SuccessResponse {
             id: request.id,
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
@@ -331,14 +356,27 @@ fn handle_request(
         .unwrap_or_else(|_| {
             r#"{"id":"","error":{"code":"internal_error","message":"failed to encode response"}}"#
                 .to_string()
-        }),
-        _ => dispatch_to_app_with_timeout_and_write_completion(
-            request,
-            api_tx,
-            None,
-            response_write_complete,
-        ),
+        });
     }
+
+    if matches!(&request.method, Method::ServerStop(_)) {
+        if let Some(server_stop) = server_stop {
+            server_stop.store(true, Ordering::Release);
+            return serde_json::to_string(&SuccessResponse {
+                id: request.id,
+                result: ResponseResult::Ok {},
+            })
+            .unwrap_or_else(|_| "{}".to_string());
+        }
+    } else if server_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+        return error_response_json(
+            request.id,
+            "server_unavailable",
+            "server is shutting down".into(),
+        );
+    }
+
+    dispatch_to_app(request, api_tx, None, response_write_complete, None)
 }
 
 fn api_method_name(method: &Method) -> &'static str {
@@ -402,6 +440,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneCurrent(_) => "pane.current",
         Method::PaneGet(_) => "pane.get",
         Method::PaneFocus(_) => "pane.focus",
+        Method::PaneInputSet(_) => "pane.input.set",
         Method::PaneRename(_) => "pane.rename",
         Method::PaneSendText(_) => "pane.send_text",
         Method::PaneSendKeys(_) => "pane.send_keys",
@@ -412,6 +451,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneGraphicsInfo(_) => "pane.graphics.info",
         Method::PaneGraphicsStream(_) => "pane.graphics.stream",
         Method::PaneGraphicsStreamSet(_) => "pane.graphics.stream.set",
+        Method::PaneGraphicsStreamDirect(_) => "pane.graphics.stream.direct",
         Method::PaneGraphicsStreamOpen(_) => "pane.graphics.stream.open",
         Method::PaneGraphicsStreamClose(_) => "pane.graphics.stream.close",
         Method::PaneReportAgent(_) => "pane.report_agent",
@@ -748,22 +788,51 @@ pub(super) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app_with_timeout_and_write_completion(request, api_tx, timeout, None)
+    dispatch_to_app(request, api_tx, timeout, None, None)
 }
 
-fn dispatch_to_app_with_timeout_and_write_completion(
+pub(super) fn dispatch_stream_open(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    timeout: Duration,
+    active: Arc<AtomicBool>,
+) -> String {
+    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active))
+}
+
+pub(super) fn dispatch_stream_frame(
+    request: Request,
+    api_tx: &ApiRequestSender,
+    active: Arc<AtomicBool>,
+) -> String {
+    dispatch_to_app(
+        request,
+        api_tx,
+        Some(crate::app::pane_graphics::DIRECT_OUTER_TIMEOUT),
+        None,
+        Some(active),
+    )
+}
+
+fn dispatch_to_app(
     request: Request,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    stream_active: Option<Arc<AtomicBool>>,
 ) -> String {
     let request_id = request.id.clone();
+    let request_active = stream_active.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
         request,
         respond_to,
         response_write_complete,
+        stream_active,
     }) {
+        if let Some(active) = request_active {
+            active.store(false, Ordering::Release);
+        }
         return error_response_json(
             request_id,
             "server_unavailable",
@@ -792,11 +861,16 @@ fn dispatch_to_app_with_timeout_and_write_completion(
 
     match response {
         Ok(response) => response,
-        Err(err) => error_response_json(
-            request_id,
-            "server_unavailable",
-            format!("request handling failed: {err}"),
-        ),
+        Err(err) => {
+            if let Some(active) = request_active {
+                active.store(false, Ordering::Release);
+            }
+            error_response_json(
+                request_id,
+                "server_unavailable",
+                format!("request handling failed: {err}"),
+            )
+        }
     }
 }
 
@@ -1009,11 +1083,47 @@ mod tests {
                 detached_server_daemon: true,
             }),
             None,
+            None,
         );
 
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    #[test]
+    fn server_stop_control_bypasses_app_channel() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let response = handle_request(
+            Request {
+                id: "priority_stop".into(),
+                method: Method::ServerStop(crate::api::schema::EmptyParams::default()),
+            },
+            &tx,
+            None,
+            Some(&stop),
+            None,
+        );
+
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["id"], "priority_stop");
+        assert_eq!(response["result"]["type"], "ok");
+        assert!(stop.load(Ordering::Acquire));
+
+        let rejected = handle_request(
+            Request {
+                id: "after_stop".into(),
+                method: Method::WorkspaceList(crate::api::schema::EmptyParams::default()),
+            },
+            &tx,
+            None,
+            Some(&stop),
+            None,
+        );
+        let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected["error"]["code"], "server_unavailable");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -1026,7 +1136,7 @@ mod tests {
 
         let request_for_thread = request.clone();
         let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None));
+            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None, None));
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -1334,6 +1444,8 @@ mod pane_graphics_request_tests {
             id: "graphics-max".into(),
             method: Method::PaneGraphicsSet(crate::api::schema::PaneGraphicsSetParams {
                 pane_id: "pane_1".into(),
+                layer_id: None,
+                z_index: 0,
                 owner: String::new(),
                 format: crate::api::schema::PaneGraphicsFormat::Png,
                 image_width: 1,

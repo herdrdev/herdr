@@ -13,15 +13,15 @@ Herdr launches or attaches to your default background session. You do not manage
 
 ## Create a workspace
 
-When a session has no workspaces, Herdr opens one automatically. A workspace is a project-level container for tabs, panes, and agents. Give each active project its own workspace; this keeps agent state readable in the sidebar.
+When a session has no workspaces, Herdr opens one automatically. A workspace is a project-level container for tabs, panes, and agents. Give each active project its own workspace to keep agent state readable in the sidebar.
 
 ## Use the mouse
 
-Herdr is mouse-native, so start by clicking. Click panes, tabs, workspaces, and agents to focus them. Drag split borders to resize. Right-click for context menus, including splitting panes and creating tabs. Drag-select text to copy it to your clipboard; double-click a token to copy it directly. Copying does not require Ctrl+C.
+Herdr is mouse-native, so start by clicking panes, tabs, workspaces, and agents to focus them. Drag split borders to resize. Right-click for context menus, including splitting panes and creating tabs. Drag-select text to copy it to your clipboard; double-click a token to copy it directly. Copying does not require Ctrl+C.
 
 Ctrl-click opens pane links when your terminal sends the modified click to Herdr. This works for OSC 8 hyperlinks and visible `http://` or `https://` URLs. On macOS, use Ctrl-click for Herdr-handled pane links while mouse capture is enabled; Cmd-click is only available through the terminal-native bypass path, such as Shift-Cmd-click or `ui.mouse_capture = false`.
 
-If you configure `ui.right_click_passthrough_modifier`, that modifier plus right-click sends right-click, hold, and drag gestures to mouse-reporting pane apps.
+If you configure `ui.right_click_passthrough_modifier`, that modifier plus right-click sends right-click, hold, and drag gestures to mouse-reporting pane apps. To make normal right-click go to one pane app, choose **Send right-clicks to pane** from that pane's menu or run `herdr pane input --current --right-click pane` inside it. Right-click the pane frame to reopen Herdr's menu.
 
 ## Run an agent
 
@@ -31,7 +31,7 @@ Start your coding agent in a pane:
 claude
 ```
 
-Or `codex`, `pi`, `opencode`, or any other [supported agent](/docs/agents/). Herdr detects it automatically. The sidebar shows whether each agent is `working`, `blocked`, `done`, or `idle` — across every workspace, so you always know which project needs you.
+Or `codex`, `pi`, `opencode`, or any other [supported agent](/docs/agents/). Herdr detects it automatically. Across every workspace, the sidebar shows whether each agent is `working`, `blocked`, `done`, or `idle`, so you always know which project needs you.
 
 ## Keyboard control
 
@@ -49,13 +49,13 @@ Common actions:
 | New workspace | `prefix+shift+n` |
 | Detach client | `prefix+q` |
 
-New to the prefix idea? [Keyboard](/docs/keyboard/) explains what it is, why multiplexers use one, and how to go prefix-free. Press `prefix+?` inside Herdr to see every active binding, and `prefix+[` to copy from the keyboard in copy mode.
+If the prefix idea is new to you, [Keyboard](/docs/keyboard/) explains what it is, why multiplexers use one, and how to go prefix-free. Press `prefix+?` inside Herdr to see every active binding, and `prefix+[` to copy from the keyboard in copy mode.
 
 ## Detach and come back
 
 Press `prefix+q` or simply close your terminal window. The Herdr server and every agent keep running. Run `herdr` again to reattach to the same session.
 
-To actually end the session and stop its panes:
+To end the session and stop its panes:
 
 ```bash
 herdr server stop

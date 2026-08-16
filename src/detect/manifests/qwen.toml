@@ -1,0 +1,119 @@
+id = "qwen"
+version = "2026.08.14.1"
+min_engine_version = 2
+updated_at = "2026-08-14T00:00:00Z"
+aliases = ["qwen-code", "qwen code"]
+
+# Qwen Code keeps its composer visible while responding, so the prompt box is
+# not idle evidence by itself. Its status-prefixed terminal titles are the
+# primary locale-independent signals when ui.showStatusInTitle is enabled.
+# Exact screen fallbacks cover built-in locales and narrow terminals. OSC 9;4
+# is supplemental because Qwen emits it only while a tool is executing and
+# only in terminals that advertise progress support.
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1200
+region = "osc_title"
+visible_blocker = true
+regex = ['^\x{2733}\x{FE0E}? ']
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+visible_working = true
+regex = ['^\x{25D0}\x{FE0E}? ']
+
+[[rules]]
+id = "waiting_for_confirmation"
+state = "blocked"
+priority = 1000
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+line_regex = ['^\s*⠏\s+.*\.\.\.\s*$']
+any = [
+  { contains = ["Waiting for user confirmation..."] },
+  { contains = ["等待用户确认..."] },
+  { contains = ["等待用戶確認..."] },
+  { contains = ["Warten auf Benutzerbestätigung..."] },
+  { contains = ["En attente de la confirmation de l'utilisateur..."] },
+  { contains = ["ユーザーの確認を待っています..."] },
+  { contains = ["Aguardando confirmação do usuário..."] },
+  { contains = ["Ожидание подтверждения от пользователя..."] },
+  { contains = ["Esperant la confirmació de l'usuari..."] },
+]
+
+[[rules]]
+id = "tool_confirmation"
+state = "blocked"
+priority = 990
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+contains = ["yes, allow once"]
+any = [
+  { contains = ["apply this change?"] },
+  { contains = ["allow execution of:"] },
+  { contains = ["allow execution of mcp tool"] },
+  { contains = ["do you want to proceed?"] },
+  { contains = ["shell command execution"] },
+]
+
+[[rules]]
+id = "question_dialog"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+line_regex = [
+  '^\s*[❯›]\s*(?:\[(?: |✓)\]\s*)?\d+\.\s+',
+  '^\s*↑/↓\s*:.*(?:Enter|Return)\s*:',
+]
+
+[[rules]]
+id = "folder_trust_dialog"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+contains = ["do you trust this folder?", "trust folder (", "don't trust (esc)"]
+
+[[rules]]
+id = "cancel_hint_working"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*(?:[⠁-⣿]|\.{1,2})\s+.*\(\d+(?:m(?:\s+\d+s)?|s).*\s·\sesc to cancel\)\s*$']
+
+[[rules]]
+id = "narrow_cancel_hint_working"
+state = "working"
+priority = 890
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*\(\d+(?:m(?:\s+\d+s)?|s)\s·\sesc to cancel\)\s*$']
+
+[[rules]]
+id = "osc_tool_progress_working"
+state = "working"
+priority = 850
+region = "osc_progress"
+visible_working = true
+regex = ['^4;3(?:;|$)']
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(30)"
+visible_idle = true
+line_regex = ['^\s*>\s*(?:type\s*)?.*$']
+any = [
+  { contains = ["type your message"] },
+  { contains = ["your message or @path/to/file"] },
+  { contains = ["@path/to/file"] },
+  { contains = ["type", "mes", "sage", "@pat", "h/to", "/fil"] },
+]

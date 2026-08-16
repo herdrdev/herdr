@@ -13,6 +13,24 @@
       ]
     },
     {
+      "id": "server",
+      "title": "Server",
+      "keys": [
+        {
+          "key": "server.headless_cols",
+          "type": "integer",
+          "default": "120",
+          "description": "Virtual terminal width used for layout and newly created panes when no client is attached. Must be greater than zero."
+        },
+        {
+          "key": "server.headless_rows",
+          "type": "integer",
+          "default": "40",
+          "description": "Virtual terminal height used for layout and newly created panes when no client is attached. Must be greater than zero."
+        }
+      ]
+    },
+    {
       "id": "theme",
       "title": "Theme",
       "keys": [
@@ -57,6 +75,18 @@
           "type": "color",
           "default": "unset",
           "description": "Set the desktop sidebar background without changing other panel surfaces. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        },
+        {
+          "key": "theme.custom.active_row_bg",
+          "type": "color",
+          "default": "unset",
+          "description": "Set the active Space and focused Agent row background without changing separators or scrollbar tracks. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        },
+        {
+          "key": "theme.custom.selection_bg",
+          "type": "color",
+          "default": "unset",
+          "description": "Set the Navigate-mode cursor row background in the sidebar without changing other selection surfaces. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
         },
         {
           "key": "theme.custom.surface0",
@@ -392,6 +422,18 @@
           "description": "Select the next tab."
         },
         {
+          "key": "keys.move_tab_previous",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the active tab one position toward the front. Unset by default."
+        },
+        {
+          "key": "keys.move_tab_next",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Move the active tab one position toward the back. Unset by default."
+        },
+        {
           "key": "keys.switch_tab",
           "type": "keybinding",
           "default": "\"prefix+1..9\"",
@@ -522,6 +564,30 @@
           "type": "keybinding",
           "default": "\"prefix+r\"",
           "description": "Enter resize mode."
+        },
+        {
+          "key": "keys.resize_pane_left",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the left. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_down",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane downward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_up",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane upward. Unset by default."
+        },
+        {
+          "key": "keys.resize_pane_right",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Resize the focused pane toward the right. Unset by default."
         },
         {
           "key": "keys.toggle_sidebar",
@@ -659,6 +725,12 @@
           "description": "Draw borders around split panes."
         },
         {
+          "key": "ui.pane_outer_borders",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw borders along the outside edge of the pane area. Disable with pane gaps disabled for tmux-style internal splitters without an outside frame."
+        },
+        {
           "key": "ui.pane_scrollbars",
           "type": "boolean",
           "default": "true",
@@ -691,6 +763,31 @@
             "top",
             "bottom"
           ]
+        },
+        {
+          "key": "ui.tab_bar_right",
+          "type": "array",
+          "default": "[]",
+          "description": "Configure ordered right-aligned tab bar entries. Supported types are zoom, hostname, datetime, text, and command.",
+          "values": [
+            "zoom",
+            "hostname",
+            "datetime",
+            "text",
+            "command"
+          ]
+        },
+        {
+          "key": "ui.tab_bar_right_separator",
+          "type": "string",
+          "default": "\" \"",
+          "description": "Text inserted between visible right-aligned tab bar entries."
+        },
+        {
+          "key": "ui.window_title",
+          "type": "string",
+          "default": "\"{hostname}: {workspace}\"",
+          "description": "Title Herdr writes to the terminal it runs in. Tokens: {hostname}, {workspace}, {tab}, {pane}, {terminal_title}. Empty leaves the outer title alone."
         },
         {
           "key": "ui.agent_panel_sort",
@@ -1033,6 +1130,17 @@
           ]
         },
         {
+          "key": "ui.sound.agents.qwen",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Qwen Code agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
+        },
+        {
           "key": "ui.sound.agents.maki",
           "type": "enum",
           "default": "\"default\"",
@@ -1125,7 +1233,7 @@
           "key": "experimental.cjk_ime_agents",
           "type": "list of strings",
           "default": "[]",
-          "description": "Restrict `reveal_hidden_cursor_for_cjk_ime` to focused panes whose detected agent matches one of these names (case-insensitive). Empty list means apply to any focused pane. Unknown agent names are ignored; if the list contains no valid names, the reveal does not apply. Accepted names: pi, claude, codex, gemini, cursor, devin, cline, opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo, qodercli, qoder, maki."
+          "description": "Restrict `reveal_hidden_cursor_for_cjk_ime` to focused panes whose detected agent matches one of these names (case-insensitive). Empty list means apply to any focused pane. Unknown agent names are ignored; if the list contains no valid names, the reveal does not apply. Accepted names: pi, claude, codex, gemini, cursor, devin, cline, opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo, qodercli, qoder, qwen, qwen-code, maki."
         },
         {
           "key": "experimental.cjk_ime_cursor_shape",

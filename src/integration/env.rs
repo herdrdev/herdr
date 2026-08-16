@@ -16,15 +16,20 @@ pub(crate) const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 pub(crate) const KIMI_CODE_HOME_ENV_VAR: &str = "KIMI_CODE_HOME";
 pub(crate) const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 pub(crate) const QODERCLI_CONFIG_DIR_ENV_VAR: &str = "QODER_CONFIG_DIR";
+pub(crate) const QWEN_HOME_ENV_VAR: &str = "QWEN_HOME";
 pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 pub(crate) const ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR: &str = "ANTIGRAVITY_CLI_CONFIG_DIR";
 pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// The grok CLI's own config-home override (documented alongside
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
+pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
+    if let Ok(executable) = std::env::current_exe() {
+        cmd.env("HERDR_BIN_PATH", executable);
+    }
 }
 
 pub(crate) fn pi_extension_dir() -> io::Result<PathBuf> {
@@ -122,6 +127,24 @@ pub(crate) fn kilo_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn hermes_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os(HERMES_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+
+    #[cfg(windows)]
+    {
+        let explicit_home = std::env::var_os("HOME").filter(|value| !value.is_empty());
+        let profile = std::env::var_os("USERPROFILE").filter(|value| !value.is_empty());
+        if let Some(home) = explicit_home.filter(|home| profile.as_ref() != Some(home)) {
+            return Ok(PathBuf::from(home).join(".hermes"));
+        }
+        if let Some(local_app_data) =
+            std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())
+        {
+            return Ok(PathBuf::from(local_app_data).join("hermes"));
+        }
+    }
+
     Ok(home_dir()?.join(".hermes"))
 }
 
@@ -133,6 +156,10 @@ pub(crate) fn hermes_plugin_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn qodercli_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(QODERCLI_CONFIG_DIR_ENV_VAR, &[".qoder"])
+}
+
+pub(crate) fn qwen_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(QWEN_HOME_ENV_VAR, &[".qwen"])
 }
 
 pub(crate) fn cursor_dir() -> io::Result<PathBuf> {

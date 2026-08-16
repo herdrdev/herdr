@@ -4,15 +4,17 @@
   "type": "module",
   "scripts": {
     "prepare-docs": "node scripts/prepare-docs.mjs",
-    "dev": "node scripts/prepare-docs.mjs --draft && astro dev",
+    "prepare-llms": "node scripts/patch-starlight-llms.mjs",
+    "dev": "bun run prepare-llms && node scripts/prepare-docs.mjs --draft && astro dev",
     "test": "bun test",
-    "build": "bun run test && node scripts/prepare-docs.mjs && astro build && node scripts/check-built-docs.mjs",
-    "build:draft": "node scripts/prepare-docs.mjs --draft && astro build && node scripts/check-built-docs.mjs",
+    "build": "bun run test && bun run prepare-llms && node scripts/prepare-docs.mjs && astro build && node scripts/check-built-docs.mjs",
+    "build:draft": "bun run prepare-llms && node scripts/prepare-docs.mjs --draft && astro build && node scripts/check-built-docs.mjs",
     "preview": "astro preview"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.2",
     "@astrojs/starlight": "^0.36.0",
-    "astro": "^5.0.0"
+    "astro": "^5.0.0",
+    "starlight-llms-txt": "0.6.1"
   }
 }

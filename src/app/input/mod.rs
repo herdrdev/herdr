@@ -392,7 +392,10 @@ impl App {
         let previous_agent_panel_sort = self.state.agent_panel_sort;
         let previous_settings_section = self.state.settings.section;
         if !handled_pane_double_click {
-            if let Some(action) = self.state.handle_mouse(&mut self.terminal_runtimes, mouse) {
+            if let Some(action) =
+                self.state
+                    .handle_mouse(&mut self.terminal_runtimes, source_id, mouse)
+            {
                 match action {
                     MouseAction::NewWorkspace => {
                         self.begin_tui_workspace_create("tui.mouse.workspace.create")
@@ -493,15 +496,17 @@ impl App {
             self.close_popup_pane();
             return;
         };
-        let column = mouse.column.saturating_sub(inner.x);
-        let row = mouse.row.saturating_sub(inner.y);
+        let position = crate::input::mouse::Position::Cell {
+            column: mouse.column.saturating_sub(inner.x),
+            row: mouse.row.saturating_sub(inner.y),
+        };
         let bytes = match mouse.kind {
             MouseEventKind::ScrollUp
             | MouseEventKind::ScrollDown
             | MouseEventKind::ScrollLeft
             | MouseEventKind::ScrollRight => match rt.wheel_routing() {
                 Some(crate::pane::WheelRouting::MouseReport) => {
-                    rt.encode_mouse_wheel(mouse.kind, column, row, mouse.modifiers)
+                    rt.encode_mouse_wheel(mouse.kind, position, mouse.modifiers)
                 }
                 Some(crate::pane::WheelRouting::AlternateScroll) => {
                     rt.encode_alternate_scroll(mouse.kind)
@@ -517,11 +522,9 @@ impl App {
                 }
             },
             MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
-                rt.encode_mouse_button(mouse.kind, column, row, mouse.modifiers)
+                rt.encode_mouse_button(mouse.kind, position, mouse.modifiers)
             }
-            MouseEventKind::Moved => {
-                rt.encode_mouse_motion(mouse.kind, column, row, mouse.modifiers)
-            }
+            MouseEventKind::Moved => rt.encode_mouse_motion(mouse.kind, position, mouse.modifiers),
         };
         let Some(bytes) = bytes else {
             return;

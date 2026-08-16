@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::env;
-#[cfg(not(windows))]
 use std::fs;
 #[cfg(not(windows))]
 use std::io;
@@ -125,6 +124,8 @@ impl UpdateChannel {
 struct AssetRef {
     url: String,
     sha256: Option<String>,
+    #[cfg(windows)]
+    format: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for AssetRef {
@@ -137,6 +138,8 @@ impl<'de> Deserialize<'de> for AssetRef {
             serde_json::Value::String(url) if !url.trim().is_empty() => Ok(Self {
                 url: url.trim().to_string(),
                 sha256: None,
+                #[cfg(windows)]
+                format: None,
             }),
             serde_json::Value::Object(mut object) => {
                 let url = object
@@ -146,16 +149,46 @@ impl<'de> Deserialize<'de> for AssetRef {
                 let sha256 = object
                     .remove("sha256")
                     .and_then(|value| value.as_str().map(str::to_string));
+                #[cfg(windows)]
+                let format = object
+                    .remove("format")
+                    .and_then(|value| value.as_str().map(str::to_string));
                 if url.trim().is_empty() {
                     return Err(serde::de::Error::custom("asset url must not be empty"));
                 }
                 Ok(Self {
                     url: url.trim().to_string(),
                     sha256: sha256.filter(|value| !value.trim().is_empty()),
+                    #[cfg(windows)]
+                    format: format.filter(|value| !value.trim().is_empty()),
                 })
             }
             _ => Err(serde::de::Error::custom(
                 "asset must be a URL string or object with url",
+            )),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl AssetRef {
+    fn package_format(&self) -> Result<String, String> {
+        let format = self
+            .format
+            .clone()
+            .unwrap_or_else(|| {
+                if self.url.to_ascii_lowercase().ends_with(".zip") {
+                    "zip"
+                } else {
+                    "exe"
+                }
+                .into()
+            })
+            .to_ascii_lowercase();
+        match format.as_str() {
+            "zip" | "exe" => Ok(format),
+            _ => Err(format!(
+                "update manifest asset has unsupported format '{format}'"
             )),
         }
     }
@@ -169,6 +202,8 @@ struct UpdateManifest {
     protocol: Option<u32>,
     notes: String,
     assets: BTreeMap<String, AssetRef>,
+    #[serde(default)]
+    sha256: BTreeMap<String, String>,
     announcement: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_manifest_releases")]
     releases: BTreeMap<String, serde_json::Value>,
@@ -273,6 +308,8 @@ struct ReleaseInfo {
     target_protocol: Option<u32>,
     download_url: String,
     sha256: Option<String>,
+    #[cfg(windows)]
+    package_format: String,
     notes_body: String,
 }
 
@@ -362,6 +399,13 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
         .get(&asset_key)
         .ok_or_else(|| format!("no binary for {asset_key} in update manifest"))?;
     let download_url = asset.url.clone();
+    let sha256 = asset
+        .sha256
+        .clone()
+        .or_else(|| manifest.sha256.get(&asset_key).cloned())
+        .ok_or_else(|| {
+            format!("update manifest asset {asset_key} is missing a SHA-256 checksum")
+        })?;
 
     Ok(Some(ReleaseInfo {
         identity: latest.to_string(),
@@ -372,7 +416,9 @@ fn release_info_from_manifest(manifest: &UpdateManifest) -> Result<Option<Releas
         #[cfg(not(windows))]
         target_protocol: manifest.protocol,
         download_url,
-        sha256: asset.sha256.clone(),
+        sha256: Some(sha256),
+        #[cfg(windows)]
+        package_format: asset.package_format()?,
         notes_body,
     }))
 }
@@ -458,6 +504,8 @@ fn release_info_from_preview_manifest(
         target_protocol: Some(manifest.protocol),
         download_url,
         sha256: asset.sha256.clone(),
+        #[cfg(windows)]
+        package_format: asset.package_format()?,
         notes_body,
     }))
 }
@@ -628,29 +676,81 @@ fn install_downloaded_update(mut update: DownloadedUpdate) -> Result<(), String>
 }
 
 #[cfg(windows)]
+const WINDOWS_INSTALLER: &str = include_str!("../website/install.ps1");
+
+#[cfg(windows)]
+struct DownloadedWindowsUpdate {
+    package_path: PathBuf,
+    installer_path: PathBuf,
+}
+
+#[cfg(windows)]
+impl Drop for DownloadedWindowsUpdate {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.package_path);
+        let _ = fs::remove_file(&self.installer_path);
+    }
+}
+
+#[cfg(windows)]
+fn download_windows_update(release: &ReleaseInfo) -> Result<DownloadedWindowsUpdate, String> {
+    let expected_sha256 = release
+        .sha256
+        .as_deref()
+        .ok_or("Windows update asset is missing a SHA-256 checksum")?;
+    let stem = format!("herdr-update-{}", std::process::id());
+    let update = DownloadedWindowsUpdate {
+        package_path: env::temp_dir().join(format!("{stem}.{}", release.package_format)),
+        installer_path: env::temp_dir().join(format!("{stem}.ps1")),
+    };
+    fs::write(&update.installer_path, WINDOWS_INSTALLER)
+        .map_err(|err| format!("failed to prepare Windows installer: {err}"))?;
+
+    let status = crate::noninteractive_process::curl_command()
+        .args(["-sfL", "--max-time", "120", "-o"])
+        .arg(&update.package_path)
+        .arg(&release.download_url)
+        .status()
+        .map_err(|err| format!("download failed: {err}"))?;
+    if !status.success() {
+        return Err("download failed".into());
+    }
+    crate::checksum::verify_sha256(&update.package_path, expected_sha256)
+        .map_err(|err| format!("downloaded update checksum verification failed: {err}"))?;
+    tracing::info!(sha256 = %expected_sha256, "downloaded update checksum verified");
+
+    Ok(update)
+}
+
+#[cfg(windows)]
 fn install_windows_update_with_installer(
-    channel: UpdateChannel,
-    expected_build_id: Option<&str>,
+    release: &ReleaseInfo,
+    update: &DownloadedWindowsUpdate,
 ) -> Result<(), String> {
+    let expected_sha256 = release
+        .sha256
+        .as_deref()
+        .ok_or("Windows update asset is missing a SHA-256 checksum")?;
     let mut command = Command::new("powershell");
     command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&update.installer_path)
+        .args(["-Channel", release.channel.as_str(), "-LocalPackagePath"])
+        .arg(&update.package_path)
         .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "irm https://herdr.dev/install.ps1 | iex",
+            "-LocalPackageFormat",
+            &release.package_format,
+            "-LocalPackageIdentity",
+            release.label(),
+            "-LocalPackageSha256",
+            expected_sha256,
         ])
-        .env("HERDR_CHANNEL", channel.as_str())
         // Drop any inherited PSModulePath. When herdr is launched from
         // PowerShell 7, its Core module paths come first and Windows
         // PowerShell 5.1 (this `powershell`) fails to autoload cmdlets like
         // Get-FileHash. Removing it lets 5.1 compute its own default path.
         // See PowerShell/PowerShell#8635.
         .env_remove("PSModulePath");
-    if let Some(build_id) = expected_build_id {
-        command.env("HERDR_EXPECTED_BUILD_ID", build_id);
-    }
     let status = command
         .status()
         .map_err(|err| format!("failed to run Windows installer: {err}"))?;
@@ -2032,7 +2132,10 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
         if let Some(sha256) = &release.sha256 {
             tracing::debug!(sha256 = %sha256, "selected Windows update asset has checksum");
         }
-        install_windows_update_with_installer(channel, release.build_id.as_deref())?;
+        eprintln!("downloading {}...", release.label());
+        let downloaded_update = download_windows_update(&release)?;
+        eprintln!("downloaded {}", release.label());
+        install_windows_update_with_installer(&release, &downloaded_update)?;
         let updated_exe = windows_installed_herdr_exe_path()?;
         eprintln!("installed {}", release.label());
         print_outdated_integration_notice_with_updated_binary(&updated_exe);
@@ -3334,6 +3437,26 @@ mod tests {
     }
 
     #[test]
+    fn stable_update_requires_asset_checksum() {
+        let (os, arch) = platform_target();
+        let asset_key = format!("{os}-{arch}");
+        let json = format!(
+            r####"{{
+                "version": "99.99.99",
+                "notes": "### Changed\n- One",
+                "assets": {{
+                    "{asset_key}": "https://example.com/herdr"
+                }}
+            }}"####
+        );
+        let manifest: UpdateManifest = serde_json::from_str(&json).unwrap();
+
+        assert!(release_info_from_manifest(&manifest)
+            .unwrap_err()
+            .contains("missing a SHA-256 checksum"));
+    }
+
+    #[test]
     fn invalid_manifest_announcement_does_not_block_release_info() {
         let (os, arch) = platform_target();
         let asset_key = format!("{os}-{arch}");
@@ -3348,7 +3471,10 @@ mod tests {
                     "body": "### Heads up\n- Defaults changed"
                 }},
                 "assets": {{
-                    "{asset_key}": "https://example.com/herdr"
+                    "{asset_key}": {{
+                        "url": "https://example.com/herdr",
+                        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }}
                 }}
             }}"####
         );
@@ -3428,8 +3554,18 @@ mod tests {
 
     #[test]
     fn checked_in_website_manifest_matches_update_schema() {
-        let manifest: UpdateManifest = serde_json::from_str(include_str!("../website/latest.json"))
-            .expect("website/latest.json should match updater schema");
+        #[derive(Deserialize)]
+        struct LegacyUpdateManifest {
+            assets: BTreeMap<String, String>,
+        }
+
+        let json = include_str!("../website/latest.json");
+        let legacy: LegacyUpdateManifest = serde_json::from_str(json)
+            .expect("website/latest.json should keep legacy string asset URLs");
+        assert_eq!(legacy.assets.len(), 4);
+
+        let manifest: UpdateManifest =
+            serde_json::from_str(json).expect("website/latest.json should match updater schema");
 
         assert!(!manifest
             .metadata_for_version(&Version::parse(&manifest.version).unwrap())
@@ -3449,11 +3585,16 @@ mod tests {
             "macos-x86_64",
             "macos-aarch64",
         ] {
-            let url = &manifest
+            let asset = manifest
                 .assets
                 .get(target)
-                .unwrap_or_else(|| panic!("missing asset URL for {target}"))
-                .url;
+                .unwrap_or_else(|| panic!("missing asset URL for {target}"));
+            let url = &asset.url;
+            assert_eq!(
+                manifest.sha256.get(target).map(String::len),
+                Some(64),
+                "missing SHA-256 checksum for {target}"
+            );
             assert!(
                 url.contains(&format!("/releases/download/v{}/", manifest.version)),
                 "unexpected release URL for {target}: {url}"
@@ -3475,10 +3616,13 @@ mod tests {
                 "macos-x86_64",
                 "macos-aarch64",
             ] {
-                let url = assets
+                let asset = assets
                     .get(target)
-                    .and_then(serde_json::Value::as_str)
+                    .cloned()
                     .unwrap_or_else(|| panic!("missing asset URL for {version} {target}"));
+                let asset: AssetRef = serde_json::from_value(asset)
+                    .unwrap_or_else(|_| panic!("invalid asset for {version} {target}"));
+                let url = &asset.url;
                 assert!(
                     url.contains(&format!("/releases/download/v{version}/")),
                     "unexpected release URL for {version} {target}: {url}"

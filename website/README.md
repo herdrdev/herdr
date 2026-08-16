@@ -15,7 +15,7 @@ Documentation has three lifecycle states:
 
 - `../docs/next/website/` is the committed, author-edited draft. Production builds never read it.
 - `../docs/preview/website/` is the latest preview release snapshot, rendered at `/docs/preview/`.
-- `../docs/versions/<version>/website/` contains maintained stable-release documentation, rendered at `/docs/<version>/`. Release CI seeds a new version from its tag; later factual corrections are made directly in that version directory and mirrored to `docs/next` when they also apply to future releases.
+- `../docs/versions/<version>/website/` contains maintained stable-release documentation, rendered at `/docs/<version>/`. Release CI seeds each new version from its tag. Make later factual corrections directly in that version directory, and mirror them to `docs/next` when they also apply to future releases.
 
 The version selected by `docs/versions/manifest.json` is also rendered at `/docs/`. `src/content/docs/` is entirely generated and ignored.
 

@@ -107,7 +107,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | インテグレーション | `integration.install`、`integration.uninstall` |
 | プラグイン | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
 
-`agent.wait` はサーバー所有でイベント駆動です。解決したペイン占有者に固定されるため、置換されたエージェントが待機を満たすことはありません。`agent.prompt` は `until` と `timeout_ms` を持つ省略可能な `wait` オブジェクトを受け付けます。これにより、プロンプト送信と待機開始を 1 つのリクエストで行い、別々の呼び出し間の競合を避けられます。
+`agent.wait` はサーバー所有でイベント駆動です。解決したペイン占有者に固定されるため、置換されたエージェントが待機を満たすことはありません。`agent.prompt` は `until` と `timeout_ms` を持つ省略可能な `wait` オブジェクトを受け付けます。これにより、プロンプト送信と待機開始を 1 つのリクエストで行い、別々の呼び出し間の競合を避けられます。解決したエージェントがすでに `blocked` の場合、`agent.prompt` は入力を送信せず、待機も開始せずに `agent_blocked` を返します。
 
 `workspace.move_block` は、順序付きの `workspace_ids` を `before_workspace_id` の前へアトミックに移動します。アンカーを省略するとブロックを末尾へ移動します。id は一意である必要があり、アンカーをブロックに含めることはできません。レスポンスにはサーバーが確定した順序付きワークスペース一覧が含まれます。
 
@@ -273,7 +273,7 @@ reason の候補は `shown`、`disabled`、`rate_limited`、`no_foreground_clien
 {"id":"req_title_clear","method":"client.window_title.clear","params":{}}
 ```
 
-`client.window_title.clear` は Herdr のデフォルトタイトルを復元します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
+`client.window_title.clear` はタイトルを `ui.window_title` に戻します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
 
 Worktree メソッドは Git チェックアウトを Herdr ワークスペースとして管理します。`worktree.create` はチェックアウトを作成し、新しい `workspace`、`tab`、`root_pane`、`worktree` のレコードを返します。要求されたブランチがローカルに既存ならそれをチェックアウトし、なければ要求されたベースまたは `HEAD` からブランチを作成します。`worktree.open` は既存のチェックアウトを開くか、すでに開いているワークスペースを返します。`worktree.remove` はリンクされた子ワークスペースに対して `git worktree remove` を実行し、ブランチは決して削除しません。
 

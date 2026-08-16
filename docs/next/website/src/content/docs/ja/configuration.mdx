@@ -239,6 +239,8 @@ dark_name = "catppuccin"
 ```toml
 [theme.custom]
 sidebar_bg = "#181825"
+active_row_bg = "#1e1e2e"
+selection_bg = "#313244"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -247,13 +249,28 @@ red = "#f38ba8"
 yellow = "#f9e2af"
 ```
 
-`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。
+`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。`active_row_bg` は、区切り線やスクロールバートラックに影響を与えず、アクティブな Space とフォーカス中の Agent 行の背景色を変更します。`selection_bg` は、サイドバーの Navigate モードのカーソル行の背景色を変更します。
 
 色の値には、hex、名前付きの色、`rgb(r,g,b)`、または `reset`、`default`、`none`、`transparent` のようなリセットエイリアスが使えます。
 
 ## UI とサイドバー
 
 サイドバーは Herdr のメインダッシュボードです。サイズ、折りたたみモード、Agent パネルの並び順、マウスの挙動、ペインの境界線、その他の表示設定については、[設定リファレンス](/docs/config-reference/)で `ui.` を検索してください。
+
+### 外側のターミナルのウィンドウタイトル
+
+Herdr はペイン内のターミナルをエミュレートするため、ペイン内で書き込まれた `OSC 0`/`OSC 2` のタイトルは Herdr で止まります。Herdr は自身が動作しているターミナルに独自のタイトルを書き込み、ウィンドウマネージャーやターミナルのタブバーはこれを読み取ります:
+
+```toml
+[ui]
+window_title = "{hostname}: {workspace}"
+```
+
+トークンは `{hostname}`、`{workspace}`、`{tab}`、`{pane}`(フォーカス中のペインの手動名)、`{terminal_title}`(フォーカス中のペイン自身のターミナルタイトルからスピナーを取り除いたもの)です。波括弧そのものを書くには `{{` と `}}` を使います。値のないトークンは空になります。
+
+タイトルは Herdr サーバー上で生成されるため、`herdr --remote` で接続した場合や SSH 越しに `herdr` を実行した場合でも、`{hostname}` はペインが動作しているマシンを指します。外側のターミナルのタイトルに触れないようにするには `window_title = ""` を設定します。
+
+`client.window_title.set` は設定されたタイトルを上書きし、`client.window_title.clear` がそれを戻します。
 
 ### サイドバーの行レイアウト
 

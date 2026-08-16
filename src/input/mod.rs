@@ -1,5 +1,6 @@
 mod encode;
 mod model;
+pub(crate) mod mouse;
 mod parse;
 
 #[allow(unused_imports)]

@@ -65,6 +65,7 @@ enum ManagedAgentPhase {
         deadline: Instant,
         observed_expected: bool,
     },
+    Blocked,
     Active,
 }
 
@@ -144,6 +145,7 @@ pub struct TerminalState {
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
+    agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
 }
 
@@ -177,8 +179,41 @@ impl TerminalState {
             launch_argv: None,
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
+            agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
+    }
+
+    pub fn set_detected_agent_process_at(
+        &mut self,
+        agent: Agent,
+        now: Instant,
+    ) -> TerminalStateMutation {
+        let starts_acquisition = !self
+            .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
+            && !self.detected_state_observed_before_release_suppression(Some(agent), now);
+        let mutation = self.set_detected_state_with_screen_signals_at(
+            Some(agent),
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            now,
+        );
+        if starts_acquisition {
+            self.agent_process_acquisition_pending = true;
+        }
+        mutation
+    }
+
+    pub(crate) fn finish_agent_process_acquisition(&mut self) -> bool {
+        let reached_idle = self.agent_process_acquisition_pending && self.state == AgentState::Idle;
+        let suppress_completion = reached_idle && self.recent_agent_process_exit.is_none();
+        if reached_idle {
+            self.agent_process_acquisition_pending = false;
+        }
+        suppress_completion
     }
 
     pub(crate) fn terminal_title_stripped(&self) -> Option<String> {
@@ -844,7 +879,7 @@ impl TerminalState {
         let process_present = known_agent.is_some()
             && self.detected_agent == known_agent
             && self.recent_agent_process_exit.is_none();
-        let session_anchored = self
+        let anchored_session_ref = self
             .hook_authority
             .as_ref()
             .filter(|authority| authority.source == source && authority.agent_label == agent_label)
@@ -854,12 +889,20 @@ impl TerminalState {
                     .as_ref()
                     .filter(|session| session.source == source && session.agent == agent_label)
                     .map(|session| &session.session_ref)
-            })
-            .is_some_and(|anchored| {
-                session_ref
-                    .as_ref()
-                    .is_none_or(|incoming| incoming == anchored)
             });
+        let session_anchored = anchored_session_ref.is_some_and(|anchored| {
+            session_ref
+                .as_ref()
+                .is_none_or(|incoming| incoming == anchored)
+        });
+        let opencode_cross_talk = (source, agent_label) == ("herdr:opencode", "opencode")
+            && process_present
+            && anchored_session_ref
+                .zip(session_ref.as_ref())
+                .is_some_and(|(anchored, incoming)| anchored != incoming);
+        if opencode_cross_talk {
+            return FullLifecycleHookReportRoute::Ignore;
+        }
         if let Some(suppressed) = self.suppressed_full_lifecycle_hook_reports.get(source) {
             if suppressed.agent_label != agent_label {
                 return FullLifecycleHookReportRoute::Ignore;
@@ -1284,12 +1327,17 @@ impl TerminalState {
                 Some("startup" | "clear" | "resume" | "compact")
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
-                | ("herdr:opencode", "opencode", Some("new"))
+                | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | (
                     "herdr:omp",
                     "omp",
                     Some("startup" | "new" | "resume" | "fork")
+                )
+                | (
+                    "herdr:qwen",
+                    "qwen",
+                    Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
                 | ("herdr:antigravity_cli", "agy", None)
         )
@@ -1298,8 +1346,18 @@ impl TerminalState {
     fn session_start_source_is_recognized(session_start_source: Option<&str>) -> bool {
         matches!(
             session_start_source,
-            Some("startup" | "clear" | "resume" | "compact" | "new" | "fork")
+            Some("startup" | "clear" | "resume" | "compact" | "new" | "fork" | "select")
         )
+    }
+
+    fn is_unsequenced_opencode_selection(
+        source: &str,
+        agent_label: &str,
+        session_start_source: Option<&str>,
+        seq: Option<u64>,
+    ) -> bool {
+        (source, agent_label, session_start_source, seq)
+            == ("herdr:opencode", "opencode", Some("select"), None)
     }
 
     pub fn set_persisted_agent_session(
@@ -1346,7 +1404,48 @@ impl TerminalState {
                 && authority.agent_label == agent_label
                 && authority.session_ref.is_some()
         }) || self.persisted_agent_session_matches(&source, &agent_label);
-        if full_lifecycle_source && (!process_present || generation_gated || !session_anchored) {
+        let unsequenced_selection = Self::is_unsequenced_opencode_selection(
+            &source,
+            &agent_label,
+            session_start_source.as_deref(),
+            seq,
+        );
+        let selection_can_reconcile = unsequenced_selection && process_present;
+        if selection_can_reconcile {
+            self.suppressed_full_lifecycle_hook_reports.remove(&source);
+        } else if full_lifecycle_source && unsequenced_selection {
+            let previous_session_ref = self
+                .hook_authority
+                .as_ref()
+                .filter(|authority| {
+                    authority.source == source && authority.agent_label == agent_label
+                })
+                .and_then(|authority| authority.session_ref.clone())
+                .or_else(|| {
+                    self.persisted_agent_session
+                        .as_ref()
+                        .filter(|session| session.source == source && session.agent == agent_label)
+                        .map(|session| session.session_ref.clone())
+                });
+            let suppressed = self
+                .suppressed_full_lifecycle_hook_reports
+                .entry(source)
+                .or_insert_with(|| SuppressedFullLifecycleHookReport {
+                    agent_label,
+                    session_ref: previous_session_ref,
+                    observed_at: Instant::now(),
+                    reason: FullLifecycleHookSuppressionReason::ProcessExit,
+                    replacement_session_ref: None,
+                    pending_replacement_report: None,
+                });
+            suppressed.replacement_session_ref = Some(session_ref);
+            suppressed.pending_replacement_report = None;
+            return None;
+        }
+        if full_lifecycle_source
+            && !selection_can_reconcile
+            && (!process_present || generation_gated || !session_anchored)
+        {
             if !Self::session_start_source_is_recognized(session_start_source.as_deref()) {
                 return None;
             }
@@ -1408,7 +1507,7 @@ impl TerminalState {
             }
             return None;
         }
-        if !self.accept_hook_report(&source, seq) {
+        if !unsequenced_selection && !self.accept_hook_report(&source, seq) {
             return None;
         }
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
@@ -1818,8 +1917,12 @@ impl TerminalState {
     }
 
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.managed_agent
-            .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Pending { .. }))
+        self.managed_agent.is_some_and(|managed| {
+            matches!(
+                managed.phase,
+                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+            )
+        })
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
@@ -1852,7 +1955,7 @@ impl TerminalState {
             ManagedAgentPhase::Pending {
                 observed_expected, ..
             } => observed_expected || known_agent == Some(managed.kind),
-            ManagedAgentPhase::Active => false,
+            ManagedAgentPhase::Blocked | ManagedAgentPhase::Active => false,
         };
         let clear = process_exited
             || known_agent.is_some_and(|agent| agent != managed.kind)
@@ -1863,20 +1966,35 @@ impl TerminalState {
             self.clear_agent_name();
             return true;
         }
+        if managed.phase == ManagedAgentPhase::Blocked {
+            if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
+                self.managed_agent = Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::Active,
+                });
+                return true;
+            }
+            return false;
+        }
         if let ManagedAgentPhase::Pending {
             ready_after,
             deadline,
             observed_expected: previous_observed_expected,
         } = managed.phase
         {
+            if known_agent == Some(managed.kind) && self.state == AgentState::Blocked {
+                self.managed_agent = Some(ManagedAgent {
+                    kind: managed.kind,
+                    phase: ManagedAgentPhase::Blocked,
+                });
+                return true;
+            }
             if now >= deadline {
                 self.clear_agent_name();
                 return true;
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {
-                if known_agent == Some(managed.kind)
-                    && matches!(self.state, AgentState::Idle | AgentState::Blocked)
-                {
+                if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
                     self.managed_agent = Some(ManagedAgent {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
@@ -1944,6 +2062,7 @@ impl TerminalState {
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
+        self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
         self.clear_agent_name();
     }
@@ -2084,7 +2203,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_activates_only_after_matching_settled_detection() {
+    fn managed_agent_readiness_tracks_detection_state() {
         let mut terminal = test_terminal();
         let now = Instant::now();
         terminal.begin_managed_agent(
@@ -2094,23 +2213,35 @@ mod tests {
             Duration::from_millis(100),
             Duration::from_secs(1),
         );
-        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Unknown);
 
         assert!(terminal.managed_agent_launch_pending());
         assert!(!terminal.managed_agent_interactive_ready());
         assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(100), false));
-        assert!(!terminal.managed_agent_launch_pending());
-        assert!(terminal.managed_agent_interactive_ready());
-        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert!(terminal.managed_agent_launch_pending());
 
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_millis(101), false));
+
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Blocked);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(102), false));
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
+        assert!(!terminal.managed_agent_launch_pending());
         assert!(terminal.managed_agent_interactive_ready());
 
         terminal.set_detected_state(None, AgentState::Unknown);
         assert!(terminal.managed_agent_interactive_ready());
-        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_millis(101), false));
+        assert!(!terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), false));
         assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
-        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(102), true));
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), true));
         assert_eq!(terminal.agent_name, None);
     }
 
@@ -4426,37 +4557,338 @@ mod tests {
     }
 
     #[test]
-    fn opencode_new_session_ref_replaces_existing_session_ref() {
+    fn qwen_lifecycle_session_ref_replaces_existing_session_ref() {
+        for session_start_source in ["startup", "clear", "resume", "compact", "branch"] {
+            let mut terminal = test_terminal();
+            terminal.set_detected_state(Some(Agent::Qwen), AgentState::Idle);
+            terminal
+                .set_agent_session_ref(
+                    "herdr:qwen".into(),
+                    "qwen".into(),
+                    crate::agent_resume::AgentSessionRef::id("qwen-session"),
+                    Some(20),
+                )
+                .expect("initial session should be accepted");
+
+            let next_session = format!("qwen-{session_start_source}-session");
+            let mutation = terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:qwen".into(),
+                    "qwen".into(),
+                    crate::agent_resume::AgentSessionRef::id(&next_session),
+                    Some(21),
+                    Some(session_start_source.into()),
+                )
+                .unwrap_or_else(|| panic!("{session_start_source} should replace the session"));
+
+            assert!(mutation.session_ref_changed);
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .map(|session| session.session_ref.value.as_str()),
+                Some(next_session.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn qwen_session_ref_does_not_replace_without_foreground_qwen() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:qwen".into(),
+                "qwen".into(),
+                crate::agent_resume::AgentSessionRef::id("qwen-parent"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal.set_agent_session_ref_for_session_start(
+            "herdr:qwen".into(),
+            "qwen".into(),
+            crate::agent_resume::AgentSessionRef::id("qwen-branch"),
+            Some(21),
+            Some("branch".into()),
+        );
+
+        assert!(mutation.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("qwen-parent")
+        );
+    }
+
+    #[test]
+    fn opencode_server_new_does_not_replace_existing_session_ref() {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
         terminal
             .set_agent_session_ref_for_session_start(
                 "herdr:opencode".into(),
                 "opencode".into(),
-                crate::agent_resume::AgentSessionRef::id("opencode-old"),
-                Some(20),
-                Some("new".into()),
+                crate::agent_resume::AgentSessionRef::id("opencode-visible"),
+                None,
+                Some("select".into()),
             )
-            .expect("initial session should be accepted");
+            .expect("local selection should be accepted");
 
-        let mutation = terminal
-            .set_agent_session_ref_for_session_start(
-                "herdr:opencode".into(),
-                "opencode".into(),
-                crate::agent_resume::AgentSessionRef::id("opencode-new"),
-                Some(21),
-                Some("new".into()),
-            )
-            .expect("new should replace the session");
+        let mutation = terminal.set_agent_session_ref_for_session_start(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            crate::agent_resume::AgentSessionRef::id("opencode-attached-client"),
+            Some(21),
+            Some("new".into()),
+        );
 
-        assert!(mutation.session_ref_changed);
+        assert!(mutation.is_none());
         assert_eq!(
             terminal
                 .persisted_agent_session
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
-            Some("opencode-new")
+            Some("opencode-visible")
         );
+    }
+
+    #[test]
+    fn opencode_server_resume_does_not_replace_existing_session_ref() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("opencode-visible"),
+                None,
+                Some("select".into()),
+            )
+            .expect("local selection should be accepted");
+
+        let mutation = terminal.set_agent_session_ref_for_session_start(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            crate::agent_resume::AgentSessionRef::id("opencode-attached-client"),
+            Some(21),
+            Some("resume".into()),
+        );
+
+        assert!(mutation.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("opencode-visible")
+        );
+    }
+
+    #[test]
+    fn opencode_tui_selection_anchors_after_process_detection() {
+        let mut terminal = test_terminal();
+        let startup_selection = terminal.set_agent_session_ref_for_session_start(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            crate::agent_resume::AgentSessionRef::id("opencode-startup-selection"),
+            None,
+            Some("select".into()),
+        );
+        assert!(startup_selection.is_none());
+        assert_eq!(
+            terminal
+                .suppressed_full_lifecycle_hook_reports
+                .get("herdr:opencode")
+                .and_then(|suppressed| suppressed.replacement_session_ref.as_ref())
+                .map(|session| session.value.as_str()),
+            Some("opencode-startup-selection")
+        );
+
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("opencode-startup-selection")
+        );
+        assert!(!terminal
+            .suppressed_full_lifecycle_hook_reports
+            .contains_key("herdr:opencode"));
+
+        terminal.suppressed_full_lifecycle_hook_reports.insert(
+            "herdr:opencode".into(),
+            SuppressedFullLifecycleHookReport {
+                agent_label: "opencode".into(),
+                session_ref: None,
+                observed_at: Instant::now(),
+                reason: FullLifecycleHookSuppressionReason::ProcessExit,
+                replacement_session_ref: None,
+                pending_replacement_report: None,
+            },
+        );
+        let selected = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                crate::agent_resume::AgentSessionRef::id("opencode-reselected"),
+                None,
+                Some("select".into()),
+            )
+            .expect("local TUI selection should reconcile generation suppression");
+
+        assert!(selected.session_ref_changed);
+        assert!(!terminal
+            .suppressed_full_lifecycle_hook_reports
+            .contains_key("herdr:opencode"));
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("opencode-reselected")
+        );
+        assert!(!terminal
+            .hook_report_sequences
+            .contains_key("herdr:opencode"));
+    }
+
+    #[test]
+    fn opencode_tui_selection_reanchors_full_lifecycle_authority() {
+        let mut terminal = test_terminal();
+        let old_session = crate::agent_resume::AgentSessionRef::id("opencode-newer").unwrap();
+        let selected_session =
+            crate::agent_resume::AgentSessionRef::id("opencode-selected-older").unwrap();
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::OpenCode,
+            "herdr:opencode",
+            "opencode",
+            old_session.clone(),
+        );
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                AgentState::Idle,
+                None,
+                Some(old_session.clone()),
+                Some(20),
+            )
+            .expect("initial session should own lifecycle state");
+        let attached_session =
+            crate::agent_resume::AgentSessionRef::id("opencode-attached-client").unwrap();
+        let attached = terminal.set_hook_authority_with_session_ref(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Working,
+            None,
+            Some(attached_session.clone()),
+            Some(21),
+        );
+        assert!(attached.is_none());
+        assert!(!terminal
+            .suppressed_full_lifecycle_hook_reports
+            .contains_key("herdr:opencode"));
+
+        let selected = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                Some(selected_session.clone()),
+                None,
+                Some("select".into()),
+            )
+            .expect("selected session should replace the previous session");
+
+        assert!(selected.session_ref_changed);
+        assert!(terminal.hook_authority.is_none());
+        assert!(!terminal
+            .suppressed_full_lifecycle_hook_reports
+            .contains_key("herdr:opencode"));
+        assert_eq!(
+            terminal.hook_report_sequences.get("herdr:opencode"),
+            Some(&20)
+        );
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&selected_session)
+        );
+
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                AgentState::Working,
+                None,
+                Some(selected_session.clone()),
+                Some(21),
+            )
+            .expect("selected session should regain lifecycle authority");
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref()),
+            Some(&selected_session)
+        );
+
+        let late_old_session = terminal.set_hook_authority_with_session_ref(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Idle,
+            None,
+            Some(old_session),
+            Some(22),
+        );
+        assert!(late_old_session.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref()),
+            Some(&selected_session)
+        );
+
+        let late_attached_session = terminal.set_hook_authority_with_session_ref(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Blocked,
+            None,
+            Some(attached_session),
+            Some(23),
+        );
+        assert!(late_attached_session.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+
+        let final_session =
+            crate::agent_resume::AgentSessionRef::id("opencode-final-selection").unwrap();
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:opencode".into(),
+                "opencode".into(),
+                Some(final_session.clone()),
+                None,
+                Some("select".into()),
+            )
+            .expect("another local selection should remain authoritative");
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| &session.session_ref),
+            Some(&final_session)
+        );
+        assert!(!terminal
+            .suppressed_full_lifecycle_hook_reports
+            .contains_key("herdr:opencode"));
     }
 
     #[test]
@@ -4501,14 +4933,14 @@ mod tests {
         terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
         assert!(terminal.reconcile_managed_agent_at(now, false));
 
-        for (sequence, session) in [(20, "opencode-old"), (21, "opencode-new")] {
+        for session in ["opencode-old", "opencode-new"] {
             terminal
                 .set_agent_session_ref_for_session_start(
                     "herdr:opencode".into(),
                     "opencode".into(),
                     crate::agent_resume::AgentSessionRef::id(session),
-                    Some(sequence),
-                    Some("new".into()),
+                    None,
+                    Some("select".into()),
                 )
                 .expect("managed session should be accepted");
         }
@@ -4533,10 +4965,10 @@ mod tests {
                 "herdr:opencode".into(),
                 "opencode".into(),
                 crate::agent_resume::AgentSessionRef::id("opencode-old"),
-                Some(20),
-                Some("new".into()),
+                None,
+                Some("select".into()),
             )
-            .expect("initial session should be accepted");
+            .expect("local selection should be accepted");
 
         // session.updated reports carry no session_start_source, so a different
         // id must not displace the established session (cross-talk guard).
@@ -4793,10 +5225,10 @@ mod tests {
                 "herdr:opencode".into(),
                 "opencode".into(),
                 crate::agent_resume::AgentSessionRef::id("opencode-new-session"),
-                Some(23),
-                Some("new".into()),
+                None,
+                Some("select".into()),
             )
-            .expect("fresh root session");
+            .expect("fresh local selection");
         let fresh_session = terminal.set_hook_authority_with_session_ref(
             "herdr:opencode".into(),
             "opencode".into(),
@@ -5235,6 +5667,7 @@ mod tests {
             session_ref: crate::agent_resume::AgentSessionRef::id("codex-session").unwrap(),
         });
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.set_detected_agent_process_at(Agent::Codex, Instant::now());
 
         terminal.clear_agent_runtime_identity_after_respawn();
 
@@ -5243,6 +5676,7 @@ mod tests {
         assert!(terminal.agent_name.is_none());
         assert!(terminal.persisted_agent_session.is_none());
         assert!(!terminal.respawn_shell_on_exit);
+        assert!(!terminal.finish_agent_process_acquisition());
     }
 
     #[test]

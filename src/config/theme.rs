@@ -1,6 +1,51 @@
 use serde::Deserialize;
 use tracing::warn;
 
+pub const THEME_NAMES: &[&str] = &[
+    "catppuccin",
+    "catppuccin-latte",
+    "terminal",
+    "tokyo-night",
+    "tokyo-night-day",
+    "dracula",
+    "nord",
+    "gruvbox",
+    "gruvbox-light",
+    "one-dark",
+    "one-light",
+    "solarized",
+    "solarized-light",
+    "kanagawa",
+    "kanagawa-lotus",
+    "rose-pine",
+    "rose-pine-dawn",
+    "vesper",
+];
+
+pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
+    match name.to_lowercase().replace([' ', '_'], "-").as_str() {
+        "catppuccin" | "catppuccin-mocha" => Some("catppuccin"),
+        "catppuccin-latte" | "latte" | "light" => Some("catppuccin-latte"),
+        "terminal" => Some("terminal"),
+        "tokyo-night" | "tokyonight" => Some("tokyo-night"),
+        "tokyo-night-day" | "tokyo-day" | "tokyonight-day" => Some("tokyo-night-day"),
+        "dracula" => Some("dracula"),
+        "nord" => Some("nord"),
+        "gruvbox" | "gruvbox-dark" => Some("gruvbox"),
+        "gruvbox-light" => Some("gruvbox-light"),
+        "one-dark" | "onedark" => Some("one-dark"),
+        "one-light" | "onelight" => Some("one-light"),
+        "solarized" | "solarized-dark" => Some("solarized"),
+        "solarized-light" => Some("solarized-light"),
+        "kanagawa" => Some("kanagawa"),
+        "kanagawa-lotus" | "lotus" => Some("kanagawa-lotus"),
+        "rose-pine" | "rosepine" => Some("rose-pine"),
+        "rose-pine-dawn" | "rosepine-dawn" | "dawn" => Some("rose-pine-dawn"),
+        "vesper" => Some("vesper"),
+        _ => None,
+    }
+}
+
 /// Theme configuration: pick a built-in or override individual tokens.
 ///
 /// ```toml
@@ -26,6 +71,31 @@ pub struct ThemeConfig {
     pub custom: Option<CustomThemeColors>,
 }
 
+impl ThemeConfig {
+    pub(crate) fn diagnostics(&self) -> Vec<String> {
+        let valid = THEME_NAMES.join(", ");
+        [
+            ("theme.name", self.name.as_deref(), "catppuccin"),
+            ("theme.dark_name", self.dark_name.as_deref(), "catppuccin"),
+            (
+                "theme.light_name",
+                self.light_name.as_deref(),
+                "catppuccin-latte",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(field, value, fallback)| {
+            let value = value?;
+            canonical_theme_name(value).is_none().then(|| {
+                format!(
+                    "unknown theme name {field} = {value:?}; using {fallback:?}; valid themes: {valid}"
+                )
+            })
+        })
+        .collect()
+    }
+}
+
 /// Per-token color overrides. All fields optional — only set what you want to change.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -33,6 +103,8 @@ pub struct CustomThemeColors {
     pub accent: Option<String>,
     pub panel_bg: Option<String>,
     pub sidebar_bg: Option<String>,
+    pub active_row_bg: Option<String>,
+    pub selection_bg: Option<String>,
     pub surface0: Option<String>,
     pub surface1: Option<String>,
     pub surface_dim: Option<String>,
@@ -133,6 +205,34 @@ name = "dracula"
     }
 
     #[test]
+    fn unknown_theme_names_are_diagnosed() {
+        let config: Config = toml::from_str(
+            r#"
+[theme]
+name = "catppucin"
+dark_name = "tokio-night"
+light_name = "lattee"
+"#,
+        )
+        .unwrap();
+
+        let diagnostics = config.theme.diagnostics();
+        assert_eq!(diagnostics.len(), 3);
+        assert!(diagnostics[0].contains("theme.name = \"catppucin\""));
+        assert!(diagnostics[0].contains("using \"catppuccin\""));
+        assert!(diagnostics[1].contains("theme.dark_name = \"tokio-night\""));
+        assert!(diagnostics[2].contains("theme.light_name = \"lattee\""));
+        assert!(diagnostics[2].contains("using \"catppuccin-latte\""));
+    }
+
+    #[test]
+    fn theme_name_aliases_are_valid() {
+        for name in ["catppuccin-mocha", "tokyonight", "gruvbox-dark", "dawn"] {
+            assert!(canonical_theme_name(name).is_some(), "alias: {name}");
+        }
+    }
+
+    #[test]
     fn parse_color_accepts_reset_aliases() {
         use ratatui::style::Color;
 
@@ -166,6 +266,8 @@ name = "nord"
 [theme.custom]
 panel_bg = "#1e1e2e"
 sidebar_bg = "#181825"
+active_row_bg = "#313244"
+selection_bg = "#45475a"
 accent = "#ff79c6"
 red = "rgb(255, 85, 85)"
 "##;
@@ -174,6 +276,8 @@ red = "rgb(255, 85, 85)"
         let custom = config.theme.custom.as_ref().unwrap();
         assert_eq!(custom.panel_bg.as_deref(), Some("#1e1e2e"));
         assert_eq!(custom.sidebar_bg.as_deref(), Some("#181825"));
+        assert_eq!(custom.active_row_bg.as_deref(), Some("#313244"));
+        assert_eq!(custom.selection_bg.as_deref(), Some("#45475a"));
         assert_eq!(custom.accent.as_deref(), Some("#ff79c6"));
         assert_eq!(custom.red.as_deref(), Some("rgb(255, 85, 85)"));
         assert!(custom.green.is_none());

@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::discovery::{canonicalize_best_effort_path, GitWorktreeInfo};
 
@@ -10,17 +13,68 @@ pub(super) struct BranchConfig {
     remote_urls: Vec<(String, String)>,
 }
 
-pub(super) fn read_branch_config(info: &GitWorktreeInfo, branch: &str) -> Option<BranchConfig> {
-    read_branch_config_with_user_paths(info, branch, git_user_config_paths())
+type FileStamp = Option<(Option<SystemTime>, u64)>;
+pub(super) type FileDep = (PathBuf, FileStamp, bool, Option<PathBuf>);
+
+pub(super) fn stamp(path: PathBuf, target: Option<PathBuf>) -> FileDep {
+    let meta = std::fs::metadata(&path);
+    let reusable = meta.is_ok() || matches!(&meta, Err(e) if e.kind() == ErrorKind::NotFound);
+    let stamp = meta.ok().map(|m| (m.modified().ok(), m.len()));
+    (path, stamp, reusable, target)
 }
 
-pub(super) fn read_branch_config_with_user_paths(
+pub(super) fn deps_current(deps: &[FileDep]) -> bool {
+    deps.iter().all(|dep| {
+        let target = dep
+            .3
+            .as_ref()
+            .map(|_| canonicalize_best_effort_path(&dep.0));
+        dep.2 && stamp(dep.0.clone(), target) == *dep
+    })
+}
+
+pub(super) type ConfigCtx = (String, Option<BranchConfig>, Vec<FileDep>);
+
+#[derive(Default)]
+struct ConfigReader {
+    files: HashMap<PathBuf, Option<String>>,
+    deps: Vec<FileDep>,
+}
+
+impl ConfigReader {
+    fn read(&mut self, path: &Path) -> (PathBuf, Option<String>) {
+        let logical = path.to_path_buf();
+        let path = canonicalize_best_effort_path(path);
+        self.deps
+            .extend((logical != path).then(|| stamp(logical, Some(path.clone()))));
+        let deps = &mut self.deps;
+        let contents = self
+            .files
+            .entry(path.clone())
+            .or_insert_with(|| {
+                let mut dep = stamp(path.clone(), None);
+                let r = std::fs::read_to_string(&path);
+                dep.2 &= r.is_ok() || matches!(&r, Err(e) if e.kind() == ErrorKind::NotFound);
+                deps.push(dep);
+                r.ok()
+            })
+            .clone();
+        (path, contents)
+    }
+}
+
+pub(super) fn read_config(info: &GitWorktreeInfo, branch: &str) -> ConfigCtx {
+    read_config_with_user_paths(info, branch, git_user_config_paths())
+}
+
+pub(super) fn read_config_with_user_paths(
     info: &GitWorktreeInfo,
     branch: &str,
     user_config_paths: Vec<PathBuf>,
-) -> Option<BranchConfig> {
+) -> ConfigCtx {
+    let mut reader = ConfigReader::default();
     let worktree_config_enabled =
-        worktree_config_enabled(&info.git_common_dir.join("config"), info);
+        worktree_config_enabled(&info.git_common_dir.join("config"), info, &mut reader);
     let config_paths = user_config_paths
         .into_iter()
         .chain(std::iter::once(info.git_common_dir.join("config")))
@@ -28,7 +82,14 @@ pub(super) fn read_branch_config_with_user_paths(
     let mut remote_urls = Vec::new();
     for path in &config_paths {
         let mut include_stack = Vec::new();
-        collect_remote_urls(path, info, branch, &mut remote_urls, &mut include_stack);
+        collect_remote_urls(
+            path,
+            info,
+            branch,
+            &mut remote_urls,
+            &mut include_stack,
+            &mut reader,
+        );
     }
     let mut config = BranchConfig {
         remote: String::new(),
@@ -38,7 +99,15 @@ pub(super) fn read_branch_config_with_user_paths(
     };
     for path in config_paths {
         let mut include_stack = Vec::new();
-        merge_git_config(&mut config, &path, branch, info, true, &mut include_stack);
+        merge_git_config(
+            &mut config,
+            &path,
+            branch,
+            info,
+            true,
+            &mut include_stack,
+            &mut reader,
+        );
     }
     if worktree_config_enabled {
         let mut include_stack = Vec::new();
@@ -49,9 +118,14 @@ pub(super) fn read_branch_config_with_user_paths(
             info,
             false,
             &mut include_stack,
+            &mut reader,
         );
     }
-    (!config.remote.is_empty() && !config.merge_ref.is_empty()).then_some(config)
+    (
+        branch.to_string(),
+        (!config.remote.is_empty() && !config.merge_ref.is_empty()).then_some(config),
+        reader.deps,
+    )
 }
 
 fn git_user_config_paths() -> Vec<PathBuf> {
@@ -67,8 +141,8 @@ fn git_user_config_paths() -> Vec<PathBuf> {
     paths
 }
 
-fn worktree_config_enabled(path: &Path, info: &GitWorktreeInfo) -> bool {
-    let Ok(contents) = std::fs::read_to_string(path) else {
+fn worktree_config_enabled(path: &Path, info: &GitWorktreeInfo, reader: &mut ConfigReader) -> bool {
+    let Some(contents) = reader.read(path).1 else {
         return false;
     };
     let mut section = ConfigSection::Other;
@@ -124,13 +198,14 @@ fn collect_remote_urls(
     branch: &str,
     remote_urls: &mut Vec<(String, String)>,
     include_stack: &mut Vec<PathBuf>,
+    reader: &mut ConfigReader,
 ) {
-    let path = canonicalize_best_effort_path(path);
+    let (path, contents) = reader.read(path);
     if include_stack.contains(&path) {
         return;
     }
     include_stack.push(path.clone());
-    let Ok(contents) = std::fs::read_to_string(&path) else {
+    let Some(contents) = contents else {
         include_stack.pop();
         return;
     };
@@ -163,6 +238,7 @@ fn collect_remote_urls(
                     branch,
                     remote_urls,
                     include_stack,
+                    reader,
                 );
             }
             ConfigSection::IncludeIf(IncludeIfMode::Enabled)
@@ -174,6 +250,7 @@ fn collect_remote_urls(
                     branch,
                     remote_urls,
                     include_stack,
+                    reader,
                 );
             }
             _ => {}
@@ -189,13 +266,14 @@ fn merge_git_config(
     info: &GitWorktreeInfo,
     collect_hasconfig_urls: bool,
     include_stack: &mut Vec<PathBuf>,
+    reader: &mut ConfigReader,
 ) {
-    let path = canonicalize_best_effort_path(path);
+    let (path, contents) = reader.read(path);
     if include_stack.contains(&path) {
         return;
     }
     include_stack.push(path.clone());
-    let Ok(contents) = std::fs::read_to_string(&path) else {
+    let Some(contents) = contents else {
         include_stack.pop();
         return;
     };
@@ -232,6 +310,7 @@ fn merge_git_config(
                     info,
                     collect_hasconfig_urls,
                     include_stack,
+                    reader,
                 );
             }
             ConfigSection::IncludeIf(IncludeIfMode::Enabled)
@@ -245,6 +324,7 @@ fn merge_git_config(
                     info,
                     collect_hasconfig_urls,
                     include_stack,
+                    reader,
                 );
             }
             ConfigSection::IncludeIf(IncludeIfMode::HasConfig)
@@ -257,6 +337,7 @@ fn merge_git_config(
                     info,
                     config,
                     include_stack,
+                    reader,
                 ) {
                     merge_git_config(
                         config,
@@ -265,6 +346,7 @@ fn merge_git_config(
                         info,
                         collect_hasconfig_urls,
                         include_stack,
+                        reader,
                     );
                 }
             }
@@ -402,13 +484,14 @@ fn included_config_defines_remote_url(
     info: &GitWorktreeInfo,
     config: &BranchConfig,
     include_stack: &mut Vec<PathBuf>,
+    reader: &mut ConfigReader,
 ) -> bool {
-    let path = canonicalize_best_effort_path(path);
+    let (path, contents) = reader.read(path);
     if include_stack.contains(&path) {
         return false;
     }
     include_stack.push(path.clone());
-    let Ok(contents) = std::fs::read_to_string(&path) else {
+    let Some(contents) = contents else {
         include_stack.pop();
         return false;
     };
@@ -438,6 +521,7 @@ fn included_config_defines_remote_url(
                     info,
                     config,
                     include_stack,
+                    reader,
                 ) {
                     continue;
                 }
@@ -454,6 +538,7 @@ fn included_config_defines_remote_url(
                     info,
                     config,
                     include_stack,
+                    reader,
                 ) {
                     continue;
                 }

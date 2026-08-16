@@ -42,6 +42,8 @@ pub(crate) struct DroidInstallPaths {
 #[derive(Debug)]
 pub(crate) struct OpenCodeInstallPaths {
     pub plugin_path: PathBuf,
+    pub tui_plugin_path: PathBuf,
+    pub tui_config_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -63,6 +65,12 @@ pub(crate) struct HermesInstallPaths {
 
 #[derive(Debug)]
 pub(crate) struct QodercliInstallPaths {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct QwenInstallPaths {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
 }
@@ -111,6 +119,14 @@ pub(crate) struct GrokUninstallResult {
 
 #[derive(Debug)]
 pub(crate) struct QodercliUninstallResult {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_settings: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct QwenUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
     pub removed_hook_file: bool,
@@ -225,7 +241,11 @@ pub(crate) struct DroidUninstallResult {
 #[derive(Debug)]
 pub(crate) struct OpenCodeUninstallResult {
     pub plugin_path: PathBuf,
+    pub tui_plugin_path: PathBuf,
+    pub tui_config_path: PathBuf,
     pub removed_plugin: bool,
+    pub removed_tui_plugin: bool,
+    pub updated_tui_config: bool,
 }
 
 #[derive(Debug)]

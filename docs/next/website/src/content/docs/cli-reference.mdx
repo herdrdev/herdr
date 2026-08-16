@@ -5,7 +5,7 @@ description: Herdr commands for sessions, workspaces, tabs, panes, notifications
 
 Herdr’s CLI talks to the running server over the same local socket API used by integrations and agents.
 
-Most commands print JSON responses. Use them from scripts when you want deterministic automation.
+Most commands print JSON responses for deterministic automation in scripts.
 
 ## Launch and status
 
@@ -130,7 +130,7 @@ Create a workspace without stealing focus:
 herdr workspace create --cwd ~/project --label api --no-focus
 ```
 
-A workspace is the top-level project or work context. Creating one also creates its first tab and root pane. The JSON response exposes their IDs as `.result.workspace.workspace_id`, `.result.tab.tab_id`, and `.result.root_pane.pane_id`.
+A workspace is a top-level project or work context. Creating one also creates its first tab and root pane. The JSON response exposes their IDs as `.result.workspace.workspace_id`, `.result.tab.tab_id`, and `.result.root_pane.pane_id`.
 
 ## Worktrees
 
@@ -143,7 +143,7 @@ herdr worktree remove --workspace ID [--force]
 
 Worktrees are normal Herdr workspaces with Git checkout provenance. `worktree create` creates a Git worktree checkout, opens it as a workspace, and groups it with the parent repo workspace. If `--branch` names an existing local branch, Herdr checks it out; otherwise it creates the branch from `--base` or `HEAD`. Without `--path`, Herdr creates the checkout under `<worktrees.directory>/<repo>/<branch-slug>`.
 
-`workspace close` closes Herdr state only. `worktree remove` is the explicit checkout deletion path; it runs `git worktree remove`, never deletes the branch, and requires `--force` when Git refuses a dirty checkout.
+`workspace close` closes only Herdr state. To delete the checkout, run `worktree remove`. It runs `git worktree remove`, never deletes the branch, and requires `--force` when Git refuses a dirty checkout.
 
 ## Tabs
 
@@ -156,7 +156,7 @@ herdr tab rename <tab_id> <label>
 herdr tab close <tab_id>
 ```
 
-A tab is another terminal layout inside a workspace. Without `--workspace`, `tab create` uses the active workspace and fails if none exists. Its JSON response exposes `.result.tab.tab_id` and `.result.root_pane.pane_id`. Closing a workspace's last tab also closes the workspace, matching the TUI close-tab action; when `confirm_close` is enabled and that would also close a whole worktree group, `tab close` returns a `confirmation_required` error instead.
+A tab is another terminal layout inside a workspace. Without `--workspace`, `tab create` uses the active workspace and fails if none exists. Its JSON response exposes `.result.tab.tab_id` and `.result.root_pane.pane_id`. Closing a workspace's last tab also closes the workspace, matching the TUI close-tab action. If `confirm_close` is enabled and closing the tab would also close a whole worktree group, `tab close` returns a `confirmation_required` error instead.
 
 Workspace and tab creation, and pane splitting, leave focus unchanged by default. `--focus` selects the new layout; `--no-focus` states the default explicitly. Without `--cwd`, new terminals follow the configured `terminal.new_cwd` policy, which follows the source pane or workspace by default. Each `--env KEY=VALUE` adds or replaces that variable in the new root shell.
 
@@ -174,7 +174,8 @@ herdr pane focus --direction left|right|up|down [--pane ID|--current]
 herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]
 herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]
 herdr pane rename <pane_id> <label>|--clear
-herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]
+herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane
+herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]
 herdr pane swap --direction left|right|up|down [--pane ID|--current]
 herdr pane swap --source-pane ID --target-pane ID
 herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]
@@ -188,6 +189,12 @@ For pane commands that accept `--current`, Herdr uses the calling pane's
 an explicit pane id or `--pane ID` splits that pane, `--current` splits the
 calling pane, and an omitted target keeps using the UI-focused pane.
 The split response exposes the new pane ID as `.result.pane.pane_id`.
+
+`pane input --right-click pane` forwards unmodified right-click gestures to a
+mouse-reporting pane application. `herdr` restores the default pane menu.
+Right-clicking the pane frame still opens Herdr's menu. `pane split
+--right-click pane` applies the same policy to the new pane at creation.
+
 After `pane move`, use `.result.move_result.pane.pane_id` for later commands. A cross-workspace move changes the workspace-qualified pane ID; the prior value remains at `.result.move_result.previous_pane_id`. The running process keeps its launch-time `HERDR_PANE_ID`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID`; Herdr retains the old pane ID as an alias for that terminal, so pane commands using `--current` still resolve it. A live agent name follows the terminal and continues to resolve after the move.
 
 Read output:
@@ -248,7 +255,7 @@ herdr pane release-agent <pane_id> \
 
 `pane get`, `pane list`, `agent get`, and `agent list` include a read-only `agent_session` object when an official integration has reported a native session reference. If no native session reference is stored, the field is omitted.
 
-Those commands include `foreground_cwd` when Herdr can resolve the cwd of the foreground process controlling the pane. The existing `cwd` field remains the pane/workspace cwd used for labels and follow-cwd behavior.
+Those commands include `foreground_cwd` when Herdr can resolve the cwd of the foreground process controlling the pane. The `cwd` field remains the pane/workspace cwd used for labels and follow-cwd behavior.
 
 `pane get` and `pane list` include `scroll` when terminal scroll metrics are available. `scroll.offset_from_bottom == 0` means the pane is at the bottom of its scrollback.
 
@@ -298,11 +305,11 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 Agent targets are either a unique live agent name or the pane ID that currently hosts the agent. Terminal IDs and bare agent-kind labels are not agent targets. Agents started through `agent start` require a name; manually launched agents remain unnamed and use their pane ID.
 
-`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, and `maki`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
+`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, and `maki`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
 
-Start returns only after the expected agent owns the same terminal and is ready for interactive input. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
+A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
 
-`agent prompt` honors live bracketed-paste mode and submits text plus encoded Enter atomically, including while the agent is working. With `--wait`, a prompt sent from a non-working state must produce an observed lifecycle change within five seconds or Herdr returns `agent_prompt_stalled`; a caller timeout of five seconds or less keeps the normal `timeout` error. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
+`agent prompt` honors live bracketed-paste mode and sends text followed by encoded Enter after a short delay, including while the agent is working. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, an accepted prompt sent from another non-working state must produce an observed lifecycle change within five seconds or Herdr returns `agent_prompt_stalled`; a caller timeout of five seconds or less keeps the normal `timeout` error. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
 
 `idle` means ready for input after its tab has been seen in the focused Herdr UI; `done` is the same underlying idle state after unseen background work completes. Focusing that tab or targeting it with `pane focus` / `agent focus` marks it seen; reading it through the CLI does not. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently, not that its work succeeded.
 
@@ -334,7 +341,7 @@ terminal, or agent target. It prints newline-delimited JSON `terminal.frame`
 records with base64-encoded ANSI bytes, then a `terminal.closed` record when
 the server closes the stream. Multiple observers can watch the same terminal
 without taking input, resize, scroll, or takeover authority.
-`terminal title clear` restores Herdr's default outer terminal window title.
+`terminal title clear` hands the outer terminal window title back to `ui.window_title`.
 
 ## Output waits
 
@@ -365,6 +372,7 @@ herdr integration install opencode
 herdr integration install kilo
 herdr integration install hermes
 herdr integration install qodercli
+herdr integration install qwen
 herdr integration install cursor
 herdr integration install mastracode
 herdr integration install grok
@@ -380,6 +388,7 @@ herdr integration uninstall opencode
 herdr integration uninstall kilo
 herdr integration uninstall hermes
 herdr integration uninstall qodercli
+herdr integration uninstall qwen
 herdr integration uninstall cursor
 herdr integration uninstall mastracode
 herdr integration uninstall grok
@@ -411,7 +420,7 @@ herdr plugin link <path> [--disabled]
 herdr plugin unlink <plugin_id>
 ```
 
-`plugin link` accepts a plugin directory containing `herdr-plugin.toml` or a direct manifest path. It is still the right command while authoring or testing a plugin from a local checkout. `plugin unlink` unregisters the plugin and leaves files alone. `plugin uninstall` unregisters a plugin and also removes Herdr-managed GitHub checkout files. For GitHub installs, uninstall accepts either the plugin id or the same `owner/repo[/subdir...]` shorthand used by install. Actions, event hooks, panes, and link handlers are declared in the manifest; runtime action registration is not part of v1.
+`plugin link` accepts a plugin directory containing `herdr-plugin.toml` or a direct manifest path. Use it while authoring or testing a plugin from a local checkout. `plugin unlink` unregisters the plugin and leaves files alone. `plugin uninstall` unregisters a plugin and also removes Herdr-managed GitHub checkout files. For GitHub installs, uninstall accepts either the plugin id or the same `owner/repo[/subdir...]` shorthand used by install. Actions, event hooks, panes, and link handlers are declared in the manifest; runtime action registration is not part of v1.
 
 Config directory:
 
@@ -419,7 +428,7 @@ Config directory:
 herdr plugin config-dir <plugin_id>
 ```
 
-`plugin config-dir` prints the plugin's config directory, creating it (and seeding it from legacy plugin config locations when present) if needed. Use it in setup docs and shell scripts to point users at a stable path for `.env` files and other user-editable config, separate from the managed plugin checkout.
+`plugin config-dir` prints the plugin's config directory. It creates the directory if needed and seeds it from legacy plugin config locations when present. Use it in setup docs and shell scripts to point users at a stable path for `.env` files and other user-editable config, separate from the managed plugin checkout.
 
 Actions:
 
@@ -457,7 +466,7 @@ layout. `--width` and `--height` set the outer popup dimensions in terminal
 cells or percentages such as `80%`; omitted dimensions default to half the
 terminal size, and values smaller than the popup minimum are clamped. A popup
 is not a Herdr pane, does not export `HERDR_PANE_ID`, and does not participate
-in pane or agent APIs. Native non-terminal plugin panes are a later surface.
+in pane or agent APIs. Native non-terminal plugin panes are outside plugin v1.
 
 `--env KEY=VALUE` can be repeated on process-launching commands. It applies to the newly launched process only. Herdr-managed variables such as `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ENV`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID`, `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_ENTRYPOINT_ID`, and `HERDR_PLUGIN_CONTEXT_JSON` stay authoritative when they conflict with caller-provided env.
 

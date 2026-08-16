@@ -3,7 +3,7 @@ title: Agent automation
 description: Use Herdr's layout, pane, and agent primitives to coordinate coding agents from scripts or other agents.
 ---
 
-Herdr can act as an automation layer for coding agents. A script can control them, or one agent can create work for other agents, inspect their state, and collect their results. The important part is choosing the primitive that matches the job.
+Use Herdr as an automation layer for coding agents. A script can control them, or one agent can create work for other agents, inspect their state, and collect their results. Choose the primitive that matches the job.
 
 ## Three primitives
 
@@ -41,9 +41,9 @@ Agent commands accept either a unique live name or the pane ID that currently ho
 
 An available shell pane is at its interactive shell prompt: the shell itself owns the foreground, with no foreground command, editor, or agent running. Return the pane to its prompt before calling `agent start`.
 
-`--kind` selects a supported agent and its canonical executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, and `maki`. Arguments after `--` are passed unchanged to that executable.
+`--kind` selects a supported agent and its canonical executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, and `maki`. Arguments after `--` are passed unchanged to that executable.
 
-`agent start` returns only after Herdr detects the expected agent in the same terminal and marks it ready for interactive input. Startup waits for 30 seconds by default; `--timeout` must be greater than 3000 and no more than 300000 milliseconds.
+Successful `agent start` returns only after Herdr detects the expected agent in the same terminal and marks it ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. Startup waits for 30 seconds by default; `--timeout` must be greater than 3000 and no more than 300000 milliseconds.
 
 ```bash
 herdr agent start reviewer --kind codex --pane "$review_pane" -- -m gpt-5.4
@@ -69,11 +69,11 @@ herdr agent rename w1:p2 reviewer
 | Send keys to an agent's interactive UI | `agent send-keys` |
 | Wait for agent lifecycle state | `agent wait` |
 
-`agent prompt` submits text plus encoded Enter and honors the terminal's live bracketed-paste mode. It can prompt an agent that is already working. Use `agent send-keys` for interactions such as `esc`, `up`, `enter`, or `ctrl+c`; `escape` is accepted as an alias for `esc`. Use the pane input commands when you deliberately want raw terminal control.
+`agent prompt` submits text plus encoded Enter and honors the terminal's live bracketed-paste mode. It can prompt an agent that is already working. If the agent is already `blocked`, it returns `agent_blocked` without sending terminal input; inspect the dialog and use `agent send-keys` for a deliberate response. Use `agent send-keys` for interactions such as `esc`, `up`, `enter`, or `ctrl+c`; `escape` is accepted as an alias for `esc`. Use the pane input commands when you deliberately want raw terminal control.
 
 Pane input addresses the terminal regardless of its current occupant. Agent input resolves the live agent and rejects the operation if that agent no longer controls the pane.
 
-`agent prompt --wait` submits immediately. When the agent starts from a non-working state, Herdr first requires an observed lifecycle change within five seconds. If the state sequence does not advance, it returns `agent_prompt_stalled` instead of waiting indefinitely; a caller `--timeout` of five seconds or less returns the normal `timeout` error. After activity is observed, it waits for the requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. Standalone `agent wait` observes the current agent and returns immediately if its status already matches. Both commands default to `idle`, `done`, or `blocked`. Repeat `--until` to accept several exact states, for example `--until idle --until done`; use `--until unknown` explicitly when needed. On `agent prompt`, `--until` requires `--wait`.
+`agent prompt --wait` submits immediately unless the agent is already `blocked`, in which case it returns `agent_blocked` without starting the wait. If an accepted prompt starts from another non-working state, Herdr must observe a lifecycle change within five seconds. Otherwise, it returns `agent_prompt_stalled` instead of waiting indefinitely; a caller `--timeout` of five seconds or less returns the normal `timeout` error. After Herdr observes activity, it waits for the requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. Standalone `agent wait` observes the current agent and returns immediately if its status already matches. Both commands default to `idle`, `done`, or `blocked`. Repeat `--until` to accept several exact states, for example `--until idle --until done`; use `--until unknown` explicitly when needed. On `agent prompt`, `--until` requires `--wait`.
 
 `idle` means the agent is ready for input and its tab has been seen in the focused Herdr UI. `done` is the same underlying idle state after background work finishes, until that tab is focused or `pane focus` / `agent focus` targets it. Reading through the CLI does not mark it seen. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify its lifecycle confidently; it does not prove successful completion. Use exact `--until` states when that distinction matters.
 

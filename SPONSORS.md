@@ -1,11 +1,13 @@
 # Past sponsors
 
-herdr's sponsorship program is closed and no longer accepts new sponsors.
-This file is the permanent record of everyone who backed herdr — thank you.
+herdr's sponsorship program is closed to new sponsors.
+This file permanently lists everyone who backed herdr.
 
 → Enterprise / partnership: hey@herdr.dev
 
 ## Gold
+
+<a href="https://terminaltrove.com/"><img src="assets/sponsors/terminal-trove.png" alt="Terminal Trove" width="200" /></a>
 
 - [Terminal Trove](https://terminaltrove.com/)
 - [Joel (Moshi)](https://getmoshi.app/)
@@ -62,4 +64,4 @@ This file is the permanent record of everyone who backed herdr — thank you.
 
 ---
 
-Thank you to everyone who supported herdr. The herd keeps moving because of you. 🐑
+Thank you to everyone who supported herdr. 🐑

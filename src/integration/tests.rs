@@ -101,6 +101,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(QWEN_HOME_ENV_VAR);
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
@@ -179,10 +180,11 @@ fn home_dir_uses_userprofile_when_home_is_missing() {
 fn windows_supports_portable_integrations() {
     use crate::api::schema::IntegrationTarget;
 
-    assert!(!integration_target_supported(IntegrationTarget::Hermes));
-    assert!(!integration_target_supported(IntegrationTarget::Cursor));
-    assert!(!integration_target_supported(IntegrationTarget::Devin));
-    assert!(!integration_target_supported(IntegrationTarget::Mastracode));
+    assert!(integration_target_supported(IntegrationTarget::Hermes));
+    assert!(integration_target_supported(IntegrationTarget::Cursor));
+    assert!(integration_target_supported(IntegrationTarget::Devin));
+    assert!(integration_target_supported(IntegrationTarget::Mastracode));
+    assert!(integration_target_supported(IntegrationTarget::Grok));
 
     assert!(integration_target_supported(IntegrationTarget::Pi));
     assert!(integration_target_supported(IntegrationTarget::Omp));
@@ -194,11 +196,12 @@ fn windows_supports_portable_integrations() {
     assert!(integration_target_supported(IntegrationTarget::Droid));
     assert!(integration_target_supported(IntegrationTarget::Kimi));
     assert!(integration_target_supported(IntegrationTarget::Qodercli));
+    assert!(integration_target_supported(IntegrationTarget::Qwen));
 }
 
 #[cfg(windows)]
 #[test]
-fn windows_availability_excludes_unsupported_integrations() {
+fn windows_availability_includes_native_integrations() {
     use crate::api::schema::IntegrationTarget;
 
     let _lock = integration_env_lock();
@@ -216,15 +219,17 @@ fn windows_availability_excludes_unsupported_integrations() {
     fs::write(bin.join("cursor-agent.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("devin.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("mastracode.cmd"), "@echo off\r\n").unwrap();
+    fs::write(bin.join("grok.cmd"), "@echo off\r\n").unwrap();
 
     assert!(integration_target_available(IntegrationTarget::Pi));
     assert!(integration_target_available(IntegrationTarget::Omp));
     assert!(integration_target_available(IntegrationTarget::Opencode));
     assert!(integration_target_available(IntegrationTarget::Kilo));
-    assert!(!integration_target_available(IntegrationTarget::Hermes));
-    assert!(!integration_target_available(IntegrationTarget::Cursor));
-    assert!(!integration_target_available(IntegrationTarget::Devin));
-    assert!(!integration_target_available(IntegrationTarget::Mastracode));
+    assert!(integration_target_available(IntegrationTarget::Hermes));
+    assert!(integration_target_available(IntegrationTarget::Cursor));
+    assert!(integration_target_available(IntegrationTarget::Devin));
+    assert!(integration_target_available(IntegrationTarget::Mastracode));
+    assert!(integration_target_available(IntegrationTarget::Grok));
 
     if let Some(path) = original_path {
         std::env::set_var("PATH", path);
@@ -232,41 +237,6 @@ fn windows_availability_excludes_unsupported_integrations() {
         std::env::remove_var("PATH");
     }
     let _ = fs::remove_dir_all(base);
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_install_rejects_unsupported_integration_before_config_lookup() {
-    use crate::api::schema::IntegrationTarget;
-
-    let _lock = integration_env_lock();
-    let original_home = std::env::var_os("HOME");
-    let original_userprofile = std::env::var_os("USERPROFILE");
-    let original_homedrive = std::env::var_os("HOMEDRIVE");
-    let original_homepath = std::env::var_os("HOMEPATH");
-    std::env::remove_var("HOME");
-    std::env::remove_var("USERPROFILE");
-    std::env::remove_var("HOMEDRIVE");
-    std::env::remove_var("HOMEPATH");
-
-    let err = install_target(IntegrationTarget::Hermes).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "hermes integration is not supported on Windows"
-    );
-
-    if let Some(home) = original_home {
-        std::env::set_var("HOME", home);
-    }
-    if let Some(userprofile) = original_userprofile {
-        std::env::set_var("USERPROFILE", userprofile);
-    }
-    if let Some(homedrive) = original_homedrive {
-        std::env::set_var("HOMEDRIVE", homedrive);
-    }
-    if let Some(homepath) = original_homepath {
-        std::env::set_var("HOMEPATH", homepath);
-    }
 }
 
 #[test]
@@ -349,23 +319,37 @@ fn qodercli_availability_checks_windows_aliases() {
 
 #[test]
 #[cfg(windows)]
-fn hermes_layout_can_exist_without_making_unsupported_target_available() {
+fn hermes_layout_makes_target_available() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let local_app_data = base.join("local-app-data");
     let hermes_bin = local_app_data.join("hermes").join("bin");
     fs::create_dir_all(&hermes_bin).unwrap();
     fs::write(hermes_bin.join("hermes.exe"), "").unwrap();
+    let original_hermes_home = std::env::var_os(HERMES_HOME_ENV_VAR);
+    let original_home = std::env::var_os("HOME");
     let original_local_app_data = std::env::var_os("LOCALAPPDATA");
     let original_path = std::env::var_os("PATH");
+    std::env::remove_var(HERMES_HOME_ENV_VAR);
+    std::env::remove_var("HOME");
     std::env::set_var("LOCALAPPDATA", &local_app_data);
     std::env::set_var("PATH", "");
 
     assert!(hermes_install_layout_available());
-    assert!(!integration_target_available(
+    assert!(integration_target_available(
         crate::api::schema::IntegrationTarget::Hermes
     ));
 
+    if let Some(hermes_home) = original_hermes_home {
+        std::env::set_var(HERMES_HOME_ENV_VAR, hermes_home);
+    } else {
+        std::env::remove_var(HERMES_HOME_ENV_VAR);
+    }
+    if let Some(home) = original_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
     if let Some(local_app_data) = original_local_app_data {
         std::env::set_var("LOCALAPPDATA", local_app_data);
     } else {
@@ -1076,7 +1060,7 @@ fn claude_v1_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 7);
+    assert_eq!(claude.expected_version, 8);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1106,7 +1090,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 7);
+    assert_eq!(claude.expected_version, 8);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1239,7 +1223,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 7);
+    assert_eq!(codex.expected_version, 8);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2219,7 +2203,7 @@ fn install_droid_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn install_opencode_writes_plugin_to_plugins_dir() {
+fn install_opencode_writes_server_and_tui_plugins() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -2228,7 +2212,6 @@ fn install_opencode_writes_plugin_to_plugins_dir() {
     std::env::set_var("HOME", &home);
 
     let installed = install_opencode().unwrap();
-    let plugin_content = fs::read_to_string(&installed.plugin_path).unwrap();
 
     assert_eq!(
         installed.plugin_path,
@@ -2236,30 +2219,126 @@ fn install_opencode_writes_plugin_to_plugins_dir() {
             .join("plugins")
             .join(OPENCODE_PLUGIN_INSTALL_NAME)
     );
-    assert_eq!(plugin_content, OPENCODE_PLUGIN_ASSET);
+    assert_eq!(
+        fs::read_to_string(&installed.plugin_path).unwrap(),
+        OPENCODE_PLUGIN_ASSET
+    );
+    assert_eq!(
+        installed.tui_plugin_path,
+        opencode_dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME)
+    );
+    assert_eq!(
+        fs::read_to_string(&installed.tui_plugin_path).unwrap(),
+        OPENCODE_TUI_PLUGIN_ASSET
+    );
+    assert_eq!(installed.tui_config_path, opencode_dir.join("tui.jsonc"));
+    let tui_config: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.tui_config_path).unwrap()).unwrap();
+    assert_eq!(tui_config["plugin"], json!([OPENCODE_TUI_PLUGIN_SPEC]));
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
 
 #[test]
-fn uninstall_opencode_removes_plugin_when_present() {
+fn opencode_status_requires_the_tui_plugin_and_config_entry() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
-    let opencode_dir = home.join(".config/opencode/plugins");
+    let opencode_dir = home.join(".config/opencode");
     fs::create_dir_all(&opencode_dir).unwrap();
-    fs::write(
-        opencode_dir.join(OPENCODE_PLUGIN_INSTALL_NAME),
-        OPENCODE_PLUGIN_ASSET,
-    )
-    .unwrap();
     std::env::set_var("HOME", &home);
+    let installed = install_opencode().unwrap();
+    let status = || {
+        integration_status_at(
+            crate::api::schema::IntegrationTarget::Opencode,
+            installed.plugin_path.clone(),
+            OPENCODE_INTEGRATION_VERSION,
+        )
+        .state
+    };
+
+    assert_eq!(status(), IntegrationStatusKind::Current);
+    fs::remove_file(&installed.tui_plugin_path).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+    fs::write(&installed.tui_plugin_path, OPENCODE_TUI_PLUGIN_ASSET).unwrap();
+    super::opencode_config::remove_tui_plugin(&opencode_dir, OPENCODE_TUI_PLUGIN_SPEC).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_opencode_removes_plugins_and_managed_tui_config_entry() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let opencode_dir = home.join(".config/opencode");
+    fs::create_dir_all(&opencode_dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let installed = install_opencode().unwrap();
 
     let result = uninstall_opencode().unwrap();
 
     assert!(result.removed_plugin);
+    assert!(result.removed_tui_plugin);
+    assert!(result.updated_tui_config);
     assert!(!result.plugin_path.exists());
+    assert!(!result.tui_plugin_path.exists());
+    assert!(result.tui_config_path.exists());
+    let tui_config: Value =
+        serde_json::from_str(&fs::read_to_string(&result.tui_config_path).unwrap()).unwrap();
+    assert_eq!(tui_config, json!({}));
+    assert_eq!(installed.plugin_path, result.plugin_path);
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_opencode_invalid_tui_config_does_not_write_plugins() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let opencode_dir = home.join(".config/opencode");
+    fs::create_dir_all(&opencode_dir).unwrap();
+    fs::write(opencode_dir.join("tui.jsonc"), r#"{"plugin":{}}"#).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let err = install_opencode().unwrap_err().to_string();
+
+    assert!(err.contains("plugin list"));
+    assert!(!opencode_dir
+        .join("plugins")
+        .join(OPENCODE_PLUGIN_INSTALL_NAME)
+        .exists());
+    assert!(!opencode_dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME).exists());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_opencode_removes_plugins_when_tui_config_is_invalid() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let opencode_dir = home.join(".config/opencode");
+    let plugins_dir = opencode_dir.join("plugins");
+    fs::create_dir_all(&plugins_dir).unwrap();
+    let plugin_path = plugins_dir.join(OPENCODE_PLUGIN_INSTALL_NAME);
+    let tui_plugin_path = opencode_dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, OPENCODE_PLUGIN_ASSET).unwrap();
+    fs::write(&tui_plugin_path, OPENCODE_TUI_PLUGIN_ASSET).unwrap();
+    fs::write(opencode_dir.join("tui.jsonc"), "{\"plugin\":").unwrap();
+    std::env::set_var("HOME", &home);
+
+    let err = uninstall_opencode().unwrap_err().to_string();
+
+    assert!(err.contains("failed to parse OpenCode TUI config"));
+    assert!(!plugin_path.exists());
+    assert!(!tui_plugin_path.exists());
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -2647,6 +2726,11 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             QODERCLI_INTEGRATION_VERSION,
         ),
         ("cursor", CURSOR_HOOK_ASSET, CURSOR_INTEGRATION_VERSION),
+        (
+            "antigravity_cli",
+            ANTIGRAVITY_CLI_HOOK_ASSET,
+            ANTIGRAVITY_CLI_INTEGRATION_VERSION,
+        ),
         (
             "mastracode",
             MASTRACODE_HOOK_ASSET,
@@ -3105,6 +3189,108 @@ fn install_qodercli_errors_when_config_dir_missing() {
 }
 
 #[test]
+fn install_qwen_writes_session_hook_and_preserves_settings() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let qwen_dir = base.join(".qwen");
+    fs::create_dir_all(&qwen_dir).unwrap();
+    fs::write(
+        qwen_dir.join("settings.json"),
+        r#"{"permissions":{"allow":["Read"]},"hooks":{}}"#,
+    )
+    .unwrap();
+    std::env::set_var(QWEN_HOME_ENV_VAR, &qwen_dir);
+
+    let installed = install_qwen().unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        qwen_dir.join("hooks").join(QWEN_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.settings_path, qwen_dir.join("settings.json"));
+    assert!(installed.hook_path.is_file());
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+    let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["matcher"], "*");
+    assert_eq!(entries[0]["hooks"][0]["timeout"], 10_000);
+    let command = entries[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(command.contains(QWEN_HOOK_INSTALL_NAME));
+    assert!(command.ends_with("session"));
+    assert!(settings.get("permissions").is_some());
+    let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
+    assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
+    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=1"));
+    assert!(hook_asset.contains("herdr:qwen"));
+
+    install_qwen().unwrap();
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+    assert_eq!(
+        settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1
+    );
+
+    std::env::remove_var(QWEN_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_qwen_removes_only_herdr_hook() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let qwen_dir = base.join(".qwen");
+    fs::create_dir_all(&qwen_dir).unwrap();
+    std::env::set_var(QWEN_HOME_ENV_VAR, &qwen_dir);
+
+    install_qwen().unwrap();
+    let settings_path = qwen_dir.join("settings.json");
+    let mut settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    settings["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "matcher": "resume",
+            "hooks": [{"type": "command", "command": "echo user-defined"}],
+        }));
+    fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let result = uninstall_qwen().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let remaining = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["hooks"][0]["command"], "echo user-defined");
+
+    std::env::remove_var(QWEN_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_qwen_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let missing = base.join(".qwen");
+    std::env::set_var(QWEN_HOME_ENV_VAR, &missing);
+
+    let err = install_qwen().unwrap_err().to_string();
+    assert!(err.contains("qwen code config directory not found"));
+
+    std::env::remove_var(QWEN_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_cursor_writes_hook_and_updates_hooks_json() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -3134,14 +3320,10 @@ fn install_cursor_writes_hook_and_updates_hooks_json() {
     let hooks = hooks_file.get("hooks").and_then(Value::as_object).unwrap();
     let session_start = hooks.get("sessionStart").and_then(Value::as_array).unwrap();
     assert_eq!(session_start.len(), 1);
-    assert!(session_start[0]
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| {
-            command.starts_with("bash ")
-                && command.contains("herdr-agent-state.sh")
-                && command.ends_with(" session")
-        }));
+    assert_eq!(
+        session_start[0].get("command").and_then(Value::as_str),
+        Some(hook_command(&installed.hook_path, Some("session")).as_str())
+    );
     assert!(hooks.get("beforeSubmitPrompt").is_none());
     assert!(hooks.get("beforeShellExecution").is_none());
     let stop = hooks.get("stop").and_then(Value::as_array).unwrap();
@@ -3308,9 +3490,10 @@ fn install_mastracode_writes_hook_and_updates_hooks_json() {
         let entries = hooks.get(event).and_then(Value::as_array).unwrap();
         assert_eq!(entries.len(), 1, "{event} should have one Herdr hook");
         let command = entries[0].get("command").and_then(Value::as_str).unwrap();
-        assert!(command.starts_with("bash "));
-        assert!(command.contains(MASTRACODE_HOOK_INSTALL_NAME));
-        assert!(command.ends_with(action));
+        assert_eq!(
+            command,
+            mastracode_hook_command(&installed.hook_path, action)
+        );
         assert_eq!(
             entries[0].get("type").and_then(Value::as_str),
             Some("command")
@@ -3369,9 +3552,14 @@ fn install_grok_writes_hook_and_config() {
     let session_start = config["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(session_start.len(), 1);
     let command = grok_session_command(&config);
-    assert!(command.starts_with("sh "));
-    assert!(command.contains("herdr-agent-state.sh"));
-    assert!(command.ends_with(" session"));
+    #[cfg(windows)]
+    assert_eq!(command, hook_command(&installed.hook_path, Some("session")));
+    #[cfg(not(windows))]
+    {
+        assert!(command.starts_with("sh "));
+        assert!(command.contains("herdr-agent-state.sh"));
+        assert!(command.ends_with(" session"));
+    }
 
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);
@@ -3392,12 +3580,12 @@ fn install_mastracode_removes_v1_lifecycle_hooks() {
         serde_json::to_string(&json!({
             "SessionStart": [{
                 "type": "command",
-                "command": format!("bash '{}' idle", hook_path.display()),
+                "command": hook_command(&hook_path, Some("idle")),
                 "timeout": MASTRACODE_HOOK_TIMEOUT_MS
             }],
             "SessionEnd": [{
                 "type": "command",
-                "command": format!("bash '{}' release", hook_path.display()),
+                "command": hook_command(&hook_path, Some("release")),
                 "timeout": MASTRACODE_HOOK_TIMEOUT_MS
             }]
         }))
@@ -3415,10 +3603,10 @@ fn install_mastracode_removes_v1_lifecycle_hooks() {
     assert!(!hooks.contains_key("SessionEnd"));
     let session_start = hooks["SessionStart"].as_array().unwrap();
     assert_eq!(session_start.len(), 1);
-    assert!(session_start[0]["command"]
-        .as_str()
-        .unwrap()
-        .ends_with("session"));
+    assert_eq!(
+        session_start[0]["command"].as_str().unwrap(),
+        mastracode_hook_command(&hook_path, "session")
+    );
 
     if let Some(home) = original_home {
         std::env::set_var("HOME", home);

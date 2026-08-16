@@ -6,7 +6,9 @@ const CACHE_LINES: usize = 2000;
 pub(super) struct Cache {
     rows: Vec<RenderedLine>,
     last_snapshot: Vec<RenderedLine>,
-    usable: bool,
+    pub(super) usable: bool,
+    last_scrollbar: Option<(usize, usize)>,
+    pub(super) needs_refresh: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,10 +22,23 @@ pub(super) fn update(core: &mut GhosttyPaneCore) {
     if !primary_screen_active(core) {
         return;
     }
-    if !viewport_is_at_bottom(core) {
+    let scrollbar = core.terminal.scrollbar().ok();
+    let pending_refresh = std::mem::take(&mut core.recent_fallback.needs_refresh);
+    let total = scrollbar.map(|metrics| metrics.total).unwrap_or_default();
+    let len = scrollbar.map(|metrics| metrics.len).unwrap_or_default();
+    let (old_total, old_len) = core.recent_fallback.last_scrollbar.unwrap_or((total, len));
+    core.recent_fallback.last_scrollbar = scrollbar.map(|metrics| (metrics.total, metrics.len));
+    if scrollbar.is_some_and(|metrics| !at_bottom(metrics)) {
         core.recent_fallback.usable = false;
         return;
     }
+    let tracked_row = core.terminal.track_row(len.saturating_sub(1) as u32);
+    let history_growth = if pending_refresh {
+        tracked_row.map_or(CACHE_LINES, |row| total.saturating_sub(row + 1))
+    } else {
+        total.saturating_sub(old_total)
+    };
+    let history_changed = history_growth > 0 || old_total != total || old_len != len;
     let Ok(snapshot) = visible_render_lines(core) else {
         core.recent_fallback.usable = false;
         return;
@@ -34,14 +49,56 @@ pub(super) fn update(core: &mut GhosttyPaneCore) {
         core.recent_fallback.usable = false;
         return;
     }
-    if snapshot == core.recent_fallback.last_snapshot {
+    if snapshot == core.recent_fallback.last_snapshot && !history_changed {
         core.recent_fallback.usable = true;
         return;
     }
 
-    merge_snapshot(&mut core.recent_fallback.rows, &snapshot);
-    core.recent_fallback.last_snapshot = snapshot;
-    core.recent_fallback.usable = true;
+    let mut moved_snapshot = Vec::new();
+    if pending_refresh && history_changed {
+        let viewport_rows = scrollbar.map_or(1, |metrics| metrics.len.max(1));
+        let recovery_rows = history_growth.max(viewport_rows).min(CACHE_LINES);
+        for offset in (1..=recovery_rows).rev().step_by(viewport_rows) {
+            super::ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset);
+            let Ok(moved) = visible_render_lines(core) else {
+                core.terminal.scroll_viewport_bottom();
+                core.recent_fallback.usable = false;
+                return;
+            };
+            merge_snapshot(&mut moved_snapshot, &moved);
+        }
+        core.terminal.scroll_viewport_bottom();
+    }
+    let cache = &mut core.recent_fallback;
+    if pending_refresh && cache.rows.ends_with(&cache.last_snapshot) {
+        cache
+            .rows
+            .truncate(cache.rows.len() - cache.last_snapshot.len());
+    }
+    merge_snapshot(&mut cache.rows, &moved_snapshot);
+    merge_snapshot(&mut cache.rows, &snapshot);
+    cache.last_snapshot = snapshot;
+    cache.usable = true;
+}
+
+pub(super) fn update_after_write(core: &mut GhosttyPaneCore) {
+    let scrollbar = core.terminal.scrollbar().ok();
+    let old_total = core.recent_fallback.last_scrollbar.map(|old| old.0);
+    if primary_screen_active(core)
+        && core.terminal.max_scrollback() > 0
+        && scrollbar.is_some_and(|metrics| old_total == Some(metrics.total) && at_bottom(metrics))
+    {
+        core.recent_fallback.needs_refresh = true;
+    } else {
+        update(core);
+    }
+}
+
+pub(super) fn refresh_if_needed(core: &mut GhosttyPaneCore) {
+    let bottom = core.terminal.scrollbar().map_or(true, at_bottom);
+    if core.recent_fallback.needs_refresh && primary_screen_active(core) && bottom {
+        update(core);
+    }
 }
 
 pub(super) fn recent_text(
@@ -96,10 +153,7 @@ fn unwrapped_text(core: &GhosttyPaneCore, lines: usize) -> TerminalReadSnapshot 
     }
 }
 
-fn viewport_is_at_bottom(core: &GhosttyPaneCore) -> bool {
-    let Ok(scrollbar) = core.terminal.scrollbar() else {
-        return true;
-    };
+fn at_bottom(scrollbar: crate::ghostty::TerminalScrollbar) -> bool {
     scrollbar.offset.saturating_add(scrollbar.len) >= scrollbar.total
 }
 
@@ -267,12 +321,94 @@ mod tests {
     }
 
     #[test]
+    fn deferred_refresh_replaces_visible_tail_after_repaint() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"older", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\r\nold\r\nprompt", &tx);
+        let mut core = pane.core.lock().unwrap();
+        let _ = super::super::finish_recent_snapshot(&mut core, String::new(), 3, false);
+        drop(core);
+        pane.resize(2, 40, 8, 16);
+        pane.process_pty_bytes(pane_id, 0, b"\rupdated", &tx);
+        let mut core = pane.core.lock().unwrap();
+        let resized = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
+        assert_eq!(resized.text, "older\nold\nupdated\n");
+        drop(core);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"updated", &tx);
+        let mut core = pane.core.lock().unwrap();
+        let refreshed = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
+        assert_eq!(refreshed.text, "older\nupdated\n");
+    }
+
+    #[test]
+    fn deferred_repaint_survives_real_scrollback_pruning() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(40, 1, 1).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let state = || {
+            let core = pane.core.lock().unwrap();
+            let total = core.terminal.scrollbar().unwrap().total;
+            (total, core.recent_fallback.needs_refresh)
+        };
+        pane.process_pty_bytes(pane_id, 0, b"line-0000", &tx);
+        let first_total = state().0;
+        let mut max_total = first_total;
+        let prune = (1..=5000).find_map(|line| {
+            let repaint = format!("repaint-{line:04}");
+            pane.process_pty_bytes(pane_id, 0, format!("\r{repaint}").as_bytes(), &tx);
+            let (before, pending) = state();
+            assert!(pending);
+            pane.process_pty_bytes(pane_id, 0, format!("\r\nline-{line:04}").as_bytes(), &tx);
+            let after = state().0;
+            max_total = max_total.max(after);
+            (after < before).then_some((before, after, repaint))
+        });
+        let Some((before, after, repaint)) = prune else {
+            panic!("no Ghostty total decrease: first={first_total}, max={max_total}");
+        };
+        assert!(recent_text(&pane.core.lock().unwrap(), CACHE_LINES, false)
+            .text
+            .lines()
+            .any(|row| row == repaint));
+
+        let page_rows = before + 1 - after;
+        for line in 0..before - after {
+            pane.process_pty_bytes(pane_id, 0, format!("\r\nrefill-{line:04}").as_bytes(), &tx);
+        }
+        assert_eq!(state().0, before);
+        pane.process_pty_bytes(pane_id, 0, b"\rnet-zero-repaint", &tx);
+        let batch = (0..page_rows)
+            .map(|line| format!("\r\nbatch-{line:04}"))
+            .collect::<String>();
+        pane.process_pty_bytes(pane_id, 0, batch.as_bytes(), &tx);
+        assert_eq!(state(), (before, true));
+        let mut core = pane.core.lock().unwrap();
+        let fallback =
+            super::super::finish_recent_snapshot(&mut core, String::new(), CACHE_LINES, false);
+        for row in [
+            "net-zero-repaint",
+            "batch-0000",
+            &format!("batch-{:04}", page_rows / 2),
+            &format!("batch-{:04}", page_rows - 1),
+        ] {
+            assert!(
+                fallback.text.lines().any(|line| line == row),
+                "lost {row}: total {before}->{after}->{before}"
+            );
+        }
+    }
+
+    #[test]
     fn ignores_alternate_screen_snapshots() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
-
         for line in 0..20 {
             pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx);
         }
@@ -305,26 +441,58 @@ mod tests {
         for line in 0..20 {
             pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx);
         }
+        pane.process_pty_bytes(pane_id, 0, b"\rredraw", &tx);
         let before = pane.scroll_metrics().expect("scroll metrics before scroll");
         pane.set_scroll_offset_from_bottom(before.max_offset_from_bottom);
+        {
+            let core = pane.core.lock().unwrap();
+            assert!(!core.recent_fallback.needs_refresh);
+            assert!(recent_text(&core, 3, false).text.contains("redraw"));
+        }
+        pane.resize(4, 40, 8, 16);
+        pane.scroll_reset();
+        assert!(recent_text(&pane.core.lock().unwrap(), 3, false)
+            .text
+            .contains("redraw"));
+        pane.set_scroll_offset_from_bottom(before.max_offset_from_bottom);
         pane.process_pty_bytes(pane_id, 0, b"new output\r\n", &tx);
+        pane.resize(4, 40, 8, 16);
 
         let core = pane.core.lock().unwrap();
+        assert!(!core.recent_fallback.needs_refresh);
         assert_eq!(recent_text(&core, 3, false).text, "");
         assert_eq!(recent_text(&core, 3, true).text, "");
     }
 
     #[test]
-    fn seed_history_updates_fallback() {
+    fn zero_scrollback_keeps_eager_snapshots_across_writes() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-
-        pane.seed_history_ansi("seeded history\r\n");
+        let terminal = crate::ghostty::Terminal::new(40, 2, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"one\r\n", &tx);
+        let total = pane.core.lock().unwrap().recent_fallback.last_scrollbar;
+        pane.process_pty_bytes(pane_id, 0, b"two\r\n", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"three\r\n", &tx);
 
         let core = pane.core.lock().unwrap();
-        assert!(recent_text(&core, 3, false).text.contains("seeded history"));
-        assert!(recent_text(&core, 3, true).text.contains("seeded history"));
+        assert_eq!(core.recent_fallback.last_scrollbar, total);
+        assert!(!core.recent_fallback.needs_refresh);
+        assert_eq!(recent_text(&core, 10, false).text, "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn seed_history_updates_fallback() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(5, 2, 1024).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+        pane.seed_history_ansi("abcdefghij\r\nend");
+        pane.resize(3, 10, 8, 16);
+
+        let core = pane.core.lock().unwrap();
+        assert_eq!(recent_text(&core, 10, false).text, "abcdefghij\nend\n");
+        assert_eq!(recent_text(&core, 10, true).text, "abcdefghij\nend\n");
     }
 
     #[test]
