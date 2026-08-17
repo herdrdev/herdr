@@ -449,12 +449,20 @@ pub fn process_exists(pid: u32) -> bool {
 }
 
 pub fn write_clipboard(bytes: &[u8]) -> bool {
+    let mut written = false;
     for command in clipboard_commands() {
         if run_clipboard_command(&command, bytes) {
-            return true;
+            written = true;
+            break;
         }
     }
-    false
+    for command in primary_clipboard_commands() {
+        if run_clipboard_command(&command, bytes) {
+            written = true;
+            break;
+        }
+    }
+    written
 }
 
 pub fn read_clipboard_text() -> Option<String> {
@@ -642,6 +650,30 @@ fn clipboard_commands() -> Vec<ClipboardCommand> {
         commands.push(ClipboardCommand {
             program: "xsel",
             args: &["--clipboard", "--input"],
+        });
+    }
+
+    commands
+}
+
+fn primary_clipboard_commands() -> Vec<ClipboardCommand> {
+    let mut commands = Vec::new();
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        commands.push(ClipboardCommand {
+            program: "wl-copy",
+            args: &["--primary", "--type", "text/plain;charset=utf-8"],
+        });
+    }
+
+    if std::env::var_os("DISPLAY").is_some() {
+        commands.push(ClipboardCommand {
+            program: "xclip",
+            args: &["-selection", "primary", "-in"],
+        });
+        commands.push(ClipboardCommand {
+            program: "xsel",
+            args: &["--primary", "--input"],
         });
     }
 
@@ -1023,6 +1055,37 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].program, "xclip");
         assert_eq!(commands[1].program, "xsel");
+    }
+
+    #[test]
+    fn primary_clipboard_commands_prefer_wayland_when_available() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+            std::env::remove_var("DISPLAY");
+        }
+        let commands = primary_clipboard_commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].program, "wl-copy");
+        assert_eq!(
+            commands[0].args,
+            &["--primary", "--type", "text/plain;charset=utf-8"]
+        );
+    }
+
+    #[test]
+    fn primary_clipboard_commands_include_x11_fallbacks() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::set_var("DISPLAY", ":0");
+        }
+        let commands = primary_clipboard_commands();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].program, "xclip");
+        assert_eq!(commands[0].args, &["-selection", "primary", "-in"]);
+        assert_eq!(commands[1].program, "xsel");
+        assert_eq!(commands[1].args, &["--primary", "--input"]);
     }
 
     #[test]
