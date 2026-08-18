@@ -702,6 +702,43 @@ fn is_remote_client_process() -> bool {
     std::env::var(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR).is_ok()
 }
 
+fn environment_update_entry(
+    name: String,
+    value: Option<std::ffi::OsString>,
+) -> Option<(String, Option<String>)> {
+    match value {
+        Some(value) => value.into_string().ok().map(|value| (name, Some(value))),
+        None => Some((name, None)),
+    }
+}
+
+fn launch_mode_updates_environment(launch_mode: ClientLaunchMode) -> bool {
+    matches!(
+        launch_mode,
+        ClientLaunchMode::App | ClientLaunchMode::AppDirectGraphics
+    )
+}
+
+fn requested_environment_update() -> Option<Vec<(String, Option<String>)>> {
+    if is_remote_client_process() {
+        return None;
+    }
+    let config = crate::config::Config::load().config;
+    let mut update = config
+        .session
+        .update_environment
+        .into_iter()
+        .filter(|name| crate::config::session_environment_name_allowed(name))
+        .filter_map(|name| {
+            let value = std::env::var_os(&name);
+            environment_update_entry(name, value)
+        })
+        .collect::<Vec<_>>();
+    update.sort_by(|left, right| left.0.cmp(&right.0));
+    update.dedup_by(|left, right| left.0 == right.0);
+    Some(update)
+}
+
 /// Time to wait for the server's Welcome reply during the handshake.
 ///
 /// A local client talks to an already-connected server, so 5s is plenty. The
@@ -836,6 +873,12 @@ fn do_handshake(
         .map_err(ClientError::ConnectionFailed)?;
 
     // Send Hello.
+    let launch_mode = client_launch_mode(
+        direct_attach_requested,
+        exact_cell_size,
+        cell_width_px,
+        cell_height_px,
+    );
     let hello = ClientMessage::Hello {
         version: PROTOCOL_VERSION,
         cols,
@@ -844,12 +887,10 @@ fn do_handshake(
         cell_height_px,
         requested_encoding,
         keybindings: requested_keybindings(),
-        launch_mode: client_launch_mode(
-            direct_attach_requested,
-            exact_cell_size,
-            cell_width_px,
-            cell_height_px,
-        ),
+        launch_mode,
+        environment_update: launch_mode_updates_environment(launch_mode)
+            .then(requested_environment_update)
+            .flatten(),
     };
     protocol::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
@@ -2659,6 +2700,13 @@ mod tests {
             client_launch_mode(true, false, 8, 16),
             ClientLaunchMode::TerminalAttach
         );
+        assert!(!launch_mode_updates_environment(
+            ClientLaunchMode::TerminalAttach
+        ));
+        assert!(launch_mode_updates_environment(ClientLaunchMode::App));
+        assert!(launch_mode_updates_environment(
+            ClientLaunchMode::AppDirectGraphics
+        ));
     }
 
     #[test]
@@ -2741,12 +2789,28 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn remote_client_uses_extended_handshake_timeout() {
+    fn non_utf8_environment_values_are_not_reported_as_missing() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert_eq!(
+            environment_update_entry("DISPLAY".into(), Some(OsString::from_vec(vec![0xff]))),
+            None
+        );
+        assert_eq!(
+            environment_update_entry("DISPLAY".into(), None),
+            Some(("DISPLAY".into(), None))
+        );
+    }
+
+    #[test]
+    fn remote_client_uses_extended_handshake_timeout_without_forwarding_environment() {
         let _guard = env_lock().lock().unwrap();
         let _remote = EnvVarGuard::set(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR, "local");
 
         assert_eq!(handshake_read_timeout(), REMOTE_HANDSHAKE_READ_TIMEOUT);
+        assert!(requested_environment_update().is_none());
     }
 
     #[test]

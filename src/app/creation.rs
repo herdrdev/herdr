@@ -256,6 +256,7 @@ impl App {
             self.render_notify.clone(),
             self.render_dirty.clone(),
             extra_env,
+            &self.session_environment,
         )?;
         self.terminal_runtimes.insert(terminal.id.clone(), runtime);
         self.state.terminals.insert(terminal.id.clone(), terminal);

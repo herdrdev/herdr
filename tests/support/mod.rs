@@ -241,6 +241,7 @@ pub fn client_handshake(
             &encode_varint_u32(0),  // RenderEncoding::SemanticFrame
             &encode_varint_u32(0),  // ClientKeybindings::Server
             &encode_varint_u32(0),  // ClientLaunchMode::App
+            &encode_varint_u32(0),  // environment_update: None
         ],
     );
     let framed = frame_message(&hello_payload);

@@ -1162,6 +1162,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Herdr session."
+        },
+        {
+          "key": "session.update_environment",
+          "type": "array of strings",
+          "default": "[\"DISPLAY\", \"KRB5CCNAME\", \"MSYSTEM\", \"SSH_ASKPASS\", \"SSH_AUTH_SOCK\", \"SSH_AGENT_PID\", \"SSH_CONNECTION\", \"WAYLAND_DISPLAY\", \"WINDOWID\", \"XAUTHORITY\", \"XDG_CURRENT_DESKTOP\", \"XDG_SESSION_DESKTOP\", \"XDG_SESSION_TYPE\"]",
+          "description": "Refresh selected environment variables from each local client for processes launched after it attaches. Running processes are unchanged."
         }
       ]
     },

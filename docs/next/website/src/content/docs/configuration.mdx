@@ -491,6 +491,19 @@ resume_agents_on_restore = true
 
 Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
 
+## Environment refresh on attach
+
+When a local client attaches, Herdr refreshes a tmux-style allowlist of desktop and authentication variables for processes launched afterward. Running processes keep their existing environment. This lets a server started outside a graphical session launch new panes with current values such as `WAYLAND_DISPLAY`, `DISPLAY`, and `SSH_AUTH_SOCK`.
+
+Customize the allowlist under `[session]`:
+
+```toml
+[session]
+update_environment = ["WAYLAND_DISPLAY", "DISPLAY", "SSH_AUTH_SOCK", "HYPRLAND_INSTANCE_SIGNATURE"]
+```
+
+Missing variables are removed from future process environments. Remote clients do not update the remote server from the local environment. `TERM`, `COLORTERM`, `CODEX_THREAD_ID`, and `HERDR_*` variables are always managed by Herdr and cannot be added to this list.
+
 ## IME cursor tracking
 
 On macOS, AI Agent TUIs that hide the hardware cursor can prevent native input-method candidate windows from following the focused pane. Reveal a cursor anchor for those panes with:

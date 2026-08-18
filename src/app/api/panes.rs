@@ -928,7 +928,7 @@ impl App {
                     .map(|terminal| terminal.cwd.clone())
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
                 let moved_pane_id = moved.pane_id;
-                let workspace = crate::workspace::Workspace::from_existing_pane(
+                let mut workspace = crate::workspace::Workspace::from_existing_pane(
                     label,
                     tab_label,
                     identity_cwd,
@@ -937,6 +937,7 @@ impl App {
                     self.render_notify.clone(),
                     self.render_dirty.clone(),
                 );
+                workspace.set_session_environment(&self.session_environment);
                 self.state.workspaces.push(workspace);
                 let target_ws_idx = self.state.workspaces.len() - 1;
                 created_workspace = true;
@@ -1068,6 +1069,7 @@ impl App {
             );
             workspace.id = context.previous_workspace_id;
             workspace.worktree_space = context.previous_worktree_space;
+            workspace.set_session_environment(&self.session_environment);
             let insert_idx = context.source_ws_idx.min(self.state.workspaces.len());
             if let Some(active) = self.state.active {
                 if active >= insert_idx {
@@ -2983,6 +2985,7 @@ mod tests {
     #[test]
     fn api_pane_move_to_new_workspace_closes_empty_source_workspace() {
         let mut app = app_with_linked_worktree();
+        app.update_session_environment(vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))]);
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
             .terminal_id(source)
@@ -3035,6 +3038,10 @@ mod tests {
         assert_ne!(move_result.pane.pane_id, source_public);
         assert_eq!(move_result.pane.terminal_id, source_terminal.to_string());
         assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(
+            app.state.workspaces[0].session_environment,
+            vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))]
+        );
         assert_eq!(
             app.state.workspaces[0].tabs[0].terminal_id(source),
             Some(&source_terminal)
@@ -3191,6 +3198,7 @@ mod tests {
     #[test]
     fn api_pane_move_recovery_restores_removed_source_workspace() {
         let mut app = app_with_linked_worktree();
+        app.update_session_environment(vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))]);
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
             .terminal_id(source)
@@ -3216,6 +3224,10 @@ mod tests {
 
         assert_eq!(app.state.workspaces.len(), 1);
         assert_eq!(app.state.workspaces[0].id, previous_workspace_id);
+        assert_eq!(
+            app.state.workspaces[0].session_environment,
+            vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))]
+        );
         assert_eq!(
             app.state.workspaces[0].tabs[0].terminal_id(source),
             Some(&source_terminal)

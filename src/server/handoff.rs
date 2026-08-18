@@ -44,6 +44,9 @@ pub(crate) struct HandoffManifest {
     /// Absent from manifests written before this field existed.
     #[serde(default)]
     pub api_window_title: Option<String>,
+    /// Attachment-refreshed environment used only for later process launches.
+    #[serde(default)]
+    pub session_environment: crate::pane::SessionEnvironment,
 }
 
 #[cfg(unix)]
@@ -310,6 +313,7 @@ pub(crate) fn manifest_for(
     expected_protocol: Option<u32>,
     expected_version: Option<String>,
     api_window_title: Option<String>,
+    session_environment: crate::pane::SessionEnvironment,
 ) -> HandoffManifest {
     HandoffManifest {
         version: HANDOFF_VERSION,
@@ -320,6 +324,7 @@ pub(crate) fn manifest_for(
         snapshot,
         panes,
         api_window_title,
+        session_environment,
     }
 }
 
@@ -489,36 +494,51 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_carries_an_api_set_window_title() {
+    fn a_handoff_carries_runtime_session_state() {
         let manifest = manifest_for(
             empty_snapshot(),
             Vec::new(),
             None,
             None,
             Some("deploying".to_string()),
+            vec![
+                ("WAYLAND_DISPLAY".to_string(), Some("wayland-1".to_string())),
+                ("SSH_AUTH_SOCK".to_string(), None),
+            ],
         );
+        let restored: HandoffManifest = serde_json::from_value(
+            serde_json::to_value(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should deserialize");
 
-        assert_eq!(manifest.api_window_title.as_deref(), Some("deploying"));
+        assert_eq!(restored.api_window_title.as_deref(), Some("deploying"));
+        assert_eq!(restored.session_environment, manifest.session_environment);
     }
 
     #[test]
-    fn a_manifest_written_before_the_title_field_still_loads() {
+    fn an_older_manifest_still_loads_without_new_runtime_fields() {
         let manifest = manifest_for(
             empty_snapshot(),
             Vec::new(),
             None,
             None,
             Some("deploying".to_string()),
+            Vec::new(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
             .as_object_mut()
             .expect("manifest should be a json object")
             .remove("api_window_title");
+        value
+            .as_object_mut()
+            .expect("manifest should be a json object")
+            .remove("session_environment");
 
         let older: HandoffManifest =
             serde_json::from_value(value).expect("an older manifest should still load");
 
         assert!(older.api_window_title.is_none());
+        assert!(older.session_environment.is_empty());
     }
 }

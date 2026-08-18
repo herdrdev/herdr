@@ -316,6 +316,7 @@ pub(crate) enum ServerEvent {
         keybindings: Option<Box<crate::config::LiveKeybindConfig>>,
         direct_attach_requested: bool,
         direct_graphics: bool,
+        environment_update: Option<Vec<(String, Option<String>)>>,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -563,6 +564,7 @@ pub(crate) fn handle_client_handshake(
         keybindings,
         direct_attach_requested,
         direct_graphics,
+        environment_update,
     ) = match hello {
         ClientMessage::Hello {
             version,
@@ -573,6 +575,7 @@ pub(crate) fn handle_client_handshake(
             requested_encoding,
             keybindings,
             launch_mode,
+            environment_update,
         } => {
             // Version check.
             match protocol::check_client_version(version) {
@@ -613,6 +616,7 @@ pub(crate) fn handle_client_handshake(
                 keybindings,
                 launch_mode == ClientLaunchMode::TerminalAttach,
                 launch_mode == ClientLaunchMode::AppDirectGraphics,
+                environment_update,
             )
         }
         _ => {
@@ -677,6 +681,7 @@ pub(crate) fn handle_client_handshake(
         keybindings,
         direct_attach_requested,
         direct_graphics,
+        environment_update,
         writer,
     };
     if let Err(err) = server_event_tx.blocking_send(connected) {
@@ -1330,6 +1335,10 @@ new_tab = "ctrl+notakey"
                 requested_encoding: RenderEncoding::TerminalAnsi,
                 keybindings: ClientKeybindings::Server,
                 launch_mode: ClientLaunchMode::App,
+                environment_update: Some(vec![
+                    ("WAYLAND_DISPLAY".into(), Some("wayland-1".into())),
+                    ("SSH_AUTH_SOCK".into(), None),
+                ]),
             },
         )
         .expect("write hello");
@@ -1363,6 +1372,7 @@ new_tab = "ctrl+notakey"
                 keybindings,
                 direct_attach_requested,
                 direct_graphics,
+                environment_update,
                 writer,
             } => {
                 assert_eq!(client_id, 42);
@@ -1372,6 +1382,13 @@ new_tab = "ctrl+notakey"
                 assert!(keybindings.is_none());
                 assert!(!direct_attach_requested);
                 assert!(!direct_graphics);
+                assert_eq!(
+                    environment_update,
+                    Some(vec![
+                        ("WAYLAND_DISPLAY".into(), Some("wayland-1".into())),
+                        ("SSH_AUTH_SOCK".into(), None),
+                    ])
+                );
                 drop(writer);
             }
             other => panic!("expected ClientConnected, got {other:?}"),
@@ -1407,6 +1424,7 @@ new_tab = "ctrl+notakey"
                 requested_encoding: RenderEncoding::TerminalAnsi,
                 keybindings: ClientKeybindings::Server,
                 launch_mode: ClientLaunchMode::TerminalAttach,
+                environment_update: None,
             },
         )
         .expect("write hello");

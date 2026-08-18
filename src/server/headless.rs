@@ -1321,6 +1321,7 @@ impl HeadlessServer {
             params.expected_protocol,
             params.expected_version,
             self.api_window_title.clone(),
+            self.app.session_environment.clone(),
         );
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
@@ -3003,6 +3004,7 @@ impl HeadlessServer {
                 render_encoding,
                 direct_attach_requested,
                 direct_graphics,
+                environment_update,
             } => {
                 if self.handoff_in_progress {
                     if let Ok(message) =
@@ -3046,6 +3048,9 @@ impl HeadlessServer {
                 connection.direct_graphics = direct_graphics;
                 connection.pixel_mouse = direct_graphics;
                 self.clients.insert(client_id, connection);
+                if let Some(environment_update) = environment_update {
+                    self.app.update_session_environment(environment_update);
+                }
                 if !direct_attach_requested {
                     self.foreground_client_id = Some(client_id);
                 }
@@ -5197,6 +5202,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &received.manifest.snapshot,
             &mut imports,
         )?;
+        app.update_session_environment(received.manifest.session_environment.clone());
         app.state.local_sound_playback = false;
         app.local_terminal_notifications = false;
         app.local_input_source_switch = false;
@@ -6170,8 +6176,13 @@ mod tests {
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: true,
+            environment_update: Some(vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()),)]),
             writer: writer_a,
         }));
+        assert_eq!(
+            server.app.session_environment,
+            vec![("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))]
+        );
         assert!(server.clients[&1].direct_graphics);
         assert!(server.clients[&1].pixel_mouse);
         assert!(server.direct_graphics_available());
@@ -6187,6 +6198,7 @@ mod tests {
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_b,
         }));
         assert!(!server.direct_graphics_available());
@@ -6217,6 +6229,7 @@ new_tab = "prefix+t"
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_a,
         }));
         assert_eq!(
@@ -6242,6 +6255,7 @@ new_tab = "prefix+t"
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -6283,6 +6297,7 @@ new_tab = "prefix+t"
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_a,
         }));
         assert_eq!(server.app.state.config_diagnostic, without_keybindings);
@@ -6297,6 +6312,7 @@ new_tab = "prefix+t"
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -6341,6 +6357,7 @@ next_tab = ""
             keybindings: Some(Box::new(local_keybindings)),
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -6417,6 +6434,7 @@ next_tab = ""
             keybindings: Some(Box::new(local_config.live_keybinds().unwrap())),
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_a,
         }));
         server.app.state.mode = crate::app::Mode::Settings;
@@ -6438,6 +6456,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer: writer_b,
         }));
         assert_eq!(
@@ -6473,6 +6492,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         assert!(server.clients.contains_key(&7));
@@ -6539,6 +6559,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         control_rx
@@ -6953,6 +6974,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
 
@@ -6988,6 +7010,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
 
@@ -7022,6 +7045,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: false,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         assert!(server.has_app_client());
@@ -7123,6 +7147,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         assert!(
@@ -9148,6 +9173,7 @@ next_tab = ""
             keybindings: None,
             direct_attach_requested: true,
             direct_graphics: false,
+            environment_update: None,
             writer,
         }));
         assert!(

@@ -202,6 +202,7 @@ pub struct Workspace {
     pub public_pane_numbers: HashMap<PaneId, usize>,
     pub(crate) next_public_pane_number: usize,
     pub(crate) next_public_tab_number: usize,
+    pub(crate) session_environment: crate::pane::SessionEnvironment,
     pub tabs: Vec<Tab>,
     pub active_tab: usize,
     #[cfg(test)]
@@ -267,6 +268,7 @@ impl Workspace {
             public_pane_numbers,
             next_public_pane_number: 2,
             next_public_tab_number: 2,
+            session_environment: Vec::new(),
             tabs: vec![tab],
             active_tab: 0,
             #[cfg(test)]
@@ -301,6 +303,7 @@ impl Workspace {
             render_notify,
             render_dirty,
             Vec::new(),
+            &[],
         )
     }
 
@@ -317,6 +320,7 @@ impl Workspace {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         extra_env: Vec<(String, String)>,
+        session_environment: &[(String, Option<String>)],
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         Self::new_with_tab(
             initial_cwd,
@@ -331,6 +335,7 @@ impl Workspace {
             render_dirty,
             None,
             extra_env,
+            session_environment,
         )
     }
 
@@ -390,6 +395,7 @@ impl Workspace {
             render_dirty,
             Some(argv),
             extra_env,
+            &[],
         )
     }
 
@@ -407,13 +413,16 @@ impl Workspace {
         render_dirty: Arc<RenderSignal>,
         argv: Option<&[String]>,
         extra_env: Vec<(String, String)>,
+        session_environment: &[(String, Option<String>)],
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let id = generate_workspace_id();
-        let launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
-            id.clone(),
-            public_tab_id_for_number(&id, 1),
-            public_pane_id_for_number(&id, 1),
-        );
+        let launch_env = PaneLaunchEnv::from_extra(extra_env)
+            .with_session(session_environment)
+            .with_identity(
+                id.clone(),
+                public_tab_id_for_number(&id, 1),
+                public_pane_id_for_number(&id, 1),
+            );
         let (tab, terminal, runtime) = if let Some(argv) = argv {
             Tab::new_argv_command(
                 1,
@@ -466,6 +475,7 @@ impl Workspace {
                 public_pane_numbers,
                 next_public_pane_number: 2,
                 next_public_tab_number: 2,
+                session_environment: session_environment.to_vec(),
                 tabs: vec![tab],
                 active_tab: 0,
                 #[cfg(test)]
@@ -1072,11 +1082,20 @@ impl Workspace {
         pane_number: usize,
         extra_env: Vec<(String, String)>,
     ) -> PaneLaunchEnv {
-        PaneLaunchEnv::from_extra(extra_env).with_identity(
-            self.id.clone(),
-            public_tab_id_for_number(&self.id, tab_number),
-            public_pane_id_for_number(&self.id, pane_number),
-        )
+        PaneLaunchEnv::from_extra(extra_env)
+            .with_session(&self.session_environment)
+            .with_identity(
+                self.id.clone(),
+                public_tab_id_for_number(&self.id, tab_number),
+                public_pane_id_for_number(&self.id, pane_number),
+            )
+    }
+
+    pub(crate) fn set_session_environment(
+        &mut self,
+        environment: &crate::pane::SessionEnvironment,
+    ) {
+        self.session_environment.clone_from(environment);
     }
 
     pub fn public_tab_number(&self, tab_idx: usize) -> Option<usize> {
@@ -1304,6 +1323,7 @@ impl Workspace {
             public_pane_numbers,
             next_public_pane_number: 2,
             next_public_tab_number: 2,
+            session_environment: Vec::new(),
             tabs: vec![tab],
             active_tab: 0,
             test_runtimes: HashMap::new(),

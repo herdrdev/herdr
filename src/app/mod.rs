@@ -30,7 +30,7 @@ mod theme_sync;
 mod window_title;
 mod worktrees;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::pending;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -164,6 +164,8 @@ pub struct App {
     /// even when an App-internal drain consumes the event before the forwarding drain.
     pub(crate) local_input_source_switch: bool,
     pub(crate) config_reloaded_from_disk: bool,
+    pub(crate) session_environment: crate::pane::SessionEnvironment,
+    session_update_environment: Vec<String>,
     prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
 }
 
@@ -234,6 +236,16 @@ fn auto_updates_enabled(no_session: bool) -> bool {
 
 fn background_update_check_enabled(no_session: bool, check_enabled: bool) -> bool {
     auto_updates_enabled(no_session) && check_enabled
+}
+
+fn filtered_session_update_environment(config: &crate::config::Config) -> Vec<String> {
+    config
+        .session
+        .update_environment
+        .iter()
+        .filter(|name| crate::config::session_environment_name_allowed(name))
+        .cloned()
+        .collect()
 }
 
 fn load_plugin_registry(no_session: bool) -> crate::app::state::InstalledPluginRegistry {
@@ -801,6 +813,8 @@ impl App {
             local_terminal_notifications: true,
             local_input_source_switch: true,
             config_reloaded_from_disk: false,
+            session_environment: Vec::new(),
+            session_update_environment: filtered_session_update_environment(config),
             prefix_input_source: Box::new(crate::platform::RealPrefixInputSource::default()),
         };
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
@@ -1382,6 +1396,30 @@ impl App {
         self.apply_config_from_disk(true)
     }
 
+    pub(crate) fn update_session_environment(&mut self, update: Vec<(String, Option<String>)>) {
+        let allowed = |name: &str| {
+            self.session_update_environment
+                .iter()
+                .any(|candidate| candidate == name)
+                && crate::config::session_environment_name_allowed(name)
+        };
+        self.session_environment = update
+            .into_iter()
+            .filter(|(name, value)| {
+                allowed(name) && value.as_ref().is_none_or(|v| !v.contains('\0'))
+            })
+            .collect::<BTreeMap<_, _>>()
+            .into_iter()
+            .collect();
+        self.sync_session_environment_to_workspaces();
+    }
+
+    fn sync_session_environment_to_workspaces(&mut self) {
+        for workspace in &mut self.state.workspaces {
+            workspace.set_session_environment(&self.session_environment);
+        }
+    }
+
     pub(crate) fn take_config_reloaded_from_disk(&mut self) -> bool {
         let reloaded = self.config_reloaded_from_disk;
         self.config_reloaded_from_disk = false;
@@ -1443,6 +1481,14 @@ impl App {
                     );
                 }
             }
+        }
+
+        if !invalid_section("session") {
+            self.session_update_environment = filtered_session_update_environment(config);
+            let allowed = &self.session_update_environment;
+            self.session_environment
+                .retain(|(name, _)| allowed.iter().any(|candidate| candidate == name));
+            self.sync_session_environment_to_workspaces();
         }
 
         if !invalid_section("ui") {
@@ -2092,6 +2138,41 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[test]
+    fn session_environment_update_filters_and_replaces_the_overlay() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.session_update_environment = vec![
+            "DISPLAY".into(),
+            "SSH_AUTH_SOCK".into(),
+            "TERM".into(),
+            "HERDR_SOCKET_PATH".into(),
+        ];
+
+        app.update_session_environment(vec![
+            ("DISPLAY".into(), Some("client-display".into())),
+            ("DISPLAY".into(), Some("latest-display".into())),
+            ("SSH_AUTH_SOCK".into(), None),
+            ("TERM".into(), Some("unsafe-term".into())),
+            ("HERDR_SOCKET_PATH".into(), Some("unsafe-socket".into())),
+            ("UNLISTED".into(), Some("ignored".into())),
+        ]);
+
+        let expected = vec![
+            ("DISPLAY".into(), Some("latest-display".into())),
+            ("SSH_AUTH_SOCK".into(), None),
+        ];
+        assert_eq!(app.session_environment, expected);
+        assert_eq!(app.state.workspaces[0].session_environment, expected);
+
+        app.update_session_environment(vec![("DISPLAY".into(), None)]);
+        assert_eq!(app.session_environment, vec![("DISPLAY".into(), None)]);
+        assert_eq!(
+            app.state.workspaces[0].session_environment,
+            app.session_environment
+        );
     }
 
     fn unique_temp_path(name: &str) -> std::path::PathBuf {

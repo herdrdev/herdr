@@ -271,14 +271,49 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
+    /// Client environment variables refreshed for processes launched after attachment.
+    pub update_environment: Vec<String>,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             resume_agents_on_restore: true,
+            update_environment: default_update_environment(),
         }
     }
+}
+
+pub(crate) fn session_environment_name_allowed(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['=', '\0'])
+        && !name.eq_ignore_ascii_case("TERM")
+        && !name.eq_ignore_ascii_case("COLORTERM")
+        && !name.eq_ignore_ascii_case("CODEX_THREAD_ID")
+        && !name
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("HERDR_"))
+}
+
+fn default_update_environment() -> Vec<String> {
+    [
+        "DISPLAY",
+        "KRB5CCNAME",
+        "MSYSTEM",
+        "SSH_ASKPASS",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "SSH_CONNECTION",
+        "WAYLAND_DISPLAY",
+        "WINDOWID",
+        "XAUTHORITY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1316,16 +1351,42 @@ new_cwd = "~/Projects"
     }
 
     #[test]
-    fn resume_agents_on_restore_defaults_on_and_parses() {
+    fn session_config_defaults_and_parses() {
         let default_config = Config::default();
         assert!(default_config.session.resume_agents_on_restore);
+        assert!(default_config
+            .session
+            .update_environment
+            .contains(&"WAYLAND_DISPLAY".to_string()));
 
         let toml = r#"
 [session]
 resume_agents_on_restore = false
+update_environment = ["DISPLAY", "NIRI_SOCKET"]
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
+        assert_eq!(
+            config.session.update_environment,
+            vec!["DISPLAY", "NIRI_SOCKET"]
+        );
+        assert!(config.collect_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn session_environment_rejects_terminal_and_managed_names() {
+        assert!(session_environment_name_allowed("WAYLAND_DISPLAY"));
+        assert!(!session_environment_name_allowed("TERM"));
+        assert!(!session_environment_name_allowed("colorterm"));
+        assert!(!session_environment_name_allowed("HERDR_SOCKET_PATH"));
+        assert!(!session_environment_name_allowed("herdr_custom"));
+        assert!(!session_environment_name_allowed("CODEX_THREAD_ID"));
+
+        let config: Config = toml::from_str(
+            "[session]\nupdate_environment = [\"WAYLAND_DISPLAY\", \"TERM\", \"HERDR_FOO\"]\n",
+        )
+        .unwrap();
+        assert_eq!(config.collect_diagnostics().len(), 2);
     }
 
     #[test]

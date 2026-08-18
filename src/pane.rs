@@ -78,8 +78,11 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", PANE_COLORTERM);
 }
 
+pub(crate) type SessionEnvironment = Vec<(String, Option<String>)>;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PaneLaunchEnv {
+    session: SessionEnvironment,
     extra: Vec<(String, String)>,
     identity: PaneLaunchIdentity,
 }
@@ -99,9 +102,15 @@ enum PaneLaunchIdentity {
 impl PaneLaunchEnv {
     pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
         Self {
+            session: Vec::new(),
             extra,
             identity: PaneLaunchIdentity::Inherit,
         }
+    }
+
+    pub(crate) fn with_session(mut self, session: &[(String, Option<String>)]) -> Self {
+        self.session = session.to_vec();
+        self
     }
 
     pub(crate) fn with_identity(
@@ -125,10 +134,17 @@ impl PaneLaunchEnv {
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
-    cmd.env_remove("CODEX_THREAD_ID");
+    for (key, value) in &launch_env.session {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        }
+    }
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
+    cmd.env_remove("CODEX_THREAD_ID");
+    apply_pane_terminal_env(cmd);
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
@@ -1749,7 +1765,6 @@ impl PaneRuntime {
             uses_windows_powershell_pane_shell(shell_config);
         let mut cmd = pane_shell_command_builder(shell_config)?;
         cmd.cwd(cwd);
-        apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
@@ -1791,7 +1806,6 @@ impl PaneRuntime {
     ) -> std::io::Result<Self> {
         let mut cmd = crate::platform::pane_custom_command_pty_builder(command);
         cmd.cwd(cwd);
-        apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
@@ -1838,7 +1852,6 @@ impl PaneRuntime {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
             pane_id,
@@ -3077,13 +3090,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_launch_env_removes_outer_codex_thread_id() {
+    fn pane_launch_env_applies_session_and_explicit_precedence() {
         let mut cmd = CommandBuilder::new("shell");
+        cmd.env("DISPLAY", "daemon-display");
+        cmd.env("SSH_AUTH_SOCK", "daemon-socket");
         cmd.env("CODEX_THREAD_ID", "outer-session");
+        let launch_env = PaneLaunchEnv::from_extra(vec![
+            ("DISPLAY".into(), "explicit-display".into()),
+            ("TERM".into(), "unsafe-term".into()),
+            ("HERDR_ENV".into(), "unsafe-herdr".into()),
+        ])
+        .with_session(&[
+            ("DISPLAY".into(), Some("client-display".into())),
+            ("SSH_AUTH_SOCK".into(), None),
+        ]);
 
-        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+        apply_pane_launch_env(&mut cmd, &launch_env);
 
+        assert_eq!(
+            cmd.get_env("DISPLAY").and_then(std::ffi::OsStr::to_str),
+            Some("explicit-display")
+        );
+        assert!(cmd.get_env("SSH_AUTH_SOCK").is_none());
         assert!(cmd.get_env("CODEX_THREAD_ID").is_none());
+        assert_eq!(
+            cmd.get_env("TERM").and_then(std::ffi::OsStr::to_str),
+            Some(PANE_TERM)
+        );
+        assert_eq!(
+            cmd.get_env("HERDR_ENV").and_then(std::ffi::OsStr::to_str),
+            Some(crate::HERDR_ENV_VALUE)
+        );
     }
 
     #[tokio::test]

@@ -38,6 +38,7 @@ pub use self::{
 };
 
 pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::model::session_environment_name_allowed;
 pub(crate) use self::{
     io::upsert_top_level_bool,
     tab_bar::{
@@ -91,8 +92,22 @@ impl Config {
             .chain(self.ui.sound.diagnostics())
             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
             .chain(window_title_diagnostics(&self.ui.window_title))
+            .chain(self.session_environment_diagnostics())
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .collect()
+    }
+
+    fn session_environment_diagnostics(&self) -> Vec<String> {
+        self.session
+            .update_environment
+            .iter()
+            .filter(|name| !session_environment_name_allowed(name))
+            .map(|name| {
+                format!(
+                    "session.update_environment entry {name:?} is reserved or invalid; ignoring"
+                )
+            })
             .collect()
     }
 
