@@ -23,6 +23,7 @@
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
+- `pane report-agent` and `pane report-agent-session` now accept the pane ID after their options, as shown by CLI help, and support `--option=value` syntax.
 - Foreground typing no longer waits behind render cadence consumed by output from panes in hidden tabs. (#2890)
 - The Windows ARM64 installer now waits for x64 emulation to release the verified executable before activating the downloaded release. (#2916)
 - On Unix, Ctrl-click URL openers are now reaped after they exit, preventing defunct child processes from accumulating on long-running servers. (#2903)
