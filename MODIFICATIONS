@@ -21,7 +21,7 @@ Fork-added files
 
 - FORK.md
 - MODIFICATIONS
-- .github/workflows/ci.yml
+- .github/workflows/fork-ci.yml
 
 No non-commentable upstream file was modified during M0b. See FORK.md for the
 path-by-path upstream-edit registry, reasons, commits, branch model, and merge

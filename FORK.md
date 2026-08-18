@@ -36,6 +36,11 @@ Recorded on macOS arm64 with Rust/Cargo 1.96.1:
 This failure reproduces from the unmodified `v0.8.0` base and is the fork's
 pre-existing bootstrap baseline. The vendored dependency was not changed.
 
+Upstream already shipped a macOS/Linux CI matrix, but its push trigger omitted
+the fork's `main` branch. `.github/workflows/fork-ci.yml` supplies the requested
+`cargo build --locked` and `cargo test --locked` matrix for pushes and pull
+requests targeting `main` without modifying the upstream workflow.
+
 ## Upstream-edit registry
 
 Apache-2.0 section 4(b) changes to upstream source files carry this notice at
