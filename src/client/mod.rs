@@ -341,11 +341,13 @@ fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
 
 /// Sets up a direct attach terminal.
 ///
-/// Direct attach forwards stdin to the attached PTY. It enables mouse capture
-/// so wheel events can drive the attached viewport or be forwarded to child
-/// programs that requested mouse input.
-fn setup_direct_attach_terminal() -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(false, true)
+/// Direct attach forwards stdin to the attached PTY. Mouse capture lets wheel
+/// events drive the attached viewport and reach child programs that asked for
+/// mouse input, but it also takes click-drag away from the host terminal's own
+/// selection. `ui.mouse_capture` is the existing knob for that trade-off, so
+/// honour it here instead of forcing capture on for every attach.
+fn setup_direct_attach_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
+    setup_terminal_with_capabilities(false, mouse_capture)
 }
 
 fn setup_terminal_with_capabilities(
@@ -1192,7 +1194,7 @@ fn run_client_with_mode(
     // so we don't leave the terminal in raw mode if the server rejects us.
     let direct_attach = attach_escape.is_some();
     let terminal_guard = if direct_attach {
-        setup_direct_attach_terminal()
+        setup_direct_attach_terminal(mouse_capture)
     } else {
         setup_terminal(mouse_capture)
     }
