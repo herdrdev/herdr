@@ -384,13 +384,36 @@ fn text_char_for_key(key: &TerminalKey) -> Option<char> {
         return None;
     };
 
-    if key.modifiers.is_empty() {
-        return Some(ch);
+    if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
+        return None;
     }
+
+    if let Some(letter) = apply_ascii_letter_case(ch, key) {
+        return Some(letter);
+    }
+
     if key.modifiers == KeyModifiers::SHIFT {
         return shifted_text_char(key, ch);
     }
-    None
+
+    Some(ch)
+}
+
+fn apply_ascii_letter_case(ch: char, key: &TerminalKey) -> Option<char> {
+    if !ch.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    if !shift && !key.caps_lock {
+        return None;
+    }
+
+    Some(if shift ^ key.caps_lock {
+        ch.to_ascii_uppercase()
+    } else {
+        ch.to_ascii_lowercase()
+    })
 }
 
 fn shifted_text_char(key: &TerminalKey, ch: char) -> Option<char> {
@@ -494,7 +517,9 @@ fn encode_legacy_inner(key: TerminalKey) -> Vec<u8> {
                     _ => vec![ch as u8],
                 }
             } else {
-                let ch = if key.modifiers == KeyModifiers::SHIFT {
+                let ch = if let Some(letter) = apply_ascii_letter_case(ch, &key) {
+                    letter
+                } else if key.modifiers == KeyModifiers::SHIFT {
                     shifted_text_char(&key, ch).unwrap_or(ch)
                 } else {
                     ch
@@ -1181,5 +1206,40 @@ mod tests {
         let encoded = encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 7 });
         assert!(!encoded.is_empty());
         assert_ne!(encoded, "测".as_bytes());
+    }
+
+    #[test]
+    fn caps_lock_uppercases_ascii_letter_in_legacy() {
+        let key = TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()).with_caps_lock(true);
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"A");
+    }
+
+    #[test]
+    fn caps_lock_uppercases_ascii_letter_in_kitty_disambiguate() {
+        let key = TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()).with_caps_lock(true);
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 1 }),
+            b"A"
+        );
+    }
+
+    #[test]
+    fn caps_lock_xor_shift_lowercases_ascii_letter_in_legacy() {
+        let key = TerminalKey::new(KeyCode::Char('A'), KeyModifiers::SHIFT).with_caps_lock(true);
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"a");
+    }
+
+    #[test]
+    fn caps_lock_does_not_shift_digits_in_legacy() {
+        let key = TerminalKey::new(KeyCode::Char('1'), KeyModifiers::empty()).with_caps_lock(true);
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"1");
+    }
+
+    #[test]
+    fn parse_kitty_caps_lock_letter_encodes_uppercase() {
+        let key = parse_terminal_key_sequence("\x1b[97;65u").expect("caps lock CSI-u should parse");
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.caps_lock);
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"A");
     }
 }

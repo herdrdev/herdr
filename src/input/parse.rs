@@ -49,7 +49,8 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         modifiers |= KeyModifiers::SHIFT;
     }
 
-    let mut key = TerminalKey::new(code, modifiers).with_kind(kind);
+    let mut key =
+        apply_kitty_caps_lock(TerminalKey::new(code, modifiers).with_kind(kind), modifier);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
     }
@@ -75,9 +76,12 @@ fn parse_modify_other_keys_sequence(data: &str) -> Option<TerminalKey> {
     let modifier = modifier_part.parse::<u8>().ok()?.checked_sub(1)?;
     let codepoint = codepoint_part.parse::<u32>().ok()?;
 
-    Some(TerminalKey::new(
-        kitty_codepoint_to_keycode(codepoint)?,
-        key_modifiers_from_u8(modifier),
+    Some(apply_kitty_caps_lock(
+        TerminalKey::new(
+            kitty_codepoint_to_keycode(codepoint)?,
+            key_modifiers_from_u8(modifier),
+        ),
+        modifier,
     ))
 }
 
@@ -218,10 +222,11 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
                 'S' => KeyCode::F(4),
                 _ => return None,
             };
-            return Some(
+            return Some(apply_kitty_caps_lock(
                 TerminalKey::new(code, key_modifiers_from_u8(mod_value))
                     .with_kind(parse_kitty_event_type(event_type)?),
-            );
+                mod_value,
+            ));
         }
     }
 
@@ -244,10 +249,11 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         "24" => KeyCode::F(12),
         _ => return None,
     };
-    Some(
+    Some(apply_kitty_caps_lock(
         TerminalKey::new(code, key_modifiers_from_u8(mod_value))
             .with_kind(parse_kitty_event_type(event_type)?),
-    )
+        mod_value,
+    ))
 }
 
 fn split_modifier_and_event(input: &str) -> (&str, Option<&str>) {
@@ -367,6 +373,14 @@ fn key_modifiers_from_u8(modifier: u8) -> KeyModifiers {
         mods |= KeyModifiers::META;
     }
     mods
+}
+
+fn apply_kitty_caps_lock(key: TerminalKey, modifier: u8) -> TerminalKey {
+    if modifier & 0b0100_0000 != 0 {
+        key.with_caps_lock(true)
+    } else {
+        key
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +698,15 @@ mod tests {
             None,
         );
         assert_eq!(key.generated_text.as_deref(), Some("😀"));
+    }
+
+    #[test]
+    fn parse_kitty_caps_lock_letter_sets_lock_flag() {
+        let key = parse_terminal_key_sequence("\x1b[97;65u").expect("caps lock CSI-u should parse");
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert_eq!(key.modifiers, KeyModifiers::empty());
+        assert!(key.caps_lock);
+        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"A");
     }
 
     #[test]
