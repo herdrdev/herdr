@@ -378,6 +378,14 @@ fn setup_terminal_with_capabilities(
             set_mouse_capture(true)?;
         } else {
             set_mouse_capture(false)?;
+            // With no mouse mode set, ghostty and xterm translate the wheel
+            // into cursor keys on the alternate screen (DECSET 1007, on by
+            // default). Direct attach is always on the alternate screen, so
+            // every notch arrives as Up/Down and gets forwarded verbatim:
+            // scrolling types arrow keys at whatever is running in the pane.
+            // Nothing here consumes them, so turn the translation off.
+            io::stdout().write_all(b"\x1b[?1007l")?;
+            io::stdout().flush()?;
         }
     }
 
@@ -416,6 +424,7 @@ fn setup_terminal_with_capabilities(
     Ok(TerminalGuard {
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
+        reset_alternate_scroll: !enable_client_protocols && !mouse_capture,
         #[cfg(windows)]
         restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
     })
@@ -429,6 +438,7 @@ fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> boo
 struct TerminalGuard {
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    reset_alternate_scroll: bool,
     #[cfg(windows)]
     restore_windows_input_mode: Option<u32>,
 }
@@ -649,6 +659,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.reset_alternate_scroll {
+            let mut out = io::stdout();
+            let _ = out.write_all(b"\x1b[?1007h");
+            let _ = out.flush();
+        }
         restore_terminal_state(
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
