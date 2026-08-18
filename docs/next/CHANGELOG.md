@@ -20,6 +20,7 @@
 - Headless servers now use a configurable 120×40 virtual terminal instead of 80×24 when no client is attached, giving newly created panes a practical default size. (#2828)
 - Desktop tab labels are now centered in their tabs, so the active-tab highlight has symmetric padding.
 - Bumped the client/server protocol version to 20 for pane terminal bell forwarding.
+- Bumped the client/server protocol version to 21 for explicit workspace worktree-group closure.
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
@@ -27,6 +28,7 @@
 - Foreground typing no longer waits behind render cadence consumed by output from panes in hidden tabs. (#2890)
 - The Windows ARM64 installer now waits for x64 emulation to release the verified executable before activating the downloaded release. (#2916)
 - On Unix, Ctrl-click URL openers are now reaped after they exit, preventing defunct child processes from accumulating on long-running servers. (#2903)
+- `workspace close` now rejects implicit worktree-group closure and supports explicit group closure with `--group`. (#2874)
 - Herdr no longer sends the full OSC 4 palette query burst under WSL, preventing reply fragments from leaking into the shell through ConPTY. (#2440)
 - Qwen Code panes now use locale-independent terminal-title states and localized confirmation fallbacks, preventing active or blocked turns from appearing idle. (#2756)
 - Closing a terminal running `herdr --remote` no longer produces a local client core dump while the remote session stays alive. (#2424)

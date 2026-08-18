@@ -299,6 +299,8 @@ Worktree 方法把 Git 检出作为 Herdr 工作区管理。`worktree.create` �
 
 Worktree 命令也发出生命周期事件。`worktree.create` 发出 `workspace.created`、`tab.created`、`pane.created` 和 `worktree.created`。`worktree.open` 发出 `worktree.opened`,并在打开新的 Herdr 工作区时同时发出工作区/标签页/窗格创建事件。`worktree.remove` 发出 `worktree.removed`;如果关联的工作区仍然打开,还会发出 `workspace.closed`。
 
+当关联的 worktree 工作区仍然打开时，`workspace.close` 只有在 params 中包含 `"close_group": true` 才会关闭父工作区。显式关闭组时，每个被关闭的工作区都会发出一个 `workspace.closed` 事件。
+
 ## 智能体视图查询
 
 `agent.view.set` 为内置 Agents 视图设置一个临时的声明式投影。智能体信息或当前

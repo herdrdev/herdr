@@ -62,6 +62,34 @@ fn request_uses_dot_method_names() {
 }
 
 #[test]
+fn workspace_close_group_intent_defaults_false_and_round_trips() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "close",
+        "method": "workspace.close",
+        "params": { "workspace_id": "w1" }
+    }))
+    .unwrap();
+    assert!(matches!(
+        request.method,
+        Method::WorkspaceClose(WorkspaceCloseParams {
+            close_group: false,
+            ..
+        })
+    ));
+
+    let explicit = Request {
+        id: "close-group".into(),
+        method: Method::WorkspaceClose(WorkspaceCloseParams {
+            workspace_id: "w1".into(),
+            close_group: true,
+        }),
+    };
+    let json = serde_json::to_value(&explicit).unwrap();
+    assert_eq!(json["params"]["close_group"], true);
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), explicit);
+}
+
+#[test]
 fn agent_start_and_prompt_requests_round_trip() {
     let start = Request {
         id: "start".into(),

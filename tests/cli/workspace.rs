@@ -217,6 +217,83 @@ fn worktree_management_commands_work() {
 }
 
 #[test]
+fn workspace_close_requires_explicit_worktree_group_intent() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let repo = base.join("repo");
+    let checkout = base.join("checkout");
+    create_committed_repo(&repo);
+
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = run_cli_json(
+        &socket_path,
+        &[
+            "worktree",
+            "create",
+            "--cwd",
+            repo.to_str().unwrap(),
+            "--branch",
+            "worktree/group-close",
+            "--path",
+            checkout.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(created["result"]["type"], "worktree_created");
+    let workspaces = run_cli_json(&socket_path, &["workspace", "list"]);
+    let workspace_list = workspaces["result"]["workspaces"].as_array().unwrap();
+    let parent_workspace_id = workspace_list
+        .iter()
+        .find(|workspace| workspace["worktree"]["is_linked_worktree"] == false)
+        .and_then(|workspace| workspace["workspace_id"].as_str())
+        .unwrap()
+        .to_string();
+    let workspace_ids = workspace_list
+        .iter()
+        .map(|workspace| workspace["workspace_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    let rejected = run_cli(&socket_path, &["workspace", "close", &parent_workspace_id]);
+    assert_eq!(rejected.status.code(), Some(1));
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "workspace_group_close_required");
+    let after_rejection = run_cli_json(&socket_path, &["workspace", "list"]);
+    assert_eq!(
+        after_rejection["result"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|workspace| workspace["workspace_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        workspace_ids
+    );
+
+    let closed = run_cli(
+        &socket_path,
+        &["workspace", "close", &parent_workspace_id, "--group"],
+    );
+    assert!(
+        closed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&closed.stderr)
+    );
+    let after_close = run_cli_json(&socket_path, &["workspace", "list"]);
+    assert!(after_close["result"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(
+        checkout.exists(),
+        "workspace close must not remove the checkout"
+    );
+
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
 fn forced_worktree_remove_terminates_processes_inside_checkout() {
     let base = unique_test_dir();
     let config_home = base.join("config");

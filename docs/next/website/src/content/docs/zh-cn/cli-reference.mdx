@@ -117,7 +117,7 @@ herdr workspace get <workspace_id>
 herdr workspace focus <workspace_id>
 herdr workspace rename <workspace_id> <label>
 herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]
-herdr workspace close <workspace_id>
+herdr workspace close <workspace_id> [--group]
 ```
 
 不抢占焦点地创建工作区:
@@ -139,7 +139,7 @@ herdr worktree remove --workspace ID [--force]
 
 worktree 是带有 Git 检出来源信息的普通 Herdr 工作区。`worktree create` 创建一个 Git worktree 检出,作为工作区打开,并与父仓库工作区分到一组。如果 `--branch` 指向已有的本地分支,Herdr 检出它;否则从 `--base` 或 `HEAD` 创建分支。没有 `--path` 时,Herdr 在 `<worktrees.directory>/<repo>/<branch-slug>` 下创建检出。
 
-`workspace close` 只关闭 Herdr 状态。`worktree remove` 是显式的检出删除路径;它运行 `git worktree remove`,从不删除分支,并在 Git 拒绝脏检出时要求 `--force`。
+`workspace close` 只关闭 Herdr 状态。当关联的 worktree 工作区仍然打开时，关闭父工作区需要 `--group`；否则命令会保留整个组并返回 `workspace_group_close_required`。`worktree remove` 是显式的检出删除路径;它运行 `git worktree remove`,从不删除分支,并在 Git 拒绝脏检出时要求 `--force`。
 
 ## 标签页
 
