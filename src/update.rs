@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 //! Self-update mechanism.
 //!
 //! Checks the hosted herdr.dev update manifest for newer versions.
@@ -30,6 +31,8 @@ const HERDR_UPDATE_COMMAND: &str = "herdr update";
 const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
 const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
 const NIX_UPDATE_COMMAND: &str = "update through Nix";
+const FORK_UPDATE_DISABLED_MESSAGE: &str =
+    "self-update is disabled in the vimeflow tracking fork; see FORK.md";
 const MISE_INSTALLS_DIR_ENV: &str = "MISE_INSTALLS_DIR";
 const FAKE_UPDATE_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_VERSION";
 const FAKE_UPDATE_NOTES_VERSION_ENV: &str = "HERDR_FAKE_UPDATE_NOTES_VERSION";
@@ -294,6 +297,10 @@ fn fetch_json_manifest<T>(url: &str) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
+    if updates_disabled() {
+        return Err(FORK_UPDATE_DISABLED_MESSAGE.into());
+    }
+
     let output = crate::noninteractive_process::curl_command()
         .args([
             "-sfL",
@@ -1952,6 +1959,10 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if updates_disabled() {
+        return Err(FORK_UPDATE_DISABLED_MESSAGE.into());
+    }
+
     let channel = UpdateChannel::configured();
     #[cfg(windows)]
     if channel == UpdateChannel::Stable {
@@ -2087,6 +2098,11 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 /// Background update check: only surface availability and release notes.
 /// Runs in a background thread at startup.
 pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+    if updates_disabled() {
+        tracing::debug!("automatic updates are disabled in the vimeflow tracking fork");
+        return;
+    }
+
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
@@ -2162,6 +2178,10 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
         version: release.label().to_string(),
         install_command: update_install_command().to_string(),
     });
+}
+
+pub(crate) fn updates_disabled() -> bool {
+    true
 }
 
 fn auto_update_homebrew(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
@@ -2255,6 +2275,18 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn vimeflow_fork_never_fetches_upstream_update_manifests() {
+        assert_eq!(
+            fetch_update_manifest().err().unwrap(),
+            FORK_UPDATE_DISABLED_MESSAGE
+        );
+        assert_eq!(
+            self_update(SelfUpdateOptions::default()).unwrap_err(),
+            FORK_UPDATE_DISABLED_MESSAGE
+        );
     }
 
     fn unique_test_socket_path(name: &str) -> std::path::PathBuf {

@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -79,27 +80,14 @@ pub fn store_path() -> PathBuf {
 }
 
 pub fn save_manifest_announcement(
-    manifest_version: &str,
-    announcement: Option<&ManifestAnnouncement>,
+    _manifest_version: &str,
+    _announcement: Option<&ManifestAnnouncement>,
 ) -> io::Result<Option<ProductAnnouncement>> {
-    let Some(announcement) = announcement else {
-        clear_latest_for_version(&store_path(), manifest_version)?;
-        return Ok(None);
-    };
-
-    let Some(product_announcement) = announcement_from_manifest(manifest_version, announcement)
-    else {
-        clear_latest_for_version(&store_path(), manifest_version)?;
-        return Ok(None);
-    };
-
-    save_latest_to_path(&store_path(), product_announcement.clone())?;
-    Ok(Some(product_announcement))
+    Ok(None)
 }
 
 pub fn load_unseen_for_current_version() -> Option<ProductAnnouncement> {
     load_fake_for_current_version()
-        .or_else(|| load_unseen_from_path(&store_path(), &crate::build_info::version()))
 }
 
 pub fn mark_seen(version: &str, id: &str) -> io::Result<()> {
@@ -244,6 +232,20 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn manifest_announcements_are_disabled_in_the_vimeflow_fork() {
+        let announcement = ManifestAnnouncement {
+            id: "upstream".into(),
+            title: None,
+            body: "upstream announcement".into(),
+        };
+
+        assert_eq!(
+            save_manifest_announcement("1.2.3", Some(&announcement)).unwrap(),
+            None
+        );
     }
 
     #[test]
