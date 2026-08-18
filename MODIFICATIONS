@@ -11,6 +11,7 @@ Modified upstream source files
 - src/update.rs
 - src/cli.rs
 - src/product_announcements.rs
+- src/app/mod.rs
 
 Each modified source file contains the Apache-2.0 section 4(b) notice:
 
