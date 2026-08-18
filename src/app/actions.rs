@@ -2248,7 +2248,7 @@ impl AppState {
             .into_iter()
             .find(|((x, y), _, _)| *x == screen_col && *y == screen_row)
         {
-            return safe_web_url(&uri).map(str::to_owned);
+            return Some(uri);
         }
 
         let metrics = self.pane_scroll_metrics(terminal_runtimes, pane_id);

@@ -1051,6 +1051,57 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn ctrl_click_osc8_file_url_invokes_plugin_link_handler() {
+        let uri = "file:///tmp/herdr-file-repro.txt";
+        let screen = format!("\x1b]8;;{uri}\x1b\\FILE\x1b]8;;\x1b\\");
+        let (mut app, info) = app_with_screen_bytes(screen.as_bytes());
+        install_test_link_handler(&mut app);
+        app.state
+            .installed_plugins
+            .get_mut("example.links")
+            .expect("test plugin")
+            .link_handlers[0]
+            .pattern = r"^file:///tmp/herdr-file-repro\.txt$".into();
+
+        let handled = app.handle_modified_url_click_with(
+            41,
+            modified_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                info.inner_rect.x + 1,
+                info.inner_rect.y,
+                KeyModifiers::CONTROL,
+            ),
+            |_| panic!("matched file link should not use the system URL opener"),
+        );
+
+        assert!(handled);
+        let log = app
+            .state
+            .plugin_command_logs
+            .last()
+            .expect("ctrl-click should start plugin link handler");
+        assert_eq!(log.plugin_id, "example.links");
+        assert_eq!(log.action_id.as_deref(), Some("open"));
+
+        let (mut unmatched_app, unmatched_info) = app_with_screen_bytes(screen.as_bytes());
+        install_test_link_handler(&mut unmatched_app);
+        let unmatched_handled = unmatched_app.handle_modified_url_click_with(
+            42,
+            modified_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                unmatched_info.inner_rect.x + 1,
+                unmatched_info.inner_rect.y,
+                KeyModifiers::CONTROL,
+            ),
+            |_| panic!("unmatched file link should not use the system URL opener"),
+        );
+
+        assert!(!unmatched_handled);
+        assert!(unmatched_app.state.plugin_command_logs.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn ctrl_click_url_invokes_plugin_link_handler_but_super_click_does_not() {
         let line = "see https://github.com/herdrdev/herdr/issues/398";
         let col = line.find("github").expect("url host") as u16;

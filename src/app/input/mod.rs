@@ -595,14 +595,21 @@ impl App {
             return false;
         };
 
-        self.last_pane_click = None;
-        self.pending_url_click_sources.insert(source_id);
-        match self.invoke_plugin_link_handler_for_url(&url, info.id) {
-            Ok(true) => return true,
-            Ok(false) => {}
+        let plugin_handled = match self.invoke_plugin_link_handler_for_url(&url, info.id) {
+            Ok(handled) => handled,
             Err(err) => {
                 tracing::warn!(err = %err, url = %url, "failed to invoke plugin link handler");
+                false
             }
+        };
+        if !plugin_handled && crate::app::actions::safe_web_url(&url).is_none() {
+            return false;
+        }
+
+        self.last_pane_click = None;
+        self.pending_url_click_sources.insert(source_id);
+        if plugin_handled {
+            return true;
         }
         match open_url(&url) {
             Ok(Some(child)) => self.detached_process_children.push(child),
