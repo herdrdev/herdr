@@ -1670,6 +1670,10 @@ async fn run_client_loop(
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
                 }
+                if state.mouse_capture_active {
+                    let sgr_pixels = host_sgr_pixels_active.load(Ordering::Acquire);
+                    set_mouse_capture(true, sgr_pixels).map_err(ClientError::ConnectionFailed)?;
+                }
             }
             ClientLoopEvent::ServerMessage(msg) => match msg {
                 ServerMessage::Frame(frame_data) => {
