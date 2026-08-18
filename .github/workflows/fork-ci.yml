@@ -26,6 +26,11 @@ jobs:
         with:
           toolchain: 1.96.1
 
+      - name: Install Rust test runner
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2.81.9
+        with:
+          tool: cargo-nextest
+
       - name: Install Zig
         if: runner.os != 'macOS'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
@@ -64,4 +69,4 @@ jobs:
         run: cargo build --locked
 
       - name: Test
-        run: cargo test --locked
+        run: cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
