@@ -86,6 +86,9 @@ the top of the file:
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel. | `e312ccf8368c2a51b42ff12efad51efb8b128957` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency pinned to `v0.2.0`. | Task 1 dependency pin (this commit) |
+| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.0` to commit `1b6ece71285cdfb5d12be985c94c02ae2bb6fc89` and its transitive crates. | Task 1 dependency pin (this commit) |
+| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | Task 1 dependency pin (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

@@ -5,15 +5,19 @@ Upstream: https://github.com/herdrdev/herdr
 Base: v0.8.0 (346411fa21afd297f5ed3b3fa56f9e3fbf7654b7)
 Fork: https://github.com/winoooops/vimeflow-terminal
 
-Modified upstream source files
-------------------------------
+Modified upstream files
+-----------------------
 
+- Cargo.toml
+- Cargo.lock
+- nix/package.nix
 - src/update.rs
 - src/cli.rs
 - src/product_announcements.rs
 - src/app/mod.rs
 
-Each modified source file contains the Apache-2.0 section 4(b) notice:
+Each modified Rust, TOML, and Nix file contains the Apache-2.0 section 4(b)
+notice:
 
     Modified from herdr by the vimeflow project — see FORK.md
 
@@ -24,7 +28,8 @@ Fork-added files
 - MODIFICATIONS
 - .github/workflows/fork-ci.yml
 - scripts/preseed_zig_cache.sh
+- tests/watcher_dependency_smoke.rs
 
-No non-commentable upstream file was modified during M0b. See FORK.md for the
-path-by-path upstream-edit registry, reasons, commits, branch model, and merge
-procedure. The upstream LICENSE and notices remain unchanged.
+See FORK.md for the path-by-path upstream-edit registry, reasons, commits,
+branch model, and merge procedure. The upstream LICENSE and notices remain
+unchanged.

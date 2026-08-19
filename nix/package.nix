@@ -1,3 +1,4 @@
+# Modified from herdr by the vimeflow project — see FORK.md
 {
   lib,
   stdenv,
@@ -55,6 +56,9 @@ rustPlatform.buildRustPackage {
 
   cargoLock = {
     lockFile = ../Cargo.lock;
+    outputHashes = {
+      "herdr-agent-watcher-0.2.0" = "sha256-gFDHMz/J5PLnbvI3GKkYO4OKpCs6UkZZyAnQHZ7ytUE=";
+    };
   };
 
   nativeBuildInputs = [
