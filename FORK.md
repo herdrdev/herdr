@@ -89,6 +89,7 @@ the top of the file:
 | `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency pinned to `v0.2.0`. | Task 1 dependency pin (this commit) |
 | `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.0` to commit `1b6ece71285cdfb5d12be985c94c02ae2bb6fc89` and its transitive crates. | Task 1 dependency pin (this commit) |
 | `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | Task 1 dependency pin (this commit) |
+| `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | Task 1 CI follow-up (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

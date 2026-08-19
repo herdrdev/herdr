@@ -15,6 +15,7 @@ Modified upstream files
 - src/cli.rs
 - src/product_announcements.rs
 - src/app/mod.rs
+- src/api/schema/tests.rs
 
 Each modified Rust, TOML, and Nix file contains the Apache-2.0 section 4(b)
 notice:
