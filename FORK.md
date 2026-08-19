@@ -40,10 +40,21 @@ The cold-cache HTTP failure reproduces from the unmodified `v0.8.0` base. The
 vendored dependency was not changed. CI fetches the artifact successfully on
 both operating systems; macOS CI uses upstream's patched Homebrew Zig setup.
 
+For a cold local Zig cache, run `scripts/preseed_zig_cache.sh` before
+`cargo build --locked`. The script downloads the themes tarball and other
+archives that Zig 0.15.2 fails to fetch locally, imports them into Zig's global
+package cache, and rejects content hashes that no longer match the vendored
+`build.zig.zon` manifests.
+
 Upstream already shipped a macOS/Linux CI matrix, but its push trigger omitted
 the fork's `main` branch. `.github/workflows/fork-ci.yml` supplies the requested
 `cargo build --locked` plus the upstream `cargo nextest` test harness for pushes
 and pull requests targeting `main` without modifying the upstream workflow.
+
+Local Rust tests follow upstream CI: use `cargo nextest run --locked` (or
+`just test` for the Rust suite plus maintenance checks). Raw `cargo test` is
+not the project baseline because its shared-process harness triggers the two
+known upstream failures below.
 
 ### Upstream baseline test behavior
 

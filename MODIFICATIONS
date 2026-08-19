@@ -23,6 +23,7 @@ Fork-added files
 - FORK.md
 - MODIFICATIONS
 - .github/workflows/fork-ci.yml
+- scripts/preseed_zig_cache.sh
 
 No non-commentable upstream file was modified during M0b. See FORK.md for the
 path-by-path upstream-edit registry, reasons, commits, branch model, and merge
