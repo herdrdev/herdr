@@ -45,7 +45,8 @@ while IFS="$(printf '\t')" read -r url expected; do
   fi
   archive="$temporary/${url##*/}"
   echo "fetching $url"
-  curl --fail --location --retry 3 --silent --show-error --output "$archive" "$url"
+  curl --fail --location --retry 3 --retry-all-errors --silent --show-error \
+    --output "$archive" "$url"
   if ! actual=$(zig fetch --global-cache-dir "$cache" "$archive"); then
     echo "zig could not import $url" >&2
     exit 1
