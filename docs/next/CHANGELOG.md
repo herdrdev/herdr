@@ -26,6 +26,7 @@
 - Experimental pane graphics now support bounded named layers, acknowledged full-RGBA primary-layer direct file frames on audited local terminals, owned BGRA fallback, exact pixel mouse input, and placement-only resize replay.
 
 ### Fixed
+- The Pi integration now preserves short blocked transitions while an earlier lifecycle report is still in flight. (#2971)
 - High-rate output from many hidden panes no longer floods the server loop with redundant wakeups, and terminal input-mode synchronization no longer formats pane scrollback to read one keyboard flag.
 - Chinese IME commits now reach panes on macOS when the focused application requests printable key-release events. (#2924)
 - Windows now recognizes `Ctrl+1` through `Ctrl+9` keybindings instead of decoding those key records as control characters. (#2910)

@@ -315,6 +315,52 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });
 
+test("Pi preserves a blocked transition while a state report is in flight", async () => {
+  const recordingSocketPath = join(tmpdir(), `herdr-pi-blocked-order-${process.pid}.sock`);
+  socketPath = recordingSocketPath;
+  await rm(recordingSocketPath, { force: true });
+
+  const requests: unknown[] = [];
+  let acknowledgeFirstReport: (() => void) | undefined;
+  const recordingServer = createServer((socket) => {
+    let input = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      input += chunk;
+      const newline = input.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      requests.push(JSON.parse(input.slice(0, newline)));
+      if (requestStates(requests).length === 1) {
+        acknowledgeFirstReport = () => socket.end("{}\n");
+        return;
+      }
+      socket.end("{}\n");
+    });
+  });
+  server = recordingServer;
+  await new Promise<void>((resolve, reject) => {
+    recordingServer.once("error", reject);
+    recordingServer.listen(recordingSocketPath, resolve);
+  });
+
+  configureIntegrationEnvironment(recordingSocketPath);
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => false));
+  await waitFor(() => acknowledgeFirstReport !== undefined);
+
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
+  eventHandlers.get("herdr:blocked")?.({ active: false }, {});
+  acknowledgeFirstReport?.();
+
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["working", "blocked", "working"]);
+});
+
 test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
   const { handlers, pi } = createExtensionHarness();
