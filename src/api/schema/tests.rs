@@ -154,10 +154,7 @@ fn bundled_protocol_schema_refs_resolve_inside_bundle() {
 fn generated_protocol_schema_artifact_is_current() {
     let mut schema = protocol_schema_document();
     schema.sort_all_objects();
-    let actual = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&schema).unwrap()
-    );
+    let actual = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("docs/next/api/herdr-api.schema.json");
 
