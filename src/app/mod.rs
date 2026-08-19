@@ -722,7 +722,8 @@ impl App {
             background_update_check_enabled(no_session, config.update.manifest_check);
         if version_check_enabled {
             let update_tx = event_tx.clone();
-            std::thread::spawn(move || crate::update::auto_update(update_tx));
+            let announced_version = state.update_available.clone();
+            std::thread::spawn(move || crate::update::auto_update(update_tx, announced_version));
         }
         if manifest_check_enabled {
             let manifest_update_tx = event_tx.clone();
@@ -837,11 +838,7 @@ impl App {
         app.state.installed_plugins = load_plugin_registry(app.no_session);
         let now = Instant::now();
         if background_update_check_enabled(app.no_session, app.update_version_check_enabled) {
-            app.next_auto_update_check = app
-                .state
-                .update_available
-                .is_none()
-                .then_some(now + AUTO_UPDATE_CHECK_INTERVAL);
+            app.next_auto_update_check = Some(now + AUTO_UPDATE_CHECK_INTERVAL);
         }
         if background_update_check_enabled(app.no_session, app.update_manifest_check_enabled) {
             app.next_agent_manifest_update_check = Some(now + AUTO_UPDATE_CHECK_INTERVAL);
@@ -1572,7 +1569,6 @@ impl App {
                     self.no_session,
                     self.update_version_check_enabled,
                 )
-                && self.state.update_available.is_none()
             {
                 self.next_auto_update_check = Some(now);
             }

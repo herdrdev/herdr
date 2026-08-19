@@ -107,6 +107,21 @@ pub fn mark_current_version_seen() -> std::io::Result<()> {
     mark_current_version_seen_at(&pending_path(), &crate::build_info::version())
 }
 
+pub fn clear_pending_version(version: &str) -> std::io::Result<bool> {
+    clear_pending_version_at(&pending_path(), version)
+}
+
+fn clear_pending_version_at(path: &Path, version: &str) -> std::io::Result<bool> {
+    let Some(stored) = load_stored_from_path(path) else {
+        return Ok(false);
+    };
+    if stored.version != version {
+        return Ok(true);
+    }
+    clear_pending_at(path)?;
+    Ok(false)
+}
+
 fn mark_current_version_seen_at(path: &Path, current_version: &str) -> std::io::Result<()> {
     let Some(mut stored) = load_stored_from_path(path) else {
         return Ok(());
@@ -225,6 +240,25 @@ mod tests {
         assert!(!notes.preview);
 
         clear_pending_at(&path).unwrap();
+    }
+
+    #[test]
+    fn clearing_pending_version_removes_only_matching_notes() {
+        let path = std::env::temp_dir().join(format!(
+            "herdr-release-notes-{}-{}",
+            std::process::id(),
+            "clear-version"
+        ));
+        let _ = clear_pending_at(&path);
+        save_pending_to_path(&path, "0.3.1", "### Changed\n- One").unwrap();
+
+        assert!(clear_pending_version_at(&path, "0.3.2").unwrap());
+        assert_eq!(
+            load_stored_from_path(&path).map(|notes| notes.version),
+            Some("0.3.1".to_string())
+        );
+        assert!(!clear_pending_version_at(&path, "0.3.1").unwrap());
+        assert!(!path.exists());
     }
 
     #[test]

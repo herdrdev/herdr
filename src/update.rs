@@ -2199,12 +2199,15 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 }
 
 /// Background update check: only surface availability and release notes.
-/// Runs in a background thread at startup.
-pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+/// Runs in a background thread at startup and on the periodic update schedule.
+pub fn auto_update(
+    events: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    announced_version: Option<String>,
+) {
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
-        if !version.is_empty() {
+        if !version.is_empty() && announced_version.as_deref() != Some(version) {
             tracing::info!(
                 env = FAKE_UPDATE_VERSION_ENV,
                 version,
@@ -2231,7 +2234,7 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
             );
             return;
         }
-        auto_update_homebrew(events);
+        auto_update_homebrew(events, announced_version.as_deref());
         return;
     }
 
@@ -2247,13 +2250,19 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
     }
 
     let release = match check_latest() {
-        Ok(Some(r)) => r,
-        Ok(None) => return,
+        Ok(Some(release)) => release,
+        Ok(None) => {
+            retract_announced_update(&events, announced_version.as_deref());
+            return;
+        }
         Err(err) => {
             crate::logging::update_check_failed(&err);
             return;
         }
     };
+    if announced_version.as_deref() == Some(release.label()) {
+        return;
+    }
 
     crate::logging::update_available(release.label());
     tracing::info!(
@@ -2271,26 +2280,35 @@ pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
         release.label()
     );
 
-    // Notify the TUI — blocking_send is safe from a std::thread
     let _ = events.blocking_send(crate::events::AppEvent::UpdateReady {
         version: release.label().to_string(),
         install_command: update_install_command().to_string(),
     });
 }
 
-fn auto_update_homebrew(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+fn auto_update_homebrew(
+    events: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    announced_version: Option<&str>,
+) {
     let version = match check_homebrew_latest() {
         Ok(Some(version)) => version,
-        Ok(None) => return,
+        Ok(None) => {
+            retract_announced_update(&events, announced_version);
+            return;
+        }
         Err(err) => {
             crate::logging::update_check_failed(&err);
             return;
         }
     };
+    let version_label = version.to_string();
+    if announced_version == Some(version_label.as_str()) {
+        return;
+    }
 
-    crate::logging::update_available(&version.to_string());
+    crate::logging::update_available(&version_label);
     let notes_body = homebrew_release_notes_body(&version);
-    if let Err(e) = crate::release_notes::save_pending(&version.to_string(), &notes_body) {
+    if let Err(e) = crate::release_notes::save_pending(&version_label, &notes_body) {
         tracing::warn!("failed to save pending release notes: {e}");
     }
 
@@ -2300,8 +2318,28 @@ fn auto_update_homebrew(events: tokio::sync::mpsc::Sender<crate::events::AppEven
     );
 
     let _ = events.blocking_send(crate::events::AppEvent::UpdateReady {
-        version: version.to_string(),
+        version: version_label,
         install_command: HOMEBREW_UPDATE_COMMAND.to_string(),
+    });
+}
+
+fn retract_announced_update(
+    events: &tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    announced_version: Option<&str>,
+) {
+    let Some(version) = announced_version else {
+        return;
+    };
+    let release_notes_available = match crate::release_notes::clear_pending_version(version) {
+        Ok(available) => available,
+        Err(err) => {
+            tracing::warn!(version, "failed to clear withdrawn update notes: {err}");
+            return;
+        }
+    };
+    let _ = events.blocking_send(crate::events::AppEvent::UpdateUnavailable {
+        version: version.to_string(),
+        release_notes_available,
     });
 }
 
@@ -2483,6 +2521,50 @@ mod tests {
         assert_eq!(Version::parse("1.2"), None);
         assert_eq!(Version::parse("abc"), None);
         assert_eq!(Version::parse(""), None);
+    }
+
+    #[test]
+    fn unchanged_fake_update_does_not_repeat_notification() {
+        let _guard = env_lock().lock().unwrap();
+        let previous = std::env::var_os(FAKE_UPDATE_VERSION_ENV);
+        std::env::set_var(FAKE_UPDATE_VERSION_ENV, "9.9.9");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        auto_update(tx, Some("9.9.9".to_string()));
+
+        assert!(rx.try_recv().is_err());
+        if let Some(previous) = previous {
+            std::env::set_var(FAKE_UPDATE_VERSION_ENV, previous);
+        } else {
+            std::env::remove_var(FAKE_UPDATE_VERSION_ENV);
+        }
+    }
+
+    #[test]
+    fn retracted_update_clears_matching_notes_and_emits_unavailable() {
+        let _guard = env_lock().lock().unwrap();
+        let previous_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        let config_home = set_test_config_home("retracted-update");
+        crate::release_notes::save_pending("9.9.9", "### Changed\n- Withdrawn").unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        retract_announced_update(&tx, Some("9.9.9"));
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(crate::events::AppEvent::UpdateUnavailable {
+                version,
+                release_notes_available: false
+            }) if version == "9.9.9"
+        ));
+        assert!(!crate::release_notes::pending_path().exists());
+
+        let _ = fs::remove_dir_all(config_home);
+        if let Some(previous) = previous_config_home {
+            std::env::set_var("XDG_CONFIG_HOME", previous);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 
     #[test]

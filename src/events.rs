@@ -125,6 +125,11 @@ pub enum AppEvent {
         version: String,
         install_command: String,
     },
+    /// The previously announced version is no longer available.
+    UpdateUnavailable {
+        version: String,
+        release_notes_available: bool,
+    },
     /// Remote agent detection manifest update check finished.
     AgentDetectionManifestsUpdated {
         updated: Vec<crate::detect::manifest_update::ManifestUpdateCommit>,

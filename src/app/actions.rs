@@ -2743,6 +2743,16 @@ impl AppState {
                 }
                 Vec::new()
             }
+            AppEvent::UpdateUnavailable {
+                version,
+                release_notes_available,
+            } => {
+                if self.update_available.as_deref() == Some(version.as_str()) {
+                    self.update_available = None;
+                    self.latest_release_notes_available = release_notes_available;
+                }
+                Vec::new()
+            }
             AppEvent::AgentDetectionManifestsUpdated { updated, status } => {
                 self.agent_manifest_update_status = status;
                 self.refresh_agent_manifest_summaries();
@@ -5721,6 +5731,29 @@ mod tests {
         assert!(active_tab_suppresses_notifications(true, Some(true)));
         assert!(!active_tab_suppresses_notifications(true, Some(false)));
         assert!(!active_tab_suppresses_notifications(false, None));
+    }
+
+    #[test]
+    fn update_unavailable_clears_only_the_pending_update() {
+        let mut state = AppState::test_new();
+        state.update_available = Some("0.8.1".into());
+        state.latest_release_notes_available = true;
+
+        state.handle_app_event(AppEvent::UpdateUnavailable {
+            version: "0.8.1".into(),
+            release_notes_available: true,
+        });
+
+        assert_eq!(state.update_available, None);
+        assert!(state.latest_release_notes_available);
+
+        state.update_available = Some("0.8.2".into());
+        state.handle_app_event(AppEvent::UpdateUnavailable {
+            version: "0.8.1".into(),
+            release_notes_available: false,
+        });
+        assert_eq!(state.update_available.as_deref(), Some("0.8.2"));
+        assert!(state.latest_release_notes_available);
     }
 
     #[test]
