@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -35,19 +35,43 @@ pub fn save_pending(version: &str, body: &str) -> std::io::Result<()> {
 }
 
 fn save_pending_to_path(path: &Path, version: &str, body: &str) -> std::io::Result<()> {
-    let body = normalize_body(body);
-    if body.is_empty() {
-        return clear_pending_at(path);
-    }
+    with_pending_lock(path, || {
+        let body = normalize_body(body);
+        if body.is_empty() {
+            return clear_pending_at(path);
+        }
 
-    write_stored_to_path(
-        path,
-        &StoredReleaseNotes {
-            version: version.to_string(),
-            body,
-            show_on_startup: true,
-        },
-    )
+        write_stored_to_path(
+            path,
+            &StoredReleaseNotes {
+                version: version.to_string(),
+                body,
+                show_on_startup: true,
+            },
+        )
+    })
+}
+
+fn pending_lock_path(path: &Path) -> PathBuf {
+    path.with_extension("lock")
+}
+
+fn with_pending_lock<T>(
+    path: &Path,
+    operation: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let lock_path = pending_lock_path(path);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    lock.lock()?;
+    operation()
 }
 
 fn write_stored_to_path(path: &Path, stored: &StoredReleaseNotes) -> std::io::Result<()> {
@@ -112,25 +136,29 @@ pub fn clear_pending_version(version: &str) -> std::io::Result<bool> {
 }
 
 fn clear_pending_version_at(path: &Path, version: &str) -> std::io::Result<bool> {
-    let Some(stored) = load_stored_from_path(path) else {
-        return Ok(false);
-    };
-    if stored.version != version {
-        return Ok(true);
-    }
-    clear_pending_at(path)?;
-    Ok(false)
+    with_pending_lock(path, || {
+        let Some(stored) = load_stored_from_path(path) else {
+            return Ok(false);
+        };
+        if stored.version != version {
+            return Ok(true);
+        }
+        clear_pending_at(path)?;
+        Ok(false)
+    })
 }
 
 fn mark_current_version_seen_at(path: &Path, current_version: &str) -> std::io::Result<()> {
-    let Some(mut stored) = load_stored_from_path(path) else {
-        return Ok(());
-    };
-    if stored.version != current_version || !stored.show_on_startup {
-        return Ok(());
-    }
-    stored.show_on_startup = false;
-    write_stored_to_path(path, &stored)
+    with_pending_lock(path, || {
+        let Some(mut stored) = load_stored_from_path(path) else {
+            return Ok(());
+        };
+        if stored.version != current_version || !stored.show_on_startup {
+            return Ok(());
+        }
+        stored.show_on_startup = false;
+        write_stored_to_path(path, &stored)
+    })
 }
 
 fn clear_pending_at(path: &Path) -> std::io::Result<()> {
@@ -259,6 +287,50 @@ mod tests {
         );
         assert!(!clear_pending_version_at(&path, "0.3.1").unwrap());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn locked_clear_preserves_a_newer_replacement() {
+        let path = std::env::temp_dir().join(format!(
+            "herdr-release-notes-{}-{}",
+            std::process::id(),
+            "clear-race"
+        ));
+        let _ = clear_pending_at(&path);
+        save_pending_to_path(&path, "0.3.1", "### Changed\n- One").unwrap();
+
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(pending_lock_path(&path))
+            .unwrap();
+        lock.lock().unwrap();
+        let thread_path = path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let clear = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            clear_pending_version_at(&thread_path, "0.3.1")
+        });
+        started_rx.recv().unwrap();
+        write_stored_to_path(
+            &path,
+            &StoredReleaseNotes {
+                version: "0.3.2".to_string(),
+                body: "### Changed\n- Two".to_string(),
+                show_on_startup: true,
+            },
+        )
+        .unwrap();
+        drop(lock);
+
+        assert!(clear.join().unwrap().unwrap());
+        assert_eq!(
+            load_stored_from_path(&path).map(|notes| notes.version),
+            Some("0.3.2".to_string())
+        );
+
+        clear_pending_at(&path).unwrap();
+        fs::remove_file(pending_lock_path(&path)).unwrap();
     }
 
     #[test]
