@@ -16,7 +16,8 @@ The title-sync TS repo working tree is dirty: uncommitted changes make
 TS repo (port source pins that commit) or exclude them (pin `c48327ee`).
 Record the chosen commit hash here before starting Task 5.
 
-> Port source commit: `________` (fill in)
+> Port source commit: `4487edc` (winoooops/herdr-agent-title-sync — includes the
+> agent_session-sufficient exit/sync fix; decided by the operator 2026-08-19).
 
 ## Task W — watcher embedding API (in `~/projects/agent-watcher`, FIRST)
 
