@@ -34,6 +34,8 @@ Fork-added files
 - .github/workflows/fork-ci.yml
 - scripts/preseed_zig_cache.sh
 - tests/watcher_dependency_smoke.rs
+- .config/nextest.toml
+- tests/watcher_cli.rs
 
 See FORK.md for the path-by-path upstream-edit registry, reasons, commits,
 branch model, and merge procedure. The upstream LICENSE and notices remain

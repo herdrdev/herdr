@@ -1,0 +1,3 @@
+[[profile.default.overrides]]
+filter = 'test(=api::server::pane_graphics_stream::tests::inactive_owner_cancels_idle_stream_and_dispatches_close)'
+retries = 2

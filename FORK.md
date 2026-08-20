@@ -62,8 +62,10 @@ known upstream failures below.
   is order/timing dependent on slow raw-`cargo test` runners. At v0.8.0 the
   server writes the open acknowledgement before registering the stream, so the
   test thread can request cancellation before registration and then time out.
-  Fork CI runs it under upstream's isolated nextest harness; fork code does not
-  patch the graphics implementation or test.
+  Fork CI runs it under upstream's isolated nextest harness and retries exactly
+  this test up to two times via `.config/nextest.toml`; fork code does not patch
+  the graphics implementation or test. Two consecutive CI runs demonstrated
+  that process isolation reduced but did not eliminate the race.
 - `workspace::tests::generated_workspace_ids_are_short_base32_handles` assumes
   a fresh global workspace-ID counter. Raw `cargo test` shares that counter
   across the 2938-test unit-test process and can exceed the asserted two-digit
@@ -82,18 +84,18 @@ the top of the file:
 | Upstream path | Reason | Fork commit |
 | --- | --- | --- |
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
-| `src/cli.rs` | Reject fork-disabled update channels and dispatch the native watcher CLI. | Task 4 watcher CLI |
+| `src/cli.rs` | Reject fork-disabled update channels and dispatch the native watcher CLI. | `dded4c73` |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel. | `e312ccf8368c2a51b42ff12efad51efb8b128957` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
-| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.1`. | Task 3 dependency update |
-| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.1` to commit `588edda7afd2b96725beb63e2b2f6f088ea4cc2b` and its transitive crates. | Task 3 dependency update |
-| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | Task 3 dependency update |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.1`. | `0d3faa58` |
+| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.1` to commit `588edda7afd2b96725beb63e2b2f6f088ea4cc2b` and its transitive crates. | `0d3faa58` |
+| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `0d3faa58` |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
-| `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | Task 2 config commit |
-| `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | Task 2 config commit |
-| `src/server/headless.rs` | Own the embedded agent-watcher lifecycle across normal and handoff server paths. | Task 3 daemon embed |
-| `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | Task 4 watcher CLI |
+| `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
+| `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | `c3c70979` |
+| `src/server/headless.rs` | Own the embedded agent-watcher lifecycle across normal and handoff server paths. | `dd08df50` |
+| `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
