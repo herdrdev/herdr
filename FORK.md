@@ -86,9 +86,9 @@ the top of the file:
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel. | `e312ccf8368c2a51b42ff12efad51efb8b128957` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
-| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency pinned to `v0.2.0`. | `4190599687d83fe12a7da8365435e1679c8b229f` |
-| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.0` to commit `1b6ece71285cdfb5d12be985c94c02ae2bb6fc89` and its transitive crates. | `4190599687d83fe12a7da8365435e1679c8b229f` |
-| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `4190599687d83fe12a7da8365435e1679c8b229f` |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.1`. | Task 3 dependency update |
+| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.1` to commit `588edda7afd2b96725beb63e2b2f6f088ea4cc2b` and its transitive crates. | Task 3 dependency update |
+| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | Task 3 dependency update |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | Task 2 config commit |
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | Task 2 config commit |
