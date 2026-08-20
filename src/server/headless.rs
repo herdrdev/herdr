@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 //! Headless server mode — runs the herdr event loop without a real terminal.
 //!
 //! The server:
@@ -64,6 +65,8 @@ use crate::server::socket_paths::{
 };
 use crate::server::terminal_attach::paste_payload_for_runtime;
 
+#[cfg(unix)]
+mod embedded_watcher;
 mod pane_graphics;
 
 #[cfg(test)]
@@ -335,6 +338,8 @@ pub struct HeadlessServer {
     server_event_rx: mpsc::Receiver<ServerEvent>,
     /// Sender for server events (cloned for each client thread).
     server_event_tx: mpsc::Sender<ServerEvent>,
+    #[cfg(unix)]
+    agent_watcher: embedded_watcher::EmbeddedWatcher,
 }
 
 fn apply_terminal_attach_scroll(
@@ -467,6 +472,7 @@ impl HeadlessServer {
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
+        agent_watcher_enabled: bool,
     ) -> io::Result<Self> {
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -492,6 +498,8 @@ impl HeadlessServer {
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
         let _ = api_tx;
+        #[cfg(not(unix))]
+        let _ = agent_watcher_enabled;
         Ok(Self {
             app,
             #[cfg(unix)]
@@ -520,6 +528,8 @@ impl HeadlessServer {
             should_quit,
             server_event_rx,
             server_event_tx,
+            #[cfg(unix)]
+            agent_watcher: embedded_watcher::EmbeddedWatcher::start(agent_watcher_enabled),
         })
     }
 
@@ -644,6 +654,8 @@ impl HeadlessServer {
 
             // 6. Handle scheduled tasks.
             let now = Instant::now();
+            #[cfg(unix)]
+            self.agent_watcher.poll(now);
             if self.handle_scheduled_tasks_headless(now, needs_render) {
                 needs_render = true;
                 needs_full_render = true;
@@ -4717,6 +4729,7 @@ pub fn run_server() -> io::Result<()> {
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(_api_server),
+            loaded_config.config.agent_watcher.enabled,
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -4825,6 +4838,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &loaded_config.diagnostics,
             Some(api_tx.clone()),
             Some(api_server),
+            loaded_config.config.agent_watcher.enabled,
         )?;
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
@@ -5006,6 +5020,8 @@ mod tests {
             should_quit,
             server_event_rx,
             server_event_tx,
+            #[cfg(unix)]
+            agent_watcher: embedded_watcher::EmbeddedWatcher::disabled(),
         }
     }
 

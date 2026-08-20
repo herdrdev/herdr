@@ -92,6 +92,7 @@ the top of the file:
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | Task 2 config commit |
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | Task 2 config commit |
+| `src/server/headless.rs` | Own the embedded agent-watcher lifecycle across normal and handoff server paths. | Task 3 daemon embed |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
