@@ -138,6 +138,91 @@ pub(crate) fn shutdown_local_stream_write(stream: &LocalStream) -> io::Result<()
     }
 }
 
+/// Trusted process identity of the connected peer, read from the kernel.
+///
+/// Call this immediately after `accept`: Darwin's `LOCAL_PEERPID` reads the live
+/// socket and fails once the peer closes, unlike Linux `SO_PEERCRED`, which
+/// snapshots at connect time. `None` means unknown, never denied.
+#[cfg(unix)]
+pub(crate) fn local_stream_peer_process_id(stream: &LocalStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+
+    let LocalStream::UdSocket(stream) = stream;
+    let fd = stream.inner().as_raw_fd();
+
+    #[cfg(target_os = "macos")]
+    let pid = {
+        let mut pid: libc::pid_t = 0;
+        let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        // SAFETY: `fd` is a live socket owned by `stream`, and the out pointer
+        // and length describe a `pid_t` this frame owns.
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                std::ptr::addr_of_mut!(pid).cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        pid
+    };
+
+    #[cfg(target_os = "linux")]
+    let pid = {
+        let mut cred = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: `fd` is a live socket owned by `stream`, and the out pointer
+        // and length describe a `ucred` this frame owns.
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                std::ptr::addr_of_mut!(cred).cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        cred.pid
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let pid = {
+        let _ = fd;
+        0
+    };
+
+    u32::try_from(pid).ok().filter(|pid| *pid != 0)
+}
+
+/// Trusted process identity of the connected named-pipe client.
+#[cfg(windows)]
+pub(crate) fn local_stream_peer_process_id(stream: &LocalStream) -> Option<u32> {
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+
+    let LocalStream::NamedPipe(pipe) = stream;
+    let mut process_id: u32 = 0;
+    // SAFETY: the handle is owned by `pipe` and the out pointer describes a
+    // `u32` this frame owns.
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId(
+            pipe.as_handle().as_raw_handle(),
+            &mut process_id,
+        )
+    };
+    (ok != 0 && process_id != 0).then_some(process_id)
+}
+
 /// Binds a listener for private terminal traffic. Unix callers restrict the
 /// socket file after binding; Windows must set the named-pipe DACL at creation.
 pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListener> {

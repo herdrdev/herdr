@@ -1269,6 +1269,8 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
         seq,
         agent_session_id,
         agent_session_path,
+        // The server overwrites this with the accepted connection's identity.
+        reporter_process_id: None,
     }))
 }
 
@@ -1365,6 +1367,8 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
             agent_session_id,
             agent_session_path,
             session_start_source,
+            // The server overwrites this with the accepted connection's identity.
+            reporter_process_id: None,
         },
     ))
 }

@@ -1252,6 +1252,7 @@ impl App {
             state: detect_state_from_api(params.state),
             message: params.message,
             seq: params.seq,
+            reporter_process_id: params.reporter_process_id,
         });
 
         encode_success(id, ResponseResult::Ok {})
@@ -1282,6 +1283,7 @@ impl App {
             session_start_source: crate::agent_resume::normalize_session_start_source(
                 params.session_start_source,
             ),
+            reporter_process_id: params.reporter_process_id,
         });
 
         encode_success(id, ResponseResult::Ok {})

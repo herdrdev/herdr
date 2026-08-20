@@ -160,7 +160,6 @@ pub(super) fn wait_for_agent(
             initial,
             last_event_sequence,
             after_state_change_seq: None,
-            accept_transient_status: true,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -255,7 +254,6 @@ pub(super) fn prompt_agent(
                 initial,
                 last_event_sequence,
                 after_state_change_seq,
-                accept_transient_status: false,
                 timeout_kind,
             },
             stream,
@@ -287,7 +285,6 @@ pub(super) fn prompt_agent(
             // the activity gate still terminate this settled-state wait.
             last_event_sequence,
             after_state_change_seq,
-            accept_transient_status: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -330,7 +327,6 @@ struct ResolvedAgentWait {
     initial: crate::api::schema::AgentInfo,
     last_event_sequence: u64,
     after_state_change_seq: Option<u64>,
-    accept_transient_status: bool,
     timeout_kind: AgentWaitTimeoutKind,
 }
 
@@ -373,7 +369,6 @@ fn wait_for_resolved_agent(
         }
 
         let mut should_probe = false;
-        let mut matched_event_status = None;
         for (sequence, event) in event_hub.events_after(last_event_sequence) {
             last_event_sequence = sequence;
             match event.data {
@@ -385,9 +380,8 @@ fn wait_for_resolved_agent(
                     ..
                 } if event_pane == pane_id => {
                     if released {
-                        if let Some(status) = final_status
-                            .filter(|status| wait.until.contains(status))
-                            .or(matched_event_status)
+                        if let Some(status) =
+                            final_status.filter(|status| wait.until.contains(status))
                         {
                             let mut matched = wait.initial.clone();
                             matched.agent_status = status;
@@ -406,14 +400,8 @@ fn wait_for_resolved_agent(
                 }
                 EventData::PaneAgentStatusChanged {
                     pane_id: event_pane,
-                    agent_status,
                     ..
-                } if event_pane == pane_id => {
-                    if wait.accept_transient_status && wait.until.contains(&agent_status) {
-                        matched_event_status = Some(agent_status);
-                    }
-                    should_probe = true;
-                }
+                } if event_pane == pane_id => should_probe = true,
                 EventData::PaneUpdated { pane } if pane.pane_id == pane_id => should_probe = true,
                 EventData::PaneMoved {
                     previous_pane_id, ..
@@ -457,11 +445,8 @@ fn wait_for_resolved_agent(
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
             }
-            if let Some(status) = matched_event_status {
-                let mut matched = current;
-                matched.agent_status = status;
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
-            }
+            // An event status is only a wake-up signal: pasting it into a later
+            // snapshot reports a state that snapshot can contradict (#2851).
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
             }

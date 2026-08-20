@@ -81,6 +81,8 @@ pub enum AppEvent {
         message: Option<String>,
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        /// Trusted peer process id of the reporter. `None` means unknown.
+        reporter_process_id: Option<u32>,
     },
     /// Agent session identity was reported without state authority.
     AgentSessionReported {
@@ -90,6 +92,8 @@ pub enum AppEvent {
         seq: Option<u64>,
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
+        /// Trusted peer process id of the reporter. `None` means unknown.
+        reporter_process_id: Option<u32>,
     },
     /// Display-only agent metadata was reported for a pane.
     HookMetadataReported {

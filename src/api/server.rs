@@ -170,6 +170,11 @@ fn handle_connection_with_stop(
         debug!(err = %err, "api connection write timeout unavailable");
     }
 
+    // Read the peer identity while the connection is fresh. Darwin invalidates
+    // it once the peer closes, and lifecycle reporters use one short-lived
+    // connection per report.
+    let reporter_process_id = crate::ipc::local_stream_peer_process_id(&stream);
+
     let Some(line) = read_initial_request_line(&mut stream)? else {
         return Ok(());
     };
@@ -179,7 +184,7 @@ fn handle_connection_with_stop(
         return Ok(());
     }
 
-    let request = match serde_json::from_str::<Request>(line) {
+    let mut request = match serde_json::from_str::<Request>(line) {
         Ok(request) => request,
         Err(request_error) => {
             write_json_line_allow_disconnect(
@@ -195,6 +200,14 @@ fn handle_connection_with_stop(
             return Ok(());
         }
     };
+
+    // Lifecycle reports carry no trustworthy owner field, so the server stamps
+    // the accepted connection's process identity onto them. See issue #2851.
+    match &mut request.method {
+        Method::PaneReportAgent(params) => params.reporter_process_id = reporter_process_id,
+        Method::PaneReportAgentSession(params) => params.reporter_process_id = reporter_process_id,
+        _ => {}
+    }
 
     let request_id = request.id.clone();
     let method = api_method_name(&request.method);

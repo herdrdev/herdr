@@ -22,6 +22,8 @@ pub struct HookAuthority {
     pub message: Option<String>,
     pub reported_at: Instant,
     pub session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    /// Trusted peer process that claimed this authority, for leased sources.
+    pub reporter_process_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -610,6 +612,7 @@ impl TerminalState {
         .and_then(|mutation| mutation.effective_state_change)
     }
 
+    #[cfg(test)]
     pub fn set_hook_authority_with_session_ref(
         &mut self,
         source: String,
@@ -630,6 +633,29 @@ impl TerminalState {
         )
     }
 
+    pub fn set_hook_authority_with_session_ref_from_reporter(
+        &mut self,
+        source: String,
+        agent_label: String,
+        state: AgentState,
+        message: Option<String>,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        reporter_process_id: Option<u32>,
+    ) -> Option<TerminalStateMutation> {
+        self.set_hook_authority_at_from_reporter(
+            source,
+            agent_label,
+            state,
+            message,
+            session_ref,
+            seq,
+            Instant::now(),
+            reporter_process_id,
+        )
+    }
+
+    #[cfg(test)]
     pub fn set_hook_authority_at(
         &mut self,
         source: String,
@@ -640,6 +666,34 @@ impl TerminalState {
         seq: Option<u64>,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
+        self.set_hook_authority_at_from_reporter(
+            source,
+            agent_label,
+            state,
+            message,
+            session_ref,
+            seq,
+            now,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    // One flat report; a struct would only rename the same fields.
+    fn set_hook_authority_at_from_reporter(
+        &mut self,
+        source: String,
+        agent_label: String,
+        state: AgentState,
+        message: Option<String>,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        now: Instant,
+        reporter_process_id: Option<u32>,
+    ) -> Option<TerminalStateMutation> {
+        if self.reporter_lease_blocks_replacement(&source, &agent_label, reporter_process_id) {
+            return None;
+        }
         if crate::detect::session_identity_only_integration(&source, &agent_label) {
             return None;
         }
@@ -658,6 +712,7 @@ impl TerminalState {
             &session_ref,
             seq,
             now,
+            reporter_process_id,
         ) {
             FullLifecycleHookReportRoute::Accept { reanchor_sequence } => reanchor_sequence,
             FullLifecycleHookReportRoute::Ignore => return None,
@@ -731,6 +786,7 @@ impl TerminalState {
             message,
             reported_at: now,
             session_ref,
+            reporter_process_id,
         });
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
@@ -865,6 +921,7 @@ impl TerminalState {
         session_ref: &Option<crate::agent_resume::AgentSessionRef>,
         seq: Option<u64>,
         reported_at: Instant,
+        reporter_process_id: Option<u32>,
     ) -> FullLifecycleHookReportRoute {
         if !crate::detect::full_lifecycle_hook_authority(source, agent_label) {
             return FullLifecycleHookReportRoute::Accept {
@@ -981,6 +1038,7 @@ impl TerminalState {
                     message: message.map(str::to_string),
                     reported_at,
                     session_ref: Some(session_ref),
+                    reporter_process_id,
                 },
                 seq,
             });
@@ -1072,6 +1130,32 @@ impl TerminalState {
             .as_ref()
             .filter(|current| *current != session_ref)
             .cloned()
+    }
+
+    /// Identity alone decides. The session ref is deliberately not consulted:
+    /// the pane publishes it, so a nested reporter can replay it, and exempting
+    /// reports that carry the anchored ref would hand over the lease. Guards
+    /// against unrelated processes, not against an attacker already running as
+    /// the user. See issue #2851.
+    fn reporter_lease_blocks_replacement(
+        &self,
+        source: &str,
+        agent_label: &str,
+        reporter_process_id: Option<u32>,
+    ) -> bool {
+        if !crate::detect::leased_lifecycle_reporter(source, agent_label) {
+            return false;
+        }
+        let Some(authority) = self.hook_authority.as_ref() else {
+            return false;
+        };
+        if authority.source != source || authority.agent_label != agent_label {
+            return false;
+        }
+        let Some(leased_to) = authority.reporter_process_id else {
+            return false;
+        };
+        reporter_process_id != Some(leased_to)
     }
 
     fn clear_full_lifecycle_hook_suppression_for_detected_agent(
@@ -1330,6 +1414,8 @@ impl TerminalState {
                 | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | (
+                    // OMP re-asserts `startup` every `agent_start`; a foreign
+                    // one is denied by the reporter lease, not by this list.
                     "herdr:omp",
                     "omp",
                     Some("startup" | "new" | "resume" | "fork")
@@ -1385,6 +1471,28 @@ impl TerminalState {
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
+        self.set_agent_session_ref_for_session_start_from_reporter(
+            source,
+            agent_label,
+            session_ref,
+            seq,
+            session_start_source,
+            None,
+        )
+    }
+
+    pub fn set_agent_session_ref_for_session_start_from_reporter(
+        &mut self,
+        source: String,
+        agent_label: String,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        seq: Option<u64>,
+        session_start_source: Option<String>,
+        reporter_process_id: Option<u32>,
+    ) -> Option<TerminalStateMutation> {
+        if self.reporter_lease_blocks_replacement(&source, &agent_label, reporter_process_id) {
+            return None;
+        }
         let session_ref = session_ref?;
         let known_agent = crate::detect::parse_agent_label(&agent_label);
         let process_present = known_agent.is_some()
@@ -2824,6 +2932,330 @@ mod tests {
 
         assert!(stale.is_none());
         assert_eq!(terminal.state, AgentState::Blocked);
+    }
+
+    fn omp_pane_with_live_authority(parent_session: &str, reporter: Option<u32>) -> TerminalState {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Omp), AgentState::Idle);
+        assert!(terminal
+            .set_agent_session_ref_for_session_start_from_reporter(
+                "herdr:omp".into(),
+                "omp".into(),
+                crate::agent_resume::AgentSessionRef::path(parent_session.to_string()),
+                Some(1000),
+                Some("startup".into()),
+                reporter,
+            )
+            .is_some());
+        assert!(terminal
+            .set_hook_authority_with_session_ref_from_reporter(
+                "herdr:omp".into(),
+                "omp".into(),
+                AgentState::Working,
+                None,
+                crate::agent_resume::AgentSessionRef::path(parent_session.to_string()),
+                Some(1001),
+                reporter,
+            )
+            .is_some());
+        assert_eq!(terminal.state, AgentState::Working);
+        terminal
+    }
+
+    #[test]
+    fn omp_session_start_reports_from_a_foreign_reporter_never_replace_live_authority() {
+        for session_start_source in [
+            Some("startup"),
+            Some("new"),
+            Some("resume"),
+            Some("fork"),
+            Some("handoff"),
+            Some("select"),
+            None,
+        ] {
+            for child_reporter in [Some(4002), None] {
+                let parent_session = test_session_path("omp-parent.jsonl");
+                let child_session = test_session_path("omp-child.jsonl");
+                let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+                let child_session_report = terminal
+                    .set_agent_session_ref_for_session_start_from_reporter(
+                        "herdr:omp".into(),
+                        "omp".into(),
+                        crate::agent_resume::AgentSessionRef::path(child_session.clone()),
+                        Some(2000),
+                        session_start_source.map(str::to_string),
+                        child_reporter,
+                    );
+                let child_idle = terminal.set_hook_authority_with_session_ref_from_reporter(
+                    "herdr:omp".into(),
+                    "omp".into(),
+                    AgentState::Idle,
+                    None,
+                    crate::agent_resume::AgentSessionRef::path(child_session),
+                    Some(2001),
+                    child_reporter,
+                );
+
+                assert!(
+                    child_session_report.is_none(),
+                    "{session_start_source:?} from {child_reporter:?} replaced the live session"
+                );
+                assert!(child_idle.is_none());
+                assert_eq!(terminal.state, AgentState::Working);
+                assert_eq!(
+                    terminal.hook_authority.as_ref().unwrap().session_ref,
+                    crate::agent_resume::AgentSessionRef::path(parent_session)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn omp_state_report_from_a_foreign_reporter_cannot_park_a_replacement() {
+        let parent_session = test_session_path("omp-parent.jsonl");
+        let child_session = test_session_path("omp-child.jsonl");
+        let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+        let child_idle = terminal.set_hook_authority_with_session_ref_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Idle,
+            None,
+            crate::agent_resume::AgentSessionRef::path(child_session.clone()),
+            Some(2000),
+            Some(4002),
+        );
+        let child_session_report = terminal.set_agent_session_ref_for_session_start_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            crate::agent_resume::AgentSessionRef::path(child_session),
+            Some(2001),
+            Some("resume".into()),
+            Some(4002),
+        );
+
+        assert!(child_idle.is_none());
+        assert!(child_session_report.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal.hook_authority.as_ref().unwrap().session_ref,
+            crate::agent_resume::AgentSessionRef::path(parent_session)
+        );
+    }
+
+    #[test]
+    fn omp_session_start_report_from_the_leased_reporter_still_reanchors() {
+        for session_start_source in ["startup", "new", "resume", "fork"] {
+            let parent_session = test_session_path("omp-parent.jsonl");
+            let next_session = test_session_path("omp-next.jsonl");
+            let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+            let reanchored = terminal.set_agent_session_ref_for_session_start_from_reporter(
+                "herdr:omp".into(),
+                "omp".into(),
+                crate::agent_resume::AgentSessionRef::path(next_session.clone()),
+                Some(2000),
+                Some(session_start_source.into()),
+                Some(4001),
+            );
+            assert!(reanchored.is_some(), "{session_start_source} was denied");
+
+            let working_again = terminal.set_hook_authority_with_session_ref_from_reporter(
+                "herdr:omp".into(),
+                "omp".into(),
+                AgentState::Working,
+                None,
+                crate::agent_resume::AgentSessionRef::path(next_session.clone()),
+                Some(2001),
+                Some(4001),
+            );
+            assert!(working_again.is_some());
+            assert_eq!(
+                terminal.hook_authority.as_ref().unwrap().session_ref,
+                crate::agent_resume::AgentSessionRef::path(next_session)
+            );
+        }
+    }
+
+    #[test]
+    fn omp_reporter_lease_denies_a_foreign_report_that_replays_the_anchored_session() {
+        // The pane publishes its session ref, so a nested process can replay it.
+        let parent_session = test_session_path("omp-parent.jsonl");
+        let child_session = test_session_path("omp-child.jsonl");
+        let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+        let replayed_idle = terminal.set_hook_authority_with_session_ref_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Idle,
+            None,
+            crate::agent_resume::AgentSessionRef::path(parent_session.clone()),
+            Some(1002),
+            Some(4002),
+        );
+        assert!(replayed_idle.is_none());
+        assert_eq!(terminal.state, AgentState::Working);
+
+        let stolen = terminal.set_agent_session_ref_for_session_start_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            crate::agent_resume::AgentSessionRef::path(child_session),
+            Some(2000),
+            Some("resume".into()),
+            Some(4002),
+        );
+        assert!(stolen.is_none());
+        assert_eq!(
+            terminal.hook_authority.as_ref().unwrap().session_ref,
+            crate::agent_resume::AgentSessionRef::path(parent_session)
+        );
+
+        let own_idle = terminal.set_hook_authority_with_session_ref_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Idle,
+            None,
+            crate::agent_resume::AgentSessionRef::path(test_session_path("omp-parent.jsonl")),
+            Some(1003),
+            Some(4001),
+        );
+        assert!(own_idle.is_some());
+        assert_eq!(terminal.state, AgentState::Idle);
+    }
+
+    #[test]
+    fn omp_reporter_lease_does_not_outlive_the_authority_it_was_taken_for() {
+        let parent_session = test_session_path("omp-parent.jsonl");
+        let next_session = test_session_path("omp-next.jsonl");
+        let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+        terminal.clear_hook_authority(Some("herdr:omp"), Some(1002));
+        assert!(terminal.hook_authority.is_none());
+
+        let restarted = terminal.set_hook_authority_with_session_ref_from_reporter(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Working,
+            None,
+            crate::agent_resume::AgentSessionRef::path(next_session.clone()),
+            Some(2000),
+            Some(4002),
+        );
+        assert!(restarted.is_some());
+        assert_eq!(
+            terminal.hook_authority.as_ref().unwrap().session_ref,
+            crate::agent_resume::AgentSessionRef::path(next_session)
+        );
+    }
+
+    #[test]
+    fn omp_reporter_lease_is_released_on_every_authority_teardown() {
+        // A dead process id must not keep gating whoever claims the pane next.
+        for teardown in [
+            "clear_hook_authority",
+            "release_agent",
+            "respawn",
+            "agent_process_exit",
+        ] {
+            let parent_session = test_session_path("omp-parent.jsonl");
+            let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+            assert!(terminal.reporter_lease_blocks_replacement("herdr:omp", "omp", Some(4002)));
+
+            match teardown {
+                "clear_hook_authority" => {
+                    terminal.clear_hook_authority(Some("herdr:omp"), Some(1002));
+                }
+                "release_agent" => {
+                    terminal.release_agent_with_mutation("herdr:omp", "omp", Some(1002));
+                }
+                "respawn" => terminal.clear_agent_runtime_identity_after_respawn(),
+                _ => {
+                    terminal.set_detected_state_with_visible_blocker(
+                        Some(Agent::Omp),
+                        AgentState::Unknown,
+                        false,
+                        false,
+                        true,
+                    );
+                }
+            }
+
+            assert!(
+                !terminal.reporter_lease_blocks_replacement("herdr:omp", "omp", Some(4002)),
+                "{teardown} still denies a new reporter"
+            );
+        }
+    }
+
+    #[test]
+    fn omp_reporter_lease_is_released_when_the_pane_agent_changes() {
+        let parent_session = test_session_path("omp-parent.jsonl");
+        let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+
+        assert!(terminal.hook_authority.is_none());
+        assert!(!terminal.reporter_lease_blocks_replacement("herdr:omp", "omp", Some(4002)));
+    }
+
+    #[test]
+    fn omp_bare_state_report_from_a_foreign_reporter_is_denied() {
+        // The asset omits the session ref before it has a session file.
+        let parent_session = test_session_path("omp-parent.jsonl");
+        let mut terminal = omp_pane_with_live_authority(&parent_session, Some(4001));
+
+        for foreign_reporter in [Some(4002), None] {
+            let bare_idle = terminal.set_hook_authority_with_session_ref_from_reporter(
+                "herdr:omp".into(),
+                "omp".into(),
+                AgentState::Idle,
+                None,
+                None,
+                Some(2000),
+                foreign_reporter,
+            );
+            assert!(bare_idle.is_none(), "{foreign_reporter:?}");
+            assert_eq!(terminal.state, AgentState::Working);
+            assert_eq!(
+                terminal.hook_authority.as_ref().unwrap().session_ref,
+                crate::agent_resume::AgentSessionRef::path(parent_session.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn non_leased_full_lifecycle_sources_keep_first_writer_replacement() {
+        // A shell asset reports from a new process each time.
+        let mut terminal = test_terminal();
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::Mastracode,
+            "herdr:mastracode",
+            "mastracode",
+            crate::agent_resume::AgentSessionRef::id("mastracode-first").unwrap(),
+        );
+        assert!(terminal
+            .set_hook_authority_with_session_ref_from_reporter(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                AgentState::Working,
+                None,
+                crate::agent_resume::AgentSessionRef::id("mastracode-first"),
+                Some(1),
+                Some(5001),
+            )
+            .is_some());
+
+        let replaced = terminal.set_agent_session_ref_for_session_start_from_reporter(
+            "herdr:mastracode".into(),
+            "mastracode".into(),
+            crate::agent_resume::AgentSessionRef::id("mastracode-second"),
+            Some(2),
+            Some("startup".into()),
+            Some(5002),
+        );
+        assert!(replaced.is_some());
     }
 
     #[test]

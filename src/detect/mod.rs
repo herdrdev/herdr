@@ -304,6 +304,16 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
     )
 }
 
+/// Integrations whose reports all come from one long-lived agent process, so
+/// the pane's lifecycle authority can be leased to that process (issue #2851).
+///
+/// Shell assets report from a new process each time and `herdr:opencode` uses
+/// more than one, so they cannot hold a lease. `herdr:pi` has OMP's shape and
+/// is a follow-up.
+pub(crate) fn leased_lifecycle_reporter(source: &str, agent_label: &str) -> bool {
+    matches!((source, agent_label), ("herdr:omp", "omp"))
+}
+
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),

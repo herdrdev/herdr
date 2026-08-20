@@ -7386,6 +7386,7 @@ next_tab = ""
                 message: None,
                 seq: None,
                 session_ref: None,
+                reporter_process_id: None,
             })
         );
         assert!(
@@ -11648,6 +11649,7 @@ next_tab = ""
                     seq: Some(19),
                     agent_session_id: None,
                     agent_session_path: None,
+                    reporter_process_id: None,
                 }),
             },
             respond_to,

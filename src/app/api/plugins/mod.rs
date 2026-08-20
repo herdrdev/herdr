@@ -2937,6 +2937,7 @@ action = "missing"
                 seq: None,
                 agent_session_id: None,
                 agent_session_path: None,
+                reporter_process_id: None,
             },
         );
 

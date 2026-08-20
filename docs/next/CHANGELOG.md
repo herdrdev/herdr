@@ -6,6 +6,9 @@
 - Claude Code panes now use visible turn, background shell, and background agent activity as working-state fallbacks when OSC titles are unavailable or disabled. (#1630, #2241)
 - Tab bar status commands now remove ESC-prefixed terminal control sequences instead of displaying their sequence bodies as text. (#3001)
 - Unix plugin pane commands now default `PWD` to their resolved working directory, so direct popup tools open at explicit `--cwd` paths while preserving caller-provided `PWD` values. (#2984)
+- A nested Oh My Pi session started inside a pane can no longer take over that pane's agent lifecycle authority, so `herdr agent wait` stops returning a child session's idle while the pane's own agent is still working. (#2851)
+- Standalone `herdr agent wait` now reports the status it actually observed on the pane, instead of substituting a status seen in an earlier event that the pane had already left. (#2851)
+- The Oh My Pi hook no longer reports idle when a turn ends with an automatic continuation already scheduled. (#2851)
 
 ## [0.8.2] - 2026-08-19
 

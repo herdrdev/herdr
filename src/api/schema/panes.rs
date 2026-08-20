@@ -378,6 +378,10 @@ pub struct PaneReportAgentParams {
     pub agent_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session_path: Option<String>,
+    /// Filled in server-side from the accepted connection, never from payloads.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub reporter_process_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -393,6 +397,10 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
+    /// Filled in server-side from the accepted connection, never from payloads.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub reporter_process_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
