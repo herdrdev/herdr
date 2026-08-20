@@ -1,7 +1,7 @@
 id = "agy"
-version = "2026.06.24.1"
+version = "2026.08.20.1"
 min_engine_version = 1
-updated_at = "2026-06-24T00:00:00Z"
+updated_at = "2026-08-20T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
 
 [[rules]]
@@ -31,3 +31,20 @@ priority = 90
 region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+
+[[rules]]
+id = "account_entitlement_initializing"
+state = "working"
+priority = 80
+region = "whole_recent"
+visible_working = true
+line_regex = ['\S+@\S+\s*$']
+
+[[rules]]
+id = "account_entitlement_ready"
+state = "idle"
+priority = 20
+region = "whole_recent"
+visible_idle = true
+line_regex = ['\S+@\S+\s+\([^)]+\)\s*$']
+
