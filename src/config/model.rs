@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+// Modified from herdr by the vimeflow project — see FORK.md
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU64, NonZeroUsize},
+};
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -287,10 +291,12 @@ pub fn validated_sidebar_bounds(min: u16, max: u16) -> Option<(u16, u16)> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub agent_watcher: AgentWatcherConfig,
     pub onboarding: Option<bool>,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
     pub session: SessionConfig,
+    pub title_sync: TitleSyncConfig,
     pub update: UpdateConfig,
     pub keys: KeysConfig,
     pub ui: UiConfig,
@@ -298,6 +304,34 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct AgentWatcherConfig {
+    pub enabled: bool,
+}
+
+impl Default for AgentWatcherConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct TitleSyncConfig {
+    pub enabled: bool,
+    pub interval_ms: NonZeroU64,
+}
+
+impl Default for TitleSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_ms: NonZeroU64::new(1_000).unwrap_or(NonZeroU64::MIN),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1144,6 +1178,34 @@ manifest_check = false
         assert_eq!(config.update.channel.as_str(), "preview");
         assert!(!config.update.version_check);
         assert!(!config.update.manifest_check);
+    }
+
+    #[test]
+    fn native_agent_feature_config_defaults_and_parses() {
+        let defaults = Config::default();
+        assert!(defaults.agent_watcher.enabled);
+        assert!(defaults.title_sync.enabled);
+        assert_eq!(defaults.title_sync.interval_ms.get(), 1_000);
+
+        let config: Config = toml::from_str(
+            r#"
+[agent_watcher]
+enabled = false
+
+[title_sync]
+enabled = false
+interval_ms = 250
+"#,
+        )
+        .unwrap();
+        assert!(!config.agent_watcher.enabled);
+        assert!(!config.title_sync.enabled);
+        assert_eq!(config.title_sync.interval_ms.get(), 250);
+    }
+
+    #[test]
+    fn title_sync_interval_must_be_positive() {
+        assert!(toml::from_str::<Config>("[title_sync]\ninterval_ms = 0").is_err());
     }
 
     #[cfg(windows)]

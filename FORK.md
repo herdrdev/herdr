@@ -90,6 +90,8 @@ the top of the file:
 | `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.0` to commit `1b6ece71285cdfb5d12be985c94c02ae2bb6fc89` and its transitive crates. | `4190599687d83fe12a7da8365435e1679c8b229f` |
 | `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `4190599687d83fe12a7da8365435e1679c8b229f` |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
+| `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | Task 2 config commit |
+| `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | Task 2 config commit |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

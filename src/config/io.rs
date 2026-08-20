@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
@@ -6,6 +7,7 @@ use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "advanced",
+    "agent_watcher",
     "experimental",
     "keys",
     "onboarding",
@@ -13,6 +15,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "session",
     "terminal",
     "theme",
+    "title_sync",
     "ui",
     "update",
     "worktrees",
@@ -262,6 +265,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
 
     load_live_section(
         table,
+        "agent_watcher",
+        "agent watcher config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.agent_watcher = section,
+    );
+    load_live_section(
+        table,
         "theme",
         "theme config",
         &mut diagnostics,
@@ -299,6 +310,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.update = section,
+    );
+    load_live_section(
+        table,
+        "title_sync",
+        "title sync config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.title_sync = section,
     );
     load_live_section(
         table,
@@ -860,6 +879,47 @@ resume_agents_on_restore = true
 
         assert!(loaded.config.session.resume_agents_on_restore);
         assert!(loaded.diagnostics.is_empty());
+        assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn live_reload_recognizes_startup_only_native_agent_sections() {
+        let loaded = load_live_config_from_str(
+            r#"
+[agent_watcher]
+enabled = false
+
+[title_sync]
+enabled = false
+interval_ms = 250
+"#,
+        )
+        .unwrap();
+
+        assert!(loaded.diagnostics.is_empty());
+        assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn live_reload_reports_unknown_native_agent_keys() {
+        let loaded = load_live_config_from_str(
+            r#"
+[agent_watcher]
+enabledd = false
+
+[title_sync]
+interval_mss = 250
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            loaded.diagnostics,
+            vec![
+                "unknown config key agent_watcher.enabledd; ignoring key",
+                "unknown config key title_sync.interval_mss; ignoring key",
+            ]
+        );
         assert!(loaded.invalid_sections.is_empty());
     }
 
