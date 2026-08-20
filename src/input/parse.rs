@@ -20,7 +20,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .filter(|field| !field.is_empty())
         .unwrap_or("1");
     let associated_text = match fields.next() {
-        Some(value) => Some(parse_kitty_associated_text(value)?),
+        Some(value) => parse_kitty_associated_text(value)?,
         None => None,
     };
     if fields.next().is_some() {
@@ -56,16 +56,23 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     Some(key.with_generated_text(associated_text))
 }
 
-fn parse_kitty_associated_text(value: &str) -> Option<String> {
+fn parse_kitty_associated_text(value: &str) -> Option<Option<String>> {
     let mut text = String::new();
+    let mut saw_control = false;
     for codepoint in value.split(':') {
         let ch = char::from_u32(codepoint.parse::<u32>().ok()?)?;
         if ch.is_control() {
-            return None;
+            saw_control = true;
+        } else {
+            text.push(ch);
         }
-        text.push(ch);
     }
-    (!text.is_empty()).then_some(text)
+
+    if saw_control && !text.is_empty() {
+        None
+    } else {
+        Some((!text.is_empty()).then_some(text))
+    }
 }
 
 #[allow(dead_code)] // Reserved for the upcoming raw stdin parser.
@@ -700,8 +707,37 @@ mod tests {
     fn reject_malformed_kitty_associated_text() {
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;1114112u"), None);
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;20320:bad:u"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[32;;27u"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[32;;133u"), None);
+        assert_eq!(parse_terminal_key_sequence("\x1b[32;;9:20320u"), None);
+    }
+
+    #[test]
+    fn parse_kitty_control_associated_text_keeps_the_key() {
+        let tab = parse_terminal_key_sequence("\x1b[9;;9u").unwrap();
+        assert_eq!(tab.code, KeyCode::Tab);
+        assert_eq!(tab.modifiers, KeyModifiers::empty());
+        assert_eq!(tab.generated_text, None);
+
+        let shift_tab = parse_terminal_key_sequence("\x1b[9;2;9u").unwrap();
+        assert_eq!(shift_tab.code, KeyCode::Tab);
+        assert_eq!(shift_tab.modifiers, KeyModifiers::SHIFT);
+        assert_eq!(shift_tab.generated_text, None);
+
+        let esc = parse_terminal_key_sequence("\x1b[27;;27u").unwrap();
+        assert_eq!(esc.code, KeyCode::Esc);
+        assert_eq!(esc.modifiers, KeyModifiers::empty());
+        assert_eq!(esc.generated_text, None);
+
+        let enter = parse_terminal_key_sequence("\x1b[13;;13u").unwrap();
+        assert_eq!(enter.code, KeyCode::Enter);
+        assert_eq!(enter.generated_text, None);
+
+        let space_with_esc_text = parse_terminal_key_sequence("\x1b[32;;27u").unwrap();
+        assert_eq!(space_with_esc_text.code, KeyCode::Char(' '));
+        assert_eq!(space_with_esc_text.generated_text, None);
+
+        let space_with_nel_text = parse_terminal_key_sequence("\x1b[32;;133u").unwrap();
+        assert_eq!(space_with_nel_text.code, KeyCode::Char(' '));
+        assert_eq!(space_with_nel_text.generated_text, None);
     }
 
     #[test]

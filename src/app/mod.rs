@@ -5312,6 +5312,55 @@ last_pane = "prefix+tab"
         assert_eq!(app.state.workspaces[1].focused_pane_id(), Some(second_root));
     }
 
+    #[test]
+    fn route_client_input_prefix_tab_dispatches_with_kitty_associated_control_text() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+next_tab = "prefix+tab"
+previous_tab = "prefix+shift+tab"
+"#,
+        )
+        .unwrap();
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("one");
+        let second_tab = workspace.test_add_tab(Some("logs"));
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.keybinds.next_tab = config.keybinds().next_tab;
+        app.state.keybinds.previous_tab = config.keybinds().previous_tab;
+        app.state.mode = Mode::Terminal;
+        app.state.switch_workspace_tab(0, 0);
+
+        app.route_client_input(vec![0x02]);
+        app.route_client_input(b"\x1b[9;;9u".to_vec());
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].active_tab, second_tab);
+
+        app.route_client_input(vec![0x02]);
+        app.route_client_input(b"\x1b[9;2;9u".to_vec());
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+    }
+
+    #[test]
+    fn route_client_input_prefix_escape_is_not_dropped_with_kitty_associated_control_text() {
+        let mut app = test_app();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        app.route_client_input(vec![0x02]);
+        assert_eq!(app.state.mode, Mode::Prefix);
+
+        app.route_client_input(b"\x1b[27;;27u".to_vec());
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
     #[tokio::test]
     async fn route_client_input_double_prefix_passes_prefix_through_to_focused_pane() {
         let mut app = test_app();
