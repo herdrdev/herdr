@@ -13,6 +13,7 @@ Modified upstream files
 - nix/package.nix
 - src/update.rs
 - src/cli.rs
+- src/cli/spec.rs
 - src/product_announcements.rs
 - src/app/mod.rs
 - src/api/schema/tests.rs

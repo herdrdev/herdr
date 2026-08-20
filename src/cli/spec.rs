@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use std::io::Write;
 
 use clap::{Arg, ArgAction, ArgGroup, Command, ValueHint};
@@ -41,6 +42,7 @@ pub(super) fn command() -> Command {
         .subcommand(pane_command())
         .subcommand(terminal_command())
         .subcommand(session_command())
+        .subcommand(watcher_command())
         .subcommand(integration_command())
         .subcommand(plugin_command());
     configure_help(command, true)
@@ -751,6 +753,27 @@ fn integration_command() -> Command {
             Command::new("status")
                 .about("Show integration status")
                 .arg(flag("outdated-only")),
+        )
+}
+
+fn watcher_command() -> Command {
+    Command::new("watcher")
+        .about("Inspect and configure the built-in agent watcher")
+        .subcommand(Command::new("status").about("Show daemon liveness and bound agents"))
+        .subcommand(Command::new("doctor").about("Diagnose watcher and plugin coexistence"))
+        .subcommand(Command::new("sidebar").about("Open the watcher sidebar in this terminal"))
+        .subcommand(
+            Command::new("claude-bridge")
+                .about("Manage the Claude Code bridge")
+                .subcommand(Command::new("enable").about("Install the Claude Code bridge"))
+                .subcommand(Command::new("disable").about("Remove the Claude Code bridge")),
+        )
+        .subcommand(
+            Command::new("kimi-consent")
+                .about("Manage Kimi network-usage consent")
+                .subcommand(Command::new("on").about("Enable Kimi network usage"))
+                .subcommand(Command::new("off").about("Disable Kimi network usage"))
+                .subcommand(Command::new("status").about("Show Kimi network-usage consent")),
         )
 }
 

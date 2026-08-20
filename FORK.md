@@ -82,7 +82,7 @@ the top of the file:
 | Upstream path | Reason | Fork commit |
 | --- | --- | --- |
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
-| `src/cli.rs` | Reject update-channel changes before config writes or self-update dispatch. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
+| `src/cli.rs` | Reject fork-disabled update channels and dispatch the native watcher CLI. | Task 4 watcher CLI |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel. | `e312ccf8368c2a51b42ff12efad51efb8b128957` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
@@ -93,6 +93,7 @@ the top of the file:
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | Task 2 config commit |
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | Task 2 config commit |
 | `src/server/headless.rs` | Own the embedded agent-watcher lifecycle across normal and handoff server paths. | Task 3 daemon embed |
+| `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | Task 4 watcher CLI |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
