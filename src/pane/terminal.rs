@@ -4499,7 +4499,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_semantic_key_repeats_expand_at_the_destination() {
+    fn grouped_key_repeats_expand_at_the_destination() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
@@ -4512,6 +4512,28 @@ mod tests {
         assert_eq!(
             pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
             b"xxx"
+        );
+
+        let shifted = crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('/'),
+            crossterm::event::KeyModifiers::SHIFT,
+        )
+        .with_generated_text(Some("/".to_owned()))
+        .with_windows_record(crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 3,
+            virtual_key_code: 0x37,
+            virtual_scan_code: 0x08,
+            unicode: u16::from(b'/'),
+            control_key_state: 0x0010,
+        });
+        assert_eq!(
+            pane.encode_terminal_key(shifted.clone(), crate::input::KeyboardProtocol::Legacy,),
+            b"///"
+        );
+        assert_eq!(
+            pane.encode_terminal_key(shifted, crate::input::KeyboardProtocol::Kitty { flags: 15 },),
+            b"\x1b[47;2:1u\x1b[47;2:2u\x1b[47;2:2u"
         );
     }
 

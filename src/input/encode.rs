@@ -16,7 +16,10 @@ pub fn encode_key(key: KeyEvent, protocol: KeyboardProtocol) -> Vec<u8> {
 }
 
 pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<u8> {
-    if key.kind != crossterm::event::KeyEventKind::Release {
+    // REPORT_ALL_KEYS must retain physical press/repeat/release semantics instead of
+    // reducing a native key to its layout-generated text.
+    let preserve_physical_key = key.has_physical_identity() && protocol.reports_all_keys();
+    if !preserve_physical_key && key.kind != crossterm::event::KeyEventKind::Release {
         if let Some(text) = &key.generated_text {
             return text.as_bytes().to_vec();
         }

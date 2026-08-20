@@ -57,7 +57,11 @@ impl InputLeaseTable {
         lease_key: &InputLeaseKey,
         key: TerminalKey,
     ) -> TerminalKey {
-        if key.kind != crossterm::event::KeyEventKind::Press || key.generated_text.is_some() {
+        // Generated text is normally stateless, but a native physical key still owns
+        // press/repeat/release lifecycle even when it carries a layout result.
+        if key.kind != crossterm::event::KeyEventKind::Press
+            || (key.generated_text.is_some() && !key.has_physical_identity())
+        {
             return key;
         }
         if key.has_physical_identity() && self.leases.contains_key(lease_key) {
@@ -76,7 +80,7 @@ impl InputLeaseTable {
         resulting_context: Option<&TerminalInputContext>,
         target: Option<TerminalInputTarget>,
     ) -> RepeatPlan {
-        if key.generated_text.is_some() {
+        if key.generated_text.is_some() && !key.has_physical_identity() {
             return RepeatPlan::Ignore;
         }
         if let Some(target) = target {
@@ -253,6 +257,19 @@ mod tests {
         }
     }
 
+    fn physical_generated_slash(repeat_count: u16) -> TerminalKey {
+        TerminalKey::new(KeyCode::Char('/'), KeyModifiers::SHIFT)
+            .with_generated_text(Some("/".to_owned()))
+            .with_windows_record(crate::input::WindowsKeyRecord {
+                key_down: true,
+                repeat_count,
+                virtual_key_code: 0x37,
+                virtual_scan_code: 0x08,
+                unicode: u16::from(b'/'),
+                control_key_state: 0x0010,
+            })
+    }
+
     #[test]
     fn remove_source_returns_forwarded_and_discards_consumed_leases() {
         let key = TerminalKey::new(KeyCode::Esc, KeyModifiers::empty());
@@ -330,6 +347,79 @@ mod tests {
             leases.normalize_press(&lease_key, physical.clone()).kind,
             crossterm::event::KeyEventKind::Repeat
         );
+    }
+
+    #[test]
+    fn physical_generated_text_keeps_native_repeat_lifecycle() {
+        let key = physical_generated_slash(3);
+        let lease_key = InputLeaseKey::new(7, &key);
+        let context = TerminalInputContext::Pane;
+        let forwarded_target = target();
+        let mut leases = InputLeaseTable::default();
+
+        assert_eq!(
+            leases.normalize_press(&lease_key, key.clone()).kind,
+            crossterm::event::KeyEventKind::Press
+        );
+        assert!(matches!(
+            leases.complete_press(
+                lease_key,
+                &key,
+                Some(&context),
+                Some(&context),
+                Some(forwarded_target.clone()),
+            ),
+            RepeatPlan::Ignore
+        ));
+        assert!(leases.contains(&lease_key));
+
+        let repeated = key.with_repeat_count(1);
+        let repeated = leases.normalize_press(&lease_key, repeated);
+        assert_eq!(repeated.kind, crossterm::event::KeyEventKind::Repeat);
+        assert!(matches!(
+            leases.plan_repeat(lease_key, &repeated, Some(&context)),
+            RepeatPlan::Forwarded(target) if target == forwarded_target
+        ));
+        assert!(leases.remove_forwarded(&lease_key).is_some());
+    }
+
+    #[test]
+    fn consumed_grouped_physical_generated_text_reprocesses_repeats() {
+        let key = physical_generated_slash(3);
+        let lease_key = InputLeaseKey::new(7, &key);
+        let context = TerminalInputContext::Pane;
+        let mut leases = InputLeaseTable::default();
+
+        assert!(matches!(
+            leases.complete_press(lease_key, &key, Some(&context), Some(&context), None),
+            RepeatPlan::Reprocess {
+                context: TerminalInputContext::Pane,
+                repetitions: 2,
+                tracked: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn semantic_generated_text_remains_untracked() {
+        let key = TerminalKey::new(KeyCode::Char('/'), KeyModifiers::SHIFT)
+            .with_generated_text(Some("/".to_owned()))
+            .with_repeat_count(3);
+        let lease_key = InputLeaseKey::new(7, &key);
+        let context = TerminalInputContext::Pane;
+        let mut leases = InputLeaseTable::default();
+
+        assert!(matches!(
+            leases.complete_press(
+                lease_key,
+                &key,
+                Some(&context),
+                Some(&context),
+                Some(target())
+            ),
+            RepeatPlan::Ignore
+        ));
+        assert!(leases.is_empty());
     }
 
     #[test]
