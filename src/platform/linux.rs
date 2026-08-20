@@ -740,7 +740,41 @@ fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
     }
     drop(stdin);
 
+    if command.program == "wl-copy" {
+        return detach_clipboard_owner(child);
+    }
+
     child.wait().map(|status| status.success()).unwrap_or(false)
+}
+
+fn detach_clipboard_owner(child: std::process::Child) -> bool {
+    let pid = child.id();
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let reaper_child = std::sync::Arc::clone(&child);
+    let reaper = std::thread::Builder::new()
+        .name("herdr-wl-copy-reaper".to_string())
+        .spawn(move || {
+            let wait_result = match reaper_child.lock() {
+                Ok(mut child) => child.wait(),
+                Err(poisoned) => poisoned.into_inner().wait(),
+            };
+            if let Err(err) = wait_result {
+                tracing::warn!(pid, %err, "failed to reap wl-copy clipboard owner");
+            }
+        });
+
+    if let Err(err) = reaper {
+        tracing::warn!(pid, %err, "failed to start wl-copy clipboard owner reaper");
+        let mut child = match child.lock() {
+            Ok(child) => child,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    }
+
+    true
 }
 
 fn process_session_id(pid: u32) -> Option<i32> {
@@ -1011,6 +1045,149 @@ mod tests {
         let commands = clipboard_commands();
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].program, "wl-copy");
+    }
+
+    #[test]
+    fn wl_copy_owner_does_not_block_clipboard_write() {
+        use std::ffi::OsString;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::PathBuf;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant, SystemTime};
+
+        struct Cleanup {
+            old_path: Option<OsString>,
+            temp_dir: PathBuf,
+            owner_pid: Option<i32>,
+        }
+
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if let Some(pid) = self.owner_pid {
+                    unsafe {
+                        libc::kill(pid, libc::SIGTERM);
+                    }
+                }
+                unsafe {
+                    match self.old_path.take() {
+                        Some(path) => std::env::set_var("PATH", path),
+                        None => std::env::remove_var("PATH"),
+                    }
+                    std::env::remove_var("HERDR_TEST_WL_COPY_MARKER");
+                    std::env::remove_var("HERDR_TEST_WL_COPY_PAYLOAD");
+                    std::env::remove_var("HERDR_TEST_WL_COPY_ARGS");
+                }
+                let _ = std::fs::remove_dir_all(&self.temp_dir);
+            }
+        }
+
+        let _guard = env_lock().lock().unwrap();
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system time should follow unix epoch")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "herdr-fake-wl-copy-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let mut cleanup = Cleanup {
+            old_path: std::env::var_os("PATH"),
+            temp_dir: temp_dir.clone(),
+            owner_pid: None,
+        };
+        let fake_wl_copy = temp_dir.join("wl-copy");
+        let marker = temp_dir.join("owner-pid");
+        let payload = temp_dir.join("payload");
+        let args = temp_dir.join("args");
+        std::fs::write(
+            &fake_wl_copy,
+            "#!/bin/sh\ncat > \"$HERDR_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$HERDR_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$HERDR_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
+        )
+        .expect("fake wl-copy should be written");
+        let mut permissions = std::fs::metadata(&fake_wl_copy)
+            .expect("fake wl-copy metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_wl_copy, permissions)
+            .expect("fake wl-copy should be executable");
+
+        let test_path = match cleanup.old_path.as_ref() {
+            Some(path) => {
+                let mut paths = vec![temp_dir.clone()];
+                paths.extend(std::env::split_paths(path));
+                std::env::join_paths(paths).expect("test path should be valid")
+            }
+            None => temp_dir.clone().into_os_string(),
+        };
+        unsafe {
+            std::env::set_var("PATH", test_path);
+            std::env::set_var("HERDR_TEST_WL_COPY_MARKER", &marker);
+            std::env::set_var("HERDR_TEST_WL_COPY_PAYLOAD", &payload);
+            std::env::set_var("HERDR_TEST_WL_COPY_ARGS", &args);
+        }
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let command = ClipboardCommand {
+                program: "wl-copy",
+                args: &["--type", "text/plain;charset=utf-8"],
+            };
+            let _ = result_tx.send(run_clipboard_command(&command, b"clipboard text"));
+        });
+
+        let marker_deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < marker_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let owner_pid: i32 = std::fs::read_to_string(&marker)
+            .expect("fake wl-copy should enter its clipboard-owner phase")
+            .parse()
+            .expect("owner pid should be numeric");
+        cleanup.owner_pid = Some(owner_pid);
+        let returned_while_owner_running = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok_and(|result| result);
+        let actual_payload = std::fs::read(&payload).expect("fake wl-copy should record stdin");
+        let actual_args = std::fs::read_to_string(&args).expect("fake wl-copy should record args");
+
+        unsafe {
+            libc::kill(owner_pid, libc::SIGTERM);
+        }
+        let reap_deadline = Instant::now() + Duration::from_secs(2);
+        while process_exists(owner_pid as u32) && Instant::now() < reap_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let owner_was_reaped = !process_exists(owner_pid as u32);
+        cleanup.owner_pid = None;
+        writer.join().expect("clipboard writer thread should join");
+        drop(cleanup);
+
+        assert!(
+            returned_while_owner_running,
+            "clipboard writes must return while wl-copy remains alive to own the selection"
+        );
+        assert_eq!(actual_payload, b"clipboard text");
+        assert_eq!(actual_args, "--type\ntext/plain;charset=utf-8\n");
+        assert!(
+            owner_was_reaped,
+            "wl-copy owner should be reaped after exit"
+        );
+    }
+
+    #[test]
+    fn finite_clipboard_commands_report_exit_status() {
+        let success = ClipboardCommand {
+            program: "sh",
+            args: &["-c", "cat >/dev/null"],
+        };
+        let failure = ClipboardCommand {
+            program: "sh",
+            args: &["-c", "cat >/dev/null; exit 7"],
+        };
+
+        assert!(run_clipboard_command(&success, b"clipboard text"));
+        assert!(!run_clipboard_command(&failure, b"clipboard text"));
     }
 
     #[test]
