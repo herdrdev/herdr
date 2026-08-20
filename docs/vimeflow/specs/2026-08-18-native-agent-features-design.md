@@ -81,10 +81,17 @@ daemon/service plumbing only.
   arbitrate: at most one daemon per machine.
 - **Lifecycle owner (MEDIUM-2):** one owner used by **both** server
   constructors — normal startup and handoff import
-  (`src/server/headless.rs`). It starts the daemon **after plugin startup
-  hooks** run (so an embedded daemon started last supersedes a
-  plugin-launched one, not the reverse) and stops it on both server exit
-  paths via the service handle.
+  (`src/server/headless.rs`); stops on both exit paths via the service
+  handle. **No ordering dependency on plugin startup hooks** (revised
+  2026-08-19: hooks spawn plugin processes from a background thread, so
+  start order is unenforceable — and a `restart-daemon` plugin action can
+  start a standalone daemon at any later time regardless). The crate's
+  newest-wins singleton guarantees at most one daemon; because state dir,
+  socket, and wire format are byte-identical, the `watcher` CLI and future
+  chrome keep working against whichever daemon holds the singleton. If the
+  embedded daemon is superseded (the handle observes its exit), the owner
+  logs **one** warning naming the plugin-disable command and does **not**
+  restart-fight; §6 doctor guidance covers migration.
 - Panic isolation: a daemon panic is caught and logged; the server survives.
 
 ### 3.3 CLI (explicit contract — not "1:1")
@@ -174,8 +181,9 @@ interval_ms = 1000
 
 ## 6. Coexistence with the standalone plugins
 
-- Watcher daemons: same state dir ⇒ the singleton genuinely arbitrates;
-  embedded starts after plugin hooks and supersedes (§3.2).
+- Watcher daemons: same state dir ⇒ the singleton genuinely arbitrates
+  (newest wins); a superseded embedded daemon is logged once, not fought
+  (§3.2).
 - Title watchers: the embedded engine and the plugin's Node watcher would
   fight over labels. `watcher doctor` + a server startup log line warn when a
   standalone twin is linked+enabled while its built-in twin is enabled,

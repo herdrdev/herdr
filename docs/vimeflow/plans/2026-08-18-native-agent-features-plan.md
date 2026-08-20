@@ -79,13 +79,19 @@ silence.
 1. One lifecycle owner used by **both** server constructors — normal startup
    and handoff import in `src/server/headless.rs` (upstream edits: notice +
    registry). Start via the Task W API with
-   `state_dir = plugin_paths::plugin_state_dir("herdr-agent-watcher")`,
-   **after plugin startup hooks**; stop via the service handle on both exit
-   paths.
-2. Tests: start-stop on both paths; coexistence ordering (embedded started
-   after hooks supersedes a plugin daemon — use the singleton's takeover
-   semantics with two options-built daemons in-process); panic isolation
-   (daemon panic logged, server loop unaffected).
+   `state_dir = plugin_paths::plugin_state_dir("herdr-agent-watcher")` at
+   whatever shared point both constructors offer — **no ordering dependency
+   on plugin startup hooks** (revised 2026-08-19; hooks spawn plugins from a
+   background thread, so ordering is unenforceable and a later
+   `restart-daemon` action defeats it anyway). Stop via the service handle
+   on both exit paths.
+2. Supersede handling: when the handle observes the embedded daemon exiting
+   because another daemon claimed the singleton, log **one** warning naming
+   the plugin-disable command; do not restart or fight.
+3. Tests: start-stop on both paths; supersede detection (second
+   options-built daemon claims the singleton in-process → owner logs the
+   warning and does not restart); panic isolation (daemon panic logged,
+   server loop unaffected).
 
 ## Task 4 — `watcher` CLI (fork)
 
