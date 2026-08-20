@@ -370,6 +370,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
 # Omitted style fields preserve the contextual default.
 # [ui.sidebar.agents]
+# Show the agents section in the expanded sidebar.
+# Set false to hide it entirely; the spaces section expands to fill the freed height.
+# visible = true
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
 # rows = [["state_icon", "workspace", "tab"], ["agent"]]
@@ -381,6 +384,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Custom values reported through workspace metadata use a $name token, for example $jj_status.
 # Inline token styles accept strict #RGB/#RRGGBB foregrounds plus bold and dim booleans.
 # [ui.sidebar.spaces]
+# Show the spaces section above the agents section in the expanded sidebar.
+# Set false to hide it entirely; the agents section expands to fill the freed height and
+# its divider line is removed, but its "agents" label and sort toggle still render.
+# If both ui.sidebar.spaces and ui.sidebar.agents are set invisible, the whole sidebar
+# collapses to zero width, the same as sidebar_collapsed_mode = "hidden".
+# visible = true
 # Blank rows between space entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
 # rows = [["state_icon", "workspace"], ["branch", "git_status"]]
