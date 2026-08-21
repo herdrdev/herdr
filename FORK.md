@@ -87,21 +87,21 @@ the top of the file:
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/cli.rs` | Reject fork-disabled update channels and dispatch the native watcher CLI. | `dded4c73` |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
-| `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel and register native title sync. | Task 7 title-sync engine |
-| `src/app/actions.rs` | Trigger coalesced title recomputation for pane and agent lifecycle mutations, including session-reference-only changes. | Task 7 title-sync engine |
-| `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | Task 7 title-sync engine |
-| `src/app/state.rs` | Track the coalesced title-sync input generation with session and lifecycle persistence changes. | Task 7 title-sync engine |
+| `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel and register native title sync. | `e312ccf8`, `e006a1ea` |
+| `src/app/actions.rs` | Trigger coalesced title recomputation for pane and agent lifecycle mutations, including session-reference-only changes. | `e006a1ea` |
+| `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
+| `src/app/state.rs` | Track the coalesced title-sync input generation with session and lifecycle persistence changes. | `e006a1ea` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
-| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.2`, plus direct SQLite access for OpenCode titles. | Task 6 title readers |
-| `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | Task 6 title readers |
-| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | watcher v0.2.2 pin commit |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.2`, plus direct SQLite access for OpenCode titles. | `ebff8667`, `4df9fb1a` |
+| `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | `ebff8667`, `4df9fb1a` |
+| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `ebff8667` |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | `c3c70979` |
-| `src/server/headless.rs` | Own the embedded watcher and title-sync lifecycles across normal and handoff server paths. | Task 7 title-sync engine |
+| `src/server/headless.rs` | Own the embedded watcher and title-sync lifecycles across normal and handoff server paths. | `dd08df50`, `e006a1ea` |
 | `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
-| `src/main.rs` | Register the Unix-only native title-sync module. | Task 5 title-sync policy |
-| `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | Task 7 title-sync engine |
+| `src/main.rs` | Register the Unix-only native title-sync module. | `f4af78b5` |
+| `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
