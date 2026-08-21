@@ -1,0 +1,168 @@
+id = "muse"
+version = "2026.08.10.1"
+min_engine_version = 2
+updated_at = "2026-08-10T00:00:00Z"
+aliases = ["muse-code", "muse-cli"]
+
+# Evidence: Live pane reads via `herdr pane read <pane> --source detection --format text`
+# captured from Muse Code 0.1.0 (muse-spark-1.2-contributor) in herdr, cross-checked with
+# vendor-side captures reported by a Muse Code developer on PR #2489 against strings in the
+# shipped `muse-bin` binary.
+#
+# Idle (prompt ready) bottom chrome:
+#   ── Voice input (⌥ + v to start) ───── ... ─
+#   ⟩
+#   ───────────────────────────────────── ... ─
+#     muse-spark-1.2-contributor · xhigh · ~/Developer/herdr · YOLO
+# The prompt is a single `⟩` (U+27E9) on its own line, or `⟩ <draft>` while composing (the
+# draft can wrap to continuation lines). `YOLO` only appears when launched with --yolo, so
+# idle_status_fallback keys on the invariant `model · effort · cwd` footer shape instead
+# (`·` is U+00B7; effort is one of none/minimal/low/medium/high/xhigh/ultra).
+#
+# Working (agent running tools/commands):
+#   ◆ Running command · <description> (0s · esc to interrupt)
+#   └ (ctrl+b to send to background)
+#   ◇/◆ Finishing up (Ns · esc to interrupt)
+# Any live activity line contains `esc to interrupt` (lowercase). This is the invariant
+# between idle and working.
+#
+# Agent-initiated Pick / multi-select (blocked, waiting on the human):
+#   Enter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt   (single-select)
+#   Enter to toggle · ↑/↓ to move · ... · Esc to interrupt                        (multi-select)
+# Title/message vary; the footer chrome does not. On narrow panes the footer wraps to two
+# lines, and up to four more lines of persistent prompt chrome (voice-input hint, `⟩`, rule
+# line, status line) sit below it, so the footer can land as far as the 6th non-empty line
+# from the bottom. `working_esc_interrupt`'s not-gate must cover the same region as this rule
+# (both bottom_non_empty_lines(8)) since the picker footer's `Esc to interrupt` would
+# otherwise satisfy the working rule's `esc to interrupt` contains match (contains is
+# case-insensitive; regex/line_regex are not).
+#
+# Startup workspace-trust dialog (blocked, first launch in an untrusted directory):
+#   Do you trust this workspace?
+#   > 1  Trust and continue
+#     2  Quit
+#   Use Up/Down or 1/2, then Enter. Esc quits.
+# No footer chrome (no `esc to interrupt`/`Enter to select`), so without a dedicated rule
+# this falls through to the known-agent idle fallback while the agent is actually blocked.
+#
+# User-opened menus (blocked by convention here; the agent isn't waiting on an answer, but
+# the pane needs input before anything else can happen): `/model`, `/theme`, `/export`,
+# `/subagents`, `/skills`, etc. Footer verb varies by menu — captured live: `/model` says
+# `enter confirm`, `/theme` says `enter save`, `/skills` (a filterable checkbox list) says
+# `enter use - space toggle - ... - esc close - type filter`. "Enter to select"/"Esc to
+# interrupt" never appear. Matched on whichever of "enter confirm" / "enter save" / "esc go
+# back" / "esc close" / "space toggle" is present rather than trying to enumerate every verb;
+# more menu types than these five captures likely exist. The highlighted row in both `/model`
+# and `/skills` also renders as `⟩ <choice>`, the same glyph idle_prompt's typed-draft variant
+# matches, so idle_prompt's not-gate excludes all five menu anchors too, even though
+# menu_request_blocked's higher priority already wins that race today.
+#
+# Tool approval (no --approval-judge, or judge declines to auto-allow): footer gains
+# acceptance hints `Allow once` / `Allow for this session` / `Always allow in this workspace`.
+# Anchored on this footer chrome rather than sentence prose ("Do you want to proceed?",
+# "waiting for approval") because Muse will quote that prose back in its own replies and tool
+# output, which would false-positive blocked right after a normal turn.
+#
+# Network-access approval is a distinct captured variant (live repro, `--approval-judge off`,
+# a shell command doing an HTTPS fetch): title `Would you like to allow this network access?`,
+# options `Yes, proceed (y)` / `Yes, don't ask again this session (p)` / `No, and tell Muse
+# Code what to do differently (esc)`, footer `Press enter to confirm or esc to cancel`. No
+# "esc to interrupt" here (esc cancels, not interrupts), and no "Allow"/footer text from the
+# tool-approval variant, so without `blocked_approval` covering it this fell through to
+# idle_status_fallback. The title itself is a bad anchor: with a `requested by: $ <command>`
+# body line it landed as the 10th non-empty line from the bottom, past this rule's own
+# bottom_non_empty_lines(8) region (the same wrap/offset trap as the Pick footer above).
+# Matched on the footer option `Yes, proceed` instead, which stays a fixed few lines from the
+# true bottom regardless of how long the request body gets.
+
+[[rules]]
+id = "workspace_trust_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["Do you trust this workspace?"]
+any = [
+  { contains = ["Trust and continue"] },
+  { contains = ["Use Up/Down"] },
+]
+
+[[rules]]
+id = "pick_request_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Enter to select"] },
+  { contains = ["Enter to toggle"] },
+]
+
+[[rules]]
+id = "menu_request_blocked"
+state = "blocked"
+priority = 940
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["enter confirm"] },
+  { contains = ["enter save"] },
+  { contains = ["esc go back"] },
+  { contains = ["esc close"] },
+  { contains = ["space toggle"] },
+]
+
+[[rules]]
+id = "working_esc_interrupt"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+contains = ["esc to interrupt"]
+not = [
+  { contains = ["Enter to select"] },
+  { contains = ["Enter to toggle"] },
+]
+
+[[rules]]
+id = "blocked_approval"
+state = "blocked"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Allow once"] },
+  { contains = ["Allow for this session"] },
+  { contains = ["Always allow in this workspace"] },
+  { contains = ["Yes, proceed"] },
+]
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+any = [
+  { line_regex = ['^\s*⟩\s*$'] },
+  { line_regex = ['^\s*⟩\s+\S'] },
+]
+not = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["Enter to select"] },
+  { contains = ["Enter to toggle"] },
+  { contains = ["enter confirm"] },
+  { contains = ["enter save"] },
+  { contains = ["esc go back"] },
+  { contains = ["esc close"] },
+  { contains = ["space toggle"] },
+]
+
+[[rules]]
+id = "idle_status_fallback"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra) · ']
+not = [{ contains = ["esc to interrupt"] }]
