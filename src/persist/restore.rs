@@ -472,6 +472,11 @@ fn restore_tab(
         let saved_cwd = saved_pane
             .map(|p| p.cwd.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+        let saved_cwd_before_agent_session = saved_pane.and_then(|pane| {
+            pane.cwd_before_agent_session
+                .clone()
+                .filter(|cwd| cwd.is_absolute() && cwd.is_dir())
+        });
 
         let cwd = if saved_cwd.exists() {
             saved_cwd
@@ -528,6 +533,10 @@ fn restore_tab(
             .unwrap_or_default();
         let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
         let was_imported = imported_runtime.is_some();
+        #[cfg(unix)]
+        let cwd_before_agent_session = imported_runtime
+            .as_ref()
+            .and_then(|imported| imported.state.cwd_before_agent_session.clone());
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -537,6 +546,10 @@ fn restore_tab(
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            if let Some(cwd_before_agent_session) = saved_cwd_before_agent_session {
+                terminal.session_reported_cwd = Some(cwd.clone());
+                terminal.cwd_before_agent_session = Some(cwd_before_agent_session);
+            }
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -571,6 +584,12 @@ fn restore_tab(
             failed_imports += 1;
             continue;
         }
+
+        let cwd = if was_imported {
+            cwd
+        } else {
+            saved_cwd_before_agent_session.unwrap_or(cwd)
+        };
 
         let runtime_result = {
             #[cfg(unix)]
@@ -629,6 +648,11 @@ fn restore_tab(
             Ok(runtime) => {
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+                #[cfg(unix)]
+                if let Some(cwd_before_agent_session) = cwd_before_agent_session {
+                    terminal.session_reported_cwd = Some(cwd.clone());
+                    terminal.cwd_before_agent_session = Some(cwd_before_agent_session);
+                }
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1169,13 +1193,14 @@ mod tests {
 
     #[tokio::test]
     async fn restore_carries_persisted_agent_session_metadata() {
-        let cwd = std::env::current_dir().unwrap();
+        let shell_cwd = std::env::current_dir().unwrap();
+        let agent_cwd = shell_cwd.join("src");
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
                 id: Some("workspace".into()),
                 custom_name: None,
-                identity_cwd: cwd.clone(),
+                identity_cwd: shell_cwd.clone(),
                 worktree_space: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
@@ -1187,7 +1212,8 @@ mod tests {
                     panes: HashMap::from([(
                         0,
                         super::super::snapshot::PaneSnapshot {
-                            cwd,
+                            cwd: agent_cwd,
+                            cwd_before_agent_session: Some(shell_cwd.clone()),
                             label: Some("reviewer".into()),
                             agent_name: Some("reviewer".into()),
                             managed_agent_kind: Some("opencode".into()),
@@ -1238,6 +1264,7 @@ mod tests {
         );
         assert_eq!(terminal.agent_name, None);
         assert_eq!(terminal.manual_label.as_deref(), Some("reviewer"));
+        assert_eq!(terminal.cwd, shell_cwd);
         let session = terminal
             .persisted_agent_session
             .as_ref()
@@ -1274,6 +1301,7 @@ mod tests {
                             10,
                             super::super::snapshot::PaneSnapshot {
                                 cwd: cwd.clone(),
+                                cwd_before_agent_session: None,
                                 label: None,
                                 agent_name: None,
                                 managed_agent_kind: None,
@@ -1285,6 +1313,7 @@ mod tests {
                             20,
                             super::super::snapshot::PaneSnapshot {
                                 cwd: cwd.clone(),
+                                cwd_before_agent_session: None,
                                 label: None,
                                 agent_name: None,
                                 managed_agent_kind: None,
@@ -1338,6 +1367,7 @@ mod tests {
                 id.parse::<u32>().unwrap(),
                 super::super::snapshot::PaneSnapshot {
                     cwd: cwd.clone(),
+                    cwd_before_agent_session: None,
                     label: None,
                     agent_name: None,
                     managed_agent_kind: None,
@@ -1348,6 +1378,7 @@ mod tests {
         };
         let final_pane = super::super::snapshot::PaneSnapshot {
             cwd: cwd.clone(),
+            cwd_before_agent_session: None,
             label: Some("planner".into()),
             agent_name: Some("planner".into()),
             managed_agent_kind: None,
@@ -1481,7 +1512,8 @@ mod tests {
     #[cfg(unix)]
     async fn native_agent_restore_defers_runtime_launch() {
         let cwd = std::env::current_dir().unwrap();
-        let snapshot = SessionSnapshot {
+        let shell_cwd = cwd.parent().unwrap().to_path_buf();
+        let mut snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
                 id: Some("workspace".into()),
@@ -1498,7 +1530,8 @@ mod tests {
                     panes: HashMap::from([(
                         0,
                         super::super::snapshot::PaneSnapshot {
-                            cwd,
+                            cwd: cwd.clone(),
+                            cwd_before_agent_session: Some(shell_cwd.clone()),
                             label: None,
                             agent_name: None,
                             managed_agent_kind: None,
@@ -1525,7 +1558,7 @@ mod tests {
         };
         let (events, _event_rx) = mpsc::channel(4);
 
-        let (_workspaces, terminals, runtimes) = restore(
+        let (_workspaces, mut terminals, runtimes) = restore(
             &snapshot,
             None,
             24,
@@ -1540,7 +1573,7 @@ mod tests {
         );
 
         let terminal = terminals
-            .values()
+            .values_mut()
             .next()
             .expect("native agent restore should create terminal state");
         assert!(
@@ -1555,8 +1588,17 @@ mod tests {
             runtimes.is_empty(),
             "native agent restore should not spawn a fallback-size runtime during snapshot restore"
         );
+        assert_eq!(terminal.session_reported_cwd.as_ref(), Some(&cwd));
+        assert_eq!(terminal.cwd_before_agent_session.as_ref(), Some(&shell_cwd));
+        terminal.clear_agent_runtime_identity_after_respawn();
+        assert_eq!(terminal.cwd, shell_cwd);
+        snapshot.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&0)
+            .unwrap()
+            .cwd_before_agent_session = Some(cwd.join("Cargo.toml"));
         let mut imports = HashMap::new();
-        let (_handoff_workspaces, handoff_terminals, handoff_runtimes) = restore_handoff(
+        let (_handoff_workspaces, mut handoff_terminals, handoff_runtimes) = restore_handoff(
             &snapshot,
             0,
             test_restore_shell(),
@@ -1568,7 +1610,7 @@ mod tests {
         )
         .expect("handoff restore should preserve pending native agent resume");
         let handoff_terminal = handoff_terminals
-            .values()
+            .values_mut()
             .next()
             .expect("handoff restore should create terminal state");
         assert!(
@@ -1579,6 +1621,9 @@ mod tests {
             handoff_runtimes.is_empty(),
             "handoff restore should not replace pending native agent resume with a shell runtime"
         );
+        assert!(handoff_terminal.cwd_before_agent_session.is_none());
+        handoff_terminal.clear_agent_runtime_identity_after_respawn();
+        assert_eq!(handoff_terminal.cwd, cwd);
     }
 
     #[tokio::test]
@@ -1665,6 +1710,7 @@ mod tests {
             0,
             super::super::snapshot::PaneSnapshot {
                 cwd: cwd.clone(),
+                cwd_before_agent_session: None,
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,

@@ -663,6 +663,7 @@ fn report_agent_session_command() -> Command {
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
         .arg(option("session-start-source", "SOURCE"))
+        .arg(path_option("cwd", "PATH"))
 }
 
 fn release_agent_command() -> Command {

@@ -718,10 +718,13 @@ Session-only official integrations report native session references with `pane.r
     "pane_id": "w1:p1",
     "source": "herdr:codex",
     "agent": "codex",
-    "agent_session_id": "..."
+    "agent_session_id": "...",
+    "cwd": "/path/to/project"
   }
 }
 ```
+
+An accepted session report can include `cwd`. Herdr uses an existing absolute directory for pane identity and follow-cwd behavior.
 
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` expose a read-only `agent_session` object when Herdr has a stored native session reference:
 

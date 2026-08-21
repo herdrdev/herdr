@@ -2865,6 +2865,12 @@
                 "null"
               ]
             },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "pane_id": {
               "type": "string"
             },

@@ -120,6 +120,8 @@ struct RecentAgentProcessExit {
 pub struct TerminalState {
     pub id: TerminalId,
     pub cwd: PathBuf,
+    pub(crate) session_reported_cwd: Option<PathBuf>,
+    pub(crate) cwd_before_agent_session: Option<PathBuf>,
     pub detected_agent: Option<Agent>,
     pub fallback_state: AgentState,
     fallback_visible_blocker: bool,
@@ -154,6 +156,8 @@ impl TerminalState {
         Self {
             id,
             cwd,
+            session_reported_cwd: None,
+            cwd_before_agent_session: None,
             detected_agent: None,
             fallback_state: AgentState::Unknown,
             fallback_visible_blocker: false,
@@ -182,6 +186,16 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
+    }
+
+    pub(crate) fn restore_cwd_before_agent_session(&mut self) -> bool {
+        self.session_reported_cwd = None;
+        let Some(cwd) = self.cwd_before_agent_session.take() else {
+            return false;
+        };
+        let changed = self.cwd != cwd;
+        self.cwd = cwd;
+        changed
     }
 
     pub fn set_detected_agent_process_at(
@@ -573,6 +587,14 @@ impl TerminalState {
             self.persisted_agent_session = durable_session;
         }
         if agent_released {
+            if previous_session
+                .as_ref()
+                .is_none_or(|(_, session_agent, _, _)| {
+                    crate::detect::parse_agent_label(session_agent) == agent
+                })
+            {
+                self.restore_cwd_before_agent_session();
+            }
             self.clear_agent_name();
         }
         TerminalStateMutation {
@@ -2047,6 +2069,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.restore_cwd_before_agent_session();
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
@@ -5594,6 +5617,11 @@ mod tests {
     #[test]
     fn process_exit_clears_matching_persisted_session_ref() {
         let mut terminal = test_terminal();
+        let shell_cwd = terminal.cwd.clone();
+        let agent_cwd = shell_cwd.join("agent-cwd");
+        terminal.cwd_before_agent_session = Some(shell_cwd.clone());
+        terminal.session_reported_cwd = Some(agent_cwd.clone());
+        terminal.cwd = agent_cwd;
         let session_ref =
             crate::agent_resume::AgentSessionRef::path(test_session_path("pi.jsonl")).unwrap();
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
@@ -5615,6 +5643,9 @@ mod tests {
 
         assert!(mutation.session_ref_changed);
         assert!(terminal.persisted_agent_session.is_none());
+        assert!(terminal.session_reported_cwd.is_none());
+        assert!(terminal.cwd_before_agent_session.is_none());
+        assert_eq!(terminal.cwd, shell_cwd);
 
         let delayed = terminal.set_agent_session_ref(
             "herdr:pi".into(),
@@ -5629,6 +5660,11 @@ mod tests {
     #[test]
     fn process_exit_preserves_foreign_persisted_session_ref() {
         let mut terminal = test_terminal();
+        let shell_cwd = terminal.cwd.clone();
+        let agent_cwd = shell_cwd.join("agent-cwd");
+        terminal.cwd_before_agent_session = Some(shell_cwd);
+        terminal.session_reported_cwd = Some(agent_cwd.clone());
+        terminal.cwd = agent_cwd.clone();
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
             source: "herdr:claude".into(),
             agent: "claude".into(),
@@ -5654,6 +5690,8 @@ mod tests {
                 .map(|session| session.session_ref.value.as_str()),
             Some("claude-session")
         );
+        assert_eq!(terminal.session_reported_cwd.as_ref(), Some(&agent_cwd));
+        assert_eq!(terminal.cwd, agent_cwd);
     }
 
     #[test]

@@ -38,9 +38,14 @@ pub(super) fn launch_cwd_for_terminal(
     >,
     terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
 ) -> Option<PathBuf> {
-    terminal_runtimes
+    terminals
         .get(terminal_id)
-        .and_then(|runtime| runtime.follow_cwd())
+        .and_then(|terminal| terminal.session_reported_cwd.clone())
+        .or_else(|| {
+            terminal_runtimes
+                .get(terminal_id)
+                .and_then(|runtime| runtime.follow_cwd())
+        })
         .or_else(|| {
             terminals
                 .get(terminal_id)

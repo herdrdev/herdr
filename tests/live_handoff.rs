@@ -1260,36 +1260,6 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
         }),
     ));
     support::wait_for_file(&started_marker, Duration::from_secs(5));
-    assert_ok(request(
-        &api_socket,
-        serde_json::json!({
-            "id": "test:agent:session",
-            "method": "pane.report_agent_session",
-            "params": {
-                "pane_id": pane_id,
-                "source": "herdr:pi",
-                "agent": "pi",
-                "seq": 1,
-                "agent_session_path": old_session,
-                "session_start_source": "startup"
-            }
-        }),
-    ));
-    assert_ok(request(
-        &api_socket,
-        serde_json::json!({
-            "id": "test:agent:report",
-            "method": "pane.report_agent",
-            "params": {
-                "pane_id": pane_id,
-                "source": "herdr:pi",
-                "agent": "pi",
-                "state": "idle",
-                "seq": 2,
-                "agent_session_path": old_session
-            }
-        }),
-    ));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let response = request(
@@ -1312,6 +1282,37 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     assert_ok(request(
         &api_socket,
         serde_json::json!({
+            "id": "test:agent:session",
+            "method": "pane.report_agent_session",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "seq": 1,
+                "agent_session_path": old_session,
+                "session_start_source": "startup",
+                "cwd": base.display().to_string()
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:pi",
+                "agent": "pi",
+                "state": "idle",
+                "seq": 2,
+                "agent_session_path": old_session
+            }
+        }),
+    ));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
             "id": "test:agent:rename",
             "method": "agent.rename",
             "params": {"target": pane_id, "name": "reviewer"}
@@ -1324,6 +1325,21 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
+
+    let split = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:split-after-handoff",
+            "method": "pane.split",
+            "params": {
+                "target_pane_id": pane_id,
+                "direction": "right",
+                "focus": false
+            }
+        }),
+    );
+    assert_ok(split.clone());
+    assert_eq!(split["result"]["pane"]["cwd"], base.display().to_string());
 
     assert_ok(request(
         &api_socket,

@@ -113,6 +113,22 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let cwd_change_pane = match &ev {
+            AppEvent::AgentSessionReported { pane_id, .. }
+            | AppEvent::StateChanged {
+                pane_id,
+                process_exited: true,
+                ..
+            } => Some(*pane_id),
+            _ => None,
+        };
+        let cwd_before = cwd_change_pane.and_then(|pane_id| {
+            let (_, pane) = self.find_pane(pane_id)?;
+            self.state
+                .terminals
+                .get(&pane.attached_terminal_id)
+                .map(|terminal| (pane.attached_terminal_id.clone(), terminal.cwd.clone()))
+        });
         if let AppEvent::TerminalBell { count, .. } = ev {
             if let Err(err) =
                 crate::terminal_effects::write_terminal_bells(&mut std::io::stdout(), count)
@@ -305,9 +321,15 @@ impl App {
             } else {
                 None
             };
-        let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let mut terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
+        terminal_cwd_reported |= cwd_before.is_some_and(|(terminal_id, cwd)| {
+            self.state
+                .terminals
+                .get(&terminal_id)
+                .is_some_and(|terminal| terminal.cwd != cwd)
+        });
         if let Some(agents) = manifest_update_agents {
             self.reset_agent_detection_for_agents(&agents);
         }
@@ -565,7 +587,10 @@ impl App {
             return false;
         };
 
-        let cwd = terminal.cwd.clone();
+        let cwd = terminal
+            .cwd_before_agent_session
+            .clone()
+            .unwrap_or_else(|| terminal.cwd.clone());
         let (rows, cols) = self
             .terminal_runtimes
             .get(&terminal_id)
@@ -604,6 +629,7 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.clear_agent_runtime_identity_after_respawn();
         }
+        self.request_git_identity_refresh(Instant::now());
         self.state.focus_pane_in_workspace(ws_idx, pane_id);
         self.schedule_session_save();
         true
@@ -1970,6 +1996,11 @@ mod tests {
             app.state.workspaces = vec![workspace];
             app.state.ensure_test_terminals();
             let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            let shell_cwd = terminal.cwd.clone();
+            let agent_cwd = shell_cwd.join("agent");
+            terminal.cwd_before_agent_session = Some(shell_cwd.clone());
+            terminal.session_reported_cwd = Some(agent_cwd.clone());
+            terminal.cwd = agent_cwd;
             terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
             if let Some(agent_name) = agent_name {
                 terminal.set_agent_name(agent_name.into());
@@ -1986,6 +2017,8 @@ mod tests {
             });
 
             assert!(app.state.terminals[&terminal_id].agent_name.is_none());
+            assert_eq!(app.state.terminals[&terminal_id].cwd, shell_cwd);
+            assert!(app.git_identity_refresh_requested);
             assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
                 &event.data,
                 crate::api::schema::EventData::PaneAgentDetected {
@@ -2157,6 +2190,11 @@ mod tests {
             .expect("test terminal should exist");
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
+        let shell_cwd = terminal.cwd.clone();
+        let agent_cwd = std::env::temp_dir().canonicalize().unwrap();
+        terminal.cwd_before_agent_session = Some(shell_cwd.clone());
+        terminal.session_reported_cwd = Some(agent_cwd.clone());
+        terminal.cwd = agent_cwd;
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
             source: "herdr:codex".into(),
             agent: "codex".into(),
@@ -2178,6 +2216,16 @@ mod tests {
         assert!(!terminal.respawn_shell_on_exit);
         assert!(terminal.persisted_agent_session.is_none());
         assert!(terminal.agent_name.is_none());
+        assert_eq!(terminal.cwd, shell_cwd);
+        assert_eq!(
+            app.terminal_runtimes
+                .get(&terminal_id)
+                .unwrap()
+                .cwd()
+                .as_ref(),
+            Some(&shell_cwd)
+        );
+        assert!(app.git_identity_refresh_requested);
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

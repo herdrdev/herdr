@@ -1282,6 +1282,7 @@ impl App {
             session_start_source: crate::agent_resume::normalize_session_start_source(
                 params.session_start_source,
             ),
+            cwd: params.cwd.map(std::path::PathBuf::from),
         });
 
         encode_success(id, ResponseResult::Ok {})
@@ -1997,6 +1998,71 @@ mod tests {
             seq: None,
             ttl_ms: None,
         }
+    }
+
+    #[tokio::test]
+    async fn pane_report_agent_session_updates_live_and_persisted_cwd() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        let shell_cwd = app.state.terminals[&terminal_id].cwd.clone();
+        let cwd = std::env::temp_dir().canonicalize().unwrap();
+        let params = PaneReportAgentSessionParams {
+            pane_id: public_pane_id,
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            seq: Some(2),
+            agent_session_id: Some("codex-session".into()),
+            agent_session_path: None,
+            session_start_source: Some("startup".into()),
+            cwd: Some(cwd.display().to_string()),
+        };
+
+        let response = app.handle_pane_report_agent_session("req".into(), params.clone());
+
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.cwd, cwd);
+        assert_eq!(terminal.session_reported_cwd.as_ref(), Some(&cwd));
+        assert_eq!(terminal.cwd_before_agent_session.as_ref(), Some(&shell_cwd));
+        assert!(app.git_identity_refresh_requested);
+        app.git_identity_refresh_requested = false;
+
+        let stale_cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let mut stale = params;
+        stale.seq = Some(1);
+        stale.cwd = Some(stale_cwd.display().to_string());
+        app.handle_pane_report_agent_session("stale".into(), stale.clone());
+        assert_ne!(stale_cwd, cwd);
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .session_reported_cwd
+                .as_ref(),
+            Some(&cwd)
+        );
+        assert!(!app.git_identity_refresh_requested);
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = stale_cwd;
+        assert_eq!(
+            crate::app::creation::launch_cwd_for_terminal(
+                &terminal_id,
+                &app.state.terminals,
+                &app.terminal_runtimes,
+            ),
+            Some(cwd.clone())
+        );
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = cwd;
+
+        stale.seq = Some(3);
+        stale.cwd = None;
+        app.handle_pane_report_agent_session("clear".into(), stale);
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.cwd, shell_cwd);
+        assert!(terminal.session_reported_cwd.is_none());
+        assert!(terminal.cwd_before_agent_session.is_none());
+        assert!(app.git_identity_refresh_requested);
     }
 
     fn metadata_error_code(response: &str) -> String {

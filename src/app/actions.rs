@@ -2842,18 +2842,34 @@ impl AppState {
                 seq,
                 session_ref,
                 session_start_source,
-            } => self
-                .update_terminal_state(pane_id, |terminal| {
-                    terminal.set_agent_session_ref_for_session_start(
+                cwd,
+            } => {
+                let mut cwd_changed = false;
+                let update = self.update_terminal_state(pane_id, |terminal| {
+                    let mutation = terminal.set_agent_session_ref_for_session_start(
                         source,
                         agent_label,
                         session_ref,
                         seq,
                         session_start_source,
-                    )
-                })
-                .into_iter()
-                .collect(),
+                    )?;
+                    if let Some(cwd) = cwd.filter(|cwd| cwd.is_absolute() && cwd.is_dir()) {
+                        if terminal.session_reported_cwd.is_none() {
+                            terminal.cwd_before_agent_session = Some(terminal.cwd.clone());
+                        }
+                        cwd_changed = terminal.cwd != cwd;
+                        terminal.cwd = cwd.clone();
+                        terminal.session_reported_cwd = Some(cwd);
+                    } else {
+                        cwd_changed = terminal.restore_cwd_before_agent_session();
+                    }
+                    Some(mutation)
+                });
+                if cwd_changed {
+                    self.mark_session_dirty();
+                }
+                update.into_iter().collect()
+            }
             AppEvent::HookMetadataReported {
                 pane_id,
                 source,
@@ -2931,7 +2947,12 @@ impl AppState {
                 let Some(terminal) = self.terminals.get_mut(&terminal_id) else {
                     return Vec::new();
                 };
-                if terminal.cwd != cwd {
+                if terminal.session_reported_cwd.is_some() {
+                    if terminal.cwd_before_agent_session.as_ref() != Some(&cwd) {
+                        terminal.cwd_before_agent_session = Some(cwd);
+                        self.mark_session_dirty();
+                    }
+                } else if terminal.cwd != cwd {
                     terminal.cwd = cwd;
                     self.mark_session_dirty();
                 }
@@ -5585,6 +5606,24 @@ mod tests {
 
         assert!(updates.is_empty());
         assert_eq!(state.terminals.get(&terminal_id).unwrap().cwd, cwd);
+        assert!(state.session_dirty);
+
+        let agent_cwd = cwd.join("agent");
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.cwd = agent_cwd.clone();
+        terminal.session_reported_cwd = Some(agent_cwd.clone());
+        terminal.cwd_before_agent_session = Some(cwd.clone());
+        let shell_cwd = cwd.join("shell");
+        std::fs::create_dir(&shell_cwd).unwrap();
+        state.session_dirty = false;
+        state.handle_app_event(AppEvent::TerminalCwdReported {
+            pane_id,
+            cwd: shell_cwd.clone(),
+        });
+        let terminal = &state.terminals[&terminal_id];
+        assert_eq!(terminal.cwd, agent_cwd);
+        assert_eq!(terminal.session_reported_cwd.as_ref(), Some(&agent_cwd));
+        assert_eq!(terminal.cwd_before_agent_session.as_ref(), Some(&shell_cwd));
         assert!(state.session_dirty);
         let _ = std::fs::remove_dir_all(cwd);
     }

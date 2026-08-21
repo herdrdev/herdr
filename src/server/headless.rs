@@ -1306,12 +1306,11 @@ impl HeadlessServer {
                 continue;
             };
             let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
-            let has_agent_session = self
-                .app
-                .state
-                .terminals
-                .get(terminal_id)
-                .is_some_and(|terminal| terminal.persisted_agent_session.is_some());
+            let terminal = self.app.state.terminals.get(terminal_id);
+            handoff_runtime.cwd_before_agent_session =
+                terminal.and_then(|terminal| terminal.cwd_before_agent_session.clone());
+            let has_agent_session =
+                terminal.is_some_and(|terminal| terminal.persisted_agent_session.is_some());
             if !has_agent_session {
                 handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
             }

@@ -98,6 +98,8 @@ pub struct TabSnapshot {
 pub struct PaneSnapshot {
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_before_agent_session: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
@@ -363,6 +365,8 @@ fn capture_tab(
             id.raw(),
             PaneSnapshot {
                 cwd,
+                cwd_before_agent_session: terminal
+                    .and_then(|terminal| terminal.cwd_before_agent_session.clone()),
                 label,
                 agent_name,
                 managed_agent_kind,
@@ -643,6 +647,7 @@ mod tests {
             0,
             PaneSnapshot {
                 cwd: PathBuf::from("/home/can/Projects/herdr"),
+                cwd_before_agent_session: None,
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
@@ -654,6 +659,7 @@ mod tests {
             1,
             PaneSnapshot {
                 cwd: PathBuf::from("/home/can/Projects/website"),
+                cwd_before_agent_session: None,
                 label: Some("website".into()),
                 agent_name: None,
                 managed_agent_kind: None,
@@ -1009,7 +1015,10 @@ mod tests {
         let root_terminal_id = state.workspaces[0].tabs[0].panes[&root]
             .attached_terminal_id
             .clone();
-        state.terminals.get_mut(&root_terminal_id).unwrap().cwd = PathBuf::from("/tmp/pion");
+        let root_terminal = state.terminals.get_mut(&root_terminal_id).unwrap();
+        root_terminal.cwd = PathBuf::from("/tmp/pion");
+        root_terminal.cwd_before_agent_session = Some(PathBuf::from("/tmp/shell"));
+        root_terminal.session_reported_cwd = Some(PathBuf::from("/tmp/pion"));
         let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
             .attached_terminal_id
             .clone();
@@ -1020,6 +1029,10 @@ mod tests {
         let tab = &workspace.tabs[0];
         assert_eq!(workspace.identity_cwd, PathBuf::from("/tmp/pion"));
         assert_eq!(tab.panes[&root.raw()].cwd, PathBuf::from("/tmp/pion"));
+        assert_eq!(
+            tab.panes[&root.raw()].cwd_before_agent_session,
+            Some(PathBuf::from("/tmp/shell"))
+        );
         assert_eq!(tab.panes[&second.raw()].cwd, PathBuf::from("/tmp/herdr"));
     }
 
@@ -1202,6 +1215,7 @@ mod tests {
             0,
             PaneSnapshot {
                 cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
+                cwd_before_agent_session: None,
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,
@@ -1215,6 +1229,7 @@ mod tests {
                 cwd: std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("/tmp")),
+                cwd_before_agent_session: None,
                 label: None,
                 agent_name: None,
                 managed_agent_kind: None,

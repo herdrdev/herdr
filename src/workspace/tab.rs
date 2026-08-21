@@ -566,9 +566,10 @@ impl Tab {
         terminal_runtimes: &TerminalRuntimeRegistry,
     ) -> Option<PathBuf> {
         let terminal_id = self.terminal_id(pane_id)?;
-        terminal_runtimes
+        terminals
             .get(terminal_id)
-            .and_then(|rt| rt.cwd())
+            .and_then(|terminal| terminal.session_reported_cwd.clone())
+            .or_else(|| terminal_runtimes.get(terminal_id).and_then(|rt| rt.cwd()))
             .or_else(|| {
                 terminals
                     .get(terminal_id)
