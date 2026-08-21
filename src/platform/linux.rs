@@ -395,6 +395,15 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     super::parse_agent_env_hint(&environ)
 }
 
+/// Read the interpreter environment a process was started in.
+pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+    if pid == 0 {
+        return None;
+    }
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    super::parse_virtual_env_activation(&environ)
+}
+
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
     let Some(session_id) = process_session_id(child_pid) else {
         return Vec::new();

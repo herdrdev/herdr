@@ -559,6 +559,10 @@ impl TerminalRuntime {
         self.0.foreground_cwd()
     }
 
+    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {
+        self.0.foreground_virtual_env()
+    }
+
     pub fn child_pid(&self) -> Option<u32> {
         self.0.child_pid()
     }
