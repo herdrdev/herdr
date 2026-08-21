@@ -191,5 +191,5 @@ After that failed read, ask the agent to write its complete response as Markdown
 - Parse IDs from JSON responses. Do not derive them from sidebar order or examples.
 - Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked.
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
-- Never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
+- Never kill the main Herdr process. For an isolated server, run `herdr --session <name> server`; the plain `herdr --session <name>` form launches the TUI, which is blocked inside a Herdr pane by default.
 - CLI server errors are JSON on stderr with exit status 1. CLI syntax errors exit with status 2.

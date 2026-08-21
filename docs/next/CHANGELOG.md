@@ -70,6 +70,7 @@
 - Session Navigator movement ignores modified `j`, `k`, and arrow keys instead of consuming unrelated pane input. (#1981, #2377, thanks @atomsbaza)
 - OpenCode panes now track the root conversation selected in their own TUI for native restore without adopting activity from attached clients. (#2450)
 - Server stop requests now bypass pane and API traffic, preventing busy sessions from blocking shutdown or admitting a client while shutdown is pending. (#2612)
+- The herdr-throwaway-repro skill is now isolated from the main session as intended. (#2600)
 - Fish `Ctrl+Alt` keybindings now work in panes after legacy Alt-prefixed control bytes are decoded with both modifiers. (#2514)
 - Windows recent-history reads no longer perform redundant snapshots, restoring `recent` output while reducing read cost. (#962, #2474, thanks @Pimpmuckl)
 - The Windows installer now activates releases with an atomic directory swap, preventing interrupted updates from leaving an empty release directory. (#2356, #2530, thanks @Pimpmuckl)
