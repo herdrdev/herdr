@@ -97,6 +97,7 @@ the top of the file:
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | `c3c70979` |
 | `src/server/headless.rs` | Own the embedded agent-watcher lifecycle across normal and handoff server paths. | `dd08df50` |
 | `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
+| `src/main.rs` | Register the Unix-only native title-sync module. | Task 5 title-sync policy |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

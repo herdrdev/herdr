@@ -1,3 +1,5 @@
+// Modified from herdr by the vimeflow project — see FORK.md
+
 use std::io;
 
 use crossterm::event::{
@@ -97,6 +99,8 @@ mod terminal;
 mod terminal_modes;
 mod terminal_notify;
 mod terminal_theme;
+#[cfg(unix)]
+mod title_sync;
 mod ui;
 mod update;
 mod workspace;

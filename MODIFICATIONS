@@ -36,6 +36,7 @@ Fork-added files
 - tests/watcher_dependency_smoke.rs
 - .config/nextest.toml
 - tests/watcher_cli.rs
+- src/title_sync/
 
 See FORK.md for the path-by-path upstream-edit registry, reasons, commits,
 branch model, and merge procedure. The upstream LICENSE and notices remain
