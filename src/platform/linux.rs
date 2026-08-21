@@ -190,6 +190,8 @@ fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
         shell_group_id,
         process_task_ids,
         process_task_children,
+        proc_children_supported(),
+        scanned_child_pids,
         |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
     )
 }
@@ -199,29 +201,48 @@ fn child_groups_foreground_process_group_with(
     shell_group_id: u32,
     mut task_ids: impl FnMut(u32) -> Vec<u32>,
     mut task_children: impl FnMut(u32, u32) -> Vec<u32>,
+    children_supported: bool,
+    scanned_children: impl FnOnce(u32) -> Vec<u32>,
     mut process_group_id: impl FnMut(u32) -> Option<i32>,
 ) -> Option<u32> {
-    let mut newest = None;
-    let mut scanned = 0usize;
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
     for tid in task_ids(child_pid) {
         for child in task_children(child_pid, tid) {
-            if scanned >= CHILD_GROUPS_SCAN_LIMIT {
-                return None;
+            if child > 0 && seen.insert(child) {
+                candidates.push(child);
             }
-            scanned += 1;
-
-            let Some(pgrp) = process_group_id(child) else {
-                continue;
-            };
-            if pgrp <= 0 {
-                continue;
-            }
-            let pgrp = pgrp as u32;
-            if pgrp == shell_group_id {
-                continue;
-            }
-            newest = Some(newest.map_or(pgrp, |current: u32| current.max(pgrp)));
         }
+    }
+
+    // Kernels built without CONFIG_PROC_CHILDREN never expose the children
+    // files, so the walk above yields nothing. Scan `/proc` for processes that
+    // report this pid as their parent instead.
+    if !children_supported {
+        for child in scanned_children(child_pid) {
+            if child > 0 && seen.insert(child) {
+                candidates.push(child);
+            }
+        }
+    }
+
+    let mut newest = None;
+    for (scanned, child) in candidates.into_iter().enumerate() {
+        if scanned >= CHILD_GROUPS_SCAN_LIMIT {
+            return None;
+        }
+
+        let Some(pgrp) = process_group_id(child) else {
+            continue;
+        };
+        if pgrp <= 0 {
+            continue;
+        }
+        let pgrp = pgrp as u32;
+        if pgrp == shell_group_id {
+            continue;
+        }
+        newest = Some(newest.map_or(pgrp, |current: u32| current.max(pgrp)));
     }
     newest.or(Some(shell_group_id))
 }
@@ -235,6 +256,8 @@ fn foreground_process_group_members(
         process_group_id,
         process_task_ids,
         process_task_children,
+        proc_children_supported(),
+        all_proc_pids,
         live_process_group_member,
     )
 }
@@ -244,9 +267,26 @@ fn foreground_process_group_members_with(
     process_group_id: u32,
     task_ids: impl FnMut(u32) -> Vec<u32>,
     task_children: impl FnMut(u32, u32) -> Vec<u32>,
+    children_supported: bool,
+    candidate_pids: impl FnOnce() -> Vec<u32>,
     mut live_member: impl FnMut(u32, u32) -> Option<ProcGroupMember>,
 ) -> Option<Vec<ProcGroupMember>> {
-    let mut members = process_tree_pids([child_pid, process_group_id], task_ids, task_children)
+    let mut pids = process_tree_pids([child_pid, process_group_id], task_ids, task_children);
+
+    // Without CONFIG_PROC_CHILDREN the tree walk only ever returns its own
+    // roots, so wrapper-spawned members (for example an agent started by a task
+    // runner) are invisible. Fall back to scanning every live pid and let the
+    // process group filter below keep only true members.
+    if !children_supported {
+        let mut seen = pids.iter().copied().collect::<HashSet<_>>();
+        for pid in candidate_pids() {
+            if pid > 0 && seen.insert(pid) {
+                pids.push(pid);
+            }
+        }
+    }
+
+    let mut members = pids
         .into_iter()
         .filter_map(|pid| live_member(process_group_id, pid))
         .collect::<Vec<_>>();
@@ -288,6 +328,69 @@ fn process_task_ids(pid: u32) -> Vec<u32> {
         .flatten()
         .filter_map(|entry| numeric_file_name(&entry))
         .collect()
+}
+
+/// Whether this kernel exposes `/proc/<pid>/task/<tid>/children`.
+///
+/// The file is only present when the kernel was built with
+/// `CONFIG_PROC_CHILDREN`; some container hosts ship kernels without it. The
+/// probe reads our own main thread, whose tid always equals our pid, and the
+/// file exists there whenever the interface exists at all (it is simply empty
+/// when we have no children).
+fn proc_children_supported() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let pid = std::process::id();
+        let supported = std::fs::metadata(format!("/proc/{pid}/task/{pid}/children")).is_ok();
+        if !supported {
+            tracing::info!(
+                "kernel does not expose /proc children files; using /proc scans to enumerate process groups"
+            );
+        }
+        supported
+    })
+}
+
+/// Every live pid visible in `/proc`, streamed so callers that stop early do
+/// not pay for the rest of the directory.
+fn proc_pids() -> impl Iterator<Item = u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| numeric_file_name(&entry))
+}
+
+/// Every live pid visible in `/proc`.
+fn all_proc_pids() -> Vec<u32> {
+    proc_pids().collect()
+}
+
+/// Direct children of `parent_pid`, discovered by scanning `/proc` for
+/// processes whose stat reports `parent_pid` as their ppid. Used only when the
+/// kernel does not expose children files.
+fn scanned_child_pids(parent_pid: u32) -> Vec<u32> {
+    scanned_child_pids_from(parent_pid, proc_pids(), process_ppid)
+}
+
+fn scanned_child_pids_from(
+    parent_pid: u32,
+    pids: impl Iterator<Item = u32>,
+    mut ppid: impl FnMut(u32) -> Option<i32>,
+) -> Vec<u32> {
+    let mut children = Vec::new();
+    for pid in pids {
+        if ppid(pid) != Some(parent_pid as i32) {
+            continue;
+        }
+        children.push(pid);
+        // One past the limit is enough for the caller to fail closed, so stop
+        // walking `/proc` instead of reading every remaining pid.
+        if children.len() > CHILD_GROUPS_SCAN_LIMIT {
+            break;
+        }
+    }
+    children
 }
 
 fn process_task_children(pid: u32, tid: u32) -> Vec<u32> {
@@ -350,6 +453,17 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+fn process_ppid(pid: u32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_ppid_from_stat(&stat)
+}
+
+fn process_ppid_from_stat(stat: &str) -> Option<i32> {
+    // After (comm): state(0) ppid(1) pgrp(2) ...
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
 fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     process_pgrp_and_comm_from_stat(&stat)
@@ -400,24 +514,10 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
         return Vec::new();
     };
 
-    let mut pids = Vec::new();
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let file_name = entry.file_name();
-        let Some(pid_str) = file_name.to_str() else {
-            continue;
-        };
-        if !pid_str.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        if process_session_id(pid) == Some(session_id) {
-            pids.push(pid);
-        }
-    }
-    pids
+    all_proc_pids()
+        .into_iter()
+        .filter(|&pid| process_session_id(pid) == Some(session_id))
+        .collect()
 }
 
 pub fn signal_processes(pids: &[u32], signal: Signal) {
@@ -801,6 +901,8 @@ mod tests {
             100,
             |pid| tasks.get(&pid).cloned().unwrap_or_default(),
             |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            true,
+            |_| Vec::new(),
             |pid| groups.get(&pid).copied(),
         );
 
@@ -818,6 +920,8 @@ mod tests {
             90,
             |pid| tasks.get(&pid).cloned().unwrap_or_default(),
             |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            true,
+            |_| Vec::new(),
             |pid| groups.get(&pid).copied(),
         );
 
@@ -835,6 +939,8 @@ mod tests {
             90,
             |pid| tasks.get(&pid).cloned().unwrap_or_default(),
             |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            true,
+            |_| Vec::new(),
             |pid| groups.get(&pid).copied(),
         );
 
@@ -851,6 +957,8 @@ mod tests {
             100,
             |_| vec![100],
             |_, _| children.clone(),
+            true,
+            |_| Vec::new(),
             |pid| {
                 inspected += 1;
                 Some(pid as i32)
@@ -859,6 +967,79 @@ mod tests {
 
         assert_eq!(inspected, CHILD_GROUPS_SCAN_LIMIT);
         assert_eq!(group, None);
+    }
+
+    #[test]
+    fn scanned_child_pids_stop_one_past_the_scan_limit() {
+        let total = CHILD_GROUPS_SCAN_LIMIT + 50;
+        let mut read = 0usize;
+
+        let children = scanned_child_pids_from(100, 1..=(total as u32), |_| {
+            read += 1;
+            Some(100)
+        });
+
+        // One past the limit is all the caller needs to fail closed, and the
+        // walk stops there instead of reading every remaining pid.
+        assert_eq!(children.len(), CHILD_GROUPS_SCAN_LIMIT + 1);
+        assert_eq!(read, CHILD_GROUPS_SCAN_LIMIT + 1);
+        assert!(read < total);
+    }
+
+    #[test]
+    fn scanned_child_pids_keep_only_direct_children() {
+        let parents = HashMap::from([(1, 0), (150, 100), (300, 100), (500, 1)]);
+
+        let children = scanned_child_pids_from(100, [1, 150, 300, 500].into_iter(), |pid| {
+            parents.get(&pid).copied()
+        });
+
+        assert_eq!(children, vec![150, 300]);
+    }
+
+    #[test]
+    fn child_groups_foreground_group_falls_back_to_a_proc_scan_without_children_files() {
+        let groups = HashMap::from([(150, 90), (300, 300)]);
+        let scanned = RefCell::new(Vec::new());
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            90,
+            |pid| vec![pid],
+            |_, _| Vec::new(),
+            false,
+            |parent| {
+                scanned.borrow_mut().push(parent);
+                vec![150, 300]
+            },
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+        assert_eq!(*scanned.borrow(), vec![100]);
+    }
+
+    #[test]
+    fn child_groups_foreground_group_skips_the_proc_scan_when_children_files_exist() {
+        let children = HashMap::from([((100, 100), vec![300])]);
+        let groups = HashMap::from([(300, 300), (400, 400)]);
+        let scanned = RefCell::new(0usize);
+
+        let group = child_groups_foreground_process_group_with(
+            100,
+            90,
+            |pid| vec![pid],
+            |pid, tid| children.get(&(pid, tid)).cloned().unwrap_or_default(),
+            true,
+            |_| {
+                *scanned.borrow_mut() += 1;
+                vec![400]
+            },
+            |pid| groups.get(&pid).copied(),
+        );
+
+        assert_eq!(group, Some(300));
+        assert_eq!(*scanned.borrow(), 0);
     }
 
     #[test]
@@ -903,6 +1084,8 @@ mod tests {
                 child_reads.borrow_mut().push((pid, tid));
                 children.get(&(pid, tid)).cloned().unwrap_or_default()
             },
+            true,
+            Vec::new,
             |process_group_id, pid| {
                 member_reads.borrow_mut().push(pid);
                 let (pgrp, comm) = processes.get(&pid)?;
@@ -933,12 +1116,105 @@ mod tests {
     }
 
     #[test]
+    fn foreground_members_fall_back_to_a_proc_scan_without_children_files() {
+        // Kernel without CONFIG_PROC_CHILDREN: every children file is missing,
+        // so the tree walk only yields its own roots. `mise` (100) leads the
+        // group and spawned `claude` (101) as a child.
+        let processes = HashMap::from([
+            (1, (1, "init")),
+            (100, (100, "mise")),
+            (101, (100, "claude")),
+            (500, (500, "unrelated")),
+        ]);
+        let scanned = RefCell::new(0usize);
+
+        let members = foreground_process_group_members_with(
+            50,
+            100,
+            |pid| vec![pid],
+            |_, _| Vec::new(),
+            false,
+            || {
+                *scanned.borrow_mut() += 1;
+                vec![1, 100, 101, 500]
+            },
+            |process_group_id, pid| {
+                let (pgrp, comm) = processes.get(&pid)?;
+                (*pgrp == process_group_id).then(|| ProcGroupMember {
+                    pid,
+                    comm: (*comm).to_string(),
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            members
+                .into_iter()
+                .map(|member| (member.pid, member.comm))
+                .collect::<Vec<_>>(),
+            vec![(100, "mise".to_string()), (101, "claude".to_string())]
+        );
+        assert_eq!(*scanned.borrow(), 1);
+    }
+
+    #[test]
+    fn foreground_members_skip_the_proc_scan_when_children_files_exist() {
+        let scanned = RefCell::new(0usize);
+
+        let members = foreground_process_group_members_with(
+            100,
+            200,
+            |pid| vec![pid],
+            |_, _| Vec::new(),
+            true,
+            || {
+                *scanned.borrow_mut() += 1;
+                vec![201]
+            },
+            |process_group_id, pid| {
+                (pid == process_group_id).then(|| ProcGroupMember {
+                    pid,
+                    comm: "leader".to_string(),
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            members
+                .into_iter()
+                .map(|member| member.pid)
+                .collect::<Vec<_>>(),
+            vec![200]
+        );
+        assert_eq!(*scanned.borrow(), 0);
+    }
+
+    #[test]
+    fn foreground_members_fallback_returns_none_when_the_group_is_empty() {
+        let members = foreground_process_group_members_with(
+            50,
+            100,
+            |pid| vec![pid],
+            |_, _| Vec::new(),
+            false,
+            || vec![1, 2, 3, 500],
+            |_, _| None,
+        );
+
+        assert_eq!(members, None);
+    }
+
+    #[test]
     fn foreground_members_degrade_to_the_direct_group_leader() {
         let members = foreground_process_group_members_with(
             100,
             200,
             |_| Vec::new(),
             |_, _| Vec::new(),
+            true,
+            Vec::new,
             |process_group_id, pid| {
                 (pid == process_group_id).then(|| ProcGroupMember {
                     pid,
@@ -972,6 +1248,8 @@ mod tests {
                         .cloned()
                         .unwrap_or_default()
                 },
+                true,
+                Vec::new,
                 |process_group_id, pid| {
                     [200, 201]
                         .contains(&pid)
@@ -991,6 +1269,28 @@ mod tests {
         assert_eq!(discover(), vec![200]);
         children.borrow_mut().insert((100, 100), vec![200, 201]);
         assert_eq!(discover(), vec![200, 201]);
+    }
+
+    #[test]
+    fn proc_stat_parsing_reads_the_parent_pid() {
+        assert_eq!(
+            process_ppid_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
+            Some(1)
+        );
+        assert_eq!(
+            process_ppid_from_stat("101 (claude) S 100 100 100 0 -1"),
+            Some(100)
+        );
+        assert_eq!(process_ppid_from_stat("garbage"), None);
+    }
+
+    #[test]
+    fn proc_children_support_probe_is_cached() {
+        // The probe reads the real /proc, so the concrete answer depends on the
+        // host kernel config. Only assert it is stable across calls; the
+        // supported/unsupported behavior itself is covered by the pure tests
+        // above, which inject the flag.
+        assert_eq!(proc_children_supported(), proc_children_supported());
     }
 
     #[test]
