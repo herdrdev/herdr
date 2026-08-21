@@ -150,7 +150,26 @@ fn read_json_lines(path: &Path, mut visit: impl FnMut(&Value)) -> io::Result<()>
 }
 
 fn resume_session_id(pane: &PaneInput) -> Option<String> {
-    pane.foreground_processes.iter().find_map(|process| {
+    let detected;
+    let processes = if pane.foreground_processes.is_empty() {
+        detected = pane
+            .shell_pid
+            .and_then(crate::detect::foreground_job)
+            .map(|job| {
+                job.processes
+                    .into_iter()
+                    .map(|process| super::ProcessInput {
+                        name: process.name,
+                        argv: process.argv.unwrap_or_default(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        &detected
+    } else {
+        &pane.foreground_processes
+    };
+    processes.iter().find_map(|process| {
         if process.name != "codex" {
             return None;
         }

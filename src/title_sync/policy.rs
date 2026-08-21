@@ -22,6 +22,7 @@ pub(crate) struct PaneInput {
     pub(crate) label: Option<String>,
     pub(crate) terminal_title: Option<String>,
     pub(crate) terminal_title_stripped: Option<String>,
+    pub(crate) shell_pid: Option<u32>,
     pub(crate) foreground_processes: Vec<ProcessInput>,
 }
 
@@ -46,12 +47,15 @@ pub(crate) enum RenameDecision {
 }
 
 pub(crate) fn has_agent_identity(pane: &PaneInput) -> bool {
-    pane.agent.is_some()
-        || pane
-            .agent_session
+    agent_identity(pane).is_some()
+}
+
+pub(crate) fn agent_identity(pane: &PaneInput) -> Option<&str> {
+    pane.agent.as_deref().or_else(|| {
+        pane.agent_session
             .as_ref()
-            .and_then(|session| session.agent.as_ref())
-            .is_some()
+            .and_then(|session| session.agent.as_deref())
+    })
 }
 
 pub(crate) fn session_key(pane: &PaneInput) -> Option<String> {

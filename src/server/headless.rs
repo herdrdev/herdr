@@ -340,6 +340,8 @@ pub struct HeadlessServer {
     server_event_tx: mpsc::Sender<ServerEvent>,
     #[cfg(unix)]
     agent_watcher: embedded_watcher::EmbeddedWatcher,
+    #[cfg(unix)]
+    title_sync: crate::title_sync::TitleSyncEngine,
 }
 
 fn apply_terminal_attach_scroll(
@@ -473,6 +475,8 @@ impl HeadlessServer {
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
         agent_watcher_enabled: bool,
+        title_sync_enabled: bool,
+        title_sync_interval: Duration,
     ) -> io::Result<Self> {
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -500,6 +504,14 @@ impl HeadlessServer {
         let _ = api_tx;
         #[cfg(not(unix))]
         let _ = agent_watcher_enabled;
+        #[cfg(not(unix))]
+        let _ = (title_sync_enabled, title_sync_interval);
+        #[cfg(unix)]
+        let title_sync = crate::title_sync::TitleSyncEngine::start(
+            title_sync_enabled,
+            title_sync_interval,
+            app.event_tx.clone(),
+        );
         Ok(Self {
             app,
             #[cfg(unix)]
@@ -530,6 +542,8 @@ impl HeadlessServer {
             server_event_tx,
             #[cfg(unix)]
             agent_watcher: embedded_watcher::EmbeddedWatcher::start(agent_watcher_enabled),
+            #[cfg(unix)]
+            title_sync,
         })
     }
 
@@ -656,6 +670,8 @@ impl HeadlessServer {
             let now = Instant::now();
             #[cfg(unix)]
             self.agent_watcher.poll(now);
+            #[cfg(unix)]
+            self.title_sync.poll(&self.app, now);
             if self.handle_scheduled_tasks_headless(now, needs_render) {
                 needs_render = true;
                 needs_full_render = true;
@@ -2110,6 +2126,16 @@ impl HeadlessServer {
     /// Returns true if the event changed visual state (requiring a re-render).
     fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
         match &ev {
+            #[cfg(unix)]
+            AppEvent::TitleSyncResolved { .. } => {
+                let AppEvent::TitleSyncResolved { generation, panes } = ev else {
+                    unreachable!("matched title-sync event")
+                };
+                let mutations = self.app.apply_title_sync_results(panes);
+                let changed = !mutations.is_empty();
+                self.title_sync.complete(&self.app, generation, mutations);
+                changed
+            }
             AppEvent::ClipboardWrite { content } => {
                 // Clipboard writes are client-local side effects. Forward them only to
                 // the foreground client instead of broadcasting to every attached client.
@@ -4730,6 +4756,8 @@ pub fn run_server() -> io::Result<()> {
             Some(api_tx.clone()),
             Some(_api_server),
             loaded_config.config.agent_watcher.enabled,
+            loaded_config.config.title_sync.enabled,
+            Duration::from_millis(loaded_config.config.title_sync.interval_ms.get()),
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
@@ -4839,6 +4867,8 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             Some(api_tx.clone()),
             Some(api_server),
             loaded_config.config.agent_watcher.enabled,
+            loaded_config.config.title_sync.enabled,
+            Duration::from_millis(loaded_config.config.title_sync.interval_ms.get()),
         )?;
         crate::server::handoff::report_ready(&mut received.stream)?;
         crate::server::handoff::wait_committed(&mut received.stream)?;
@@ -4988,6 +5018,8 @@ mod tests {
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
         let server_keybindings = app_keybindings(&app);
+        #[cfg(unix)]
+        let title_sync = crate::title_sync::TitleSyncEngine::disabled(app.event_tx.clone());
 
         HeadlessServer {
             app,
@@ -5022,6 +5054,8 @@ mod tests {
             server_event_tx,
             #[cfg(unix)]
             agent_watcher: embedded_watcher::EmbeddedWatcher::disabled(),
+            #[cfg(unix)]
+            title_sync,
         }
     }
 

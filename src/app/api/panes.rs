@@ -1,3 +1,5 @@
+// Modified from herdr by the vimeflow project — see FORK.md
+
 use bytes::Bytes;
 
 use crate::api::schema::{
@@ -1142,24 +1144,9 @@ impl App {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
-        let Some(terminal_id) = self
-            .state
-            .workspaces
-            .get(ws_idx)
-            .and_then(|ws| ws.terminal_id(pane_id))
-            .cloned()
-        else {
+        let Some(pane) = self.mutate_pane_label(ws_idx, pane_id, params.label) else {
             return pane_not_found(id, &params.pane_id);
         };
-        let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
-            return pane_not_found(id, &params.pane_id);
-        };
-        match params.label.map(|label| label.trim().to_string()) {
-            Some(label) if !label.is_empty() => terminal.set_manual_label(label),
-            _ => terminal.clear_manual_label(),
-        }
-        self.state.mark_session_dirty();
-        let pane = self.pane_info(ws_idx, pane_id).unwrap();
 
         encode_success(id, ResponseResult::PaneInfo { pane })
     }

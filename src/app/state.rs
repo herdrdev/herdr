@@ -1,3 +1,5 @@
+// Modified from herdr by the vimeflow project — see FORK.md
+
 use crate::config::{
     Keybinds, NewTerminalCwdConfig, SoundConfig, TabBarPositionConfig, ToastConfig, ToastDelivery,
 };
@@ -1568,6 +1570,8 @@ pub struct AppState {
     pub(crate) host_cell_size: crate::kitty_graphics::HostCellSize,
     /// Set when a persisted session snapshot would change.
     pub session_dirty: bool,
+    /// Monotonic signal consumed by the coalesced native title-sync worker.
+    pub(crate) title_sync_generation: u64,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
@@ -1576,6 +1580,11 @@ pub struct AppState {
 impl AppState {
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
+        self.mark_title_sync_dirty();
+    }
+
+    pub(crate) fn mark_title_sync_dirty(&mut self) {
+        self.title_sync_generation = self.title_sync_generation.wrapping_add(1);
     }
 
     pub(crate) fn remove_alias_shadowed_by_new_pane(&mut self, pane_id: PaneId) {
@@ -1921,6 +1930,7 @@ impl AppState {
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
+            title_sync_generation: 0,
             terminal_runtime_shutdowns: Vec::new(),
         }
     }

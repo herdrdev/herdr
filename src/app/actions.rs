@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 //! Pure state mutations on AppState.
 //! These don't need channels, async, or PTY runtime.
 
@@ -2932,6 +2933,8 @@ impl AppState {
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
+            #[cfg(unix)]
+            AppEvent::TitleSyncResolved { .. } => Vec::new(),
         }
     }
 
@@ -2964,8 +2967,17 @@ impl AppState {
                 unchanged_change,
             )
         };
+        // Keep the session mutation hook before the effective-state early return:
+        // session-reference-only changes still change the durable title lookup key.
         if mutation.session_ref_changed || managed_changed || agent_name_changed {
             self.mark_session_dirty();
+        }
+        if mutation.effective_state_change.is_some()
+            || mutation.agent_released
+            || managed_changed
+            || agent_name_changed
+        {
+            self.mark_title_sync_dirty();
         }
         let agent_released = mutation.agent_released;
         let change = mutation.effective_state_change.or(unchanged_change)?;

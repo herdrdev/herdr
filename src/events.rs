@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 //! Internal app events delivered via channel.
 //!
 //! Background tasks (PTY child watchers, future hook listeners, etc.) send
@@ -54,6 +55,12 @@ pub struct WorktreeRemoveResult {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
+    #[cfg(unix)]
+    /// Blocking native title resolution completed for a coalesced pane snapshot.
+    TitleSyncResolved {
+        generation: u64,
+        panes: Vec<crate::title_sync::ResolvedPane>,
+    },
     /// A pane's child process exited.
     PaneDied { pane_id: PaneId },
     /// Fallback detector state changed in a pane.

@@ -25,6 +25,8 @@ pub mod state;
 mod terminal_targets;
 mod terminal_titles;
 mod theme_sync;
+#[cfg(unix)]
+mod title_sync;
 mod worktrees;
 
 use std::collections::{HashMap, HashSet};
@@ -682,6 +684,7 @@ impl App {
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
+            title_sync_generation: 0,
             terminal_runtime_shutdowns: Vec::new(),
         };
 
