@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.08.19.1"
+version = "2026.08.21.1"
 min_engine_version = 2
-updated_at = "2026-08-19T00:00:00Z"
+updated_at = "2026-08-21T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -39,6 +39,24 @@ priority = 965
 region = "last_non_empty_above_prompt_box"
 visible_working = true
 line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}]\s+Waiting for [1-9]\d* background agents? to finish\s*$']
+
+[[rules]]
+id = "background_mcp_task_working"
+state = "working"
+priority = 965
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+# Claude renders activity summaries at column zero; wrapped continuations are indented.
+# Keeping that shape prevents user prompt text from impersonating this signal.
+regex = ['(?m)^[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}][ \t]+\S[^\n]*?(?:\n[ \t]+[^\n]*?){0,3}·(?:[ \t]+|\n[ \t]*)[1-9]\d*(?:[ \t]+|\n[ \t]*)MCP(?:[ \t]+|\n[ \t]*)tasks?(?:[ \t]+|\n[ \t]*)still(?:[ \t]+|\n[ \t]*)running[ \t]*$']
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+]
 
 [[rules]]
 id = "btw_overlay_working"
