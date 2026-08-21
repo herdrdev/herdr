@@ -57,7 +57,7 @@ rustPlatform.buildRustPackage {
   cargoLock = {
     lockFile = ../Cargo.lock;
     outputHashes = {
-      "herdr-agent-watcher-0.2.1" = "sha256-kZyv5VM47DEFQkgXO4chCm+9qFpg8xvrKcGqTLHRiq8=";
+      "herdr-agent-watcher-0.2.2" = "sha256-K+O3pArRd4qUjL9g7mearpKGq0UPTXaOEyqi+fR0n8U=";
     };
   };
 

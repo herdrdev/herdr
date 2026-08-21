@@ -50,7 +50,7 @@ schemars = { version = "1.2.1", features = ["derive"] }
 portable-pty = { path = "vendor/portable-pty" }
 
 [target.'cfg(unix)'.dependencies]
-herdr-agent-watcher = { git = "https://github.com/winoooops/herdr-agent-watcher", tag = "v0.2.1", features = ["runtime"] }
+herdr-agent-watcher = { git = "https://github.com/winoooops/herdr-agent-watcher", tag = "v0.2.2", features = ["runtime"] }
 
 [target.'cfg(windows)'.dependencies]
 wmi = { version = "0.18.4", default-features = false }
