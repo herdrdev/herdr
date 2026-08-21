@@ -164,6 +164,26 @@ pub(crate) fn handle_navigator_key(
     terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
     key: KeyEvent,
 ) {
+    let terminal_key = TerminalKey::from(key);
+    if state
+        .keybinds
+        .navigator
+        .up
+        .matches_direct_key(&terminal_key)
+    {
+        state.move_navigator_selection_from(terminal_runtimes, -1);
+        return;
+    }
+    if state
+        .keybinds
+        .navigator
+        .down
+        .matches_direct_key(&terminal_key)
+    {
+        state.move_navigator_selection_from(terminal_runtimes, 1);
+        return;
+    }
+
     if state.navigator.search_focused {
         match key.code {
             KeyCode::Esc => {
@@ -179,12 +199,6 @@ pub(crate) fn handle_navigator_key(
             }
             KeyCode::Up => state.move_navigator_selection_from(terminal_runtimes, -1),
             KeyCode::Down => state.move_navigator_selection_from(terminal_runtimes, 1),
-            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
-                state.move_navigator_selection_from(terminal_runtimes, 1)
-            }
-            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
-                state.move_navigator_selection_from(terminal_runtimes, -1)
-            }
             KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
                 state.navigator.query.clear();
                 state.navigator.state_filter = None;
@@ -1899,6 +1913,86 @@ mod tests {
         insert_navigator_search_text(&mut state, &terminal_runtimes, "beta");
 
         assert!(state.navigator.query.is_empty());
+    }
+
+    #[test]
+    fn navigator_configured_movement_keys_work_in_normal_and_search_views() {
+        let mut state = state_with_workspaces(&["alpha", "beta"]);
+        let terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[keys]
+navigate_navigator_up = "ctrl+alt+p"
+navigate_navigator_down = "ctrl+alt+n"
+"#,
+        )
+        .unwrap();
+        state.keybinds = config.keybinds();
+        state.mode = Mode::Navigator;
+
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(
+                KeyCode::Char('n'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert_eq!(state.navigator.selected, 1);
+
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert_eq!(state.navigator.selected, 0);
+
+        state.navigator.search_focused = true;
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(
+                KeyCode::Char('n'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert_eq!(state.navigator.selected, 1);
+
+        handle_navigator_key(
+            &mut state,
+            &terminal_runtimes,
+            KeyEvent::new(
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert_eq!(state.navigator.selected, 0);
+    }
+
+    #[test]
+    fn navigator_builtin_vertical_movement_keys_remain_available() {
+        let mut state = state_with_workspaces(&["alpha", "beta", "gamma"]);
+        let terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        state.mode = Mode::Navigator;
+
+        for key in [
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+        ] {
+            handle_navigator_key(&mut state, &terminal_runtimes, key);
+        }
+        assert_eq!(state.navigator.selected, 2);
+
+        for key in [
+            KeyEvent::new(KeyCode::Up, KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()),
+        ] {
+            handle_navigator_key(&mut state, &terminal_runtimes, key);
+        }
+        assert_eq!(state.navigator.selected, 0);
     }
 
     #[test]
