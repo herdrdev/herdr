@@ -22,6 +22,13 @@ pub(crate) struct PaneInput {
     pub(crate) label: Option<String>,
     pub(crate) terminal_title: Option<String>,
     pub(crate) terminal_title_stripped: Option<String>,
+    pub(crate) foreground_processes: Vec<ProcessInput>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProcessInput {
+    pub(crate) name: String,
+    pub(crate) argv: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -83,7 +90,7 @@ pub(crate) fn sanitize_title(raw: Option<&str>, max_bytes: usize) -> Option<Stri
     let value = raw?
         .chars()
         .map(|character| {
-            if character.is_control() {
+            if character <= '\u{001f}' || character == '\u{007f}' {
                 ' '
             } else {
                 character

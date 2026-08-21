@@ -940,6 +940,7 @@ dependencies = [
  "portable-pty 0.9.0",
  "ratatui",
  "regex",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_ignored",

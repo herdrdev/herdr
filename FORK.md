@@ -89,8 +89,8 @@ the top of the file:
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel. | `e312ccf8368c2a51b42ff12efad51efb8b128957` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
-| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.2`. | watcher v0.2.2 pin commit |
-| `Cargo.lock` | Lock `herdr-agent-watcher` tag `v0.2.2` to commit `f0de59e89a8c9e3332634cdb096893ba702eeeee` and its transitive crates. | watcher v0.2.2 pin commit |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.2`, plus direct SQLite access for OpenCode titles. | Task 6 title readers |
+| `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | Task 6 title readers |
 | `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | watcher v0.2.2 pin commit |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
