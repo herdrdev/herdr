@@ -300,8 +300,8 @@ impl App {
             None
         };
         let manifest_update_agents =
-            if let AppEvent::AgentDetectionManifestsUpdated { updated, .. } = &ev {
-                Some(updated.iter().map(|item| item.agent).collect::<Vec<_>>())
+            if let AppEvent::AgentDetectionManifestsUpdated { activated, .. } = &ev {
+                Some(activated.clone())
             } else {
                 None
             };
@@ -1423,7 +1423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manifest_update_event_resets_matching_agent_detection_runtime() {
+    async fn manifest_activation_event_resets_matching_agent_detection_runtime() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -1448,11 +1448,8 @@ mod tests {
         app.terminal_runtimes.insert(terminal_id, runtime);
 
         app.handle_internal_event(AppEvent::AgentDetectionManifestsUpdated {
-            updated: vec![crate::detect::manifest_update::ManifestUpdateCommit {
-                agent: Agent::Codex,
-                version: crate::detect::manifest_update::ManifestVersion::parse("2026.06.10.1")
-                    .unwrap(),
-            }],
+            updated: Vec::new(),
+            activated: vec![Agent::Codex],
             status: crate::detect::manifest_update::ManifestUpdateStatus::default(),
         });
 

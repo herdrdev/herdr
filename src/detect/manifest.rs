@@ -284,6 +284,36 @@ pub(crate) fn reload_manifests() -> Vec<AgentManifestSummary> {
     summaries
 }
 
+pub(crate) fn reload_manifests_for_agents(agents: &[Agent]) {
+    if agents.is_empty() {
+        return;
+    }
+
+    let _reload_guard = MANIFEST_RELOAD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let lock = manifest_cache();
+    let replacements = Agent::SCREEN_MANIFEST_AGENTS
+        .into_iter()
+        .filter(|agent| agents.contains(agent))
+        .map(|agent| (agent, load_manifest_uncached(agent)))
+        .collect::<Vec<_>>();
+    let mut cache = match lock.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (agent, replacement) in replacements {
+        if let Some((_, loaded)) = cache
+            .manifests
+            .iter_mut()
+            .find(|(cached_agent, _)| *cached_agent == agent)
+        {
+            *loaded = replacement;
+        }
+    }
+}
+
 fn manifest_cache() -> &'static RwLock<ManifestCache> {
     MANIFEST_CACHE.get_or_init(|| RwLock::new(build_manifest_cache()))
 }
