@@ -32,6 +32,7 @@
 - Active Space and Agent rows now use dedicated theme colors that remain visible when the host terminal background matches the selected Herdr theme. (#2792)
 - `agent prompt` now rejects agents already waiting at approval or question dialogs with `agent_blocked`, without sending text or Enter. (#2788)
 - `prefix+e` now preserves logical lines when opening soft-wrapped scrollback in an editor. (#2733)
+- `--help` for `pane report-agent`, `pane report-agent-session`, `pane release-agent`, `pane report-metadata`, and `workspace report-metadata` now shows the id argument before required options in the usage line, matching what the hand-written parsers actually require. Following the previous usage line's argument order produced a confusing `unknown option` error instead of working.
 - Tab bar clicks are now properly registered when using Ghostty in native fullscreen. (#796, #2736, thanks @HackAttack)
 - Prefix keybindings now disambiguate layout-aware shifted punctuation, so a shifted `\` no longer triggers `prefix+|` on keyboard layouts where the same key produces both characters. (#2674)
 - Remote clients now continue redrawing at very large terminal sizes instead of freezing when a full ANSI frame exceeds the transport limit. (#2670)

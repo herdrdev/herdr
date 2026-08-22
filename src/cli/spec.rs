@@ -217,6 +217,9 @@ fn workspace_command() -> Command {
         .subcommand(
             Command::new("report-metadata")
                 .about("Report display-only workspace metadata")
+                .override_usage(
+                    "herdr workspace report-metadata <WORKSPACE_ID> --source <ID> [OPTIONS]",
+                )
                 .arg(required("workspace_id", "WORKSPACE_ID"))
                 .arg(option("source", "ID").required(true))
                 .arg(repeatable_option("token", "NAME=VALUE"))
@@ -638,6 +641,7 @@ fn pane_command() -> Command {
 fn report_agent_command() -> Command {
     Command::new("report-agent")
         .about("Report pane agent lifecycle state")
+        .override_usage("herdr pane report-agent <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]")
         .arg(required("pane_id", "PANE_ID"))
         .arg(option("source", "ID").required(true))
         .arg(option("agent", "LABEL").required(true))
@@ -651,6 +655,9 @@ fn report_agent_command() -> Command {
 fn report_agent_session_command() -> Command {
     Command::new("report-agent-session")
         .about("Report pane agent session identity")
+        .override_usage(
+            "herdr pane report-agent-session <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]",
+        )
         .arg(required("pane_id", "PANE_ID"))
         .arg(option("source", "ID").required(true))
         .arg(option("agent", "LABEL").required(true))
@@ -663,6 +670,9 @@ fn report_agent_session_command() -> Command {
 fn release_agent_command() -> Command {
     Command::new("release-agent")
         .about("Release pane agent lifecycle authority")
+        .override_usage(
+            "herdr pane release-agent <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]",
+        )
         .arg(required("pane_id", "PANE_ID"))
         .arg(option("source", "ID").required(true))
         .arg(option("agent", "LABEL").required(true))
@@ -672,6 +682,7 @@ fn release_agent_command() -> Command {
 fn report_metadata_command() -> Command {
     Command::new("report-metadata")
         .about("Report display-only pane metadata")
+        .override_usage("herdr pane report-metadata <PANE_ID> --source <ID> [OPTIONS]")
         .arg(required("pane_id", "PANE_ID"))
         .arg(option("source", "ID").required(true))
         .arg(option("agent", "LABEL"))
@@ -1202,6 +1213,49 @@ mod tests {
         assert!(String::from_utf8(help)
             .unwrap()
             .contains("Usage: herdr agent rename <TARGET> <NAME>|--clear"));
+    }
+
+    #[test]
+    fn pane_and_workspace_id_reporting_commands_show_id_before_required_options() {
+        // These commands take their id positionally and a hand-written parser (not
+        // clap) requires it strictly first. Without an explicit override, clap's
+        // default usage synopsis places positionals after required options, which
+        // misleads users into an argument order the parser rejects.
+        for (path, expected_usage) in [
+            (
+                &["workspace", "report-metadata"][..],
+                "Usage: herdr workspace report-metadata <WORKSPACE_ID> --source <ID> [OPTIONS]",
+            ),
+            (
+                &["pane", "report-agent"][..],
+                "Usage: herdr pane report-agent <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]",
+            ),
+            (
+                &["pane", "report-agent-session"][..],
+                "Usage: herdr pane report-agent-session <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]",
+            ),
+            (
+                &["pane", "release-agent"][..],
+                "Usage: herdr pane release-agent <PANE_ID> --source <ID> --agent <LABEL> [OPTIONS]",
+            ),
+            (
+                &["pane", "report-metadata"][..],
+                "Usage: herdr pane report-metadata <PANE_ID> --source <ID> [OPTIONS]",
+            ),
+        ] {
+            let mut args = vec!["herdr".to_string()];
+            args.extend(path.iter().map(|s| s.to_string()));
+            args.push("--help".to_string());
+
+            let mut help = Vec::new();
+            super::write_requested_help(&args, &mut help).unwrap();
+            let help = String::from_utf8(help).unwrap();
+            assert!(
+                help.contains(expected_usage),
+                "herdr {}: expected usage line {expected_usage:?}, got: {help}",
+                path.join(" ")
+            );
+        }
     }
 
     #[test]
