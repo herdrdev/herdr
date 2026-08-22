@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Added Letta Code detection, optional native conversation restore, and `agent start --kind letta` support. (#3106, thanks @just-cameron)
+
 ### Fixed
 - Retained mouse selections now copy when Ctrl+C or Cmd+C arrives before a delayed mouse release instead of forwarding the copy shortcut to the pane. (#3100, thanks @moret)
 - Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)

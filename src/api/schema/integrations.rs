@@ -26,6 +26,7 @@ pub enum IntegrationTarget {
     Hermes,
     Qodercli,
     Qwen,
+    Letta,
     Cursor,
     Mastracode,
     AntigravityCli,
@@ -33,7 +34,7 @@ pub enum IntegrationTarget {
 }
 
 impl IntegrationTarget {
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Pi,
         Self::Omp,
         Self::Claude,
@@ -47,6 +48,7 @@ impl IntegrationTarget {
         Self::Hermes,
         Self::Qodercli,
         Self::Qwen,
+        Self::Letta,
         Self::Cursor,
         Self::Mastracode,
         Self::AntigravityCli,

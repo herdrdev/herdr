@@ -1,6 +1,6 @@
 ---
 title: インテグレーション
-description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI 向けの Herdr インテグレーションをインストールします。
+description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Letta Code、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI 向けの Herdr インテグレーションをインストールします。
 ---
 
 Herdr は対応エージェントを自動的に検出します。公式インテグレーションは、復元のためのネイティブセッション識別、ライフサイクル状態の報告、またはその両方を追加できます。
@@ -26,6 +26,7 @@ herdr integration install hermes
 herdr integration install mastracode
 herdr integration install qodercli
 herdr integration install qwen
+herdr integration install letta
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
@@ -48,6 +49,7 @@ herdr integration uninstall hermes
 herdr integration uninstall mastracode
 herdr integration uninstall qodercli
 herdr integration uninstall qwen
+herdr integration uninstall letta
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
@@ -60,7 +62,7 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 | インテグレーションの種類 | エージェント | 効果 |
 | --- | --- | --- |
 | ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
-| セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Qwen Code、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
+| セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Qwen Code、Letta Code、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
 
 カスタムインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。Herdr への組み込みや、認識済みのエージェント実行ファイルは必要ありません。
 
@@ -91,9 +93,9 @@ Herdr の外では何もしないように、`HERDR_ENV=1` で必要な変数が
 
 [Prime Agent の組み込み Herdr レポーター](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts)は実際の実装例です。Herdr 内でのみ有効になり、エージェントイベントを `working`、`idle`、`blocked` に対応付け、セッションをまたいで報告順序を維持し、終了時に権威を解放します。
 
-一部のインテグレーションは、エージェントのネイティブセッション参照を報告します。Herdr は公式のセッション参照を使って、`[session] resume_agents_on_restore = false` で無効化されていない限り、Herdr サーバーの再起動後に Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Qwen Code、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode、Antigravity CLI のペインを resume します。
+一部のインテグレーションは、エージェントのネイティブセッション参照を報告します。Herdr は公式のセッション参照を使って、`[session] resume_agents_on_restore = false` で無効化されていない限り、Herdr サーバーの再起動後に Claude Code、Codex、Devin CLI、Droid、Kimi Code CLI、Qoder CLI、Qwen Code、Letta Code、Cursor Agent CLI、Grok CLI、GitHub Copilot CLI、Pi、OMP、Hermes Agent、OpenCode、Kilo Code CLI、MastraCode、Antigravity CLI のペインを resume します。
 
-エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Qwen Code は `1`、Cursor Agent CLI は `1`、Grok CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `5`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
+エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Qwen Code は `1`、Letta Code は `1`、Cursor Agent CLI は `1`、Grok CLI は `1`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `5`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
 
 ## Pi
 
@@ -276,6 +278,20 @@ herdr integration install qwen
 Herdr はデフォルトで `~/.qwen` を使い、`QWEN_HOME` が設定されていればそちらを使います。Qwen の設定ディレクトリはあらかじめ存在している必要があります。インストールは `hooks/herdr-agent-session.sh`（Windows では `hooks/herdr-agent-session.ps1`）を書き込み、`settings.json` に Herdr エントリを追加します。アンインストールは一致するエントリと管理対象スクリプトだけを削除します。
 
 Herdr は保存された Qwen Code セッションを `qwen --resume <id>` で resume します。
+
+## Letta Code
+
+Letta Code フックをインストールします:
+
+```bash
+herdr integration install letta
+```
+
+静かな `SessionStart` フックは、ネイティブ復元用の会話 ID を報告します。Letta Code の状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。
+
+Herdr は `~/.letta` を使います。設定ディレクトリはあらかじめ存在している必要があります。インストールは `hooks/herdr-agent-session.sh`（Windows では `hooks/herdr-agent-session.ps1`）を書き込み、`settings.json` に Herdr エントリを追加します。アンインストールは一致するエントリと管理対象スクリプトだけを削除します。
+
+Herdr は名前付き会話を `letta --conversation <id>` で resume します。デフォルト会話は `default:<agent-id>` として記録し、`letta --conversation default --agent <agent-id>` で resume します。
 
 ## Cursor Agent CLI
 

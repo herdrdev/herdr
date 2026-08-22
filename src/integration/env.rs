@@ -162,6 +162,10 @@ pub(crate) fn qwen_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(QWEN_HOME_ENV_VAR, &[".qwen"])
 }
 
+pub(crate) fn letta_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".letta"))
+}
+
 pub(crate) fn cursor_dir() -> io::Result<PathBuf> {
     config_dir_from_env_or_home(CURSOR_CONFIG_DIR_ENV_VAR, &[".cursor"])
 }
