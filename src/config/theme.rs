@@ -119,6 +119,35 @@ pub struct CustomThemeColors {
     pub blue: Option<String>,
     pub teal: Option<String>,
     pub peach: Option<String>,
+    /// Overrides applied when `auto_switch` selects a light appearance.
+    pub light: Option<ModeThemeColors>,
+    /// Overrides applied when `auto_switch` selects a dark appearance.
+    pub dark: Option<ModeThemeColors>,
+}
+
+/// Per-token color overrides for one auto-switch appearance.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ModeThemeColors {
+    pub accent: Option<String>,
+    pub panel_bg: Option<String>,
+    pub sidebar_bg: Option<String>,
+    pub active_row_bg: Option<String>,
+    pub selection_bg: Option<String>,
+    pub surface0: Option<String>,
+    pub surface1: Option<String>,
+    pub surface_dim: Option<String>,
+    pub overlay0: Option<String>,
+    pub overlay1: Option<String>,
+    pub text: Option<String>,
+    pub subtext0: Option<String>,
+    pub mauve: Option<String>,
+    pub green: Option<String>,
+    pub yellow: Option<String>,
+    pub red: Option<String>,
+    pub blue: Option<String>,
+    pub teal: Option<String>,
+    pub peach: Option<String>,
 }
 
 /// Parse a color string into a ratatui Color.
@@ -281,6 +310,35 @@ red = "rgb(255, 85, 85)"
         assert_eq!(custom.accent.as_deref(), Some("#ff79c6"));
         assert_eq!(custom.red.as_deref(), Some("rgb(255, 85, 85)"));
         assert!(custom.green.is_none());
+    }
+
+    #[test]
+    fn theme_custom_mode_overrides_parse() {
+        let toml = r##"
+[theme.custom]
+accent = "#010203"
+
+[theme.custom.light]
+accent = "#040506"
+text = "#070809"
+selection_bg = "#101112"
+
+[theme.custom.dark]
+panel_bg = "#0a0b0c"
+sidebar_bg = "#0d0e0f"
+active_row_bg = "#131415"
+"##;
+        let config: Config = toml::from_str(toml).unwrap();
+        let custom = config.theme.custom.as_ref().unwrap();
+        assert_eq!(custom.accent.as_deref(), Some("#010203"));
+        let light = custom.light.as_ref().unwrap();
+        assert_eq!(light.accent.as_deref(), Some("#040506"));
+        assert_eq!(light.text.as_deref(), Some("#070809"));
+        assert_eq!(light.selection_bg.as_deref(), Some("#101112"));
+        let dark = custom.dark.as_ref().unwrap();
+        assert_eq!(dark.panel_bg.as_deref(), Some("#0a0b0c"));
+        assert_eq!(dark.sidebar_bg.as_deref(), Some("#0d0e0f"));
+        assert_eq!(dark.active_row_bg.as_deref(), Some("#131415"));
     }
 
     #[test]

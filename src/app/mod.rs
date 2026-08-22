@@ -337,6 +337,7 @@ fn resolve_palette_for_theme_name(
     name: &str,
     fallback_name: &str,
     runtime: &state::ThemeRuntimeConfig,
+    mode_custom: Option<&crate::config::ModeThemeColors>,
 ) -> state::Palette {
     let mut palette = state::Palette::from_name(name).unwrap_or_else(|| {
         tracing::warn!(
@@ -353,6 +354,9 @@ fn resolve_palette_for_theme_name(
     if let Some(accent) = &runtime.legacy_accent {
         palette.accent = crate::config::parse_color(accent);
     }
+    if let Some(custom) = mode_custom {
+        palette = palette.with_mode_overrides(custom);
+    }
 
     palette
 }
@@ -361,18 +365,30 @@ fn resolve_effective_theme(
     runtime: &state::ThemeRuntimeConfig,
     appearance: Option<crate::terminal_theme::HostAppearance>,
 ) -> (state::Palette, String) {
-    let (name, fallback) = if runtime.auto_switch {
+    let (name, fallback, mode_custom) = if runtime.auto_switch {
         match appearance.unwrap_or(crate::terminal_theme::HostAppearance::Dark) {
-            crate::terminal_theme::HostAppearance::Dark => (&runtime.dark_name, "catppuccin"),
-            crate::terminal_theme::HostAppearance::Light => {
-                (&runtime.light_name, "catppuccin-latte")
-            }
+            crate::terminal_theme::HostAppearance::Dark => (
+                &runtime.dark_name,
+                "catppuccin",
+                runtime
+                    .custom
+                    .as_ref()
+                    .and_then(|custom| custom.dark.as_ref()),
+            ),
+            crate::terminal_theme::HostAppearance::Light => (
+                &runtime.light_name,
+                "catppuccin-latte",
+                runtime
+                    .custom
+                    .as_ref()
+                    .and_then(|custom| custom.light.as_ref()),
+            ),
         }
     } else {
-        (&runtime.manual_name, "catppuccin")
+        (&runtime.manual_name, "catppuccin", None)
     };
     (
-        resolve_palette_for_theme_name(name, fallback, runtime),
+        resolve_palette_for_theme_name(name, fallback, runtime, mode_custom),
         name.clone(),
     )
 }
@@ -2807,6 +2823,17 @@ mod tests {
     fn theme_auto_switch_is_opt_in_and_preserves_manual_default() {
         let mut config = Config::default();
         config.theme.name = Some("tokyo-night".to_string());
+        config.theme.custom = Some(crate::config::CustomThemeColors {
+            light: Some(crate::config::ModeThemeColors {
+                accent: Some("#010203".to_string()),
+                ..Default::default()
+            }),
+            dark: Some(crate::config::ModeThemeColors {
+                accent: Some("#040506".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
@@ -2852,6 +2879,55 @@ mod tests {
             app.state.palette.accent,
             ratatui::style::Color::Rgb(1, 2, 3)
         );
+    }
+
+    #[test]
+    fn theme_auto_switch_layers_active_mode_overrides_last() {
+        let mut config = Config::default();
+        config.theme.name = Some("gruvbox".to_string());
+        config.theme.auto_switch = true;
+        config.theme.custom = Some(crate::config::CustomThemeColors {
+            accent: Some("#010203".to_string()),
+            text: Some("#040506".to_string()),
+            light: Some(crate::config::ModeThemeColors {
+                accent: Some("#070809".to_string()),
+                ..Default::default()
+            }),
+            dark: Some(crate::config::ModeThemeColors {
+                text: Some("#0a0b0c".to_string()),
+                sidebar_bg: Some("#0d0e0f".to_string()),
+                active_row_bg: Some("#101112".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+
+        assert_eq!(
+            app.state.palette.accent,
+            ratatui::style::Color::Rgb(1, 2, 3)
+        );
+        assert_eq!(
+            app.state.palette.text,
+            ratatui::style::Color::Rgb(10, 11, 12)
+        );
+        assert_eq!(
+            app.state.palette.sidebar_bg,
+            ratatui::style::Color::Rgb(13, 14, 15)
+        );
+        assert_eq!(
+            app.state.palette.active_row_bg,
+            ratatui::style::Color::Rgb(16, 17, 18)
+        );
+
+        app.set_host_terminal_appearance(crate::terminal_theme::HostAppearance::Light, true);
+
+        assert_eq!(
+            app.state.palette.accent,
+            ratatui::style::Color::Rgb(7, 8, 9)
+        );
+        assert_eq!(app.state.palette.text, ratatui::style::Color::Rgb(4, 5, 6));
     }
 
     #[test]
