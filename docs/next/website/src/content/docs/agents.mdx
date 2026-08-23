@@ -54,6 +54,14 @@ On Linux and macOS, a host-visible wrapper can hide the real agent process from 
 
 Some restricted Linux runtimes do not expose a terminal foreground process group. Start the Herdr server with `HERDR_PROCESS_DETECTION=child-groups` to opt into direct child-process-group inference when native detection is unavailable. Native detection remains preferred, and the default `native` mode never performs this inference. The opt-in mode is best effort: a newer background job can be mistaken for the foreground job. The variable is read by the server and requires a restart; set it in the remote server environment rather than on an attaching client.
 
+Running an agent as a different local user hides the agent process the same way. The target account owns the agent's environment, and account-switching tools such as `sudo` strip inherited variables from the child command, so the hint cannot reach or be read from the agent process itself. Set the hint on an ordinary shell owned by your own user and let that wrapper stay in the foreground:
+
+```
+HERDR_AGENT=pi sh -c 'sudo -u agent -i pi'
+```
+
+The intermediate shell must stay alive while the agent runs; do not add `exec` between the shell and `sudo`, because Herdr reads the hint from that host-visible foreground process. Setting the hint directly on the account-switching command is not reliable. Lifecycle integrations are installed per user account, so screen-manifest detection through this hint is also the expected path when a pane's agent runs under another local account.
+
 ## Blocked state
 
 Blocked detection is deliberately strict for screen-manifest agents. Herdr only marks `blocked` when the live bottom-buffer snapshot matches known visible approval, question, or permission UI. If no manifest rule matches for a known agent, Herdr falls back to `idle` and labels that fallback as `default_known_agent_idle_fallback` in explain output.
