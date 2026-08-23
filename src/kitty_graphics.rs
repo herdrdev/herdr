@@ -622,9 +622,10 @@ fn encode_graphics_update_incremental(
         emitted = true;
     }
 
-    // Cleanup deletes keep their own transaction; only re-displays of images
-    // that are already uploaded coalesce.
-    let coalesce_pass = coalesce_placements && !emitted;
+    // Cleanup deletes keep their own transaction; only pure re-displays of
+    // already-uploaded images coalesce, and nothing joins a transaction that
+    // carried an upload or a delete.
+    let mut coalesce_pass = coalesce_placements && !emitted;
     for offset in 0..placements.len() {
         let index = (start + offset) % placements.len();
         let placement = &placements[index];
@@ -639,6 +640,11 @@ fn encode_graphics_update_incremental(
             .host_image_id
             .unwrap_or_else(|| host_image_id(placement.pane_id, &placement.placement));
         let image_cached = cache.images.get(&host_id) == Some(&signature);
+        // With the image uploaded and the source already bound to it, the
+        // transaction is a re-display only: no upload and no superseded-image
+        // delete from `release_superseded_source_image`.
+        let pure_redisplay =
+            image_cached && cache.sources.get(&placement.source_key) == Some(&host_id);
         if !image_cached && !image_transaction_fits(placement, transaction_budget) {
             cache.quarantine_oversized(placement.source_key.clone(), signature);
             continue;
@@ -651,12 +657,9 @@ fn encode_graphics_update_incremental(
             *cache = candidate;
             continue;
         }
-        // Re-displays of already-uploaded images may join the transaction,
-        // including right after this pass's pixel upload; anything else keeps
-        // the one-transaction-per-call behavior.
         if emitted
             && !(coalesce_pass
-                && image_cached
+                && pure_redisplay
                 && coalesced_transaction_fits(bytes.len(), transaction.len(), transaction_budget))
         {
             return EncodedGraphics {
@@ -669,6 +672,9 @@ fn encode_graphics_update_incremental(
         cache.continuation = Some((source, id, (index + 1) % placements.len()));
         bytes.extend(transaction);
         emitted = true;
+        if !pure_redisplay {
+            coalesce_pass = false;
+        }
     }
 
     cache.replay_placements = false;
@@ -2812,6 +2818,119 @@ mod tests {
         let rest = String::from_utf8(rest.bytes).unwrap();
         assert!(!rest.contains("a=t"));
         assert_eq!(rest.matches("a=p").count(), 1);
+    }
+
+    #[test]
+    fn budgeted_upload_keeps_other_redisplays_out() {
+        let fresh = test_placement(0, 0);
+        let mut cached = test_placement(4, 0);
+        cached.placement.image_id = 8;
+        cached.placement.placement_id = 4;
+        cached.placement.data_fingerprint = 43;
+        cached.source_key = HostSourceKey::Terminal {
+            pane_id: cached.pane_id,
+            image_id: 8,
+        };
+        let mut cache = HostGraphicsCache::default();
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                std::slice::from_ref(&cached),
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            if !encoded.incomplete {
+                break;
+            }
+        }
+
+        // A fresh image followed by the cached image at a new position.
+        cached.placement.render.viewport_col = 8;
+        let placements = [fresh, cached];
+        let mut passes = 0;
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                &placements,
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            passes += 1;
+            assert!(passes <= 4, "did not converge");
+            let bytes = String::from_utf8(encoded.bytes).unwrap();
+            if bytes.contains("a=t") {
+                assert_eq!(
+                    bytes.matches("a=p").count(),
+                    1,
+                    "an upload carries only its own placement"
+                );
+            }
+            if !encoded.incomplete {
+                break;
+            }
+        }
+        assert_eq!(cache.images.len(), 2);
+    }
+
+    #[test]
+    fn budgeted_superseded_image_delete_does_not_coalesce() {
+        fn pair() -> [HostPlacement; 2] {
+            let first = test_placement(0, 0);
+            let mut second = test_placement(4, 0);
+            second.placement.image_id = 8;
+            second.placement.placement_id = 4;
+            second.placement.data_fingerprint = 43;
+            second.source_key = HostSourceKey::Terminal {
+                pane_id: second.pane_id,
+                image_id: 8,
+            };
+            [first, second]
+        }
+        let mut cache = HostGraphicsCache::default();
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                &pair(),
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            if !encoded.incomplete {
+                break;
+            }
+        }
+        assert_eq!(cache.images.len(), 2);
+
+        // The first source now shows the second image's content, so its old
+        // image gets released, while the second placement moves.
+        let [mut first, mut second] = pair();
+        first.placement.data_fingerprint = 43;
+        second.placement.render.viewport_col = 8;
+        let placements = [first, second];
+        let mut passes = 0;
+        let mut saw_release = false;
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                &placements,
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            passes += 1;
+            assert!(passes <= 6, "did not converge");
+            let bytes = String::from_utf8(encoded.bytes).unwrap();
+            if bytes.contains("a=d,d=I") {
+                saw_release = true;
+                assert!(
+                    bytes.matches("a=p").count() <= 1,
+                    "a superseded-image delete carries at most its own placement"
+                );
+            }
+            if !encoded.incomplete {
+                break;
+            }
+        }
+        assert!(saw_release, "the old image was released");
+        assert_eq!(cache.images.len(), 1);
     }
 
     #[test]
