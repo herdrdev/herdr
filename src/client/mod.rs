@@ -916,6 +916,8 @@ enum ClientLoopEvent {
     Resize(u16, u16, u32, u32),
     /// Server message received.
     ServerMessage(ServerMessage),
+    /// Wake for the newest pending graphics-free semantic frame.
+    SemanticFrame(PendingFrame),
     /// Server reader thread exited (connection lost).
     ServerDisconnected,
     /// Timer tick.
@@ -1528,6 +1530,20 @@ async fn run_client_loop(
             _ = tokio::time::sleep(Duration::from_millis(100)) => ClientLoopEvent::Timer,
         };
 
+        let event = match event {
+            ClientLoopEvent::SemanticFrame(pending) => {
+                let frame = pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                let Some(frame) = frame else {
+                    continue;
+                };
+                ClientLoopEvent::ServerMessage(ServerMessage::Frame(frame))
+            }
+            event => event,
+        };
+
         match event {
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
@@ -1900,6 +1916,7 @@ async fn run_client_loop(
                     debug!("received unexpected Welcome in main loop");
                 }
             },
+            ClientLoopEvent::SemanticFrame(_) => continue,
             ClientLoopEvent::ServerDisconnected => {
                 return Err(ClientError::ConnectionLost(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -1944,6 +1961,7 @@ fn server_reader_thread(
         return;
     }
 
+    let mut pending_frame = None;
     loop {
         if should_quit.load(Ordering::Acquire) {
             break;
@@ -1951,10 +1969,7 @@ fn server_reader_thread(
 
         match protocol::read_message(&mut stream, max_frame_size) {
             Ok(msg) => {
-                if event_tx
-                    .blocking_send(ClientLoopEvent::ServerMessage(msg))
-                    .is_err()
-                {
+                if queue_server_message(&event_tx, &mut pending_frame, msg).is_err() {
                     break; // Main loop gone.
                 }
             }
@@ -1974,6 +1989,34 @@ fn server_reader_thread(
                 let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
                 break;
             }
+        }
+    }
+}
+
+type PendingFrame = Arc<Mutex<Option<protocol::FrameData>>>;
+
+fn queue_server_message(
+    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    pending_frame: &mut Option<PendingFrame>,
+    msg: ServerMessage,
+) -> Result<(), tokio::sync::mpsc::error::SendError<ClientLoopEvent>> {
+    match msg {
+        ServerMessage::Frame(frame) if frame.graphics.is_empty() => {
+            let pending = pending_frame.get_or_insert_with(Default::default);
+            let should_wake = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .replace(frame)
+                .is_none();
+            if should_wake {
+                event_tx.blocking_send(ClientLoopEvent::SemanticFrame(pending.clone()))
+            } else {
+                Ok(())
+            }
+        }
+        msg => {
+            *pending_frame = None;
+            event_tx.blocking_send(ClientLoopEvent::ServerMessage(msg))
         }
     }
 }
@@ -2655,6 +2698,87 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn semantic_frames_coalesce_until_ordering_barriers() {
+        fn frame(width: u16, graphics: &[u8]) -> ServerMessage {
+            ServerMessage::Frame(protocol::FrameData {
+                cells: Vec::new(),
+                width,
+                height: 0,
+                cursor: None,
+                hyperlinks: Vec::new(),
+                graphics: graphics.to_vec(),
+            })
+        }
+        fn pending(event: ClientLoopEvent) -> PendingFrame {
+            match event {
+                ClientLoopEvent::SemanticFrame(pending) => pending,
+                _ => panic!("expected semantic frame wake"),
+            }
+        }
+        fn take_width(pending: &PendingFrame) -> u16 {
+            pending
+                .lock()
+                .expect("pending frame lock")
+                .take()
+                .expect("pending frame")
+                .width
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut run = None;
+        for width in 1..=300 {
+            queue_server_message(&tx, &mut run, frame(width, &[])).expect("queue semantic frame");
+        }
+        assert_eq!(rx.len(), 1);
+        tx.try_send(ClientLoopEvent::Resize(80, 24, 0, 0))
+            .expect("semantic frames leave queue capacity for input");
+
+        let first = pending(rx.try_recv().expect("coalesced frame wake"));
+        assert_eq!(take_width(&first), 300);
+
+        queue_server_message(&tx, &mut run, frame(301, &[])).expect("queue fresh wake after take");
+        queue_server_message(
+            &tx,
+            &mut run,
+            ServerMessage::MouseCapture {
+                enabled: true,
+                sgr_pixels: false,
+            },
+        )
+        .expect("queue control barrier");
+        queue_server_message(&tx, &mut run, frame(302, &[]))
+            .expect("queue frame after control barrier");
+        queue_server_message(&tx, &mut run, frame(303, &[1])).expect("queue graphics barrier");
+        queue_server_message(&tx, &mut run, frame(304, &[]))
+            .expect("queue frame after graphics barrier");
+
+        assert!(matches!(
+            rx.try_recv().expect("resize event"),
+            ClientLoopEvent::Resize(80, 24, 0, 0)
+        ));
+        let second = pending(rx.try_recv().expect("fresh semantic wake"));
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(take_width(&second), 301);
+        assert!(matches!(
+            rx.try_recv().expect("control barrier"),
+            ClientLoopEvent::ServerMessage(ServerMessage::MouseCapture { enabled: true, .. })
+        ));
+        let after_control = pending(rx.try_recv().expect("wake after control barrier"));
+        assert!(!Arc::ptr_eq(&first, &after_control));
+        assert_eq!(take_width(&after_control), 302);
+        assert!(matches!(
+            rx.try_recv().expect("graphics barrier"),
+            ClientLoopEvent::ServerMessage(ServerMessage::Frame(protocol::FrameData {
+                width: 303,
+                ..
+            }))
+        ));
+        let after_graphics = pending(rx.try_recv().expect("wake after graphics barrier"));
+        assert!(!Arc::ptr_eq(&after_control, &after_graphics));
+        assert_eq!(take_width(&after_graphics), 304);
     }
 
     #[test]
