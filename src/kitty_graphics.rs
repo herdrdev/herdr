@@ -609,23 +609,33 @@ fn encode_graphics_update_incremental(
         .copied()
         .collect::<Vec<_>>();
     stale.sort_unstable();
+    let mut stale_image = None;
     for key @ (host_id, placement_id) in stale {
-        if emitted {
+        let mut transaction = Vec::new();
+        encode_delete_placement(&mut transaction, host_id, placement_id);
+        let same_image = stale_image == Some(host_id);
+        if emitted
+            && !(coalesce_placements
+                && same_image
+                && coalesced_transaction_fits(bytes.len(), transaction.len(), transaction_budget))
+        {
             return EncodedGraphics {
                 bytes,
                 incomplete: true,
             };
         }
-        encode_delete_placement(&mut bytes, host_id, placement_id);
+        bytes.extend(transaction);
         cache.placements.remove(&key);
         cache.replayed_placements.remove(&key);
         emitted = true;
+        stale_image = Some(host_id);
     }
 
-    // Cleanup deletes keep their own transaction; only pure re-displays of
-    // already-uploaded images coalesce, and nothing joins a transaction that
-    // carried an upload or a delete.
-    let mut coalesce_pass = coalesce_placements && !emitted;
+    // Keep unrelated images isolated, but treat every row of one logical image
+    // as part of its upload or replacement transaction. Sending only the first
+    // row exposes the blank placeholder cells until later frames catch up.
+    let coalesce_pass = coalesce_placements && !emitted;
+    let mut coalesce_target = None;
     for offset in 0..placements.len() {
         let index = (start + offset) % placements.len();
         let placement = &placements[index];
@@ -657,9 +667,13 @@ fn encode_graphics_update_incremental(
             *cache = candidate;
             continue;
         }
+        let same_logical_image = coalesce_target.as_ref().is_none_or(|(source, target_id)| {
+            source == &placement.source_key && *target_id == host_id
+        });
         if emitted
             && !(coalesce_pass
                 && pure_redisplay
+                && same_logical_image
                 && coalesced_transaction_fits(bytes.len(), transaction.len(), transaction_budget))
         {
             return EncodedGraphics {
@@ -672,8 +686,8 @@ fn encode_graphics_update_incremental(
         cache.continuation = Some((source, id, (index + 1) % placements.len()));
         bytes.extend(transaction);
         emitted = true;
-        if !pure_redisplay {
-            coalesce_pass = false;
+        if coalesce_pass && !pure_redisplay {
+            coalesce_target = Some((placement.source_key.clone(), host_id));
         }
     }
 
@@ -2706,12 +2720,30 @@ mod tests {
     }
 
     #[test]
-    fn budgeted_image_rows_redisplay_in_one_transaction() {
+    fn budgeted_image_rows_upload_in_one_transaction() {
         const IMAGE_ROWS: usize = 23;
         let placements = image_covering_rows(IMAGE_ROWS);
         let mut cache = HostGraphicsCache::default();
 
-        let mut passes = 0;
+        let upload = encode_terminal_graphics_update(
+            &mut cache,
+            &placements,
+            false,
+            Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+        );
+        assert!(!upload.incomplete);
+        let upload = String::from_utf8(upload.bytes).unwrap();
+        assert_eq!(upload.matches("a=t").count(), 1);
+        assert_eq!(upload.matches("a=p").count(), IMAGE_ROWS);
+        assert_eq!(cache.images.len(), 1, "one image backs every row");
+        assert_eq!(cache.placements.len(), IMAGE_ROWS, "one placement per row");
+    }
+
+    #[test]
+    fn budgeted_image_rows_disappear_in_one_transaction() {
+        const IMAGE_ROWS: usize = 23;
+        let placements = image_covering_rows(IMAGE_ROWS);
+        let mut cache = HostGraphicsCache::default();
         loop {
             let encoded = encode_terminal_graphics_update(
                 &mut cache,
@@ -2719,14 +2751,87 @@ mod tests {
                 false,
                 Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
             );
-            passes += 1;
-            assert!(passes <= 4, "upload did not converge");
             if !encoded.incomplete {
                 break;
             }
         }
-        assert_eq!(cache.images.len(), 1, "one image backs every row");
-        assert_eq!(cache.placements.len(), IMAGE_ROWS, "one placement per row");
+
+        let removed = encode_terminal_graphics_update(
+            &mut cache,
+            &[],
+            false,
+            Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+        );
+        assert!(!removed.incomplete);
+        let removed = String::from_utf8(removed.bytes).unwrap();
+        assert_eq!(removed.matches("a=d,d=i").count(), IMAGE_ROWS);
+        assert!(cache.placements.is_empty());
+    }
+
+    #[test]
+    fn budgeted_image_rows_delete_old_rows_together_before_replacement() {
+        const IMAGE_ROWS: usize = 23;
+        let old = image_covering_rows(IMAGE_ROWS);
+        let mut cache = HostGraphicsCache::default();
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                &old,
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            if !encoded.incomplete {
+                break;
+            }
+        }
+
+        let mut replacement = image_covering_rows(IMAGE_ROWS);
+        for placement in &mut replacement {
+            placement.placement.data_fingerprint += 1;
+        }
+        let cleanup = encode_terminal_graphics_update(
+            &mut cache,
+            &replacement,
+            false,
+            Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+        );
+        assert!(cleanup.incomplete);
+        let cleanup = String::from_utf8(cleanup.bytes).unwrap();
+        assert_eq!(cleanup.matches("a=d,d=i").count(), IMAGE_ROWS);
+        assert!(!cleanup.contains("a=t"));
+
+        let replaced = encode_terminal_graphics_update(
+            &mut cache,
+            &replacement,
+            false,
+            Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+        );
+        assert!(!replaced.incomplete);
+        let replaced = String::from_utf8(replaced.bytes).unwrap();
+        assert_eq!(replaced.matches("a=t").count(), 1);
+        assert_eq!(replaced.matches("a=d,d=I").count(), 1);
+        assert_eq!(replaced.matches("a=p").count(), IMAGE_ROWS);
+        assert_eq!(cache.images.len(), 1);
+        assert_eq!(cache.placements.len(), IMAGE_ROWS);
+    }
+
+    #[test]
+    fn budgeted_image_rows_redisplay_in_one_transaction() {
+        const IMAGE_ROWS: usize = 23;
+        let placements = image_covering_rows(IMAGE_ROWS);
+        let mut cache = HostGraphicsCache::default();
+
+        loop {
+            let encoded = encode_terminal_graphics_update(
+                &mut cache,
+                &placements,
+                false,
+                Some(HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
+            );
+            if !encoded.incomplete {
+                break;
+            }
+        }
 
         let replay = encode_terminal_graphics_update(
             &mut cache,
