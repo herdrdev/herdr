@@ -194,6 +194,11 @@ pub fn session_processes(_child_pid: u32) -> Vec<u32> {
 }
 
 /// Unsupported platform stub.
+pub fn descendant_agent_job(_shell_pid: u32) -> Option<ForegroundJob> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn signal_processes(_pids: &[u32], _signal: Signal) {}
 
 /// Unsupported platform stub.

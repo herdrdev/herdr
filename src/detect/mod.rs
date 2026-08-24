@@ -335,6 +335,13 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
     crate::platform::foreground_process_group_id(child_pid)
 }
 
+/// Walk the descendant process tree from `shell_pid` looking for an agent.
+/// Used as a fallback when the foreground process group yields no agent
+/// (e.g. when the agent runs inside a nested process group).
+pub fn descendant_agent_job(shell_pid: u32) -> Option<crate::platform::ForegroundJob> {
+    crate::platform::descendant_agent_job(shell_pid)
+}
+
 fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> String {
     let effective = process.argv0.as_deref().unwrap_or(&process.name);
     let lower_effective = effective.to_lowercase();

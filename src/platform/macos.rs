@@ -928,6 +928,77 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
         .collect()
 }
 
+const DESCENDANT_SCAN_LIMIT: usize = 128;
+
+/// Walk the descendant process tree from `shell_pid` looking for an agent.
+/// Returns a synthetic `ForegroundJob` containing only the identified agent
+/// process, or `None` if no agent is found within the scan limit.
+pub fn descendant_agent_job(shell_pid: u32) -> Option<ForegroundJob> {
+    if shell_pid == 0 {
+        return None;
+    }
+
+    let pids = all_pids();
+    let mut children_by_parent: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for &pid in &pids {
+        let Some(info) = process_bsdinfo(pid) else {
+            continue;
+        };
+        let ppid = info.pbi_ppid;
+        if ppid > 0 {
+            children_by_parent.entry(ppid).or_default().push(pid);
+        }
+    }
+
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(shell_pid);
+    if let Some(children) = children_by_parent.get(&shell_pid) {
+        for &child in children {
+            if visited.insert(child) {
+                queue.push_back(child);
+            }
+        }
+    }
+
+    let mut scanned = 0usize;
+    while let Some(pid) = queue.pop_front() {
+        scanned += 1;
+        if scanned > DESCENDANT_SCAN_LIMIT {
+            return None;
+        }
+
+        let name = process_bsdinfo(pid).and_then(|info| comm_from_bsdinfo(&info));
+        let argv = process_argv(pid);
+        let process = ForegroundProcess {
+            pid,
+            name: name.unwrap_or_default(),
+            argv0: process_argv0_name(pid),
+            cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+            argv,
+        };
+
+        let job = ForegroundJob {
+            process_group_id: pid,
+            processes: vec![process],
+        };
+        if crate::detect::identify_agent_in_job(&job).is_some() {
+            return Some(job);
+        }
+
+        if let Some(children) = children_by_parent.get(&pid) {
+            for &child in children {
+                if visited.insert(child) {
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn all_pids() -> Vec<u32> {
     let initial_count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     let mut capacity = if initial_count > 0 {

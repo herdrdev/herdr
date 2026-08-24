@@ -420,6 +420,92 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
     pids
 }
 
+const DESCENDANT_SCAN_LIMIT: usize = 128;
+
+/// Walk the descendant process tree from `shell_pid` looking for an agent.
+/// Returns a synthetic `ForegroundJob` containing only the identified agent
+/// process, or `None` if no agent is found within the scan limit.
+pub fn descendant_agent_job(shell_pid: u32) -> Option<ForegroundJob> {
+    if shell_pid == 0 {
+        return None;
+    }
+
+    let mut children_by_parent: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let file_name = entry.file_name();
+        let Some(pid_str) = file_name.to_str() else {
+            continue;
+        };
+        if !pid_str.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        if let Some(ppid) = process_ppid(pid) {
+            if ppid > 0 {
+                children_by_parent.entry(ppid).or_default().push(pid);
+            }
+        }
+    }
+
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(shell_pid);
+    if let Some(children) = children_by_parent.get(&shell_pid) {
+        for &child in children {
+            if visited.insert(child) {
+                queue.push_back(child);
+            }
+        }
+    }
+
+    let mut scanned = 0usize;
+    while let Some(pid) = queue.pop_front() {
+        scanned += 1;
+        if scanned > DESCENDANT_SCAN_LIMIT {
+            return None;
+        }
+
+        let name = process_pgrp_and_comm(pid).map(|(_, comm)| comm);
+        let argv = process_argv(pid);
+        let process = ForegroundProcess {
+            pid,
+            name: name.unwrap_or_default(),
+            argv0: None,
+            cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+            argv,
+        };
+
+        let job = ForegroundJob {
+            process_group_id: pid,
+            processes: vec![process],
+        };
+        if crate::detect::identify_agent_in_job(&job).is_some() {
+            return Some(job);
+        }
+
+        if let Some(children) = children_by_parent.get(&pid) {
+            for &child in children {
+                if visited.insert(child) {
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn process_ppid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // After (comm): state(0) ppid(1)
+    fields.get(1)?.parse::<u32>().ok()
+}
+
 pub fn signal_processes(pids: &[u32], signal: Signal) {
     let sig = match signal {
         Signal::Hangup => libc::SIGHUP,

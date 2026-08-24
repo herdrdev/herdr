@@ -1806,6 +1806,12 @@ pub fn session_processes(child_pid: u32) -> Vec<u32> {
     session_processes_from_snapshot(child_pid, &snapshot)
 }
 
+/// Windows `foreground_job` already walks the full descendant tree, so this
+/// fallback is not needed. Always returns `None`.
+pub fn descendant_agent_job(_shell_pid: u32) -> Option<ForegroundJob> {
+    None
+}
+
 fn session_processes_from_snapshot(child_pid: u32, snapshot: &ProcessSnapshot) -> Vec<u32> {
     if snapshot.entry(child_pid).is_none() {
         return Vec::new();
