@@ -235,14 +235,8 @@ const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
 
 impl RawInputByteFramer {
     pub(crate) fn for_host_input() -> Self {
-        Self::with_host_input_policy(
-            crate::platform::capabilities().preserve_legacy_doubled_escape_input,
-        )
-    }
-
-    fn with_host_input_policy(preserve_legacy_doubled_escape_input: bool) -> Self {
         Self {
-            split_coalesced_escape: !preserve_legacy_doubled_escape_input,
+            split_coalesced_escape: true,
             ..Self::default()
         }
     }
@@ -540,13 +534,12 @@ impl RawInputByteFramer {
                 continue;
             }
 
-            if self.split_coalesced_escape && self.buffer.starts_with(b"\x1b\x1b") {
-                chunks.push(vec![ESC]);
-                self.buffer.drain(..1);
-                continue;
-            }
-
             let Some((event, consumed)) = extract_one_event(&self.buffer) else {
+                if self.split_coalesced_escape && self.buffer.starts_with(b"\x1b\x1b") {
+                    chunks.push(vec![ESC]);
+                    self.buffer.drain(..1);
+                    continue;
+                }
                 break;
             };
             if matches!(
@@ -2076,22 +2069,14 @@ mod tests {
         assert!(framer.flush_timeout().is_empty());
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn non_macos_host_input_splits_lone_escape_from_arrow() {
+    fn host_input_preserves_legacy_doubled_escape_alt_arrow() {
         let mut framer = RawInputByteFramer::for_host_input();
 
-        assert_eq!(
-            framer.push(b"\x1b\x1b[D"),
-            vec![b"\x1b".to_vec(), b"\x1b[D".to_vec()]
-        );
-    }
-
-    #[test]
-    fn macos_host_input_policy_preserves_legacy_doubled_escape_alt_arrow() {
-        let mut framer = RawInputByteFramer::with_host_input_policy(true);
-
         assert_eq!(framer.push(b"\x1b\x1b[D"), vec![b"\x1b\x1b[D".to_vec()]);
+        assert_eq!(framer.push(b"\x1b\x1b[C"), vec![b"\x1b\x1b[C".to_vec()]);
+        assert_eq!(framer.push(b"\x1b\x1b[A"), vec![b"\x1b\x1b[A".to_vec()]);
+        assert_eq!(framer.push(b"\x1b\x1b[B"), vec![b"\x1b\x1b[B".to_vec()]);
     }
 
     #[test]

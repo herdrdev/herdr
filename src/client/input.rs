@@ -697,9 +697,8 @@ mod tests {
         assert!(timeout_ms <= 20);
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn windows_repeated_escape_keeps_second_escape_pending() {
+    fn host_input_repeated_escape_keeps_second_escape_pending() {
         let mut framer = crate::raw_input::RawInputFramer::for_host_input();
 
         let events = framer.push(b"\x1b\x1b");
