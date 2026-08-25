@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added Muse detection for idle, working, blocked pickers and menus, workspace trust dialogs, and approval prompts, including versioned `muse-bin-*` process identification. (#2489)
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
 
 ### Fixed
