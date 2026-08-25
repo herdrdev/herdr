@@ -13,6 +13,30 @@
       ]
     },
     {
+      "id": "built-in-agent-features",
+      "title": "Built-in agent features",
+      "keys": [
+        {
+          "key": "agent_watcher.enabled",
+          "type": "boolean",
+          "default": "true",
+          "description": "Start the built-in agent watcher with the server. Startup-only; restart the server after changing it."
+        },
+        {
+          "key": "title_sync.enabled",
+          "type": "boolean",
+          "default": "true",
+          "description": "Automatically derive labels for supported agent panes. Startup-only; restart the server after changing it."
+        },
+        {
+          "key": "title_sync.interval_ms",
+          "type": "positive integer",
+          "default": "1000",
+          "description": "Polling interval in milliseconds for agent title changes that do not emit lifecycle events."
+        }
+      ]
+    },
+    {
       "id": "theme",
       "title": "Theme",
       "keys": [

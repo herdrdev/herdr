@@ -105,6 +105,42 @@ herdr integration status
 
 Each supported agent has its own integration name and behavior. See [Integrations](/docs/integrations/) for the per-agent details and the full install list.
 
+**Built-in agent watcher and titles.** This distribution starts its agent watcher with the Herdr server. It keeps the watcher state socket compatible with the standalone `herdr-agent-watcher` plugin, so existing watcher clients continue to work. It also derives pane labels from Claude Code, Codex, Kimi Code, and OpenCode session data. A label you rename manually remains yours; automatic title sync only updates labels it owns.
+
+Use the native watcher commands without opening a plugin pane:
+
+```bash
+herdr watcher status
+herdr watcher doctor
+herdr watcher sidebar
+herdr watcher claude-bridge enable
+herdr watcher claude-bridge disable
+herdr watcher kimi-consent on
+herdr watcher kimi-consent off
+herdr watcher kimi-consent status
+```
+
+Both built-in services are enabled by default. Their configuration is startup-only, so restart the Herdr server after changing it. `title_sync.interval_ms` must be a positive integer.
+
+```toml
+[agent_watcher]
+enabled = true
+
+[title_sync]
+enabled = true
+interval_ms = 1000
+```
+
+**Migrating from standalone plugins.** Disable the standalone twins before relying on the built-ins:
+
+```bash
+herdr plugin disable herdr-agent-watcher
+herdr plugin disable herdr-agent-title-sync
+herdr watcher doctor
+```
+
+Disabling leaves the plugin checkouts and state in place. You can re-enable them when returning to stock Herdr. If an enabled standalone twin remains registered while its built-in twin is enabled, `herdr watcher doctor` and the server startup log name the exact disable command. Herdr does not disable plugins automatically.
+
 ## Custom agent labels
 
 You can rename an agent target for display:

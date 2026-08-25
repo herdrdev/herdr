@@ -11,6 +11,8 @@ Modified upstream files
 - .gitignore
 - Cargo.toml
 - Cargo.lock
+- docs/next/website/src/content/docs/agents.mdx
+- docs/next/website/src/data/config-reference.json
 - nix/package.nix
 - src/update.rs
 - src/cli.rs

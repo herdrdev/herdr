@@ -92,6 +92,8 @@ the top of the file:
 | `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
 | `src/app/state.rs` | Track the coalesced title-sync input generation with session and lifecycle persistence changes. | `e006a1ea` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
+| `docs/next/website/src/content/docs/agents.mdx` | Document the built-in watcher, automatic agent titles, startup-only configuration, and standalone-plugin migration. | Task 8 close-out |
+| `docs/next/website/src/data/config-reference.json` | Add the native agent watcher and title-sync configuration keys to the generated user reference snapshot. | Task 8 close-out |
 | `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.2`, plus direct SQLite access for OpenCode titles. | `ebff8667`, `4df9fb1a` |
 | `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | `ebff8667`, `4df9fb1a` |
 | `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `ebff8667` |
