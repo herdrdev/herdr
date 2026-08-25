@@ -2,6 +2,7 @@
 title: Agents
 description: See what Herdr can detect, how agent state works, and how integrations improve it.
 ---
+<!-- Modified from herdr by the vimeflow project — see FORK.md -->
 
 Herdr is built for running more than one coding agent at a time. Each agent stays in a real terminal pane with its shell, logs, prompts, and running processes intact. Herdr tracks which panes contain agents, rolls their state up to tabs and workspaces, and lets you jump straight to the pane that needs attention instead of polling every terminal by hand.
 
@@ -140,6 +141,22 @@ herdr watcher doctor
 ```
 
 Disabling leaves the plugin checkouts and state in place. You can re-enable them when returning to stock Herdr. If an enabled standalone twin remains registered while its built-in twin is enabled, `herdr watcher doctor` and the server startup log name the exact disable command. Herdr does not disable plugins automatically.
+
+## Agent cards in the sidebar
+
+The expanded sidebar shows each detected agent as a three-line card. The card combines Herdr's pane lifecycle state with optional watcher telemetry such as context use, tool calls, model, cache, cost, and recent traces. The focused pane expands when space permits; click its chevron to collapse or reopen it. If watcher telemetry is unavailable, navigation and lifecycle state continue to work and the card says `no telemetry`.
+
+Cards follow the existing Agents sort control. `spaces` keeps a flat workspace-order list, while `priority` puts agents needing attention first. Indexed and previous/next agent focus use the same visible order as the cards.
+
+These settings reload live:
+
+```toml
+[ui.sidebar]
+agents_view = "cards"      # default; use "legacy" for configurable rows
+agents_hide_idle = false   # hide seen idle agents from cards and focus indexes
+```
+
+Switching to `legacy` restores the configurable `[ui.sidebar.agents]` row view. Agent row settings are ignored in cards mode and produce a configuration diagnostic when explicitly present. The collapsed compact rail is unchanged.
 
 ## Custom agent labels
 

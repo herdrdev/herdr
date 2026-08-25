@@ -606,6 +606,18 @@
           ]
         },
         {
+          "key": "ui.sidebar.agents_view",
+          "type": "\"cards\" | \"legacy\"",
+          "default": "\"cards\"",
+          "description": "Choose adaptive Agent cards or the legacy configurable row view. Reloads live."
+        },
+        {
+          "key": "ui.sidebar.agents_hide_idle",
+          "type": "boolean",
+          "default": "false",
+          "description": "Hide seen idle agents from cards and Agent focus indexes. Cards mode only; reloads live."
+        },
+        {
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",
