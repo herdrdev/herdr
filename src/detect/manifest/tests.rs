@@ -360,6 +360,52 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
 }
 
 #[test]
+fn muse_manifest_requires_complete_live_controls() {
+    let working = explain(
+        Agent::Muse,
+        "⟩ hello\n\n◆ Working (0s · esc to interrupt)\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+
+    let picker = explain(
+        Agent::Muse,
+        "Which option should I use?\n\n› 1. Alpha\n  2. Beta\n\nEnter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
+    );
+    assert_eq!(picker.state, AgentState::Blocked);
+    assert!(picker.visible_blocker);
+
+    let command_approval = explain(
+        Agent::Muse,
+        "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
+    );
+    assert_eq!(command_approval.state, AgentState::Blocked);
+    assert!(command_approval.visible_blocker);
+
+    let network_approval = explain(
+        Agent::Muse,
+        "network: example.com:443 https\nrequested by:\n$ curl -fsS https://example.com\n\n› 1. Yes, proceed (y)\n  2. Yes, don't ask again this session (p)  example.com:443 (https)\n  3. No, and tell Muse Code what to do differently (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
+    );
+    assert_eq!(network_approval.state, AgentState::Blocked);
+    assert!(network_approval.visible_blocker);
+
+    let menu = explain(
+        Agent::Muse,
+        "Theme\n\n⟩ Default (active)\n  Dynamic\n\n↑↓ move · enter save · esc go back",
+    );
+    assert_eq!(menu.state, AgentState::Unknown);
+    assert!(menu.skip_state_update);
+    assert!(!menu.visible_blocker);
+
+    let ordinary_reply = explain(
+        Agent::Muse,
+        "⟩ say the phrase\n\n◆ Yes, proceed\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
+    );
+    assert_eq!(ordinary_reply.state, AgentState::Idle);
+    assert!(ordinary_reply.visible_idle);
+}
+
+#[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
         r#"

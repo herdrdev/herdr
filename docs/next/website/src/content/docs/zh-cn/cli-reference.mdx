@@ -285,7 +285,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 智能体目标只能是唯一的实时智能体名称,或当前承载该智能体的窗格 ID。终端 ID 和单独的智能体 kind 标签不能作为目标。通过 `agent start` 启动的智能体必须有名称;手动启动的智能体保持未命名,通过窗格 ID 寻址。
 
-`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen` 和 `maki`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
+`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 

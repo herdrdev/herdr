@@ -792,6 +792,14 @@ mod tests {
         assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-bin-0.1.0-R708.1"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-bin-1.2.3"), Some(Agent::Muse));
+        assert_eq!(
+            identify_agent("/home/user/.local/bin/muse-bin-0.2.1-R1215.1"),
+            Some(Agent::Muse)
+        );
+        assert_eq!(
+            identify_agent(r"C:\Users\user\muse-bin-0.2.1-R1215.1.exe"),
+            Some(Agent::Muse)
+        );
     }
 
     #[test]

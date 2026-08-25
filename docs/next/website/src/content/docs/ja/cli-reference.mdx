@@ -285,7 +285,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 エージェントターゲットは、一意なライブエージェント名、または現在そのエージェントをホストしているペイン ID です。ターミナル ID とエージェント kind のラベルだけでは指定できません。`agent start` で起動するエージェントには名前が必須で、手動で起動したエージェントは名前なしのままペイン ID で指定します。
 
-`agent start` は既存の利用可能なシェルペインを起動対象にします。対話シェル自身がフォアグラウンドを所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていない必要があります。トポロジーは別に作成します。名前はライブエージェント間で一意で、`[a-z][a-z0-9_-]{0,31}` に一致する必要があります。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` です。名前は現在のペイン占有者に属し、そのエージェントの終了、release、置換で消えます。一時的に検出できないだけでは消えません。
+`agent start` は既存の利用可能なシェルペインを起動対象にします。対話シェル自身がフォアグラウンドを所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていない必要があります。トポロジーは別に作成します。名前はライブエージェント間で一意で、`[a-z][a-z0-9_-]{0,31}` に一致する必要があります。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki`、`muse` です。名前は現在のペイン占有者に属し、そのエージェントの終了、release、置換で消えます。一時的に検出できないだけでは消えません。
 
 成功した start は、期待したエージェントが同じターミナルを所有し、対話入力の準備ができてから返ります。起動中の検出状態が `blocked` の場合、コマンドは直ちに `agent_not_ready` を返します。名前は `agent read` と `agent send-keys` で引き続き使用でき、検出状態が `idle` になるとプロンプトを送信できるようになります。デフォルトの起動タイムアウトは 30000 ミリ秒で、明示する値は 3000 より大きく 300000 以下でなければなりません。
 
