@@ -7,6 +7,7 @@
 
 ### Fixed
 - Claude Code integration hooks now ignore Cursor CLI's Claude-compatible session events, preventing Cursor sessions from being stored as resumable Claude sessions. (#2832)
+- Navigate mode now closes on `Ctrl+[` like Esc under the kitty keyboard protocol, while a configured `ctrl+[` binding keeps priority. (#1431, thanks @haoxianhan)
 - Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)
 - New lifecycle event subscriptions now stream only events emitted after subscription begins instead of replaying retained history. (#1270)
 - Windows users whose endpoint security blocks the fileless PowerShell install command can now use a local `install.cmd` bootstrap; installer downloads use `curl.exe` while preserving package checksum verification. (#2751)
