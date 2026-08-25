@@ -619,6 +619,9 @@ impl App {
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_section_split,
             agent_panel_sort,
+            agents_view: config.ui.sidebar.agents_view,
+            agents_hide_idle: config.ui.sidebar.agents_hide_idle,
+            agent_card_collapsed_for: None,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -1450,6 +1453,12 @@ impl App {
                 self.state.tab_bar_position = config.ui.tab_bar_position;
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
+                let previous_agents_view = self.state.agents_view;
+                self.state.agents_view = config.ui.sidebar.agents_view;
+                self.state.agents_hide_idle = config.ui.sidebar.agents_hide_idle;
+                if previous_agents_view != self.state.agents_view {
+                    self.state.agent_card_collapsed_for = None;
+                }
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.agent_panel_scroll = 0;
@@ -3052,6 +3061,53 @@ mod tests {
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn live_agent_card_settings_flip_both_ways_and_reset_mode_state() {
+        let mut app = test_app();
+        let mut config = Config::default();
+        app.state.agent_panel_scroll = 7;
+        app.state.agent_card_collapsed_for = Some(crate::layout::PaneId::from_raw(42));
+        config.ui.sidebar.agents_view = crate::config::AgentsViewConfig::Legacy;
+
+        app.apply_live_config(&config, &[], &[], false);
+
+        assert_eq!(
+            app.state.agents_view,
+            crate::config::AgentsViewConfig::Legacy
+        );
+        assert_eq!(app.state.agent_panel_scroll, 0);
+        assert_eq!(app.state.agent_card_collapsed_for, None);
+
+        app.state.agent_panel_scroll = 3;
+        app.state.agent_card_collapsed_for = Some(crate::layout::PaneId::from_raw(43));
+        config.ui.sidebar.agents_view = crate::config::AgentsViewConfig::Cards;
+        config.ui.sidebar.agents_hide_idle = true;
+        app.apply_live_config(&config, &[], &[], false);
+
+        assert_eq!(
+            app.state.agents_view,
+            crate::config::AgentsViewConfig::Cards
+        );
+        assert!(app.state.agents_hide_idle);
+        assert_eq!(app.state.agent_panel_scroll, 0);
+        assert_eq!(app.state.agent_card_collapsed_for, None);
+    }
+
+    #[test]
+    fn live_hide_idle_change_applies_without_switching_view() {
+        let mut app = test_app();
+        let mut config = Config::default();
+        config.ui.sidebar.agents_hide_idle = true;
+
+        app.apply_live_config(&config, &[], &[], false);
+
+        assert!(app.state.agents_hide_idle);
+        assert_eq!(
+            app.state.agents_view,
+            crate::config::AgentsViewConfig::Cards
+        );
     }
 
     #[test]

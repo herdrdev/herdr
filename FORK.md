@@ -87,10 +87,10 @@ the top of the file:
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/cli.rs` | Reject fork-disabled update channels, dispatch the native watcher CLI, and share its coexistence diagnostics with server startup. | `dded4c73`, `b3aff323` |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
-| `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel and register native title sync. | `e312ccf8`, `e006a1ea` |
+| `src/app/mod.rs` | Align the stock-manifest startup test, register native title sync, and apply live Agents-card settings. | `e312ccf8`, `e006a1ea`, P1 (this commit) |
 | `src/app/actions.rs` | Trigger coalesced title recomputation for pane and agent lifecycle mutations, including session-reference-only changes. | `e006a1ea` |
 | `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
-| `src/app/state.rs` | Track the coalesced title-sync input generation with session and lifecycle persistence changes. | `e006a1ea` |
+| `src/app/state.rs` | Track title-sync generations and the live Agents-card presentation state. | `e006a1ea`, P1 (this commit) |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
 | `docs/next/website/src/content/docs/agents.mdx` | Document the built-in watcher, automatic agent titles, startup-only configuration, and standalone-plugin migration. | `18a6a734` |
 | `docs/next/website/src/data/config-reference.json` | Add the native agent watcher and title-sync configuration keys to the generated user reference snapshot. | `18a6a734` |
@@ -99,7 +99,9 @@ the top of the file:
 | `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `ebff8667` |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
-| `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | `c3c70979` |
+| `src/config/io.rs` | Recognize native feature sections and diagnose legacy Agents-row settings from raw startup/live TOML. | `c3c70979`, P1 (this commit) |
+| `src/config.rs` | Export the fork's Agents-card view configuration type. | P1 (this commit) |
+| `src/config/sidebar.rs` | Add live Agents-card view and idle-filter settings beside legacy row configuration. | P1 (this commit) |
 | `src/server/headless.rs` | Own the embedded watcher and title-sync lifecycles across normal and handoff server paths and warn about enabled standalone twins. | `dd08df50`, `e006a1ea`, `b3aff323` |
 | `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
 | `src/main.rs` | Register the Unix-only native title-sync module. | `f4af78b5` |

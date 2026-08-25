@@ -139,6 +139,9 @@ impl Config {
                     None,
                 ));
                 diagnostics.extend(config.collect_diagnostics());
+                if let Ok(value) = content.parse::<toml::Value>() {
+                    diagnostics.extend(agent_rows_config_diagnostic(&value, &config));
+                }
                 LoadedConfig {
                     config,
                     diagnostics,
@@ -360,11 +363,29 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         |section| config.remote = section,
     );
 
+    if !invalid_sections.iter().any(|section| section == "ui") {
+        diagnostics.extend(agent_rows_config_diagnostic(&value, &config));
+    }
+
     Ok(LoadedConfig {
         config,
         diagnostics,
         invalid_sections,
     })
+}
+
+fn agent_rows_config_diagnostic(value: &toml::Value, config: &Config) -> Option<String> {
+    if config.ui.sidebar.agents_view != super::AgentsViewConfig::Cards {
+        return None;
+    }
+    let agents = value.get("ui")?.get("sidebar")?.get("agents")?.as_table()?;
+    agents
+        .keys()
+        .any(|key| matches!(key.as_str(), "rows" | "rows_by_agent" | "row_gap"))
+        .then(|| {
+            "ui.sidebar.agents row settings are ignored while ui.sidebar.agents_view = \"cards\""
+                .to_string()
+        })
 }
 
 fn unknown_top_level_sections_from_str(content: &str) -> (Vec<String>, Vec<String>) {
@@ -924,6 +945,57 @@ interval_mss = 250
     }
 
     #[test]
+    fn cards_mode_reports_raw_agent_rows_presence_only_when_present() {
+        let cases = [
+            ("[ui.sidebar]\nagents_view = \"cards\"\n", false),
+            (
+                "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"workspace\"], [\"agent\"]]\n",
+                true,
+            ),
+            (
+                "[ui.sidebar.agents]\nrows = [[\"agent\"]]\nrow_gap = 2\n",
+                true,
+            ),
+            (
+                "[ui.sidebar]\nagents_view = \"legacy\"\n\n[ui.sidebar.agents]\nrows = [[\"agent\"]]\n",
+                false,
+            ),
+        ];
+
+        for (raw, expected) in cases {
+            let loaded = load_live_config_from_str(raw).expect("valid live config");
+            assert_eq!(
+                loaded
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.contains("row settings are ignored")),
+                expected,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_loader_also_reports_raw_agent_rows_presence() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "herdr-config-agent-rows-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "[ui.sidebar.agents]\nrow_gap = 0\n").unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
+
+        let loaded = Config::load();
+
+        assert!(loaded
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("row settings are ignored")));
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn load_live_config_warns_about_unknown_top_level_sections() {
         let loaded = load_live_config_from_str(
             r#"
@@ -995,6 +1067,7 @@ claude = [["terminal_title"]]
                 "unknown config key ui.\"foo.bar\"; ignoring key",
                 "unknown config key ui.mouse_captur; ignoring key",
                 "unknown config key ui.toast.delivry; ignoring key",
+                "ui.sidebar.agents row settings are ignored while ui.sidebar.agents_view = \"cards\"",
             ]
         );
         assert!(loaded.invalid_sections.is_empty());

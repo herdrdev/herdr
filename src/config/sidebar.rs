@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,14 @@ use crate::detect::Agent;
 const MAX_SIDEBAR_ROWS: usize = 16;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentsViewConfig {
+    #[default]
+    Cards,
+    Legacy,
+}
 
 fn deserialize_sidebar_rows<'de, D, T>(deserializer: D) -> Result<Vec<Vec<T>>, D::Error>
 where
@@ -427,6 +436,8 @@ impl Default for SpacesSidebarConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
+    pub agents_view: AgentsViewConfig,
+    pub agents_hide_idle: bool,
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
 }
@@ -438,6 +449,8 @@ mod tests {
     #[test]
     fn defaults_match_the_compact_agent_and_existing_space_layouts() {
         let config = SidebarConfig::default();
+        assert_eq!(config.agents_view, AgentsViewConfig::Cards);
+        assert!(!config.agents_hide_idle);
         assert_eq!(
             config.agents.rows,
             vec![
@@ -459,6 +472,25 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+    }
+
+    #[test]
+    fn agent_card_settings_parse_and_reject_unknown_views() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar]
+agents_view = "legacy"
+agents_hide_idle = true
+"#,
+        )
+        .expect("valid card settings");
+        assert_eq!(config.ui.sidebar.agents_view, AgentsViewConfig::Legacy);
+        assert!(config.ui.sidebar.agents_hide_idle);
+
+        assert!(
+            toml::from_str::<crate::config::Config>("[ui.sidebar]\nagents_view = \"grid\"\n")
+                .is_err()
+        );
     }
 
     #[test]
