@@ -328,7 +328,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # prompt_new_workspace_name = false
 
 # Draw borders around split panes.
-# pane_borders = true
+# "auto" draws them only for split panes, "always" also frames a lone pane
+# (only while pane_outer_borders is enabled), "off" disables them.
+# Legacy booleans still parse: true = "auto", false = "off".
+# pane_borders = "auto"
 
 # Draw borders along the outside edge of the pane area.
 # Disable for tmux-style internal splitters without an outside frame.

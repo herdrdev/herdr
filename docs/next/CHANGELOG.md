@@ -4,6 +4,7 @@
 
 ### Added
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
+- `ui.pane_borders` now accepts `"auto"`, `"always"`, and `"off"`; `"always"` draws pane borders even when a tab has a single pane. Existing boolean values keep working.
 
 ### Fixed
 - Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)
