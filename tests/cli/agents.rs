@@ -1,5 +1,34 @@
 use super::harness::*;
 
+#[test]
+fn agent_explain_missing_file_reports_json_error() {
+    let base = unique_test_dir();
+    let missing = base.join("missing-screen.txt");
+    let output = run_named_cli(
+        &base.join("config"),
+        &base.join("runtime"),
+        &[
+            "agent",
+            "explain",
+            "--file",
+            missing.to_str().unwrap(),
+            "--agent",
+            "claude",
+            "--json",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["id"], "cli:agent:explain");
+    assert_eq!(error["error"]["code"], "agent_explain_file_read_failed");
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains(missing.to_str().unwrap()));
+}
+
 fn write_delayed_shell_and_fake_pi(
     base: &Path,
     shell_delay_seconds: &str,

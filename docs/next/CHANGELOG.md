@@ -6,6 +6,7 @@
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
 
 ### Fixed
+- Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)
 - New lifecycle event subscriptions now stream only events emitted after subscription begins instead of replaying retained history. (#1270)
 - Windows users whose endpoint security blocks the fileless PowerShell install command can now use a local `install.cmd` bootstrap; installer downloads use `curl.exe` while preserving package checksum verification. (#2751)
 - Oh My Pi panes now stay working when a turn ends with an automatic continuation already scheduled, instead of briefly reporting idle and completing `agent wait` early. (#2851, thanks @taoeffect)
@@ -16,6 +17,8 @@
 - Windows clients now preserve layout-generated text for Shift-only keys, so characters such as `/` on German keyboards reach shell panes and pasted input. (#3045)
 - Windows panes now keep bare `cursor-agent` launches detected after Cursor hands off to its bundled Node process. (#3032)
 - Oversized Kitty images no longer prevent smaller images shown later in the same pane from rendering. (#3033)
+- `herdr agent explain --file` now reports fixture read failures as structured JSON instead of exposing Rust I/O debug output. (#3022)
+- Wayland clipboard copies no longer freeze Herdr while `wl-copy` remains alive to serve the selection. (#3014)
 - Claude Code panes now use visible turn, background shell, and background agent activity as working-state fallbacks when OSC titles are unavailable or disabled. (#1630, #2241)
 - Claude Code panes now remain working while MCP tasks continue in the background after a turn ends. (#3090)
 - Tab bar status commands now remove ESC-prefixed terminal control sequences instead of displaying their sequence bodies as text. (#3001)
