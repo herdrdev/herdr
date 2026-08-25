@@ -91,11 +91,12 @@ fn shrink_for_one_cell_gap(size: u16) -> u16 {
 
 pub(crate) fn apply_pane_chrome(
     panes: Vec<PaneInfo>,
-    pane_borders: bool,
+    pane_borders: crate::config::PaneBordersConfig,
     pane_gaps: bool,
     pane_outer_borders: bool,
 ) -> Vec<PaneInfo> {
     let multi_pane = panes.len() > 1;
+    let bordered = pane_borders.shows_borders(multi_pane);
     let outer_left = panes.iter().map(|info| info.rect.x).min().unwrap_or(0);
     let outer_top = panes.iter().map(|info| info.rect.y).min().unwrap_or(0);
     let outer_right = panes
@@ -115,7 +116,7 @@ pub(crate) fn apply_pane_chrome(
             let right_neighbor = multi_pane.then(|| pane_to_right(&info, &panes)).flatten();
             let below_neighbor = multi_pane.then(|| pane_below(&info, &panes)).flatten();
 
-            if multi_pane && pane_gaps && !pane_borders {
+            if multi_pane && pane_gaps && !pane_borders.draws_borders() {
                 if right_neighbor.is_some() {
                     info.rect.width = shrink_for_one_cell_gap(info.rect.width);
                 }
@@ -124,7 +125,7 @@ pub(crate) fn apply_pane_chrome(
                 }
             }
 
-            info.borders = if !multi_pane || !pane_borders {
+            info.borders = if !bordered {
                 Borders::NONE
             } else {
                 let mut borders = Borders::ALL;
@@ -219,7 +220,7 @@ pub(super) fn resize_tab_panes(
         if let Some((terminal_id, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
         {
-            let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
+            let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
                 Borders::ALL
             } else {
                 Borders::NONE
@@ -284,7 +285,7 @@ pub(super) fn compute_pane_infos_for_tab(
 
     if tab.zoomed {
         let focused_id = tab.layout.focused();
-        let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
+        let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
             Borders::ALL
         } else {
             Borders::NONE
@@ -457,7 +458,7 @@ fn render_pane_borders(
     split_borders: &[crate::layout::SplitBorder],
     frame: &mut Frame,
 ) {
-    if !app.pane_borders || pane_infos.iter().all(|info| info.borders.is_empty()) {
+    if !app.pane_borders.draws_borders() || pane_infos.iter().all(|info| info.borders.is_empty()) {
         return;
     }
 
@@ -830,6 +831,7 @@ fn color_to_rgb(color: Color) -> Option<Rgb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PaneBordersConfig;
     use crate::layout::PaneId;
     use crate::selection::Selection;
     use crate::terminal::TerminalRuntime;
@@ -916,7 +918,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            true,
+            PaneBordersConfig::Auto,
             false,
             true,
         );
@@ -937,7 +939,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            true,
+            PaneBordersConfig::Auto,
             false,
             true,
         );
@@ -958,7 +960,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            true,
+            PaneBordersConfig::Auto,
             false,
             false,
         );
@@ -978,7 +980,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            true,
+            PaneBordersConfig::Auto,
             true,
             true,
         );
@@ -999,7 +1001,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            false,
+            PaneBordersConfig::Off,
             true,
             true,
         );
@@ -1019,7 +1021,7 @@ mod tests {
 
         let infos = apply_pane_chrome(
             workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 20)),
-            false,
+            PaneBordersConfig::Off,
             false,
             true,
         );
@@ -1028,6 +1030,36 @@ mod tests {
             assert!(info.borders.is_empty());
             assert_eq!(pane_inner_rect(info.rect, info.borders), info.rect);
         }
+    }
+
+    #[test]
+    fn always_pane_borders_frame_lone_pane() {
+        let workspace = Workspace::test_new("test");
+        let area = Rect::new(0, 0, 100, 20);
+
+        let default_infos = apply_pane_chrome(
+            workspace.tabs[0].layout.panes(area),
+            PaneBordersConfig::Auto,
+            false,
+            true,
+        );
+        assert_eq!(default_infos[0].borders, Borders::NONE);
+
+        let framed_infos = apply_pane_chrome(
+            workspace.tabs[0].layout.panes(area),
+            PaneBordersConfig::Always,
+            false,
+            true,
+        );
+        assert_eq!(framed_infos[0].borders, Borders::ALL);
+
+        let no_outer_infos = apply_pane_chrome(
+            workspace.tabs[0].layout.panes(area),
+            PaneBordersConfig::Always,
+            false,
+            false,
+        );
+        assert_eq!(no_outer_infos[0].borders, Borders::NONE);
     }
 
     #[test]
