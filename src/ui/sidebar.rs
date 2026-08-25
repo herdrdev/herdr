@@ -1629,9 +1629,11 @@ fn render_agent_cards(
             break;
         }
         let active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
-        let row_style = active
-            .then_some(Style::default().bg(app.palette.surface_dim))
-            .unwrap_or_default();
+        let row_style = if active {
+            Style::default().bg(app.palette.surface_dim)
+        } else {
+            Style::default()
+        };
         for (offset, line) in card.lines.into_iter().enumerate() {
             let spans = line.into_iter().map(|span| {
                 Span::styled(

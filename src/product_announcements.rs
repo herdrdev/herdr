@@ -1,4 +1,6 @@
 // Modified from herdr by the vimeflow project — see FORK.md
+#![allow(dead_code)] // stock-manifest helpers retained for local preview/tests
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;

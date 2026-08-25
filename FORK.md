@@ -86,7 +86,7 @@ the top of the file:
 | --- | --- | --- |
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/cli.rs` | Reject fork-disabled update channels, dispatch the native watcher CLI, and share its coexistence diagnostics with server startup. | `dded4c73`, `b3aff323` |
-| `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
+| `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support and its intentionally dormant helpers. | `faf956e9b815045ca114d89b7faf9534386e0e8b`, P5 clippy gate (this commit) |
 | `src/app/mod.rs` | Align stock-manifest and legacy-row tests, register native title sync, apply live Agents-card settings, and initialize watcher telemetry. | `e312ccf8`, `e006a1ea`, `b8a6406c`, `95a7db2a`, P5 gate fix (this commit) |
 | `src/app/actions.rs` | Trigger coalesced title recomputation and reset focused-card collapse state on pane focus changes. | `e006a1ea`, `158aabf9` |
 | `src/app/input/navigate.rs` | Keep indexed and relative Agent focus aligned with the cards-visible order. | `158aabf9` |
@@ -110,7 +110,7 @@ the top of the file:
 | `src/main.rs` | Register the Unix-only native title-sync and Agent-card modules. | `f4af78b5`, `95a7db2a` |
 | `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |
 | `src/ui.rs` | Export shared Agent-card geometry to sidebar input handling. | `158aabf9` |
-| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards while preserving the legacy and compact-rail renderers. | `158aabf9`, `53970ca3` |
+| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards while preserving the legacy and compact-rail renderers. | `158aabf9`, `53970ca3`, P5 clippy gate (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
