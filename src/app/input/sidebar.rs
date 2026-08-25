@@ -849,7 +849,7 @@ mod tests {
         let body = crate::ui::agent_panel_body_rect(detail_area, false);
 
         assert_eq!(
-            app.state.agent_detail_target_at(body.x, body.y),
+            app.state.agent_detail_target_at(body.x + 2, body.y),
             Some((0, 0, first_pane, false))
         );
     }

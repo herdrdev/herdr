@@ -91,7 +91,7 @@ the top of the file:
 | `src/app/actions.rs` | Trigger coalesced title recomputation and reset focused-card collapse state on pane focus changes. | `e006a1ea`, `158aabf9` |
 | `src/app/input/navigate.rs` | Keep indexed and relative Agent focus aligned with the cards-visible order. | `158aabf9` |
 | `src/app/input/mouse.rs` | Focus Agent cards and toggle the focused card from its chevron zone. | `158aabf9` |
-| `src/app/input/sidebar.rs` | Use card-aware body geometry for Agent hit testing. | `158aabf9` |
+| `src/app/input/sidebar.rs` | Use card-aware body geometry for Agent hit testing. | `158aabf9`, P5 gate fix (this commit) |
 | `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
 | `src/app/state.rs` | Track title-sync generations, the live Agents-card presentation state, and non-blocking watcher telemetry snapshots. | `e006a1ea`, `b8a6406c`, `95a7db2a` |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
