@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use std::{
     fs, io,
     io::Write,
@@ -1960,6 +1961,42 @@ mod tests {
 
         app.execute_tui_navigate_action(NavigateAction::NextAgent, ActionContext::Prefix);
 
+        assert_eq!(app.state.active, Some(1));
+    }
+
+    #[test]
+    fn hidden_idle_cards_do_not_consume_focus_agent_indexes() {
+        let mut app = app_with_test_workspaces(&["idle", "working"]);
+        for ws_idx in 0..2 {
+            let pane_id = app.state.workspaces[ws_idx].tabs[0].root_pane;
+            app.state.workspaces[ws_idx].tabs[0]
+                .panes
+                .get_mut(&pane_id)
+                .unwrap()
+                .seen = true;
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.state = if ws_idx == 0 {
+                crate::detect::AgentState::Idle
+            } else {
+                crate::detect::AgentState::Working
+            };
+        }
+        app.state.agents_view = crate::config::AgentsViewConfig::Cards;
+        app.state.agents_hide_idle = true;
+
+        let visible = crate::ui::agent_panel_entries(&app.state);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].ws_idx, 1);
+
+        app.execute_tui_navigate_action(NavigateAction::FocusAgent(0), ActionContext::Prefix);
+        assert_eq!(app.state.active, Some(1));
+
+        app.state.active = Some(0);
+        app.execute_tui_navigate_action(NavigateAction::NextAgent, ActionContext::Prefix);
         assert_eq!(app.state.active, Some(1));
     }
 

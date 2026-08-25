@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -53,6 +54,8 @@ pub(crate) use self::scrollbar::{
 };
 use self::settings::render_settings_overlay;
 #[cfg(test)]
+pub(crate) use self::sidebar::agent_panel_body_rect;
+#[cfg(test)]
 pub(crate) use self::sidebar::workspace_drop_indicator_row;
 use self::sidebar::{render_sidebar, render_sidebar_collapsed};
 use self::status::{
@@ -76,7 +79,7 @@ pub(crate) use self::{
         SETTINGS_POPUP_WIDTH,
     },
     sidebar::{
-        agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
+        agent_entry_gap, agent_entry_height_in_body, agent_panel_entries, agent_panel_items_rect,
         agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
         agent_panel_toggle_rect, all_agent_panel_entries, collapsed_sidebar_sections,
         collapsed_sidebar_toggle_rect, compute_workspace_card_areas, expanded_sidebar_sections,

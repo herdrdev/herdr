@@ -293,14 +293,19 @@ impl AppState {
             pane_id,
         };
         if previous.as_ref() != Some(&target) {
-            self.previous_pane_focus = previous;
+            self.record_pane_focus_transition(previous);
         }
+    }
+
+    fn record_pane_focus_transition(&mut self, previous: Option<PaneFocusTarget>) {
+        self.previous_pane_focus = previous;
+        self.agent_card_collapsed_for = None;
     }
 
     fn record_pane_focus_after_navigation(&mut self, previous: Option<PaneFocusTarget>) {
         let current = self.current_pane_focus_target();
         if previous != current {
-            self.previous_pane_focus = previous;
+            self.record_pane_focus_transition(previous);
         }
     }
 
@@ -338,7 +343,7 @@ impl AppState {
             .and_then(|ws| ws.tabs.get_mut(tab_idx))
         {
             tab.layout.focus_pane(pane_id);
-            self.previous_pane_focus = previous;
+            self.record_pane_focus_transition(previous);
             self.mark_session_dirty();
             self.sync_copy_mode_with_focus();
             return true;
@@ -4356,6 +4361,19 @@ mod tests {
         state.switch_workspace(2);
         assert_eq!(state.active, Some(2));
         assert_eq!(state.selected, 2);
+    }
+
+    #[test]
+    fn pane_focus_change_reexpands_the_new_agent_card() {
+        let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let right = state.workspaces[0].test_split(Direction::Horizontal);
+        state.focus_pane_in_workspace(0, root);
+        state.agent_card_collapsed_for = Some(root);
+
+        assert!(state.focus_pane_in_workspace(0, right));
+
+        assert_eq!(state.agent_card_collapsed_for, None);
     }
 
     #[test]

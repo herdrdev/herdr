@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 mod tokens;
 
 use ratatui::{
@@ -130,7 +131,30 @@ fn agent_panel_entries_with_runtimes(
 ) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
     crate::app::agent_view::apply_agent_view(app, &mut entries);
+    #[cfg(unix)]
+    if app.agents_view == crate::config::AgentsViewConfig::Cards && app.agents_hide_idle {
+        entries.retain(|entry| entry.state != AgentState::Idle || !entry.seen);
+    }
     entries
+}
+
+fn compact_agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
+    let mut entries = collect_agent_panel_entries_with_runtimes(app, None);
+    crate::app::agent_view::apply_agent_view(app, &mut entries);
+    entries
+}
+
+#[cfg(unix)]
+fn hidden_idle_agent_count(app: &AppState) -> usize {
+    if app.agents_view != crate::config::AgentsViewConfig::Cards || !app.agents_hide_idle {
+        return 0;
+    }
+    let mut entries = collect_agent_panel_entries_with_runtimes(app, None);
+    crate::app::agent_view::apply_agent_view(app, &mut entries);
+    entries
+        .iter()
+        .filter(|entry| entry.state == AgentState::Idle && entry.seen)
+        .count()
 }
 
 fn collect_agent_panel_entries_with_runtimes(
@@ -542,6 +566,15 @@ pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
     Rect::new(area.x, body_y, body_width, body_height)
 }
 
+pub(crate) fn agent_panel_items_rect(app: &AppState, area: Rect, has_scrollbar: bool) -> Rect {
+    let mut body = agent_panel_body_rect(area, has_scrollbar);
+    #[cfg(unix)]
+    if hidden_idle_agent_count(app) > 0 {
+        body.height = body.height.saturating_sub(1);
+    }
+    body
+}
+
 fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
     let label = entry
         .state_labels
@@ -551,11 +584,57 @@ fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<Resol
     tokens::agent_rows(&app.sidebar_agents, entry, label)
 }
 
+#[cfg(unix)]
+fn build_agent_card(
+    app: &AppState,
+    entry: &AgentPanelEntry,
+    body_width: u16,
+    body_height: u16,
+) -> crate::agent_cards::view::BuiltCard {
+    let telemetry = app.workspaces.get(entry.ws_idx).and_then(|workspace| {
+        let number = workspace.public_pane_number(entry.pane_id)?;
+        let id = crate::workspace::public_pane_id_for_number(&workspace.id, number);
+        app.agent_telemetry.get(&id)
+    });
+    let name = entry
+        .agent_label
+        .as_deref()
+        .or(entry.agent_kind_label.as_deref())
+        .unwrap_or("agent");
+    let task = entry
+        .pane_label
+        .as_deref()
+        .or(entry.terminal_title_stripped.as_deref());
+    let expanded = app.is_active_pane(entry.ws_idx, entry.tab_idx, entry.pane_id)
+        && app.agent_card_collapsed_for != Some(entry.pane_id);
+    crate::agent_cards::view::build_card(
+        crate::agent_cards::view::CardInput {
+            workspace: &entry.primary_label,
+            name,
+            task,
+            state: entry.state,
+            seen: entry.seen,
+            telemetry,
+        },
+        body_width,
+        body_height,
+        expanded,
+    )
+}
+
 pub(crate) fn agent_entry_height_in_body(
     app: &AppState,
     entry: &AgentPanelEntry,
+    body_width: u16,
     body_height: u16,
 ) -> u16 {
+    #[cfg(unix)]
+    if app.agents_view == crate::config::AgentsViewConfig::Cards {
+        return build_agent_card(app, entry, body_width, body_height)
+            .lines
+            .len()
+            .min(u16::MAX as usize) as u16;
+    }
     (resolved_agent_rows(app, entry)
         .len()
         .max(1)
@@ -564,6 +643,10 @@ pub(crate) fn agent_entry_height_in_body(
 }
 
 pub(crate) fn agent_entry_gap(app: &AppState, entry_idx: usize, entry_count: usize) -> u16 {
+    #[cfg(unix)]
+    if app.agents_view == crate::config::AgentsViewConfig::Cards {
+        return 0;
+    }
     if entry_idx + 1 < entry_count {
         app.sidebar_agents.row_gap
     } else {
@@ -572,7 +655,7 @@ pub(crate) fn agent_entry_gap(app: &AppState, entry_idx: usize, entry_count: usi
 }
 
 fn agent_panel_visible_count_from(app: &AppState, area: Rect, scroll: usize) -> usize {
-    let body = agent_panel_body_rect(area, false);
+    let body = agent_panel_items_rect(app, area, false);
     if body.width == 0 || body.height == 0 {
         return 0;
     }
@@ -581,7 +664,7 @@ fn agent_panel_visible_count_from(app: &AppState, area: Rect, scroll: usize) -> 
     let mut visible = 0usize;
     let entries = agent_panel_entries(app);
     for (index, entry) in entries.iter().enumerate().skip(scroll) {
-        let height = agent_entry_height_in_body(app, entry, body.height);
+        let height = agent_entry_height_in_body(app, entry, body.width, body.height);
         if used_rows.saturating_add(height) > body.height {
             break;
         }
@@ -595,13 +678,14 @@ fn agent_panel_visible_count_from(app: &AppState, area: Rect, scroll: usize) -> 
 }
 
 fn agent_panel_bottom_start(app: &AppState, area: Rect) -> usize {
-    let body = agent_panel_body_rect(area, false);
+    let body = agent_panel_items_rect(app, area, false);
     let entries = agent_panel_entries(app);
     let mut used_rows = 0u16;
     let mut start = entries.len();
     for (index, entry) in entries.iter().enumerate().rev() {
         let gap = agent_entry_gap(app, index, entries.len());
-        let needed = agent_entry_height_in_body(app, entry, body.height).saturating_add(gap);
+        let needed =
+            agent_entry_height_in_body(app, entry, body.width, body.height).saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
             break;
         }
@@ -646,7 +730,7 @@ pub(crate) fn agent_panel_scroll_metrics(app: &AppState, area: Rect) -> crate::p
 
 pub(crate) fn agent_panel_scrollbar_rect(app: &AppState, area: Rect) -> Option<Rect> {
     let metrics = agent_panel_scroll_metrics(app, area);
-    let body = agent_panel_body_rect(area, true);
+    let body = agent_panel_items_rect(app, area, true);
     (should_show_scrollbar(metrics) && body.width > 0 && body.height > 0).then_some(Rect::new(
         area.x + area.width.saturating_sub(1),
         body.y,
@@ -836,7 +920,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         detail_area.height.saturating_sub(1),
     );
     if detail_content_area != Rect::default() {
-        for (detail_idx, detail) in agent_panel_entries(app).iter().enumerate() {
+        for (detail_idx, detail) in compact_agent_panel_entries(app).iter().enumerate() {
             let y = detail_content_area.y + detail_idx as u16;
             if y >= detail_content_area.y + detail_content_area.height {
                 break;
@@ -1448,7 +1532,7 @@ fn render_agent_detail(
     let details = agent_panel_entries_from(app, terminal_runtimes);
     let metrics = agent_panel_scroll_metrics(app, area);
     let scrollbar_rect = agent_panel_scrollbar_rect(app, area);
-    let body = agent_panel_body_rect(area, should_show_scrollbar(metrics));
+    let body = agent_panel_items_rect(app, area, should_show_scrollbar(metrics));
     if body == Rect::default() {
         return;
     }
@@ -1458,6 +1542,12 @@ fn render_agent_detail(
                 .style(Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)),
             Rect::new(body.x, body.y, body.width, 1),
         );
+        return;
+    }
+
+    #[cfg(unix)]
+    if app.agents_view == crate::config::AgentsViewConfig::Cards {
+        render_agent_cards(app, frame, body, &details, metrics, scrollbar_rect);
         return;
     }
 
@@ -1517,6 +1607,66 @@ fn render_agent_detail(
 
     if let Some(track) = scrollbar_rect {
         render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
+    }
+}
+
+#[cfg(unix)]
+fn render_agent_cards(
+    app: &AppState,
+    frame: &mut Frame,
+    body: Rect,
+    details: &[AgentPanelEntry],
+    metrics: crate::pane::ScrollMetrics,
+    scrollbar_rect: Option<Rect>,
+) {
+    let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+    let mut row_y = body.y;
+    let body_bottom = body.y + body.height;
+    for detail in details.iter().skip(scroll) {
+        let card = build_agent_card(app, detail, body.width, body.height);
+        let height = card.lines.len() as u16;
+        if row_y.saturating_add(height) > body_bottom {
+            break;
+        }
+        let active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+        let row_style = active
+            .then_some(Style::default().bg(app.palette.surface_dim))
+            .unwrap_or_default();
+        for (offset, line) in card.lines.into_iter().enumerate() {
+            let spans = line.into_iter().map(|span| {
+                Span::styled(
+                    span.text,
+                    crate::agent_cards::view::palette_style(span.style, &app.palette),
+                )
+            });
+            frame.render_widget(
+                Paragraph::new(Line::from_iter(spans)).style(row_style),
+                Rect::new(body.x, row_y + offset as u16, body.width, 1),
+            );
+        }
+        row_y = row_y.saturating_add(height);
+    }
+
+    let hidden = hidden_idle_agent_count(app);
+    if hidden > 0 {
+        frame.render_widget(
+            Paragraph::new(format!(" +{hidden} idle hidden")).style(
+                Style::default()
+                    .fg(app.palette.overlay0)
+                    .add_modifier(Modifier::DIM),
+            ),
+            Rect::new(body.x, body.y + body.height, body.width, 1),
+        );
+    }
+    if let Some(track) = scrollbar_rect {
+        render_scrollbar(
+            frame,
+            metrics,
+            track,
+            app.palette.surface_dim,
+            app.palette.overlay0,
+            "▕",
+        );
     }
 }
 
@@ -1591,9 +1741,83 @@ mod tests {
             })
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cards_render_lifecycle_only_with_hidden_count_outside_entries() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("idle"),
+            Workspace::test_new("working"),
+            Workspace::test_new("blocked"),
+        ];
+        app.ensure_test_terminals();
+        for (ws_idx, state) in [AgentState::Idle, AgentState::Working, AgentState::Blocked]
+            .into_iter()
+            .enumerate()
+        {
+            let pane_id = app.workspaces[ws_idx].tabs[0].root_pane;
+            app.workspaces[ws_idx].tabs[0]
+                .panes
+                .get_mut(&pane_id)
+                .unwrap()
+                .seen = true;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        }
+        app.agents_view = crate::config::AgentsViewConfig::Cards;
+        app.agents_hide_idle = true;
+        app.active = Some(1);
+
+        let area = Rect::new(0, 0, 36, 30);
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_items_rect(&app, agent_area, false);
+        let mut terminal = Terminal::new(TestBackend::new(36, 30)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert!(row_text(buffer, body.y, body.width).contains("working"));
+        assert!(row_text(buffer, body.y + 1, body.width).contains("working"));
+        assert!(row_text(buffer, body.y + 2, body.width).contains("no telemetry"));
+        assert!(row_text(buffer, body.y + body.height, body.width).contains("+1 idle hidden"));
+        assert_eq!(agent_panel_entries(&app).len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn card_order_honors_spaces_and_priority_modes() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("first"), Workspace::test_new("second")];
+        app.ensure_test_terminals();
+        for (ws_idx, state) in [AgentState::Working, AgentState::Blocked]
+            .into_iter()
+            .enumerate()
+        {
+            let pane_id = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        }
+        app.agents_view = crate::config::AgentsViewConfig::Cards;
+        app.agent_panel_sort = AgentPanelSort::Spaces;
+        assert_eq!(agent_panel_entries(&app)[0].ws_idx, 0);
+
+        app.agent_panel_sort = AgentPanelSort::Priority;
+        assert_eq!(agent_panel_entries(&app)[0].ws_idx, 1);
+    }
+
     #[test]
     fn default_agent_rows_remove_redundant_state_text() {
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         let workspace = Workspace::test_new("one");
         let pane_id = workspace.tabs[0].root_pane;
         app.workspaces = vec![workspace];
@@ -1647,6 +1871,7 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         )
         .unwrap();
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         app.sidebar_agents = config.ui.sidebar.agents;
         let workspace = Workspace::test_new("one");
         let pane_id = workspace.tabs[0].root_pane;
@@ -1789,6 +2014,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn default_agent_row_gap_packs_rendering_and_scroll_geometry() {
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.ensure_test_terminals();
         for (workspace, agent) in app.workspaces.iter().zip([Agent::Pi, Agent::Claude]) {
@@ -1819,6 +2045,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn narrow_agent_rows_preserve_later_tab_tokens() {
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         let mut workspace = Workspace::test_new("very-long-workspace-name");
         let tab_idx = workspace.test_add_tab(Some("logs"));
         let pane_id = workspace.tabs[tab_idx].root_pane;
@@ -1846,6 +2073,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn stripped_terminal_title_renders_with_unicode_width_truncation() {
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         let workspace = Workspace::test_new("one");
         let pane_id = workspace.tabs[0].root_pane;
         app.workspaces = vec![workspace];
@@ -1894,6 +2122,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn variable_agent_heights_pack_the_bottom_and_reveal_targets() {
         let mut app = crate::app::state::AppState::test_new();
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
         app.workspaces = vec![
             Workspace::test_new("one"),
             Workspace::test_new("two"),
@@ -1969,6 +2198,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             vec![vec![crate::config::AgentSidebarToken::Agent]; 6],
         );
         let panel = Rect::new(0, 0, 20, 5);
+        app.agents_view = crate::config::AgentsViewConfig::Legacy;
 
         let metrics = agent_panel_scroll_metrics(&app, panel);
 
@@ -1976,7 +2206,12 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(metrics.max_offset_from_bottom, 0);
         let entry = agent_panel_entries(&app).pop().unwrap();
         assert_eq!(
-            agent_entry_height_in_body(&app, &entry, agent_panel_body_rect(panel, false).height),
+            agent_entry_height_in_body(
+                &app,
+                &entry,
+                agent_panel_body_rect(panel, false).width,
+                agent_panel_body_rect(panel, false).height,
+            ),
             agent_panel_body_rect(panel, false).height
         );
     }

@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use bytes::Bytes;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Direction, Rect};
@@ -619,9 +620,14 @@ impl AppState {
                         return None;
                     }
 
-                    if let Some((ws_idx, _tab_idx, pane_id)) =
-                        self.agent_detail_target_at(mouse.row)
+                    if let Some((ws_idx, tab_idx, pane_id, chevron)) =
+                        self.agent_detail_target_at(mouse.column, mouse.row)
                     {
+                        if chevron && self.is_active_pane(ws_idx, tab_idx, pane_id) {
+                            self.agent_card_collapsed_for =
+                                (self.agent_card_collapsed_for != Some(pane_id)).then_some(pane_id);
+                            return None;
+                        }
                         self.mode = Mode::Terminal;
                         return Some(MouseAction::FocusPane { ws_idx, pane_id });
                     }
@@ -4038,6 +4044,57 @@ mod tests {
         ));
 
         assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn focused_agent_card_chevron_toggles_expansion_without_changing_focus() {
+        let mut app = app_for_mouse_test();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.agents_view = crate::config::AgentsViewConfig::Cards;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .detected_agent = Some(Agent::Claude);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 80, 30));
+        let detail_area = app.state.agent_panel_rect();
+        let metrics = crate::ui::agent_panel_scroll_metrics(&app.state, detail_area);
+        let body = crate::ui::agent_panel_items_rect(
+            &app.state,
+            detail_area,
+            crate::ui::should_show_scrollbar(metrics),
+        );
+        assert!(
+            !app.state
+                .agent_detail_target_at(body.x, body.y + 1)
+                .unwrap()
+                .3
+        );
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            body.x,
+            body.y,
+        ));
+        assert_eq!(app.state.agent_card_collapsed_for, Some(pane_id));
+        assert_eq!(app.state.active, Some(0));
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            body.x,
+            body.y,
+        ));
+        assert_eq!(app.state.agent_card_collapsed_for, None);
+        assert_eq!(app.state.active, Some(0));
     }
 
     #[test]

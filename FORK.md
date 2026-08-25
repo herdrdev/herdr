@@ -88,7 +88,10 @@ the top of the file:
 | `src/cli.rs` | Reject fork-disabled update channels, dispatch the native watcher CLI, and share its coexistence diagnostics with server startup. | `dded4c73`, `b3aff323` |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test, register native title sync, apply live Agents-card settings, and initialize the watcher telemetry cache. | `e312ccf8`, `e006a1ea`, P1 (this commit), P2 (this commit) |
-| `src/app/actions.rs` | Trigger coalesced title recomputation for pane and agent lifecycle mutations, including session-reference-only changes. | `e006a1ea` |
+| `src/app/actions.rs` | Trigger coalesced title recomputation and reset focused-card collapse state on pane focus changes. | `e006a1ea`, P4 (this commit) |
+| `src/app/input/navigate.rs` | Keep indexed and relative Agent focus aligned with the cards-visible order. | P4 (this commit) |
+| `src/app/input/mouse.rs` | Focus Agent cards and toggle the focused card from its chevron zone. | P4 (this commit) |
+| `src/app/input/sidebar.rs` | Use card-aware body geometry for Agent hit testing. | P4 (this commit) |
 | `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
 | `src/app/state.rs` | Track title-sync generations, the live Agents-card presentation state, and non-blocking watcher telemetry snapshots. | `e006a1ea`, P1 (this commit), P2 (this commit) |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
@@ -106,6 +109,8 @@ the top of the file:
 | `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
 | `src/main.rs` | Register the Unix-only native title-sync and Agent-card modules. | `f4af78b5`, P2 (this commit) |
 | `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |
+| `src/ui.rs` | Export shared Agent-card geometry to sidebar input handling. | P4 (this commit) |
+| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards while preserving the legacy and compact-rail renderers. | P4 (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

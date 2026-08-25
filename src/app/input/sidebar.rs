@@ -1,3 +1,4 @@
+// Modified from herdr by the vimeflow project — see FORK.md
 use ratatui::layout::Rect;
 
 use crate::app::state::{AppState, ViewLayout};
@@ -484,19 +485,26 @@ impl AppState {
 
     pub(super) fn agent_detail_target_at(
         &self,
+        col: u16,
         row: u16,
-    ) -> Option<(usize, usize, crate::layout::PaneId)> {
+    ) -> Option<(usize, usize, crate::layout::PaneId, bool)> {
         if self.sidebar_collapsed {
             return None;
         }
 
         let detail_area = self.agent_panel_rect();
         let metrics = crate::ui::agent_panel_scroll_metrics(self, detail_area);
-        let body = crate::ui::agent_panel_body_rect(
+        let body = crate::ui::agent_panel_items_rect(
+            self,
             detail_area,
             crate::ui::should_show_scrollbar(metrics),
         );
-        if body.height == 0 || row < body.y || row >= body.y + body.height {
+        let cards = cfg!(unix) && self.agents_view == crate::config::AgentsViewConfig::Cards;
+        if body.height == 0
+            || (cards && (col < body.x || col >= body.x + body.width))
+            || row < body.y
+            || row >= body.y + body.height
+        {
             return None;
         }
 
@@ -505,12 +513,14 @@ impl AppState {
         let entries = crate::ui::agent_panel_entries(self);
         let scroll = self.agent_panel_scroll.min(metrics.max_offset_from_bottom);
         for (index, detail) in entries.iter().enumerate().skip(scroll) {
-            let height = crate::ui::agent_entry_height_in_body(self, detail, body.height);
+            let height =
+                crate::ui::agent_entry_height_in_body(self, detail, body.width, body.height);
             if row_y.saturating_add(height) > body_bottom {
                 break;
             }
             if row >= row_y && row < row_y.saturating_add(height) {
-                return Some((detail.ws_idx, detail.tab_idx, detail.pane_id));
+                let chevron = cards && row == row_y && col < body.x.saturating_add(2);
+                return Some((detail.ws_idx, detail.tab_idx, detail.pane_id, chevron));
             }
             row_y = row_y
                 .saturating_add(height)
@@ -748,6 +758,7 @@ mod tests {
     #[test]
     fn per_agent_row_heights_preserve_card_gaps_and_trailing_mouse_targets() {
         let mut app = app_for_mouse_test();
+        app.state.agents_view = crate::config::AgentsViewConfig::Legacy;
         let first = Workspace::test_new("one");
         let first_pane = first.tabs[0].root_pane;
         let second = Workspace::test_new("two");
@@ -783,19 +794,19 @@ mod tests {
         );
 
         assert_eq!(
-            app.state.agent_detail_target_at(body.y),
-            Some((0, 0, first_pane))
+            app.state.agent_detail_target_at(body.x, body.y),
+            Some((0, 0, first_pane, false))
         );
-        assert_eq!(app.state.agent_detail_target_at(body.y + 1), None);
+        assert_eq!(app.state.agent_detail_target_at(body.x, body.y + 1), None);
         assert_eq!(
-            app.state.agent_detail_target_at(body.y + 3),
-            Some((1, 0, second_pane))
+            app.state.agent_detail_target_at(body.x, body.y + 3),
+            Some((1, 0, second_pane, false))
         );
 
         app.state.sidebar_agents.row_gap = 0;
         assert_eq!(
-            app.state.agent_detail_target_at(body.y + 1),
-            Some((1, 0, second_pane))
+            app.state.agent_detail_target_at(body.x, body.y + 1),
+            Some((1, 0, second_pane, false))
         );
     }
 
@@ -838,8 +849,8 @@ mod tests {
         let body = crate::ui::agent_panel_body_rect(detail_area, false);
 
         assert_eq!(
-            app.state.agent_detail_target_at(body.y),
-            Some((0, 0, first_pane))
+            app.state.agent_detail_target_at(body.x, body.y),
+            Some((0, 0, first_pane, false))
         );
     }
 
