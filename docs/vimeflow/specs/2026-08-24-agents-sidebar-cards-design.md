@@ -1,136 +1,155 @@
 # Agents Sidebar Cards — M1 Design
 
-**Date:** 2026-08-24
-**Status:** Approved direction (operator decisions 2026-08-20); pending one
-codex review pass
-**Parent:** vimeflow pivot spec (M1) — **this spec formally supersedes the
-pivot spec's 3-section sidebar shape**: the operator chose to REPLACE the
-built-in Agents section's content with the agent-watcher card view instead of
-adding a third Watcher section. Rationale: materially smaller upstream diff
-(no new section machinery, no `sidebar_section_split` persistence migration)
-and one surface instead of two overlapping ones.
+**Date:** 2026-08-24 (v2 same day — revised for all findings in
+`../reviews/2026-08-24-m1-sidebar-cards-review.md`)
+**Status:** Approved (operator decisions 2026-08-20 + 2026-08-24)
+**Supersedes:** the pivot spec's 3-section sidebar shape — the Agents
+section's content is REPLACED by the agent-watcher card view; no third
+Watcher section. Rationale: materially smaller upstream diff, one surface.
 
 ## 1. Summary
 
-The fork's sidebar **Agents section** renders the agent-watcher **card view**
-instead of herdr's token-row list. Cards show lifecycle + telemetry
-(context/cache/cost/model/tools/traces) per agent, with inline expand,
-Vim-style keys, and graceful degradation when telemetry is absent. The
-legacy row view remains available behind a config toggle.
+The fork's sidebar **Agents section** renders agent **cards** (lifecycle +
+telemetry: context/cache/cost/model/tools/traces) instead of herdr's
+token-row list. The focused agent's card auto-expands. The legacy row view
+stays behind a live config toggle. Full detail remains in
+`herdr watcher sidebar`.
 
 ## 2. Non-goals
 
-- The Spaces section: untouched.
-- A third Watcher sidebar section: never.
-- The full ratatui watcher pane (`herdr watcher sidebar`): unchanged; it stays
-  the full-detail view.
-- Embedding ratatui widgets inside herdr's chrome renderer: no — reuse the
-  watcher crate's **pure** logic only, draw through herdr's own sidebar
-  primitives.
-- The Dynamic Island (M2), branding, Windows.
-- Persisting card selection/expand state across restarts (ephemeral in v1).
+- Spaces section, compact rail (`sidebar_collapsed_mode = "compact"`):
+  **byte-identical** — cards exist only in the expanded Agents section.
+- A third Watcher section; ratatui embedding inside herdr chrome.
+- A new sidebar focus model / card cursor / new keybindings — **deferred to
+  M1.1** (operator decision 2026-08-24: expand-follows-focus first, full
+  cursor model as follow-up).
+- A new scroll model — the legacy entry-index scroll is kept; expansion is
+  bounded to fit it (§4).
+- Persisting selection/expand state across restarts.
 
-## 3. Data plane: merge, degrade
+## 3. Prerequisite: watcher state-stream API (v0.2.3)
 
-- **Lifecycle (authoritative, always present):** herdr core App state —
-  agent kind/name, state (idle/working/blocked/done/unknown), focus,
-  workspace/tab location. In-process, zero latency.
-- **Telemetry (enrichment):** the watcher state socket at
-  `plugin_paths::plugin_state_dir("herdr-agent-watcher")` — context %, cache,
-  cost, model, tool calls, traces — read via the watcher crate's existing
-  client/live modules with a **non-blocking** subscription + cache keyed by
-  pane. Works against whichever daemon holds the singleton (embedded or
-  plugin), per the Scope 2 contract.
-- **Degradation:** socket absent/stale ⇒ cards render lifecycle-only (no
-  gauges, no error chrome, no placeholder spinners). Rendering never blocks
-  on socket I/O.
+Review HIGH-1: watcher v0.2.2 has **no public socket client** — connect /
+subscribe / reconnect live as private functions in its `sidebar::tui`, and
+`view::render` clamps to 34 columns and lets telemetry choose membership,
+both incompatible with this spec. Before fork work, the **agent-watcher
+repo** publishes a minimal state-stream client API, released as **v0.2.3**:
 
-## 4. Card view
+- constructor takes the **explicit socket path**;
+- a worker owns subscribe + reconnect;
+- delivery = folded snapshots (or raw lines into the already-public
+  `sidebar::reducer::{State, apply_line}`);
+- clean `shutdown()`/`join()` (same handle idiom as the daemon API).
 
-- **Collapsed card = 3 lines** (M0a-4 contract): ① state glyph + agent name +
-  state label; ② `cwd › task` (task = pane label/terminal title); ③ context
-  gauge + `N calls`.
-- **Adaptive width** (sidebar is 18–36 cols): below ~34 cols the state label
-  drops to the glyph alone (M0a-4 rule); at the **18-col floor**: line ① =
-  glyph + name only, line ② = truncated cwd, line ③ = gauge only. Nothing
-  wraps; selection changes styling, never layout.
-- **Inline expand** (decision 2026-08-20): `o`/`↵` expands the card in place
-  within the sidebar scroll — model line, CONTEXT/CACHE/COST bars scaled to
-  width, TOOLS summary, TRACES capped at 5. Collapse with the same key.
-- **Hide idle:** `z` toggles hiding idle agents with a `+N idle hidden`
-  indicator (M0a-4 behavior).
-- **Rendering path:** an additive card module builds styled lines by reusing
-  the watcher crate's pure reducer/format/layout selectors, then draws via
-  herdr's sidebar text/draw primitives and `sidebar/tokens.rs` styling.
+**Card formatting is fork-owned** (resolves the 34-col clamp and
+telemetry-membership problems, and LOW-1): the fork maps the watcher's
+public `Role`/`Semantic` style values directly onto `AppState.palette`.
+`src/ui/sidebar/tokens.rs` and the legacy path are untouched. The standing
+latest-tag rule applies: the fork pins v0.2.3.
 
-## 5. Sort, grouping, and index parity
+## 4. Data plane and card view
 
-- Honor **`agent_panel_sort`** (decision 2026-08-20): `spaces` = grouped by
-  workspace under the existing headers; `priority` = attention queue
-  (blocked first). The watcher's activity ordering maps onto `priority`.
-- **Index parity invariant:** the visible card order IS the order the
-  indexed `focus_agent` bindings resolve — cards and bindings must read the
-  same ordered source. Hidden-idle cards still occupy their binding index or
-  the bindings re-resolve consistently — executor verifies which rule herdr
-  uses today and keeps it.
+- **Membership + lifecycle are herdr-authoritative:** the card list comes
+  from the same source as today's rows (`agent_panel_entries` after
+  agent-view filtering); telemetry from the state socket only **enriches**
+  cards. Socket absent/stale ⇒ lifecycle-only cards, no error chrome, never
+  blocking render.
+- **Collapsed card = 3 lines:** ① state glyph + agent name (+ state label
+  when width allows); ② `workspace · cwd › task`; ③ context gauge +
+  `N calls`. Telemetry-absent cards drop line ③'s gauge to `— no telemetry`
+  dimmed text or omit gracefully — never a spinner.
+- **Expanded card (exactly one, §6):** adds, in priority order, as much as
+  fits the Agents **body height** (the existing per-entry height cap):
+  model line → CONTEXT/CACHE/COST bars → TOOLS summary → TRACES (≤5).
+  Content that does not fit is **dropped by reverse priority**, never
+  clipped into an unreachable tail (review HIGH-3). Full detail =
+  `herdr watcher sidebar`.
+- **Adaptive width against the ACTUAL body rect** (review MEDIUM-2): the
+  outer sidebar 18–36 cols yields card budgets of **16/17, 24/25, 34/35**
+  (separator −1, scrollbar −1 when shown). Below ~32 budget the state label
+  drops to the glyph; at the 16-col floor: line ① glyph+name, line ②
+  truncated, line ③ gauge only. Nothing wraps; no layout shift on focus.
 
-## 6. Interaction
+## 5. Ordering, sort, index parity
+
+- Honor **`agent_panel_sort`**: `spaces` = the existing stable
+  workspace-order **flat** list with the workspace named inside each card —
+  **no group headers** (review HIGH-4: Agents has none; header machinery
+  belongs to Spaces and is not reused). `priority` = attention order.
+- **One cards-visible ordered source** built after agent-view filtering +
+  panel sort + hide-idle, consumed by card render, mouse hit-testing,
+  indexed `focus_agent`, and previous/next (review MEDIUM-1). **Hidden idle
+  entries do not occupy `focus_agent` indexes** — matching the existing
+  filtered-entries invariant codified in
+  `next_agent_starts_at_first_visible_entry_when_focused_agent_is_filtered_out`.
+  The `+N idle hidden` indicator renders outside the indexed sequence.
+
+## 6. Interaction (v1: expand-follows-focus)
 
 | Input | Effect |
 | --- | --- |
-| Click card | focus that agent's pane (existing Agents-section behavior) |
-| `focus_agent` indexed bindings | unchanged, resolve per §5 |
-| Section focused: `j`/`k` | move card selection |
-| Section focused: `o`/`↵` | expand/collapse selected card |
-| Section focused: `z` | toggle hide-idle |
-| Everything else | herdr's existing sidebar/navigate keys, untouched |
+| Click a card | focus that agent's pane (existing behavior) — its card auto-expands, all others collapse |
+| `focus_agent` indexed / previous / next bindings | unchanged; the newly focused agent's card auto-expands |
+| Click the `▸` zone on the **focused** card | toggle that card's expansion off/on |
+| Everything else | existing sidebar / navigate keys, untouched |
 
-No new global keybindings.
+- Exactly **one** card is ever expanded: the focused agent's (unless
+  toggled collapsed). No section focus, no card cursor, no new keybindings
+  in M1 — **M1.1 follow-up**: full cursor model (section focus, j/k/o/z on
+  new prefix bindings, precedence over navigate mode).
+- **Hide idle** is a config toggle in v1 (no `z` key until M1.1):
+  `[ui.sidebar] agents_hide_idle = false` (default).
 
 ## 7. Config
 
 ```toml
 [ui.sidebar]
-# agents_view = "cards"   # default; "legacy" restores the token-row view
+# agents_view = "cards"      # default; "legacy" = the untouched row view
+# agents_hide_idle = false   # cards mode only
 ```
 
-- **`legacy`** renders today's row view byte-identically; `[ui.sidebar.agents]`
-  rows/rows_by_agent config applies only there.
-- In **`cards`** mode a present rows config produces one startup diagnostic
-  ("superseded by agents_view = cards"), not an error.
-- `agent_panel_sort` is honored in both modes.
-- Reload semantics: follow the sidebar's existing config-reload behavior for
-  ui toggles — do not invent new machinery; if the existing path makes
-  `agents_view` live, it is live, otherwise startup-only and documented.
+- **Live** (review MEDIUM-3: `[ui]` already live-reloads via
+  `App::apply_live_config`): both keys apply on reload; a cards↔legacy flip
+  resets Agents scroll/expansion state.
+- `legacy` renders today's rows byte-identically; `[ui.sidebar.agents]`
+  rows config applies only there.
+- In cards mode, a **present** rows config produces one diagnostic —
+  presence detected from the **raw TOML** in both the startup and live
+  loaders (defaults erase presence after deserialization; never compare
+  materialized values to defaults).
+- `agent_panel_sort` honored in both modes.
 
 ## 8. Compatibility invariants
 
-- Upstream edits concentrate on the **section-content branch point** in
-  `src/ui/sidebar.rs` (+ config model/io, app state for the toggle, input
-  hit-testing/keys). Card building lives in additive module(s). Every
-  upstream edit: §4(b) notice + FORK.md registry row.
-- The legacy path is untouched upstream code — the toggle branches around
-  it, never rewrites it.
-- No changes to the watcher crate required; if one becomes necessary, stop
-  and report (new tag ceremony per the standing latest-tag rule).
+- The swap is a render branch at the Agents-content delegation point
+  (`render_agent_detail` call site, `src/ui/sidebar.rs` ~956–981) plus the
+  input/hit-testing counterparts; card building, ingestion, and the ordered
+  source live in additive modules. Legacy path = untouched upstream code.
+- Every upstream edit: §4(b) notice + FORK.md registry row.
+- Watcher changes limited to the §3 prerequisite release.
 
 ## 9. Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| `src/ui/sidebar.rs` is a 2.8k-line upstream hotspot | one branch at the section render + additive card modules keep the merge surface a few lines |
-| Socket coupling to crate internals | crate is pinned same-repo family; client/live modules are the supported surface |
-| 18-col floor is new design territory | floor contract fixed in §4; table-tested at 18/26/36 cols |
-| Legacy toggle doubles render paths | legacy = untouched upstream code, zero maintenance |
-| Index parity drift (focus_agent vs cards) | §5 invariant + a dedicated test |
+| `src/ui/sidebar.rs` upstream hotspot | branch + additive modules; merge surface stays small |
+| Bounded expansion hides detail on short sidebars | deterministic priority-drop order; full pane one command away |
+| Index parity drift | single ordered source + dedicated test incl. hide-idle |
+| Auto-expand feels noisy | it tracks pane focus only; `▸` toggle opts out per card; M1.1 adds manual control |
+| v0.2.3 API scope creep | client API only; formatting stays fork-side |
 
 ## 10. Acceptance
 
-1. Cards render with live telemetry while a daemon runs; lifecycle-only when
-   the socket is absent; no render blocking either way.
-2. Click + indexed focus work; both `agent_panel_sort` modes honored.
-3. j/k/o/↵/z behave per §6; narrow renders per §4 at 18/26/36 cols.
-4. `agents_view = "legacy"` restores today's view byte-identically; rows
-   config diagnostic fires only in cards mode.
+1. Cards render with live telemetry when a daemon runs; lifecycle-only when
+   the socket is absent; render never blocks.
+2. Focus (click / indexed / prev-next) auto-expands exactly the focused
+   card; `▸` toggles it; both `agent_panel_sort` modes honored; hidden idle
+   entries excluded from indexes with the indicator outside the sequence.
+3. Card budgets verified at outer 18/26/36 with and without scrollbar
+   (16/17, 24/25, 34/35); compact rail byte-identical; expanded content
+   drops by priority, no unreachable tail.
+4. `agents_view` and `agents_hide_idle` are live; cards↔legacy flip resets
+   state; rows-config diagnostic fires only in cards mode and only on raw
+   presence.
 5. No behavior change outside the Agents section; nextest + clippy + CI
    green; FORK.md registry complete.

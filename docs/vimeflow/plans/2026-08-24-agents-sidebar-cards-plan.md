@@ -1,83 +1,108 @@
 # Agents Sidebar Cards — M1 Plan
 
-**Spec:** `../specs/2026-08-24-agents-sidebar-cards-design.md` (read first)
-**Repo:** this fork, branch `main`
+**Spec:** `../specs/2026-08-24-agents-sidebar-cards-design.md` (v2 — read first)
+**Review applied:** `../reviews/2026-08-24-m1-sidebar-cards-review.md` (all
+HIGH/MEDIUM/LOW folded into spec v2)
+**Repos:** this fork (`main`) and `~/projects/agent-watcher` (Task M-W only)
 **Discipline:** conventional commits; §4(b) notice + FORK.md registry row
 same-commit for upstream files; `cargo nextest` + clippy green before each
-push; fork CI green at the end; stop and report on ambiguity — especially
-where sidebar internals contradict the spec's assumptions. Standing rule:
-check for a newer agent-watcher tag first and bump the pin if one exists.
+push; fork CI green at the end; stop and report on ambiguity. Standing rule:
+pin the latest agent-watcher tag at the start of any fork work order.
 
-## Task P0 — discovery (read-only, report before coding)
+## Task M-W — watcher state-stream client API (agent-watcher repo, FIRST)
 
-Map and record (a short section appended to this plan file is fine):
+Implements spec §3. Do not touch `src/agent/**` (PORT-SURFACE.md).
 
-1. The Agents section content render path in `src/ui/sidebar.rs` — where rows
-   are built, where `agent_panel_sort` is applied, where `spaces` grouping
-   headers come from.
-2. Click hit-testing for agent rows (mouse → focus) and where the indexed
-   `focus_agent` bindings resolve their order — confirm both read one ordered
-   source (§5 index parity), and what happens to indices when entries are
-   filtered.
-3. How sidebar section focus + key handling work (where j/k-style keys would
-   hook when the Agents section is focused) and what the existing
-   config-reload path does for ui toggles (decides `agents_view` live vs
-   startup-only).
-4. Which watcher-crate modules are the right pure reuse surface for card
-   lines (reducer/format/layout/live) and what the state-socket client
-   exposes for a non-blocking cache.
+1. Public client: constructor takes the explicit socket path; a worker owns
+   connect + subscribe + reconnect (extract from the private `sidebar::tui`
+   functions — behavior identical for the standalone TUI, which becomes a
+   consumer of the new API); delivery = folded snapshots or raw lines into
+   the public `sidebar::reducer`; `shutdown()`/`join()` handle idiom.
+2. Tests: fake state-socket server — subscribe, receive, reconnect after
+   server restart, clean shutdown (no leaked threads/sockets); standalone
+   TUI behavior unchanged.
+3. cargo test + clippy green; bump BOTH Cargo.toml and herdr-plugin.toml to
+   **0.2.3**; tag `v0.2.3`; push main + tag; mirror the release process.
 
-**Stop after P0** with the findings; flag anything that contradicts the spec.
+## Task P0 — verify the review's map (fork, read-only, small)
 
-## Task P1 — config toggle
+The review already located everything; verify its coordinates still hold on
+current main and additionally locate: (a) where pane-focus changes propagate
+so the sidebar re-renders (the expand-follows-focus hook), (b) the
+`render_agent_detail` delegation call site, (c) the mouse hit-test and
+indexed/prev-next consumers of `agent_panel_entries`. Do not stop unless
+something contradicts spec v2; fold findings into the P4 commit messages.
 
-`[ui.sidebar] agents_view = "cards" | "legacy"` (default cards) in config
-model/io + app state; startup diagnostic when rows config is present in cards
-mode; reload semantics per P0 finding. Tests: default, override, diagnostic
-fires only in cards mode, reload behavior.
+## Task P1 — config (fork)
 
-## Task P2 — telemetry ingestion (additive module)
+`[ui.sidebar] agents_view = "cards"|"legacy"` (default cards) +
+`agents_hide_idle = false`, both **live** via the existing
+`App::apply_live_config` path; cards↔legacy flip resets Agents
+scroll/expansion state; rows-config presence detected from the **raw TOML**
+in startup AND live loaders, diagnostic only in cards mode. Tests: absent /
+explicitly-default / custom rows config, live flip both directions,
+hide-idle live change, diagnostic scoping.
 
-Non-blocking watcher-socket subscription + per-pane cache using the crate's
-client/live surface against `plugin_paths::plugin_state_dir(...)`; absent or
-stale socket ⇒ `None` telemetry, no blocking, no errors surfaced to render.
-Tests with a fake state-socket server: live updates land in the cache;
-absent socket degrades; reconnect after daemon restart.
+## Task P2 — telemetry ingestion (fork, additive)
 
-## Task P3 — card line builder (additive module)
+Bump the watcher pin to v0.2.3 (Cargo.lock + nix outputHashes; registry).
+Additive module: the v0.2.3 client against
+`plugin_paths::plugin_state_dir("herdr-agent-watcher")`, folding into a
+non-blocking per-pane cache read by render. Absent/stale socket ⇒ `None`,
+no blocking, no surfaced errors. Tests with a fake socket: updates land,
+absence degrades, reconnect after daemon restart.
 
-Pure card building: 3-line collapsed contract, inline expanded form (model,
-CONTEXT/CACHE/COST bars scaled to width, TOOLS summary, TRACES cap 5),
-hide-idle with `+N idle hidden`, adaptive rules incl. the 18-col floor,
-selection styling without layout shift. Reuse crate pure selectors; output =
-herdr sidebar primitives / `sidebar/tokens.rs` styles. Table tests at
-18/26/36 cols across states (idle/working/blocked/done, telemetry
-present/absent, selected/expanded).
+## Task P3 — card builder (fork, additive)
 
-## Task P4 — wire the swap (the upstream edit)
+Pure card building per spec §4: collapsed 3-line contract (workspace named
+in line ②), bounded expanded form with the priority-drop order
+(model → gauges → tools → traces≤5) against a given body height, adaptive
+rules against the ACTUAL body width, watcher public `Role`/`Semantic` →
+`AppState.palette` mapping, `+N idle hidden` line outside the indexed items,
+lifecycle-only variants. Table tests: card budgets 16/17, 24/25, 34/35 ×
+states (idle/working/blocked/done) × telemetry present/absent ×
+collapsed/expanded × several body heights (drop order verified).
 
-1. One branch at the Agents-section content render in `src/ui/sidebar.rs`:
-   cards (new modules) vs legacy (existing code path untouched).
-2. `agent_panel_sort` honored in cards mode: `spaces` grouping headers reuse
-   the existing header machinery; `priority` = attention order.
-3. Click hit-testing over cards → focus pane; **index parity test**: card
-   order == `focus_agent` resolution order, including the hidden-idle rule
-   found in P0.
-4. Section-focused key handling: j/k/o/↵/z per spec §6, existing keys
-   untouched otherwise.
-5. §4(b) notices + FORK.md registry rows for every upstream file touched.
+## Task P4 — wire the swap (fork, the upstream edit)
 
-## Task P5 — close-out
+1. Branch at the Agents-content delegation point: cards vs legacy (legacy
+   path untouched).
+2. **One cards-visible ordered source** (agent-view filter → panel sort →
+   hide-idle) consumed by render, hit-testing, indexed `focus_agent`, and
+   prev/next. Index parity test modeled on
+   `next_agent_starts_at_first_visible_entry_when_focused_agent_is_filtered_out`,
+   covering hide-idle.
+3. Expand-follows-focus: focused agent's card expanded, others collapsed;
+   `▸` zone click toggles the focused card; click card body focuses the
+   pane. Entry-index scroll keeps working because every entry fits the body
+   (bounded expansion).
+4. `agent_panel_sort` both modes: spaces = stable workspace-order flat list,
+   priority = attention order.
+5. §4(b) notices + FORK.md registry rows for every upstream file touched
+   (sidebar.rs, input/sidebar.rs, input/mouse.rs, config files, app state).
 
-1. Integration coverage: cards+telemetry end-to-end with the embedded daemon
-   in a test server where feasible, else the P2 fake-socket path plus a
-   documented operator live-check.
-2. Operator live-verification checklist (real fork run: cards show a live
-   claude/codex agent with gauges; kill the daemon → lifecycle-only; toggle
-   legacy → today's view; sort modes; indexed focus; 18-col narrow drag).
-3. `docs/next/` user docs draft (per repo convention, not root README);
-   FORK.md registry complete; nextest + clippy + CI green.
+## Task P5 — close-out (fork)
+
+1. Integration coverage where feasible (fake-socket end-to-end), plus the
+   operator live-verification checklist in the final report: real fork run —
+   focused claude/codex card expands with gauges; kill daemon →
+   lifecycle-only; `agents_view = legacy` live-flip restores today's view;
+   both sorts; indexed focus with hide-idle on; 18-col narrow drag; compact
+   rail unchanged.
+2. `docs/next/` user docs update; FORK.md registry complete; nextest +
+   clippy + CI green.
+3. Record the M1.1 follow-up (full card-cursor model) as a one-paragraph
+   stub at the bottom of this plan.
 
 ## Execution order
 
-P0 (stop + report) → P1 → P2/P3 (parallelizable, both additive) → P4 → P5.
+M-W first (tag gates P2). Then P0 → P1 → P2/P3 (parallelizable) → P4 → P5.
+Stop and report after M-W, then run P0–P5 straight through unless a
+contradiction appears.
+
+## Follow-up stub — M1.1 card cursor (not in this plan)
+
+Section focus state + card cursor + new prefix bindings for j/k/o/z +
+precedence over navigate mode; manual expansion of non-focused cards;
+`z` key replacing the hide-idle config round-trip. Requires its own
+spec pass.
