@@ -23,7 +23,7 @@ mod server_not_running;
 mod spec;
 mod status;
 mod tab;
-mod watcher;
+pub(crate) mod watcher;
 mod workspace;
 mod worktree;
 

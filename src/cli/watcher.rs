@@ -1,3 +1,26 @@
+const WATCHER_PLUGIN_ID: &str = "herdr-agent-watcher";
+const TITLE_SYNC_PLUGIN_ID: &str = "herdr-agent-title-sync";
+
+pub(crate) fn coexistence_warnings<'a>(
+    watcher_enabled: bool,
+    title_sync_enabled: bool,
+    enabled_plugins: impl Iterator<Item = &'a str>,
+) -> Vec<&'static str> {
+    let enabled = enabled_plugins.collect::<std::collections::HashSet<_>>();
+    let mut warnings = Vec::new();
+    if watcher_enabled && enabled.contains(WATCHER_PLUGIN_ID) {
+        warnings.push(
+            "standalone agent watcher is enabled alongside the built-in watcher; disable it with `herdr plugin disable herdr-agent-watcher`",
+        );
+    }
+    if title_sync_enabled && enabled.contains(TITLE_SYNC_PLUGIN_ID) {
+        warnings.push(
+            "standalone title sync is enabled alongside built-in title sync; disable it with `herdr plugin disable herdr-agent-title-sync`",
+        );
+    }
+    warnings
+}
+
 #[cfg(unix)]
 mod platform {
     use std::collections::BTreeMap;
@@ -8,8 +31,7 @@ mod platform {
 
     use herdr_agent_watcher::daemon::state_wire::Hello;
 
-    const WATCHER_PLUGIN_ID: &str = "herdr-agent-watcher";
-    const TITLE_SYNC_PLUGIN_ID: &str = "herdr-agent-title-sync";
+    use super::{coexistence_warnings, WATCHER_PLUGIN_ID};
 
     pub(super) fn run(args: &[String]) -> std::io::Result<i32> {
         match args.first().map(String::as_str) {
@@ -98,26 +120,6 @@ mod platform {
             eprintln!("warning: {warning}");
         }
         Ok(code)
-    }
-
-    fn coexistence_warnings<'a>(
-        watcher_enabled: bool,
-        title_sync_enabled: bool,
-        enabled_plugins: impl Iterator<Item = &'a str>,
-    ) -> Vec<&'static str> {
-        let enabled = enabled_plugins.collect::<std::collections::HashSet<_>>();
-        let mut warnings = Vec::new();
-        if watcher_enabled && enabled.contains(WATCHER_PLUGIN_ID) {
-            warnings.push(
-                "standalone agent watcher is enabled alongside the built-in watcher; disable it with `herdr plugin disable herdr-agent-watcher`",
-            );
-        }
-        if title_sync_enabled && enabled.contains(TITLE_SYNC_PLUGIN_ID) {
-            warnings.push(
-                "standalone title sync is enabled alongside built-in title sync; disable it with `herdr plugin disable herdr-agent-title-sync`",
-            );
-        }
-        warnings
     }
 
     fn claude_bridge(args: &[String]) -> std::io::Result<i32> {

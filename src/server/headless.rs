@@ -478,6 +478,18 @@ impl HeadlessServer {
         title_sync_enabled: bool,
         title_sync_interval: Duration,
     ) -> io::Result<Self> {
+        #[cfg(unix)]
+        for warning in crate::cli::watcher::coexistence_warnings(
+            agent_watcher_enabled,
+            title_sync_enabled,
+            app.state
+                .installed_plugins
+                .values()
+                .filter(|plugin| plugin.enabled)
+                .map(|plugin| plugin.plugin_id.as_str()),
+        ) {
+            warn!("{warning}");
+        }
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
 

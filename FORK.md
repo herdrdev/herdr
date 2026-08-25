@@ -85,7 +85,7 @@ the top of the file:
 | Upstream path | Reason | Fork commit |
 | --- | --- | --- |
 | `src/update.rs` | Prevent hosted Herdr manifest fetches, self-update installs, and background update checks in the fork. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
-| `src/cli.rs` | Reject fork-disabled update channels and dispatch the native watcher CLI. | `dded4c73` |
+| `src/cli.rs` | Reject fork-disabled update channels, dispatch the native watcher CLI, and share its coexistence diagnostics with server startup. | `dded4c73`, Task 8 close-out |
 | `src/product_announcements.rs` | Ignore announcements delivered through stock Herdr update manifests while retaining local preview support. | `faf956e9b815045ca114d89b7faf9534386e0e8b` |
 | `src/app/mod.rs` | Align the stock-manifest startup test with the fork's disabled upstream announcement channel and register native title sync. | `e312ccf8`, `e006a1ea` |
 | `src/app/actions.rs` | Trigger coalesced title recomputation for pane and agent lifecycle mutations, including session-reference-only changes. | `e006a1ea` |
@@ -98,7 +98,7 @@ the top of the file:
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
 | `src/config/io.rs` | Recognize and validate the native feature sections during startup and live-reload diagnostics. | `c3c70979` |
-| `src/server/headless.rs` | Own the embedded watcher and title-sync lifecycles across normal and handoff server paths. | `dd08df50`, `e006a1ea` |
+| `src/server/headless.rs` | Own the embedded watcher and title-sync lifecycles across normal and handoff server paths and warn about enabled standalone twins. | `dd08df50`, `e006a1ea`, Task 8 close-out |
 | `src/cli/spec.rs` | Describe the native watcher command group and its supported subcommands. | `dded4c73` |
 | `src/main.rs` | Register the Unix-only native title-sync module. | `f4af78b5` |
 | `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |

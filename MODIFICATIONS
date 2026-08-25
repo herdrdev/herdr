@@ -8,6 +8,7 @@ Fork: https://github.com/winoooops/vimeflow-terminal
 Modified upstream files
 -----------------------
 
+- .gitignore
 - Cargo.toml
 - Cargo.lock
 - nix/package.nix
@@ -23,6 +24,7 @@ Modified upstream files
 - src/config/model.rs
 - src/config/io.rs
 - src/events.rs
+- src/main.rs
 - src/server/headless.rs
 
 Each modified Rust, TOML, and Nix file contains the Apache-2.0 section 4(b)
@@ -39,8 +41,11 @@ Fork-added files
 - scripts/preseed_zig_cache.sh
 - tests/watcher_dependency_smoke.rs
 - .config/nextest.toml
+- docs/vimeflow/
 - tests/watcher_cli.rs
 - src/app/title_sync.rs
+- src/cli/watcher.rs
+- src/server/headless/embedded_watcher.rs
 - src/title_sync/
 
 See FORK.md for the path-by-path upstream-edit registry, reasons, commits,
