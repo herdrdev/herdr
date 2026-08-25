@@ -957,8 +957,8 @@ dependencies = [
 
 [[package]]
 name = "herdr-agent-watcher"
-version = "0.2.2"
-source = "git+https://github.com/winoooops/herdr-agent-watcher?tag=v0.2.2#f0de59e89a8c9e3332634cdb096893ba702eeeee"
+version = "0.2.3"
+source = "git+https://github.com/winoooops/herdr-agent-watcher?tag=v0.2.3#75aa68da4f6bd5cfdf6fad26d0346f8f0743877e"
 dependencies = [
  "chrono",
  "crossterm",
@@ -2529,7 +2529,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

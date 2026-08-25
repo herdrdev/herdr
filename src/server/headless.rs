@@ -341,6 +341,8 @@ pub struct HeadlessServer {
     #[cfg(unix)]
     agent_watcher: embedded_watcher::EmbeddedWatcher,
     #[cfg(unix)]
+    agent_telemetry: crate::agent_cards::telemetry::TelemetryIngest,
+    #[cfg(unix)]
     title_sync: crate::title_sync::TitleSyncEngine,
 }
 
@@ -555,6 +557,13 @@ impl HeadlessServer {
             #[cfg(unix)]
             agent_watcher: embedded_watcher::EmbeddedWatcher::start(agent_watcher_enabled),
             #[cfg(unix)]
+            agent_telemetry: crate::agent_cards::telemetry::TelemetryIngest::start(
+                herdr_agent_watcher::daemon::DaemonOptions::new(
+                    crate::plugin_paths::plugin_state_dir("herdr-agent-watcher"),
+                )
+                .state_socket_path(),
+            ),
+            #[cfg(unix)]
             title_sync,
         })
     }
@@ -682,6 +691,14 @@ impl HeadlessServer {
             let now = Instant::now();
             #[cfg(unix)]
             self.agent_watcher.poll(now);
+            #[cfg(unix)]
+            if self
+                .agent_telemetry
+                .poll(&mut self.app.state.agent_telemetry)
+            {
+                needs_render = true;
+                needs_full_render = true;
+            }
             #[cfg(unix)]
             self.title_sync.poll(&self.app, now);
             if self.handle_scheduled_tasks_headless(now, needs_render) {
@@ -5066,6 +5083,7 @@ mod tests {
             server_event_tx,
             #[cfg(unix)]
             agent_watcher: embedded_watcher::EmbeddedWatcher::disabled(),
+            agent_telemetry: crate::agent_cards::telemetry::TelemetryIngest::disabled(),
             #[cfg(unix)]
             title_sync,
         }

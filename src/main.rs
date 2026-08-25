@@ -56,6 +56,8 @@ fn set_host_color_scheme_reports(enabled: bool) -> io::Result<()> {
     io::stdout().flush()
 }
 
+#[cfg(unix)]
+mod agent_cards;
 mod agent_resume;
 mod api;
 mod app;

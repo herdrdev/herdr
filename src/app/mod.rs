@@ -622,6 +622,8 @@ impl App {
             agents_view: config.ui.sidebar.agents_view,
             agents_hide_idle: config.ui.sidebar.agents_hide_idle,
             agent_card_collapsed_for: None,
+            #[cfg(unix)]
+            agent_telemetry: std::collections::HashMap::new(),
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),

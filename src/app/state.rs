@@ -1483,6 +1483,9 @@ pub struct AppState {
     /// The focused card explicitly toggled closed; a different focused pane
     /// expands automatically without a focus-change hook.
     pub agent_card_collapsed_for: Option<PaneId>,
+    #[cfg(unix)]
+    pub agent_telemetry:
+        std::collections::HashMap<String, herdr_agent_watcher::daemon::store::PaneTelemetry>,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1864,6 +1867,8 @@ impl AppState {
             agents_view: crate::config::AgentsViewConfig::Cards,
             agents_hide_idle: false,
             agent_card_collapsed_for: None,
+            #[cfg(unix)]
+            agent_telemetry: std::collections::HashMap::new(),
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
