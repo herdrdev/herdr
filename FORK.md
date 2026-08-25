@@ -110,7 +110,7 @@ the top of the file:
 | `src/main.rs` | Register the Unix-only native title-sync and Agent-card modules. | `f4af78b5`, P2 (this commit) |
 | `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |
 | `src/ui.rs` | Export shared Agent-card geometry to sidebar input handling. | P4 (this commit) |
-| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards while preserving the legacy and compact-rail renderers. | P4 (this commit) |
+| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards while preserving the legacy and compact-rail renderers. | P4 (this commit), P5 (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.

@@ -1814,6 +1814,36 @@ mod tests {
         assert_eq!(agent_panel_entries(&app)[0].ws_idx, 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn compact_rail_keeps_idle_agents_when_cards_hide_them() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("idle"), Workspace::test_new("working")];
+        app.ensure_test_terminals();
+        for (ws_idx, state) in [AgentState::Idle, AgentState::Working]
+            .into_iter()
+            .enumerate()
+        {
+            let pane_id = app.workspaces[ws_idx].tabs[0].root_pane;
+            app.workspaces[ws_idx].tabs[0]
+                .panes
+                .get_mut(&pane_id)
+                .unwrap()
+                .seen = true;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = state;
+        }
+        app.agents_view = crate::config::AgentsViewConfig::Cards;
+        app.agents_hide_idle = true;
+
+        assert_eq!(agent_panel_entries(&app).len(), 1);
+        assert_eq!(compact_agent_panel_entries(&app).len(), 2);
+    }
+
     #[test]
     fn default_agent_rows_remove_redundant_state_text() {
         let mut app = crate::app::state::AppState::test_new();
