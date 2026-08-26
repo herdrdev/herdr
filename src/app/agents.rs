@@ -214,11 +214,13 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+            terminal.end_agent_instance();
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
         self.state.mark_session_dirty();
-        self.schedule_session_save();
+        self.save_session_now_checked()
+            .map_err(|err| AgentStartError::PersistenceFailed(err.to_string()))?;
 
         let agent = self
             .agent_info(ws_idx, pane_id)
@@ -262,6 +264,10 @@ impl App {
             AgentStartError::InputFailed(message) => crate::api::schema::ErrorBody {
                 code: "agent_start_input_failed".into(),
                 message,
+            },
+            AgentStartError::PersistenceFailed(message) => crate::api::schema::ErrorBody {
+                code: "agent_instance_persist_failed".into(),
+                message: format!("agent started but its instance identity was not persisted: {message}"),
             },
             AgentStartError::DuplicateName { name, candidates } => crate::api::schema::ErrorBody {
                 code: "agent_name_taken".into(),
@@ -372,6 +378,7 @@ impl App {
         let pane = self.pane_info(ws_idx, pane_id)?;
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
+            agent_instance_id: terminal.agent_instance_id().map(ToString::to_string),
             name: terminal.agent_name.clone(),
             agent: pane.agent,
             title: pane.title,
@@ -449,6 +456,7 @@ pub(super) enum AgentStartError {
     TargetBusy(String),
     TargetUnavailable(String),
     InputFailed(String),
+    PersistenceFailed(String),
     DuplicateName {
         name: String,
         candidates: Vec<crate::api::schema::AgentInfo>,

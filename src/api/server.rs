@@ -941,6 +941,7 @@ mod tests {
         crate::api::schema::PaneInfo {
             pane_id: pane_id.into(),
             terminal_id: "term_1".into(),
+            agent_instance_id: None,
             workspace_id: "ws_1".into(),
             tab_id: "tab_1".into(),
             focused: true,

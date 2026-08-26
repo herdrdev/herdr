@@ -45,6 +45,7 @@ toml = "0.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
+uuid = { version = "1", features = ["serde", "v4"] }
 schemars = { version = "1.2.1", features = ["derive"] }
 
 [patch.crates-io]

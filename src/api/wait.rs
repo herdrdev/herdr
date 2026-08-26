@@ -773,6 +773,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
                 data: EventData::PaneAgentStatusChanged {
                     pane_id: data.pane_id,
                     workspace_id: data.workspace_id,
+                    agent_instance_id: data.agent_instance_id,
                     agent_status: data.agent_status,
                     agent: data.agent,
                     title: data.title,

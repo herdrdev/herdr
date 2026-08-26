@@ -96,6 +96,27 @@ impl App {
         run_session_save_job(self.capture_session_save_job());
         self.session_save_deadline = None;
     }
+
+    pub(crate) fn save_session_now_checked(&mut self) -> std::io::Result<()> {
+        if let Some(thread) = self.session_save_thread.take() {
+            let _ = thread.join();
+        }
+
+        if self.no_session {
+            self.session_save_deadline = None;
+            return Ok(());
+        }
+
+        match self.capture_session_save_job() {
+            SessionSaveJob::Clear => crate::persist::clear_checked()?,
+            SessionSaveJob::Save { snapshot, history } => {
+                crate::persist::save_checked(&snapshot, history.as_ref())?
+            }
+        }
+        self.state.session_dirty = false;
+        self.session_save_deadline = None;
+        Ok(())
+    }
 }
 
 fn run_session_save_job(job: SessionSaveJob) {

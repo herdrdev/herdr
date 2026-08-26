@@ -76,6 +76,14 @@ struct ManagedAgent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingAgentInstanceResume {
+    id: crate::agent_instance::AgentInstanceId,
+    source: String,
+    agent: String,
+    session_ref: crate::agent_resume::AgentSessionRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveStateChange {
     pub previous_agent_label: Option<String>,
     pub previous_known_agent: Option<Agent>,
@@ -119,6 +127,8 @@ struct RecentAgentProcessExit {
 /// metadata.
 pub struct TerminalState {
     pub id: TerminalId,
+    agent_instance_id: Option<crate::agent_instance::AgentInstanceId>,
+    pending_agent_instance_resume: Option<PendingAgentInstanceResume>,
     pub cwd: PathBuf,
     pub detected_agent: Option<Agent>,
     pub fallback_state: AgentState,
@@ -153,6 +163,8 @@ impl TerminalState {
     pub fn new(id: TerminalId, cwd: PathBuf) -> Self {
         Self {
             id,
+            agent_instance_id: None,
+            pending_agent_instance_resume: None,
             cwd,
             detected_agent: None,
             fallback_state: AgentState::Unknown,
@@ -246,6 +258,74 @@ impl TerminalState {
     pub fn with_respawn_shell_on_exit(mut self) -> Self {
         self.respawn_shell_on_exit = true;
         self
+    }
+
+    pub fn with_agent_instance_id(mut self, id: crate::agent_instance::AgentInstanceId) -> Self {
+        self.agent_instance_id = Some(id);
+        self.pending_agent_instance_resume = None;
+        self
+    }
+
+    pub fn with_pending_agent_instance_resume(
+        mut self,
+        id: crate::agent_instance::AgentInstanceId,
+        session: &crate::agent_resume::PersistedAgentSession,
+    ) -> Self {
+        self.pending_agent_instance_resume = Some(PendingAgentInstanceResume {
+            id,
+            source: session.source.clone(),
+            agent: session.agent.clone(),
+            session_ref: session.session_ref.clone(),
+        });
+        self
+    }
+
+    pub fn agent_instance_id(&self) -> Option<&crate::agent_instance::AgentInstanceId> {
+        self.agent_instance_id.as_ref()
+    }
+
+    pub fn agent_instance_id_for_snapshot(
+        &self,
+    ) -> Option<&crate::agent_instance::AgentInstanceId> {
+        self.agent_instance_id.as_ref().or_else(|| {
+            self.pending_agent_instance_resume
+                .as_ref()
+                .map(|pending| &pending.id)
+        })
+    }
+
+    pub fn ensure_agent_instance_id(&mut self) -> bool {
+        if self.agent_instance_id.is_some()
+            || self.pending_agent_instance_resume.is_some()
+            || !self.is_agent_terminal()
+        {
+            return false;
+        }
+        self.agent_instance_id = Some(crate::agent_instance::AgentInstanceId::alloc());
+        true
+    }
+
+    fn observe_resumed_agent_session(
+        &mut self,
+        source: &str,
+        agent: &str,
+        session_ref: &crate::agent_resume::AgentSessionRef,
+    ) -> bool {
+        let Some(pending) = self.pending_agent_instance_resume.take() else {
+            return false;
+        };
+        if pending.source == source && pending.agent == agent && pending.session_ref == *session_ref
+        {
+            self.agent_instance_id = Some(pending.id);
+        } else if self.is_agent_terminal() {
+            self.agent_instance_id = Some(crate::agent_instance::AgentInstanceId::alloc());
+        }
+        true
+    }
+
+    pub fn end_agent_instance(&mut self) {
+        self.agent_instance_id = None;
+        self.pending_agent_instance_resume = None;
     }
 
     #[cfg(any(windows, test))]
@@ -723,6 +803,9 @@ impl TerminalState {
                 }
             }
         }
+        let resume_proof = session_ref
+            .as_ref()
+            .map(|session_ref| (source.clone(), agent_label.clone(), session_ref.clone()));
         self.persisted_agent_session = None;
         self.hook_authority = Some(HookAuthority {
             source,
@@ -731,6 +814,9 @@ impl TerminalState {
             message,
             reported_at: now,
             session_ref,
+        });
+        let resumed_instance_changed = resume_proof.is_some_and(|(source, agent, session_ref)| {
+            self.observe_resumed_agent_session(&source, &agent, &session_ref)
         });
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
@@ -741,7 +827,7 @@ impl TerminalState {
                 previous_presentation,
                 now,
             ),
-            session_ref_changed: previous_session != current_session,
+            session_ref_changed: previous_session != current_session || resumed_instance_changed,
             agent_released: false,
         })
     }
@@ -1587,6 +1673,8 @@ impl TerminalState {
             self.hook_authority = None;
         }
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+        let resumed_instance_changed =
+            self.observe_resumed_agent_session(&source, &agent_label, &session_ref);
         self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
             source,
             agent: agent_label,
@@ -1601,7 +1689,7 @@ impl TerminalState {
                 previous_presentation,
                 now,
             ),
-            session_ref_changed: previous_session != current_session,
+            session_ref_changed: previous_session != current_session || resumed_instance_changed,
             agent_released: false,
         })
     }
@@ -1901,6 +1989,8 @@ impl TerminalState {
         settle_delay: Duration,
         timeout: Duration,
     ) {
+        self.agent_instance_id = Some(crate::agent_instance::AgentInstanceId::alloc());
+        self.pending_agent_instance_resume = None;
         self.set_agent_name(name);
         self.agent_name_owner = Some(AgentNameOwner {
             agent_label: crate::detect::agent_label(kind).to_string(),
@@ -1963,6 +2053,7 @@ impl TerminalState {
                 && observed_expected
                 && known_agent.is_none();
         if clear {
+            self.end_agent_instance();
             self.clear_agent_name();
             return true;
         }
@@ -1990,6 +2081,7 @@ impl TerminalState {
                 return true;
             }
             if now >= deadline {
+                self.end_agent_instance();
                 self.clear_agent_name();
                 return true;
             }
@@ -2047,6 +2139,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.end_agent_instance();
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
@@ -2200,6 +2293,49 @@ mod tests {
             agent: agent_label.into(),
             session_ref,
         });
+    }
+
+    #[test]
+    fn cold_resume_promotes_instance_only_for_exact_conversation() {
+        let session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("conversation-a").unwrap(),
+        };
+        let saved_id = crate::agent_instance::AgentInstanceId::alloc();
+        let mut terminal =
+            test_terminal().with_pending_agent_instance_resume(saved_id.clone(), &session);
+
+        assert_eq!(terminal.agent_instance_id(), None);
+        assert!(terminal.observe_resumed_agent_session(
+            "herdr:codex",
+            "codex",
+            &crate::agent_resume::AgentSessionRef::id("conversation-a").unwrap(),
+        ));
+        assert_eq!(terminal.agent_instance_id(), Some(&saved_id));
+    }
+
+    #[test]
+    fn mismatched_cold_resume_never_reuses_saved_instance() {
+        let session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("conversation-a").unwrap(),
+        };
+        let saved_id = crate::agent_instance::AgentInstanceId::alloc();
+        let mut terminal =
+            test_terminal().with_pending_agent_instance_resume(saved_id.clone(), &session);
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+
+        assert!(terminal.observe_resumed_agent_session(
+            "herdr:codex",
+            "codex",
+            &crate::agent_resume::AgentSessionRef::id("conversation-b").unwrap(),
+        ));
+        let replacement = terminal
+            .agent_instance_id()
+            .expect("mismatched live agent should get a replacement instance");
+        assert_ne!(replacement, &saved_id);
     }
 
     #[test]

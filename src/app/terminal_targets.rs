@@ -76,6 +76,25 @@ impl App {
         &self,
         target: &str,
     ) -> Result<TerminalTarget, TerminalTargetError> {
+        let instance_matches: Vec<_> = self
+            .terminal_targets()
+            .into_iter()
+            .filter(|candidate| {
+                self.state
+                    .terminals
+                    .values()
+                    .find(|terminal| terminal.id.to_string() == candidate.terminal_id)
+                    .is_some_and(|terminal| {
+                        terminal
+                            .agent_instance_id()
+                            .is_some_and(|id| id.to_string() == target)
+                    })
+            })
+            .collect();
+        if let Some(resolved) = self.single_terminal_match(target, instance_matches)? {
+            return Ok(resolved);
+        }
+
         if let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(target) {
             if let Some(resolved) = self
                 .terminal_target_for_pane(ws_idx, pane_id)

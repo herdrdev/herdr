@@ -84,23 +84,36 @@ pub(super) fn clear_path(path: &Path) -> std::io::Result<()> {
 }
 
 pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>) {
+    if let Err(err) = save_checked(snapshot, history) {
+        let path = session_path();
+        crate::logging::session_save_failed(&path, &err.to_string());
+    }
+}
+
+pub fn save_checked(
+    snapshot: &SessionSnapshot,
+    history: Option<&SessionHistorySnapshot>,
+) -> std::io::Result<()> {
     let path = session_path();
     let history_path = session_history_path();
-    if let Err(err) = save_to_paths(&path, &history_path, snapshot, history) {
-        crate::logging::session_save_failed(&path, &err.to_string());
-        return;
-    }
+    save_to_paths(&path, &history_path, snapshot, history)?;
     crate::logging::session_saved(&path, snapshot.workspaces.len());
+    Ok(())
 }
 
 pub fn clear() {
-    let path = session_path();
-    if let Err(err) = clear_path(&path) {
+    if let Err(err) = clear_checked() {
+        let path = session_path();
         crate::logging::session_clear_failed(&path, &err.to_string());
-        return;
     }
+}
+
+pub fn clear_checked() -> std::io::Result<()> {
+    let path = session_path();
+    clear_path(&path)?;
     clear_history();
     crate::logging::session_cleared(&path);
+    Ok(())
 }
 
 pub fn clear_history() {

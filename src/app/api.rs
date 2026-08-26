@@ -614,6 +614,14 @@ impl App {
             return;
         };
         let workspace_id = self.public_workspace_id(update.ws_idx);
+        let agent_instance_id = self
+            .state
+            .workspaces
+            .get(update.ws_idx)
+            .and_then(|workspace| workspace.terminal_id(update.pane_id))
+            .and_then(|terminal_id| self.state.terminals.get(terminal_id))
+            .and_then(crate::terminal::TerminalState::agent_instance_id)
+            .map(ToString::to_string);
 
         if update.agent_name_changed {
             self.emit_pane_updated(update.ws_idx, update.pane_id);
@@ -625,6 +633,7 @@ impl App {
                 data: crate::api::schema::EventData::PaneAgentDetected {
                     pane_id: pane_id.clone(),
                     workspace_id: workspace_id.clone(),
+                    agent_instance_id: agent_instance_id.clone(),
                     agent: update.agent_label.clone(),
                     released: update.agent_released,
                     final_status: update.agent_release_status,
@@ -650,6 +659,7 @@ impl App {
                 data: crate::api::schema::EventData::PaneAgentStatusChanged {
                     pane_id,
                     workspace_id,
+                    agent_instance_id,
                     agent_status,
                     agent: update.agent_label.clone(),
                     title: presentation.title,

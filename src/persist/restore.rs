@@ -492,6 +492,9 @@ fn restore_tab(
 
         let saved_label = saved_pane.and_then(|p| p.label.clone());
         let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
+        let saved_agent_instance_id = saved_pane
+            .and_then(|pane| pane.agent_instance_id.as_deref())
+            .and_then(crate::agent_instance::AgentInstanceId::parse);
         let saved_managed_agent = saved_pane
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
@@ -537,6 +540,12 @@ fn restore_tab(
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            if let (Some(agent_instance_id), Some(session)) = (
+                saved_agent_instance_id.clone(),
+                restored_agent_session.as_ref(),
+            ) {
+                terminal = terminal.with_pending_agent_instance_resume(agent_instance_id, session);
+            }
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -630,6 +639,9 @@ fn restore_tab(
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
                 if was_imported {
+                    if let Some(agent_instance_id) = saved_agent_instance_id {
+                        terminal = terminal.with_agent_instance_id(agent_instance_id);
+                    }
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
                     }
@@ -1190,6 +1202,7 @@ mod tests {
                             cwd,
                             label: Some("reviewer".into()),
                             agent_name: Some("reviewer".into()),
+                            agent_instance_id: None,
                             managed_agent_kind: Some("opencode".into()),
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                                 source: "herdr:opencode".into(),
@@ -1276,6 +1289,7 @@ mod tests {
                                 cwd: cwd.clone(),
                                 label: None,
                                 agent_name: None,
+                                agent_instance_id: None,
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
@@ -1287,6 +1301,7 @@ mod tests {
                                 cwd: cwd.clone(),
                                 label: None,
                                 agent_name: None,
+                                agent_instance_id: None,
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
@@ -1340,6 +1355,7 @@ mod tests {
                     cwd: cwd.clone(),
                     label: None,
                     agent_name: None,
+                    agent_instance_id: None,
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
@@ -1350,6 +1366,7 @@ mod tests {
             cwd: cwd.clone(),
             label: Some("planner".into()),
             agent_name: Some("planner".into()),
+            agent_instance_id: None,
             managed_agent_kind: None,
             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                 source: "herdr:codex".into(),
@@ -1481,6 +1498,7 @@ mod tests {
     #[cfg(unix)]
     async fn native_agent_restore_defers_runtime_launch() {
         let cwd = std::env::current_dir().unwrap();
+        let saved_instance_id = crate::agent_instance::AgentInstanceId::alloc().to_string();
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
@@ -1501,6 +1519,7 @@ mod tests {
                             cwd,
                             label: None,
                             agent_name: None,
+                            agent_instance_id: Some(saved_instance_id.clone()),
                             managed_agent_kind: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
                                 source: "herdr:codex".into(),
@@ -1525,7 +1544,7 @@ mod tests {
         };
         let (events, _event_rx) = mpsc::channel(4);
 
-        let (_workspaces, terminals, runtimes) = restore(
+        let (_workspaces, mut terminals, runtimes) = restore(
             &snapshot,
             None,
             24,
@@ -1543,6 +1562,11 @@ mod tests {
             .values()
             .next()
             .expect("native agent restore should create terminal state");
+        assert_eq!(
+            terminal.agent_instance_id(),
+            None,
+            "cold restore must not expose the old instance before exact conversation proof"
+        );
         assert!(
             terminal.pending_agent_resume_plan.is_some(),
             "restored native agent panes should defer resume until client terminal context is known"
@@ -1554,6 +1578,19 @@ mod tests {
         assert!(
             runtimes.is_empty(),
             "native agent restore should not spawn a fallback-size runtime during snapshot restore"
+        );
+        let terminal = terminals.values_mut().next().unwrap();
+        let proof = terminal.set_agent_session_ref_for_session_start(
+            "herdr:codex".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("codex-session"),
+            Some(1),
+            Some("resume".into()),
+        );
+        assert!(proof.is_some(), "exact resumed session should be accepted");
+        assert_eq!(
+            terminal.agent_instance_id().map(ToString::to_string),
+            Some(saved_instance_id.clone())
         );
         let mut imports = HashMap::new();
         let (_handoff_workspaces, handoff_terminals, handoff_runtimes) = restore_handoff(
@@ -1667,6 +1704,7 @@ mod tests {
                 cwd: cwd.clone(),
                 label: None,
                 agent_name: None,
+                agent_instance_id: None,
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,

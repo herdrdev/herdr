@@ -347,7 +347,7 @@ mod tests {
                 80, 24, 0, b"", 1,
             );
         runtime.test_process_pty_bytes(b"\x1b[?2004h");
-        app.state.insert_test_runtime(pane_id, runtime);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         let bracketed_started = std::time::Instant::now();
@@ -427,7 +427,7 @@ mod tests {
         terminal.set_agent_name("reviewer".into());
         terminal.set_detected_state(Some(Agent::GithubCopilot), AgentState::Blocked);
         let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        app.state.insert_test_runtime(pane_id, runtime);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
         let response = app.handle_agent_prompt(
             "req".into(),
@@ -627,5 +627,131 @@ mod tests {
                 Some("shell-pane")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn managed_agent_instance_id_is_queryable_and_survives_rename() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+
+        let started = app.handle_agent_start(
+            "start".into(),
+            AgentStartParams {
+                name: "builder".into(),
+                kind: "codex".into(),
+                pane_id: public_pane_id,
+                args: Vec::new(),
+                timeout_ms: None,
+            },
+        );
+        let started: SuccessResponse =
+            serde_json::from_str(&started).unwrap_or_else(|err| panic!("{err}: {started}"));
+        let ResponseResult::AgentStarted { agent, .. } = started.result else {
+            panic!("expected started response");
+        };
+        let instance_id = agent
+            .agent_instance_id
+            .expect("managed start must return an instance id");
+        assert!(uuid::Uuid::parse_str(&instance_id).is_ok());
+        assert!(
+            input.try_recv().is_ok(),
+            "start must submit the agent command"
+        );
+
+        let fetched = app.handle_agent_get(
+            "get".into(),
+            AgentTarget {
+                target: instance_id.clone(),
+            },
+        );
+        let fetched: SuccessResponse = serde_json::from_str(&fetched).unwrap();
+        let ResponseResult::AgentInfo { agent } = fetched.result else {
+            panic!("expected agent info");
+        };
+        assert_eq!(
+            agent.agent_instance_id.as_deref(),
+            Some(instance_id.as_str())
+        );
+
+        {
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+            assert!(terminal.reconcile_managed_agent_at(
+                std::time::Instant::now() + crate::app::AGENT_START_SETTLE_DELAY,
+                false,
+            ));
+        }
+
+        let renamed = app.handle_agent_rename(
+            "rename".into(),
+            AgentRenameParams {
+                target: instance_id.clone(),
+                name: Some("reviewer".into()),
+            },
+        );
+        let renamed: SuccessResponse = serde_json::from_str(&renamed).unwrap();
+        let ResponseResult::AgentInfo { agent } = renamed.result else {
+            panic!("expected renamed agent info");
+        };
+        assert_eq!(agent.name.as_deref(), Some("reviewer"));
+        assert_eq!(
+            agent.agent_instance_id.as_deref(),
+            Some(instance_id.as_str())
+        );
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .agent_instance_id()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(instance_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_gets_a_new_id_and_stale_instance_lookup_refuses() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let (runtime, _input) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let start = |app: &mut App, request: &str| {
+            let response = app.handle_agent_start(
+                request.into(),
+                AgentStartParams {
+                    name: "builder".into(),
+                    kind: "codex".into(),
+                    pane_id: public_pane_id.clone(),
+                    args: Vec::new(),
+                    timeout_ms: None,
+                },
+            );
+            let response: SuccessResponse = serde_json::from_str(&response).unwrap();
+            let ResponseResult::AgentStarted { agent, .. } = response.result else {
+                panic!("expected start");
+            };
+            agent.agent_instance_id.unwrap()
+        };
+
+        let first = start(&mut app, "first");
+        {
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.end_agent_instance();
+            terminal.clear_agent_name();
+        }
+        let second = start(&mut app, "second");
+        assert_ne!(first, second);
+
+        let stale = app.handle_agent_get("stale".into(), AgentTarget { target: first });
+        let stale: crate::api::schema::ErrorResponse = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale.error.code, "agent_not_found");
     }
 }

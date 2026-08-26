@@ -2979,6 +2979,7 @@ impl AppState {
             mutation,
             managed_changed,
             agent_name_changed,
+            agent_instance_created,
             unchanged_change,
             managed_launch_pending,
             suppress_acquisition_completion,
@@ -2987,7 +2988,20 @@ impl AppState {
             let previous_agent_name = terminal.agent_name.clone();
             let managed_launch_pending = terminal.managed_agent_launch_pending();
             let mutation = update(terminal)?;
+            let agent_replaced = mutation
+                .effective_state_change
+                .as_ref()
+                .is_some_and(|change| {
+                    matches!(
+                        (&change.previous_agent_label, &change.agent_label),
+                        (Some(previous), Some(current)) if previous != current
+                    )
+                });
+            if mutation.agent_released || agent_replaced {
+                terminal.end_agent_instance();
+            }
             let managed_changed = terminal.reconcile_managed_agent_at(now, false);
+            let agent_instance_created = terminal.ensure_agent_instance_id();
             let suppress_acquisition_completion = terminal.finish_agent_process_acquisition();
             let agent_name_changed = terminal.agent_name != previous_agent_name;
             let unchanged_change = (mutation.agent_released || agent_name_changed)
@@ -2996,12 +3010,17 @@ impl AppState {
                 mutation,
                 managed_changed,
                 agent_name_changed,
+                agent_instance_created,
                 unchanged_change,
                 managed_launch_pending,
                 suppress_acquisition_completion,
             )
         };
-        if mutation.session_ref_changed || managed_changed || agent_name_changed {
+        if mutation.session_ref_changed
+            || managed_changed
+            || agent_name_changed
+            || agent_instance_created
+        {
             self.mark_session_dirty();
         }
         let agent_released = mutation.agent_released;

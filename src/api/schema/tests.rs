@@ -760,6 +760,7 @@ fn worktree_request_and_response_round_trip() {
             root_pane: PaneInfo {
                 pane_id: "w_1-1".into(),
                 terminal_id: "term_1".into(),
+                agent_instance_id: None,
                 workspace_id: "w_1".into(),
                 tab_id: "w_1:1".into(),
                 focused: true,
@@ -1188,6 +1189,7 @@ fn create_response_round_trips_with_root_pane() {
             root_pane: PaneInfo {
                 pane_id: "w_1-3".into(),
                 terminal_id: "term_example".into(),
+                agent_instance_id: None,
                 workspace_id: "w_1".into(),
                 tab_id: "w_1:2".into(),
                 focused: false,

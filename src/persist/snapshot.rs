@@ -102,6 +102,8 @@ pub struct PaneSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_agent_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<PaneAgentSessionSnapshot>,
@@ -337,6 +339,9 @@ fn capture_tab(
                 )
             })
             .unwrap_or_default();
+        let agent_instance_id = terminal
+            .and_then(crate::terminal::TerminalState::agent_instance_id_for_snapshot)
+            .map(ToString::to_string);
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
@@ -365,6 +370,7 @@ fn capture_tab(
                 cwd,
                 label,
                 agent_name,
+                agent_instance_id,
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
@@ -645,6 +651,7 @@ mod tests {
                 cwd: PathBuf::from("/home/can/Projects/herdr"),
                 label: None,
                 agent_name: None,
+                agent_instance_id: None,
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
@@ -656,6 +663,7 @@ mod tests {
                 cwd: PathBuf::from("/home/can/Projects/website"),
                 label: Some("website".into()),
                 agent_name: None,
+                agent_instance_id: None,
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
@@ -1176,6 +1184,39 @@ mod tests {
     }
 
     #[test]
+    fn capture_persists_instance_id_while_managed_start_is_pending() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "builder".into(),
+            crate::detect::Agent::Codex,
+            now,
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(30),
+        );
+        let instance_id = terminal.agent_instance_id().unwrap().to_string();
+
+        let snapshot = capture_from_state(&state);
+        let saved = &snapshot.workspaces[0].tabs[0].panes[&root.raw()];
+
+        assert_eq!(
+            saved.agent_instance_id.as_deref(),
+            Some(instance_id.as_str())
+        );
+        assert_eq!(
+            saved.agent_name, None,
+            "pending launch is not resumable by name"
+        );
+        assert_eq!(saved.managed_agent_kind, None);
+    }
+
+    #[test]
     fn old_unversioned_snapshot_loads_as_version_0() {
         let json = r#"{"workspaces":[],"active":null,"selected":0}"#;
         let snap = parse_snapshot(json).unwrap();
@@ -1204,6 +1245,7 @@ mod tests {
                 cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
                 label: None,
                 agent_name: None,
+                agent_instance_id: None,
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
@@ -1217,6 +1259,7 @@ mod tests {
                     .unwrap_or_else(|_| PathBuf::from("/tmp")),
                 label: None,
                 agent_name: None,
+                agent_instance_id: None,
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,

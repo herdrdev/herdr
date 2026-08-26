@@ -64,6 +64,7 @@ pub(super) struct ActiveScrollChangedSubscription {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PanePresentationSnapshot {
+    agent_instance_id: Option<String>,
     title: Option<String>,
     display_agent: Option<String>,
     state_labels: std::collections::HashMap<String, String>,
@@ -72,6 +73,7 @@ struct PanePresentationSnapshot {
 impl PanePresentationSnapshot {
     fn from(pane: &crate::api::schema::PaneInfo) -> Self {
         Self {
+            agent_instance_id: pane.agent_instance_id.clone(),
             title: pane.title.clone(),
             display_agent: pane.display_agent.clone(),
             state_labels: pane.state_labels.clone(),
@@ -79,11 +81,13 @@ impl PanePresentationSnapshot {
     }
 
     fn from_event(
+        agent_instance_id: &Option<String>,
         title: &Option<String>,
         display_agent: &Option<String>,
         state_labels: &std::collections::HashMap<String, String>,
     ) -> Self {
         Self {
+            agent_instance_id: agent_instance_id.clone(),
             title: title.clone(),
             display_agent: display_agent.clone(),
             state_labels: state_labels.clone(),
@@ -215,6 +219,7 @@ impl ActiveSubscription {
                     .then_some(PaneAgentStatusChangedEvent {
                         pane_id: probe.pane_id.clone(),
                         workspace_id: probe.workspace_id,
+                        agent_instance_id: probe.agent_instance_id,
                         agent_status: probe.agent_status,
                         agent: probe.agent,
                         title: probe.title,
@@ -347,6 +352,7 @@ impl ActiveAgentStatusChangedSubscription {
             let crate::api::schema::EventData::PaneAgentStatusChanged {
                 pane_id,
                 workspace_id,
+                agent_instance_id,
                 agent_status,
                 agent,
                 title,
@@ -364,8 +370,12 @@ impl ActiveAgentStatusChangedSubscription {
             }
             saw_status_event = true;
 
-            let current_presentation =
-                PanePresentationSnapshot::from_event(&title, &display_agent, &state_labels);
+            let current_presentation = PanePresentationSnapshot::from_event(
+                &agent_instance_id,
+                &title,
+                &display_agent,
+                &state_labels,
+            );
             self.last_status = Some(agent_status);
             self.last_presentation = Some(current_presentation);
             if self
@@ -381,6 +391,7 @@ impl ActiveAgentStatusChangedSubscription {
                 data: SubscriptionEventData::PaneAgentStatusChanged(PaneAgentStatusChangedEvent {
                     pane_id,
                     workspace_id,
+                    agent_instance_id,
                     agent_status,
                     agent,
                     title,
@@ -447,6 +458,7 @@ impl ActiveAgentStatusChangedSubscription {
             data: SubscriptionEventData::PaneAgentStatusChanged(PaneAgentStatusChangedEvent {
                 pane_id: pane.pane_id,
                 workspace_id: pane.workspace_id,
+                agent_instance_id: pane.agent_instance_id,
                 agent_status: current_status,
                 agent: pane.agent,
                 title: pane.title,
@@ -593,6 +605,7 @@ mod tests {
             data: EventData::PaneAgentStatusChanged {
                 pane_id: "pane_1".into(),
                 workspace_id: "workspace_1".into(),
+                agent_instance_id: None,
                 agent_status: AgentStatus::Working,
                 agent: Some("pi".into()),
                 title: title.map(str::to_string),
@@ -615,6 +628,7 @@ mod tests {
         PaneInfo {
             pane_id: "pane_1".into(),
             terminal_id: "terminal_1".into(),
+            agent_instance_id: None,
             workspace_id: "workspace_1".into(),
             tab_id: "tab_1".into(),
             focused: true,
@@ -729,6 +743,7 @@ mod tests {
             status_filter: None,
             last_status: Some(AgentStatus::Working),
             last_presentation: Some(PanePresentationSnapshot {
+                agent_instance_id: None,
                 title: None,
                 display_agent: None,
                 state_labels: HashMap::new(),
@@ -766,6 +781,7 @@ mod tests {
             status_filter: Some(AgentStatus::Working),
             last_status: Some(AgentStatus::Working),
             last_presentation: Some(PanePresentationSnapshot {
+                agent_instance_id: None,
                 title: None,
                 display_agent: None,
                 state_labels: HashMap::new(),
@@ -774,6 +790,7 @@ mod tests {
             initial_event: Some(PaneAgentStatusChangedEvent {
                 pane_id: "pane_1".into(),
                 workspace_id: "workspace_1".into(),
+                agent_instance_id: None,
                 agent_status: AgentStatus::Working,
                 agent: Some("pi".into()),
                 title: None,
@@ -811,6 +828,7 @@ mod tests {
             status_filter: Some(AgentStatus::Working),
             last_status: Some(AgentStatus::Working),
             last_presentation: Some(PanePresentationSnapshot {
+                agent_instance_id: None,
                 title: Some("short lived".into()),
                 display_agent: None,
                 state_labels: HashMap::new(),
@@ -819,6 +837,7 @@ mod tests {
             initial_event: Some(PaneAgentStatusChangedEvent {
                 pane_id: "pane_1".into(),
                 workspace_id: "workspace_1".into(),
+                agent_instance_id: None,
                 agent_status: AgentStatus::Working,
                 agent: Some("pi".into()),
                 title: Some("short lived".into()),
