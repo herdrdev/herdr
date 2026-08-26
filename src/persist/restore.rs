@@ -504,7 +504,12 @@ fn restore_tab(
                 enabled: runtime_context.resume_agents_on_restore,
                 resumed_sessions: resumed_agent_sessions,
             };
-            pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore)
+            pane_restore_startup(
+                saved_agent_session,
+                saved_launch_argv.as_deref(),
+                saved_history,
+                &mut agent_restore,
+            )
         };
         let restored_agent_session =
             restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
@@ -738,6 +743,7 @@ fn restore_tab(
 
 fn pane_restore_startup<'a>(
     session: Option<&PaneAgentSessionSnapshot>,
+    launch_argv: Option<&[String]>,
     history: Option<&'a PaneHistorySnapshot>,
     agent_restore: &mut AgentRestoreState<'_>,
 ) -> PaneRestoreStartup<'a> {
@@ -745,8 +751,8 @@ fn pane_restore_startup<'a>(
     // resumable agent session and resume is enabled, do not replay saved pane
     // presentation history into that terminal, even when this pane is a
     // duplicate suppressed by session de-duplication.
-    let restore_plan =
-        session.and_then(|session| restore_plan_for_snapshot(session, agent_restore.enabled));
+    let restore_plan = session
+        .and_then(|session| restore_plan_for_snapshot(session, launch_argv, agent_restore.enabled));
     let has_native_agent_restore = restore_plan.is_some();
     // Reserve before spawning so later panes in the same restore pass cannot
     // launch the same native agent session. The caller rolls this reservation
@@ -783,13 +789,26 @@ fn pane_restore_startup<'a>(
 
 fn restore_plan_for_snapshot(
     session: &PaneAgentSessionSnapshot,
+    launch_argv: Option<&[String]>,
     resume_agents_on_restore: bool,
 ) -> Option<crate::agent_resume::AgentResumePlan> {
     if !resume_agents_on_restore {
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    let filtered_launch_args = launch_argv.and_then(|argv| {
+        if argv.len() > 1 {
+            Some(&argv[1..])
+        } else {
+            None
+        }
+    });
+    crate::agent_resume::plan_with_launch_args(
+        &session.source,
+        &session.agent,
+        &persisted.session_ref,
+        filtered_launch_args,
+    )
 }
 
 fn persisted_agent_session_from_snapshot(
@@ -819,7 +838,7 @@ fn take_restore_plan_for_snapshot(
     resume_agents_on_restore: bool,
     resumed_agent_sessions: &mut HashSet<String>,
 ) -> Option<crate::agent_resume::AgentResumePlan> {
-    restore_plan_for_snapshot(session, resume_agents_on_restore)
+    restore_plan_for_snapshot(session, None, resume_agents_on_restore)
         .filter(|plan| resumed_agent_sessions.insert(plan.dedupe_key.clone()))
 }
 
@@ -1019,10 +1038,34 @@ mod tests {
             value: pi_session_path.clone(),
         };
 
-        assert!(restore_plan_for_snapshot(&session, false).is_none());
+        assert!(restore_plan_for_snapshot(&session, None, false).is_none());
         assert_eq!(
-            restore_plan_for_snapshot(&session, true).unwrap().argv,
+            restore_plan_for_snapshot(&session, None, true).unwrap().argv,
             vec!["pi", "--session", pi_session_path.as_str()]
+        );
+
+        let claude_session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "session-123".into(),
+        };
+        let launch_argv = vec![
+            "claude".into(),
+            "--model".into(),
+            "claude-opus-5".into(),
+            "--dangerously-skip-permissions".into(),
+        ];
+        assert_eq!(
+            restore_plan_for_snapshot(&claude_session, Some(&launch_argv), true).unwrap().argv,
+            vec![
+                "claude",
+                "--resume",
+                "session-123",
+                "--model",
+                "claude-opus-5",
+                "--dangerously-skip-permissions"
+            ]
         );
 
         let unsupported_path = super::super::snapshot::PaneAgentSessionSnapshot {
@@ -1031,7 +1074,7 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
         };
-        assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
+        assert!(restore_plan_for_snapshot(&unsupported_path, None, true).is_none());
     }
 
     #[test]
@@ -1075,7 +1118,7 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let startup = pane_restore_startup(Some(&session), None, Some(&history), &mut agent_restore);
 
         assert!(startup.restore_plan.is_some());
         assert!(startup.initial_history_ansi.is_none());
@@ -1100,8 +1143,8 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let first = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
-        let duplicate = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let first = pane_restore_startup(Some(&session), None, Some(&history), &mut agent_restore);
+        let duplicate = pane_restore_startup(Some(&session), None, Some(&history), &mut agent_restore);
 
         assert!(first.restore_plan.is_some());
         assert!(first.initial_history_ansi.is_none());
@@ -1128,7 +1171,7 @@ mod tests {
             resumed_sessions: &mut resumed,
         };
 
-        let startup = pane_restore_startup(Some(&session), Some(&history), &mut agent_restore);
+        let startup = pane_restore_startup(Some(&session), None, Some(&history), &mut agent_restore);
 
         assert!(startup.restore_plan.is_none());
         assert_eq!(startup.initial_history_ansi, Some("RESTORED_HISTORY\r\n"));

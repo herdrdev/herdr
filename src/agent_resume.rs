@@ -116,77 +116,118 @@ pub fn session_ref_from_snapshot(
 }
 
 pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<AgentResumePlan> {
+    plan_with_launch_args(source, agent, session_ref, None)
+}
+
+pub fn plan_with_launch_args(
+    source: &str,
+    agent: &str,
+    session_ref: &AgentSessionRef,
+    launch_args: Option<&[String]>,
+) -> Option<AgentResumePlan> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
 
+    let extra_args = launch_args
+        .map(|args| crate::agent_launch_args::replayable_args(agent, args))
+        .unwrap_or_default();
+
     let argv = match (source, agent, session_ref.kind) {
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "claude".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
-            vec!["codex".into(), "resume".into(), session_ref.value.clone()]
+            let mut cmd = vec!["codex".into(), "resume".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:copilot", "copilot", AgentSessionRefKind::Id) => {
-            vec!["copilot".into(), format!("--resume={}", session_ref.value)]
+            let mut cmd = vec!["copilot".into(), format!("--resume={}", session_ref.value)];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:devin", "devin", AgentSessionRefKind::Id) => {
-            vec!["devin".into(), "--resume".into(), session_ref.value.clone()]
+            let mut cmd = vec!["devin".into(), "--resume".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:droid", "droid", AgentSessionRefKind::Id) => {
-            vec!["droid".into(), "--resume".into(), session_ref.value.clone()]
+            let mut cmd = vec!["droid".into(), "--resume".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
-            vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
+            let mut cmd = vec!["kimi".into(), "--session".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:mastracode", "mastracode", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "mastracode".into(),
                 "--thread".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
-            vec!["pi".into(), "--session".into(), session_ref.value.clone()]
+            let mut cmd = vec!["pi".into(), "--session".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
             // `--session` flag, unlike pi.
-            vec!["omp".into(), format!("--resume={}", session_ref.value)]
+            let mut cmd = vec!["omp".into(), format!("--resume={}", session_ref.value)];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "hermes".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "opencode".into(),
                 "--session".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "qodercli".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:qwen", "qwen", AgentSessionRefKind::Id) => {
-            vec!["qwen".into(), "--resume".into(), session_ref.value.clone()]
+            let mut cmd = vec!["qwen".into(), "--resume".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:kilo", "kilo", AgentSessionRefKind::Id) => {
-            vec!["kilo".into(), "--session".into(), session_ref.value.clone()]
+            let mut cmd = vec!["kilo".into(), "--session".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:cursor", "cursor", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 if cfg!(windows) {
                     "cursor-agent.cmd"
                 } else {
@@ -195,17 +236,23 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 .into(),
                 "--resume".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
-            vec![
+            let mut cmd = vec![
                 "agy".into(),
                 "--conversation".into(),
                 session_ref.value.clone(),
-            ]
+            ];
+            cmd.extend(extra_args);
+            cmd
         }
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
-            vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
+            let mut cmd = vec!["grok".into(), "--resume".into(), session_ref.value.clone()];
+            cmd.extend(extra_args);
+            cmd
         }
         _ => return None,
     };
@@ -295,6 +342,30 @@ mod tests {
             .unwrap()
             .argv,
             vec!["claude", "--resume", "claude-session"]
+        );
+        assert_eq!(
+            plan_with_launch_args(
+                "herdr:claude",
+                "claude",
+                &AgentSessionRef::id("claude-session").unwrap(),
+                Some(&[
+                    "--dangerously-skip-permissions".into(),
+                    "--model".into(),
+                    "claude-opus-5".into(),
+                    "--print".into(),
+                    "skip-this-prompt".into(),
+                ]),
+            )
+            .unwrap()
+            .argv,
+            vec![
+                "claude",
+                "--resume",
+                "claude-session",
+                "--dangerously-skip-permissions",
+                "--model",
+                "claude-opus-5"
+            ]
         );
         assert_eq!(
             plan(
