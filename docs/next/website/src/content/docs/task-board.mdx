@@ -1,0 +1,261 @@
+---
+title: Task board
+description: Automate durable work, dispatch agents, and track lifecycle activity.
+---
+
+Herdr's task board is a server-owned control plane for human and agent work.
+Tasks are saved with the session, so the board remains available after a client
+detaches or the server restarts. A task is independent from a pane: it can be
+assigned to a live agent later, and moving that pane between workspaces does not
+lose the task.
+
+## What the workflow automates
+
+A Symphony-style workflow turns a durable work queue into a control loop:
+define work, select a ready item, dispatch it to a worker, observe progress,
+review the result, and release dependent work. This matches the durable-objective
+pattern in [OpenAI's long-running goal guidance](https://learn.chatgpt.com/use-cases/follow-goals):
+name the objective and stopping condition, provide the relevant context and
+boundaries, define validation evidence, and keep short checkpoint updates.
+
+| Workflow concept | Herdr primitive |
+| --- | --- |
+| Durable objective | A task with a title, description, working directory, priority, and dependencies |
+| Work queue | The server-owned task list and status board |
+| Coordinator | A human, agent, or script using the task CLI or socket API |
+| Worker | A named live agent in a Herdr pane |
+| Isolated execution | A workspace, worktree, tab, and pane |
+| Dispatch | `herdr task dispatch` |
+| Progress and observability | Status reports, activity history, agent detection, and the TUI |
+| Acceptance gate | `review` followed by `done` |
+
+Herdr now provides the durable queue, dispatch, state machine, activity history,
+and operator UI needed for this loop. A human or coordinator agent still decides
+which ready task should run on which worker. Herdr does not yet run a built-in
+background scheduler that creates agents and drains the queue without a
+coordinator.
+
+## Human operator workflow
+
+1. Define one verifiable outcome. Put acceptance criteria, constraints, and the
+   validation command in the description. Use `--cwd` to bind the task to the
+   intended project.
+2. Split unrelated or independently reviewable outcomes into separate tasks.
+   Use `--depends-on` when one task must not start until another is accepted.
+3. Start the required agents in Herdr panes and give them stable names such as
+   `implementer` or `reviewer`.
+4. Dispatch a ready task. Herdr attaches it to the selected agent, changes it to
+   `running`, and sends the task context as the next prompt.
+5. Watch the task panel or activity modal. Intervene when a task becomes
+   `blocked`, when an approval is required, or when a progress report shows the
+   work is off course.
+6. Review the evidence when the worker reports `review`. Mark the task `done`
+   only after the acceptance criteria pass. Dependent tasks then become `ready`
+   automatically.
+
+For example:
+
+```bash
+created=$(herdr task create \
+  --title "Add retry policy" \
+  --description "Add bounded retries. Run just test and update the operator docs." \
+  --cwd ~/src/project)
+task_id=$(printf '%s\n' "$created" | jq -r '.result.task.id')
+
+herdr task dispatch "$task_id" implementer
+herdr task get "$task_id"
+herdr task report "$task_id" done --message "Review accepted; just test passes"
+```
+
+The final command is valid only after the task has reached `review`.
+
+## Worker agent contract
+
+`task dispatch` gives the worker the task ID, title, description, and a progress
+reporting instruction. For a custom dispatch prompt, agent policy, or
+`AGENTS.md`, use this contract:
+
+```text
+You are working on Herdr task TASK_ID.
+
+1. Run `herdr task get TASK_ID` before changing files.
+2. Work only on the stated outcome and respect its constraints and dependencies.
+3. At meaningful milestones, report a concise visible summary with:
+   `herdr task report TASK_ID running --message "<completed work and next step>"`
+4. If work cannot continue, report `blocked` with the exact external decision,
+   permission, input, or failure needed to resume. Do not keep working around a
+   material blocker silently.
+5. Run the task's validation checks. When the implementation and evidence are
+   ready for acceptance, report `review` with a concise result summary.
+6. Do not report private chain-of-thought. Record outcomes, evidence, decisions,
+   blockers, and next steps only.
+```
+
+A progress message is an operator-facing checkpoint, not a transcript. Report
+after a meaningful state change, before a long wait, and when the plan changes.
+Do not emit a message for every command or tool call.
+
+The implementation worker should normally stop at `review`. A reviewer, human,
+or coordinator owns the acceptance decision and moves the task to `done`.
+
+## Coordinator workflow
+
+A coordinator may be another agent, a shell script, or a service using Herdr's
+socket API. It should repeatedly perform a bounded sequence:
+
+1. List `ready`, `blocked`, and `review` tasks.
+2. Select a ready task using priority, dependencies, project ownership, and an
+   available worker. Lower numeric priority values sort first.
+3. Dispatch the task to one named live agent.
+4. Observe task status and activities instead of inferring completion from an
+   idle terminal.
+5. Route blocked tasks to a human and review tasks to the acceptance owner.
+6. Retry a failed task only after recording why another attempt is justified.
+
+Task list and get responses are JSON, so an automated coordinator can consume
+them without scraping the TUI:
+
+```bash
+ready=$(herdr task list --status ready)
+task_id=$(printf '%s\n' "$ready" | jq -r '.result.tasks[0].id // empty')
+
+if [ -n "$task_id" ]; then
+  herdr task dispatch "$task_id" implementer
+fi
+
+herdr task list --status blocked
+herdr task list --status review
+```
+
+Run independent ready tasks on separate named agents when the repository and
+worktree strategy makes parallel edits safe. See [Agent automation](/docs/agent-automation/)
+for creating workspaces and panes, starting agents, waiting for lifecycle state,
+and reading terminal results.
+
+## Create and inspect tasks
+
+```bash
+herdr task create --title "Add retry policy" --description "Document and test retries" \
+  --cwd ~/src/project
+herdr task board
+herdr task list
+herdr task get task-1
+```
+
+Herdr assigns each task a persistent, monotonically increasing ID (`task-1`,
+`task-2`, and so on). You do not provide the ID when creating a task, and gaps
+in the saved task list are not reused.
+
+The primary lifecycle is:
+
+```text
+backlog -> ready -> running -> review -> done
+                       |  ^
+                       v  |
+                     blocked
+```
+
+A task with dependencies stays in `backlog` until every dependency is `done`.
+Running work may move to `blocked`, `review`, `failed`, or `cancelled`. A failed
+task may return to `ready` for a deliberate retry. Herdr rejects `running` to
+`done`; review is an explicit acceptance gate.
+
+## Show tasks in the terminal UI
+
+Open the global menu from the workspace sidebar and choose `task panel` to cycle
+the task dock through `hidden`, `right`, and `bottom`. The dock reserves space
+next to or below the terminal, so the workspace and agent panels remain usable.
+
+Choose `task board` from the same menu for the full status-column view. Use
+`h`/`l` or Left/Right to move across non-empty status columns while keeping the
+same row when possible. Use `j`/`k` or Up/Down to move between tasks in the
+current column. Press Enter on a selected task, or click a row in either the
+board or dock, to open its activity modal. The modal shows task identity,
+status, assignment metadata, and the newest activity first. Use `j`/`k`,
+Up/Down, Page Up/Page Down, or the mouse wheel to scroll. Escape returns to the
+board. Press `p` in the board to cycle the dock and close the board.
+
+`herdr task board` prints a non-interactive command-line summary. Use the TUI
+menu when you want the interactive board and activity modal. Use
+`herdr task get TASK_ID` when you need the complete task record, including its
+description, dependencies, last message, and structured activities.
+
+Activity history includes creation, assignment, dispatch, status changes, agent
+working/blocked/idle transitions, release events, and explicit progress reports.
+Herdr keeps the newest 256 activity records per task and persists them with the
+session. It records visible progress summaries, not an agent's private
+chain-of-thought.
+
+On narrow screens, a right dock is placed at the bottom automatically. Dock
+placement is client UI state; task data and activity history remain server-owned.
+
+## Attach or dispatch an agent
+
+The target is the same live agent name or workspace-qualified pane ID accepted
+by `herdr agent`. This lets you attach a Codex session that is already running
+inside Herdr:
+
+```bash
+herdr task attach task-1 reviewer
+herdr task dispatch task-1 reviewer
+herdr task dispatch task-1 reviewer --prompt "Review the implementation and report review with evidence"
+```
+
+`task attach` associates the task with the agent without sending a prompt.
+`task dispatch` attaches the target and sends the task title and description, or
+the supplied custom prompt, as the next prompt. Neither command adopts a process
+from an unrelated terminal or creates a hidden agent. Start or place the agent
+in a Herdr pane first.
+
+To move that running pane into a different space, use the existing pane layout
+command and keep the returned pane ID:
+
+```bash
+herdr pane move w1:p2 --new-tab --workspace w2 --focus
+```
+
+The process and task remain alive; only the workspace-qualified pane ID changes.
+
+## Report lifecycle progress
+
+Workers, reviewers, humans, and coordinators use the same reporting interface:
+
+```bash
+herdr task report task-1 running --message "Added the retry path; writing tests"
+herdr task report task-1 blocked --message "Need the retry limit from the API owner"
+herdr task report task-1 running --message "Limit confirmed at three; tests are running"
+herdr task report task-1 review --message "Implementation complete; just test passes"
+herdr task report task-1 done --message "Review accepted"
+```
+
+Every status change and non-empty message becomes activity. Repeated `running`
+reports are allowed, so agents can append milestones without inventing state
+transitions. Explicit reports keep completion separate from terminal-idle
+detection: an idle agent may still be waiting for a follow-up instruction, so
+Herdr never silently marks work complete.
+
+## Review and recovery
+
+When a task is `blocked`, inspect its latest activity, resolve the named issue,
+and report `running` before work resumes. When a task is `failed`, preserve the
+failure summary; move it to `ready` only when a new attempt has a concrete change
+in inputs, approach, or environment. Each attachment increments the attempt
+counter.
+
+For review, inspect the task record, diff or produced artifact, and validation
+evidence. Return the task from `review` to `running` when changes are required.
+Report `done` only from `review`. This explicit gate makes dependent-task release
+and board completion mean acceptance, not merely that an agent stopped typing.
+
+## Automation boundaries
+
+Herdr automatically persists tasks, allocates IDs, enforces dependencies and
+valid transitions, attaches and prompts live agents, records activities, and
+renders the shared board. It also observes agent lifecycle state, but lifecycle
+detection is evidence for operators and coordinators, not proof of task success.
+
+The coordinator remains responsible for decomposing work, starting an
+appropriately isolated worker, selecting and dispatching ready tasks, handling
+approvals, evaluating output, authorizing retries, and accepting review. That is
+enough to run a Symphony-style workflow today with a human or agent coordinator;
+a fully unattended queue scheduler is a separate capability.

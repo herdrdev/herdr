@@ -124,6 +124,20 @@ herdr workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] 
 herdr workspace close <workspace_id>
 ```
 
+## Tasks
+
+```bash
+herdr task board
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task attach <task_id> <agent-or-pane>
+herdr task dispatch <task_id> <agent-or-pane>
+herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
+```
+
+Tasks are durable server records. `task attach` and `task dispatch` accept a
+live Herdr agent name or pane ID; they do not adopt processes launched outside
+Herdr. Use `pane move` when the running pane should change workspaces.
+
 Create a workspace without stealing focus:
 
 ```bash

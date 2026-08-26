@@ -36,6 +36,7 @@ pub(super) fn command() -> Command {
         .subcommand(workspace_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
+        .subcommand(task_command())
         .subcommand(notification_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
@@ -230,6 +231,58 @@ fn workspace_command() -> Command {
                 .arg(option("ttl-ms", "N")),
         )
         .subcommand(id_command("close", "workspace_id", "Close a workspace"))
+}
+
+fn task_command() -> Command {
+    Command::new("task")
+        .about("Create and coordinate durable agent tasks")
+        .subcommand(Command::new("board").about("Show tasks grouped by lifecycle state"))
+        .subcommand(
+            Command::new("list")
+                .about("List tasks")
+                .arg(option("status", "STATUS"))
+                .arg(json_flag()),
+        )
+        .subcommand(id_command("get", "task_id", "Show a task"))
+        .subcommand(
+            Command::new("create")
+                .about("Create a task")
+                .arg(option("title", "TEXT").required(true))
+                .arg(option("description", "TEXT"))
+                .arg(option("priority", "N"))
+                .arg(repeatable_option("depends-on", "TASK_ID"))
+                .arg(path_option("cwd", "PATH")),
+        )
+        .subcommand(
+            Command::new("update")
+                .about("Update a task")
+                .arg(required("task_id", "TASK_ID"))
+                .arg(option("title", "TEXT"))
+                .arg(option("description", "TEXT"))
+                .arg(option("priority", "N"))
+                .arg(option("status", "STATUS"))
+                .arg(option("message", "TEXT")),
+        )
+        .subcommand(
+            Command::new("attach")
+                .about("Attach a live agent or pane to a task")
+                .arg(required("task_id", "TASK_ID"))
+                .arg(required("target", "AGENT_OR_PANE")),
+        )
+        .subcommand(
+            Command::new("dispatch")
+                .about("Attach a live agent and send it the task")
+                .arg(required("task_id", "TASK_ID"))
+                .arg(required("target", "AGENT_OR_PANE"))
+                .arg(option("prompt", "TEXT")),
+        )
+        .subcommand(
+            Command::new("report")
+                .about("Record task lifecycle progress")
+                .arg(required("task_id", "TASK_ID"))
+                .arg(required("status", "STATUS"))
+                .arg(option("message", "TEXT")),
+        )
 }
 
 fn worktree_command() -> Command {

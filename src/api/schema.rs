@@ -10,6 +10,7 @@ pub mod response;
 pub mod server;
 pub mod session;
 pub mod tabs;
+pub mod tasks;
 pub mod workspaces;
 pub mod worktrees;
 
@@ -23,6 +24,7 @@ pub use response::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
+pub use tasks::*;
 pub use workspaces::*;
 pub use worktrees::*;
 
@@ -103,6 +105,20 @@ pub enum Method {
     TabMove(TabMoveParams),
     #[serde(rename = "tab.close")]
     TabClose(TabTarget),
+    #[serde(rename = "task.list")]
+    TaskList(TaskListParams),
+    #[serde(rename = "task.get")]
+    TaskGet(TaskTarget),
+    #[serde(rename = "task.create")]
+    TaskCreate(TaskCreateParams),
+    #[serde(rename = "task.update")]
+    TaskUpdate(TaskUpdateParams),
+    #[serde(rename = "task.attach")]
+    TaskAttach(TaskAttachParams),
+    #[serde(rename = "task.dispatch")]
+    TaskDispatch(TaskDispatchParams),
+    #[serde(rename = "task.report")]
+    TaskReport(TaskReportParams),
     #[serde(rename = "agent.list")]
     AgentList(EmptyParams),
     #[serde(rename = "agent.get")]

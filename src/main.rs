@@ -93,6 +93,7 @@ mod selection;
 mod server;
 mod session;
 mod sound;
+mod task;
 mod terminal;
 mod terminal_effects;
 mod terminal_modes;

@@ -128,6 +128,18 @@ herdr workspace create --cwd ~/project --label api --no-focus
 
 ワークスペースは最上位のプロジェクトまたは作業コンテキストです。作成時に最初のタブとルートペインも作られます。JSON レスポンスの `.result.workspace.workspace_id`、`.result.tab.tab_id`、`.result.root_pane.pane_id` から各 ID を取得できます。
 
+## タスク
+
+```bash
+herdr task board
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task attach <task_id> <agent-or-pane>
+herdr task dispatch <task_id> <agent-or-pane>
+herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
+```
+
+タスクはサーバーに保存される永続レコードです。`task attach` と `task dispatch` は Herdr で実行中のエージェント名またはペイン ID を受け取り、Herdr 外で起動したプロセスは取り込みません。実行中のペインを別のワークスペースへ移すには `pane move` を使います。
+
 ## Worktree
 
 ```bash

@@ -4136,6 +4136,186 @@
           ],
           "type": "object"
         },
+        "TaskAttachParams": {
+          "properties": {
+            "target": {
+              "description": "A live agent name or pane id, resolved by the existing agent target rules.",
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "target"
+          ],
+          "type": "object"
+        },
+        "TaskCreateParams": {
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dependencies": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "default": "",
+              "type": "string"
+            },
+            "priority": {
+              "default": 100,
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "TaskDispatchParams": {
+          "properties": {
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "description": "A live agent name or pane id. Dispatch never creates a hidden process.",
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "target"
+          ],
+          "type": "object"
+        },
+        "TaskListParams": {
+          "properties": {
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "TaskReportParams": {
+          "properties": {
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/schemas/request/$defs/TaskStatus"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "status"
+          ],
+          "type": "object"
+        },
+        "TaskStatus": {
+          "enum": [
+            "backlog",
+            "ready",
+            "running",
+            "blocked",
+            "review",
+            "done",
+            "failed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "TaskTarget": {
+          "properties": {
+            "task_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id"
+          ],
+          "type": "object"
+        },
+        "TaskUpdateParams": {
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "priority": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "task_id"
+          ],
+          "type": "object"
+        },
         "ToastHerdrPosition": {
           "enum": [
             "top-left",
@@ -4899,6 +5079,118 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/TabTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.update",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskUpdateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.attach",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskAttachParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.dispatch",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskDispatchParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task.report",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TaskReportParams"
             }
           },
           "required": [
@@ -8895,6 +9187,105 @@
             },
             {
               "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/Task"
+                },
+                "type": {
+                  "const": "task_info",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/Task"
+                },
+                "type": {
+                  "const": "task_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/Task"
+                },
+                "type": {
+                  "const": "task_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "tasks": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Task"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "task_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tasks"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/Task"
+                },
+                "type": {
+                  "const": "task_attached",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/Task"
+                },
+                "type": {
+                  "const": "task_dispatched",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "agent": {
                   "$ref": "#/schemas/success_response/$defs/AgentInfo"
                 },
@@ -9860,6 +10251,13 @@
               },
               "type": "array"
             },
+            "tasks": {
+              "default": [],
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Task"
+              },
+              "type": "array"
+            },
             "version": {
               "type": "string"
             },
@@ -9926,6 +10324,168 @@
             "agent_status"
           ],
           "type": "object"
+        },
+        "Task": {
+          "description": "A durable unit of work tracked by Herdr's control plane.",
+          "properties": {
+            "activities": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/TaskActivity"
+              },
+              "type": "array"
+            },
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "attempts": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "created_at": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dependencies": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "default": "",
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "last_message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "priority": {
+              "default": 100,
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "$ref": "#/schemas/success_response/$defs/TaskStatus",
+              "default": "backlog"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated_at": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ],
+          "type": "object"
+        },
+        "TaskActivity": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/schemas/success_response/$defs/TaskActivityKind"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timestamp": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "timestamp",
+            "kind"
+          ],
+          "type": "object"
+        },
+        "TaskActivityKind": {
+          "enum": [
+            "created",
+            "status_changed",
+            "progress",
+            "attached",
+            "dispatched",
+            "agent_status",
+            "agent_released"
+          ],
+          "type": "string"
+        },
+        "TaskStatus": {
+          "enum": [
+            "backlog",
+            "ready",
+            "running",
+            "blocked",
+            "review",
+            "done",
+            "failed",
+            "cancelled"
+          ],
+          "type": "string"
         },
         "WorkspaceInfo": {
           "properties": {

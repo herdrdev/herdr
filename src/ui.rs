@@ -19,6 +19,7 @@ mod sidebar;
 mod status;
 mod tab_surface;
 mod tabs;
+mod task_board;
 mod text;
 mod widgets;
 
@@ -63,6 +64,11 @@ pub(crate) use self::tab_surface::{
     compute_tab_surface, render_tab_surface, resize_tab_surface, TabSurfaceLayout,
 };
 use self::tabs::render_tab_bar;
+pub(crate) use self::task_board::task_board_task_at;
+pub(crate) use self::task_board::TASK_BOARD_STATUSES;
+use self::task_board::{
+    render_task_activity_overlay, render_task_board_overlay, render_task_panel,
+};
 pub(crate) use self::{
     dialogs::{
         confirm_close_button_rects, confirm_close_popup_rect, new_linked_worktree_button_rects,
@@ -99,11 +105,79 @@ pub(crate) use self::{
     tabs::{compute_tab_bar_view, tab_bar_content_area},
     widgets::{centered_popup_rect, modal_stack_areas},
 };
-use crate::app::state::ViewLayout;
+use crate::app::state::{TaskPanelPosition, ViewLayout};
 use crate::app::{AppState, Mode};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const COLLAPSED_WIDTH: u16 = 4; // num + space + dot + separator
+const TASK_PANEL_RIGHT_WIDTH: u16 = 32;
+const TASK_PANEL_BOTTOM_HEIGHT: u16 = 9;
+const TASK_PANEL_MIN_TERMINAL_WIDTH: u16 = 24;
+const TASK_PANEL_MIN_TERMINAL_HEIGHT: u16 = 6;
+
+pub(crate) fn task_panel_inner_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
+}
+
+pub(crate) fn task_panel_task_at(app: &AppState, column: u16, row: u16) -> Option<usize> {
+    let area = app.view.task_panel_rect;
+    if area.width == 0
+        || area.height < 3
+        || column < area.x
+        || column >= area.x.saturating_add(area.width)
+        || row < area.y
+        || row >= area.y.saturating_add(area.height)
+    {
+        return None;
+    }
+    let inner = task_panel_inner_rect(area);
+    let row = row.checked_sub(inner.y + 1).map(usize::from)?;
+    app.tasks.get(row).map(|_| row)
+}
+
+fn split_task_panel(area: Rect, position: TaskPanelPosition) -> (Rect, Rect) {
+    if area.width == 0 || area.height == 0 {
+        return (Rect::default(), area);
+    }
+    match position {
+        TaskPanelPosition::Hidden => (Rect::default(), area),
+        TaskPanelPosition::Right if area.width >= TASK_PANEL_MIN_TERMINAL_WIDTH + 4 => {
+            let panel_width = TASK_PANEL_RIGHT_WIDTH.min(
+                area.width
+                    .saturating_sub(TASK_PANEL_MIN_TERMINAL_WIDTH)
+                    .max(1),
+            );
+            let [content, panel] = Layout::horizontal([
+                Constraint::Min(TASK_PANEL_MIN_TERMINAL_WIDTH),
+                Constraint::Length(panel_width),
+            ])
+            .areas(area);
+            (panel, content)
+        }
+        TaskPanelPosition::Bottom if area.height >= TASK_PANEL_MIN_TERMINAL_HEIGHT + 3 => {
+            let panel_height = TASK_PANEL_BOTTOM_HEIGHT.min(
+                area.height
+                    .saturating_sub(TASK_PANEL_MIN_TERMINAL_HEIGHT)
+                    .max(1),
+            );
+            let [content, panel] = Layout::vertical([
+                Constraint::Min(TASK_PANEL_MIN_TERMINAL_HEIGHT),
+                Constraint::Length(panel_height),
+            ])
+            .areas(area);
+            (panel, content)
+        }
+        // A right dock is too narrow on mobile; make it a bottom dock when there
+        // is enough vertical room for the terminal and task rows.
+        TaskPanelPosition::Right => split_task_panel(area, TaskPanelPosition::Bottom),
+        TaskPanelPosition::Bottom => (Rect::default(), area),
+    }
+}
 
 /// Compute view geometry and reconcile pane sizes.
 /// Called before render to separate mutation from drawing.
@@ -237,11 +311,12 @@ fn compute_view_internal(
     let [sidebar_area, main_area] =
         Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
 
+    let (task_panel_rect, content_area) = split_task_panel(main_area, app.task_panel_position);
     let (tab_bar_rect, terminal_area) = app
         .active
         .and_then(|i| app.workspaces.get(i))
-        .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, main_area))
-        .unwrap_or((Rect::default(), main_area));
+        .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, content_area))
+        .unwrap_or((Rect::default(), content_area));
 
     if !app.sidebar_collapsed {
         app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
@@ -287,7 +362,7 @@ fn compute_view_internal(
         cell_size,
     );
     if resize_panes {
-        resize_background_tab_panes_for_desktop(app, terminal_runtimes, main_area, cell_size);
+        resize_background_tab_panes_for_desktop(app, terminal_runtimes, content_area, cell_size);
         resize_popup_pane(app, terminal_runtimes, terminal_area, cell_size);
     }
 
@@ -314,6 +389,7 @@ fn compute_view_internal(
         tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
         new_tab_hit_area: tab_bar_view.new_tab_hit_area,
         terminal_area,
+        task_panel_rect,
         mobile_header_rect: Rect::default(),
         mobile_menu_hit_area: Rect::default(),
         toast_hit_area,
@@ -338,6 +414,13 @@ fn compute_mobile_view(
     } else {
         (area, Rect::default())
     };
+
+    let mobile_task_panel_position = match app.task_panel_position {
+        TaskPanelPosition::Right => TaskPanelPosition::Bottom,
+        position => position,
+    };
+    let (task_panel_rect, terminal_area) =
+        split_task_panel(terminal_area, mobile_task_panel_position);
 
     if app.mode == Mode::Navigate {
         let switcher_viewport_h = area.height.saturating_sub(header_h + 1);
@@ -377,6 +460,7 @@ fn compute_mobile_view(
         tab_scroll_right_hit_area: Rect::default(),
         new_tab_hit_area: Rect::default(),
         terminal_area,
+        task_panel_rect,
         mobile_header_rect: header_rect,
         mobile_menu_hit_area: header_hits.menu,
         toast_hit_area,
@@ -455,6 +539,8 @@ pub fn render_with_runtime_registry(
         }
         Mode::ConfirmRemoveWorktree => render_remove_worktree_overlay(app, frame, frame.area()),
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
+        Mode::TaskBoard => render_task_board_overlay(app, frame),
+        Mode::TaskActivity => render_task_activity_overlay(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),
         Mode::Terminal => {}
@@ -474,6 +560,9 @@ fn render_navigation_chrome(
         } else {
             render_sidebar(app, terminal_runtimes, frame, app.view.sidebar_rect);
         }
+    }
+    if app.view.task_panel_rect.width > 0 && app.view.task_panel_rect.height > 0 {
+        render_task_panel(app, frame, app.view.task_panel_rect);
     }
 }
 
@@ -598,7 +687,7 @@ mod tests {
     use super::keybind_help::keybind_help_groups;
     use super::scrollbar::scrollbar_thumb;
     use super::*;
-    use crate::{app::state::ViewLayout, layout::PaneInfo, workspace::Workspace};
+    use crate::{app::state::ViewLayout, layout::PaneInfo, task::TaskStatus, workspace::Workspace};
     use ratatui::style::Color;
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -724,6 +813,122 @@ mod tests {
         assert_eq!(
             app.view.mobile_menu_hit_area.x + app.view.mobile_menu_hit_area.width,
             44
+        );
+    }
+
+    #[test]
+    fn task_panel_right_reserves_terminal_area() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.task_panel_position = TaskPanelPosition::Right;
+
+        compute_view(&mut app, Rect::new(0, 0, 120, 40));
+
+        assert!(app.view.task_panel_rect.width > 0);
+        assert_eq!(
+            app.view.task_panel_rect.x + app.view.task_panel_rect.width,
+            120
+        );
+        assert_eq!(
+            app.view.terminal_area.x + app.view.terminal_area.width,
+            app.view.task_panel_rect.x
+        );
+    }
+
+    #[test]
+    fn task_panel_bottom_reserves_terminal_area() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.task_panel_position = TaskPanelPosition::Bottom;
+
+        compute_view(&mut app, Rect::new(0, 0, 120, 40));
+
+        assert!(app.view.task_panel_rect.height > 0);
+        assert_eq!(
+            app.view.task_panel_rect.y + app.view.task_panel_rect.height,
+            40
+        );
+        assert_eq!(
+            app.view.terminal_area.y + app.view.terminal_area.height,
+            app.view.task_panel_rect.y
+        );
+    }
+
+    #[test]
+    fn task_activity_modal_renders_progress_summary() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut task = crate::task::Task::new(
+            "task-1".into(),
+            "Build activity modal".into(),
+            String::new(),
+            100,
+            Vec::new(),
+            Some("/tmp/project".into()),
+            1,
+        );
+        task.transition(TaskStatus::Running, 2).unwrap();
+        task.record_activity(crate::task::TaskActivity {
+            timestamp: 3,
+            kind: crate::task::TaskActivityKind::Progress,
+            status: Some(TaskStatus::Running),
+            message: Some(
+                "Focused tests pass and this intentionally long activity message wraps with a stable timeline gutter for review."
+                    .into(),
+            ),
+            agent: Some("worker-1".into()),
+            pane_id: Some("w1:p1".into()),
+        });
+        task.agent = Some("worker-1".into());
+        task.pane_id = Some("w1:p1".into());
+        app.tasks.push(task);
+        app.mode = Mode::TaskActivity;
+
+        let area = Rect::new(0, 0, 100, 32);
+        compute_view(&mut app, area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let screen = (0..area.height)
+            .map(|row| buffer_row_text(terminal.backend().buffer(), area, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(screen.contains("TASK ACTIVITY"), "{screen}");
+        assert!(screen.contains("Build activity modal"), "{screen}");
+        let first_message_row = screen
+            .lines()
+            .find(|line| line.contains("| Focused tests pass"))
+            .expect("first activity message row");
+        let wrapped_row = screen
+            .lines()
+            .find(|line| line.contains("timeline gutter for review."))
+            .expect("wrapped activity row");
+        assert_eq!(
+            first_message_row.find("| "),
+            wrapped_row.find("| "),
+            "{screen}"
+        );
+        assert!(screen.contains("worker-1"), "{screen}");
+    }
+
+    #[test]
+    fn narrow_mobile_task_panel_uses_bottom_dock() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.task_panel_position = TaskPanelPosition::Right;
+
+        compute_view(&mut app, Rect::new(0, 0, 44, 20));
+
+        assert_eq!(app.view.layout, ViewLayout::Mobile);
+        assert!(app.view.task_panel_rect.height > 0);
+        assert_eq!(
+            app.view.task_panel_rect.y,
+            app.view.terminal_area.y + app.view.terminal_area.height
         );
     }
 

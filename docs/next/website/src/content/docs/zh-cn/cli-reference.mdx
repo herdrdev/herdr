@@ -128,6 +128,18 @@ herdr workspace create --cwd ~/project --label api --no-focus
 
 工作区是顶层项目或工作上下文。创建工作区也会创建第一个标签页和根窗格。JSON 响应中的 `.result.workspace.workspace_id`、`.result.tab.tab_id` 和 `.result.root_pane.pane_id` 是对应 ID。
 
+## 任务
+
+```bash
+herdr task board
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task attach <task_id> <agent-or-pane>
+herdr task dispatch <task_id> <agent-or-pane>
+herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
+```
+
+任务是保存在服务器上的持久记录。`task attach` 和 `task dispatch` 接受正在运行的 Herdr 智能体名称或窗格 ID，不会接管 Herdr 外部启动的进程。要将运行中的窗格移动到其他工作区，请使用 `pane move`。
+
 ## Worktree
 
 ```bash

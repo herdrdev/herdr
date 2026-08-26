@@ -418,6 +418,7 @@ impl App {
             sidebar_width_source,
             sidebar_section_split,
             collapsed_space_keys,
+            tasks,
         ) = if no_session {
             (
                 Vec::new(),
@@ -427,6 +428,7 @@ impl App {
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
                 std::collections::HashSet::new(),
+                Vec::new(),
             )
         } else if let Some(snap) = crate::persist::load() {
             let history = config
@@ -463,6 +465,7 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    snap.tasks,
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
@@ -480,6 +483,7 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    snap.tasks,
                 )
             }
         } else {
@@ -491,6 +495,7 @@ impl App {
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
                 std::collections::HashSet::new(),
+                Vec::new(),
             )
         };
 
@@ -555,6 +560,8 @@ impl App {
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces,
+            tasks,
+            task_panel_position: state::TaskPanelPosition::default(),
             active,
             previous_pane_focus: None,
             selected,
@@ -615,6 +622,7 @@ impl App {
                 tab_scroll_right_hit_area: Rect::default(),
                 new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
+                task_panel_rect: Rect::default(),
                 mobile_header_rect: Rect::default(),
                 mobile_menu_hit_area: Rect::default(),
                 toast_hit_area: Rect::default(),
@@ -713,6 +721,8 @@ impl App {
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,
             global_menu: state::MenuListState::new(0),
+            task_board_selected: 0,
+            task_activity_scroll: 0,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             host_mouse_pixels: None,
@@ -865,6 +875,7 @@ impl App {
         app.state.detach_exits = false;
         app.state.pane_id_aliases = pane_id_aliases;
         app.state.workspaces = workspaces;
+        app.state.tasks = snapshot.tasks.clone();
         app.state.terminals = terminals;
         app.terminal_runtimes = runtimes.into();
         app.state.active = snapshot
@@ -1946,6 +1957,12 @@ impl App {
             }
             Mode::GlobalMenu => {
                 input::handle_global_menu_key(&mut self.state, key_event);
+            }
+            Mode::TaskBoard => {
+                input::handle_task_board_key(&mut self.state, key_event);
+            }
+            Mode::TaskActivity => {
+                input::handle_task_activity_key(&mut self.state, key_event);
             }
             Mode::Onboarding => {
                 self.handle_onboarding_key(key_event);

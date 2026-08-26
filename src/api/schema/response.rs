@@ -18,6 +18,7 @@ use super::plugins::{
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
+use super::tasks::Task;
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
@@ -93,6 +94,24 @@ pub enum ResponseResult {
     },
     TabList {
         tabs: Vec<TabInfo>,
+    },
+    TaskInfo {
+        task: Task,
+    },
+    TaskCreated {
+        task: Task,
+    },
+    TaskUpdated {
+        task: Task,
+    },
+    TaskList {
+        tasks: Vec<Task>,
+    },
+    TaskAttached {
+        task: Task,
+    },
+    TaskDispatched {
+        task: Task,
     },
     AgentInfo {
         agent: AgentInfo,

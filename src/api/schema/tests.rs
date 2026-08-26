@@ -123,6 +123,28 @@ fn agent_start_and_prompt_requests_round_trip() {
 }
 
 #[test]
+fn task_requests_round_trip() {
+    let request = Request {
+        id: "task-create".into(),
+        method: Method::TaskCreate(TaskCreateParams {
+            title: "Implement task board".into(),
+            description: "Add the persisted control-plane model".into(),
+            priority: 20,
+            dependencies: vec!["task-1".into()],
+            cwd: Some("/tmp/herdr".into()),
+        }),
+    };
+
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(json["method"], "task.create");
+    assert_eq!(
+        json["params"]["dependencies"],
+        serde_json::json!(["task-1"])
+    );
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+}
+
+#[test]
 fn bundled_protocol_schema_refs_resolve_inside_bundle() {
     fn assert_no_standalone_refs(value: &serde_json::Value) {
         match value {
@@ -674,6 +696,7 @@ fn session_snapshot_request_and_response_round_trip() {
                 panes: Vec::new(),
                 layouts: Vec::new(),
                 agents: Vec::new(),
+                tasks: Vec::new(),
             }),
         },
     };

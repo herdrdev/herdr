@@ -79,11 +79,15 @@ pub(crate) enum GlobalMenuAction {
     Keybinds,
     ReloadConfig,
     Settings,
+    TaskBoard,
+    TaskPanel,
 }
 
 pub(super) fn global_menu_actions(state: &AppState) -> Vec<GlobalMenuAction> {
     let mut actions = vec![
         GlobalMenuAction::Settings,
+        GlobalMenuAction::TaskBoard,
+        GlobalMenuAction::TaskPanel,
         GlobalMenuAction::Keybinds,
         GlobalMenuAction::ReloadConfig,
     ];
@@ -141,6 +145,143 @@ pub(super) fn apply_global_menu_action(state: &mut AppState, action: GlobalMenuA
             leave_modal(state);
         }
         GlobalMenuAction::Settings => super::settings::open_settings(state),
+        GlobalMenuAction::TaskBoard => {
+            state.task_board_selected = 0;
+            state.mode = Mode::TaskBoard;
+        }
+        GlobalMenuAction::TaskPanel => {
+            state.task_panel_position = state.task_panel_position.cycle();
+            leave_modal(state);
+        }
+    }
+}
+
+pub(crate) fn handle_task_board_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => leave_modal(state),
+        KeyCode::Up | KeyCode::Char('k') => {
+            move_task_board_selection_vertical(state, false);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            move_task_board_selection_vertical(state, true);
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            move_task_board_selection_horizontal(state, false);
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            move_task_board_selection_horizontal(state, true);
+        }
+        KeyCode::Char('p') => {
+            state.task_panel_position = state.task_panel_position.cycle();
+            leave_modal(state);
+        }
+        KeyCode::Enter if state.tasks.get(state.task_board_selected).is_some() => {
+            state.task_activity_scroll = 0;
+            state.mode = Mode::TaskActivity;
+        }
+        _ => {}
+    }
+}
+
+fn move_task_board_selection_vertical(state: &mut AppState, forward: bool) {
+    let Some(selected) = state.tasks.get(state.task_board_selected) else {
+        state.task_board_selected = 0;
+        return;
+    };
+    let status = selected.status;
+    let row = state.tasks[..state.task_board_selected]
+        .iter()
+        .filter(|task| task.status == status)
+        .count();
+    let column_len = state
+        .tasks
+        .iter()
+        .filter(|task| task.status == status)
+        .count();
+    let target_row = if forward {
+        row.saturating_add(1).min(column_len.saturating_sub(1))
+    } else {
+        row.saturating_sub(1)
+    };
+
+    if let Some((index, _)) = state
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task.status == status)
+        .nth(target_row)
+    {
+        state.task_board_selected = index;
+    }
+}
+
+fn move_task_board_selection_horizontal(state: &mut AppState, forward: bool) {
+    let Some(selected) = state.tasks.get(state.task_board_selected) else {
+        state.task_board_selected = 0;
+        return;
+    };
+    let status = selected.status;
+    let row = state.tasks[..state.task_board_selected]
+        .iter()
+        .filter(|task| task.status == status)
+        .count();
+    let Some(column) = crate::ui::TASK_BOARD_STATUSES
+        .iter()
+        .position(|candidate| *candidate == status)
+    else {
+        return;
+    };
+
+    let columns: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(column.saturating_add(1)..crate::ui::TASK_BOARD_STATUSES.len())
+    } else {
+        Box::new((0..column).rev())
+    };
+    for target_column in columns {
+        let target_status = crate::ui::TASK_BOARD_STATUSES[target_column];
+        let column_len = state
+            .tasks
+            .iter()
+            .filter(|task| task.status == target_status)
+            .count();
+        if column_len == 0 {
+            continue;
+        }
+        let target_row = row.min(column_len - 1);
+        if let Some((index, _)) = state
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.status == target_status)
+            .nth(target_row)
+        {
+            state.task_board_selected = index;
+        }
+        return;
+    }
+}
+
+pub(crate) fn handle_task_activity_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            state.task_activity_scroll = 0;
+            state.mode = Mode::TaskBoard;
+        }
+        KeyCode::Char('q') => leave_modal(state),
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.task_activity_scroll = state.task_activity_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.task_activity_scroll = state.task_activity_scroll.saturating_add(1);
+        }
+        KeyCode::PageUp => {
+            state.task_activity_scroll = state.task_activity_scroll.saturating_sub(8);
+        }
+        KeyCode::PageDown => {
+            state.task_activity_scroll = state.task_activity_scroll.saturating_add(8);
+        }
+        KeyCode::Home => state.task_activity_scroll = 0,
+        _ => {}
     }
 }
 
@@ -1416,6 +1557,128 @@ mod tests {
 
     use super::super::{capture_snapshot, state_with_workspaces};
     use super::*;
+
+    #[test]
+    fn task_board_opens_activity_and_escape_returns_to_board() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.tasks.push(crate::task::Task::new(
+            "task-1".into(),
+            "show activity".into(),
+            String::new(),
+            100,
+            Vec::new(),
+            None,
+            1,
+        ));
+        state.mode = Mode::TaskBoard;
+
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::TaskActivity);
+
+        handle_task_activity_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_activity_scroll, 1);
+        handle_task_activity_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::TaskBoard);
+        assert_eq!(state.task_activity_scroll, 0);
+    }
+
+    #[test]
+    fn task_board_hjkl_navigation_follows_status_columns() {
+        let mut state = state_with_workspaces(&["test"]);
+        for (id, status) in [
+            ("ready-1", crate::task::TaskStatus::Ready),
+            ("done-1", crate::task::TaskStatus::Done),
+            ("ready-2", crate::task::TaskStatus::Ready),
+            ("running-1", crate::task::TaskStatus::Running),
+            ("running-2", crate::task::TaskStatus::Running),
+            ("running-3", crate::task::TaskStatus::Running),
+        ] {
+            let mut task = crate::task::Task::new(
+                id.into(),
+                id.into(),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            );
+            task.status = status;
+            state.tasks.push(task);
+        }
+        state.mode = Mode::TaskBoard;
+        state.task_board_selected = 2;
+
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 4);
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 3);
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 4);
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 2);
+
+        state.task_board_selected = 5;
+        handle_task_board_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 1);
+    }
+
+    #[test]
+    fn task_board_arrow_keys_match_hjkl_navigation() {
+        let mut state = state_with_workspaces(&["test"]);
+        for (id, status) in [
+            ("ready-1", crate::task::TaskStatus::Ready),
+            ("ready-2", crate::task::TaskStatus::Ready),
+            ("running-1", crate::task::TaskStatus::Running),
+            ("running-2", crate::task::TaskStatus::Running),
+        ] {
+            let mut task = crate::task::Task::new(
+                id.into(),
+                id.into(),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            );
+            task.status = status;
+            state.tasks.push(task);
+        }
+        state.mode = Mode::TaskBoard;
+
+        for (key, expected) in [
+            (KeyCode::Right, 2),
+            (KeyCode::Down, 3),
+            (KeyCode::Left, 1),
+            (KeyCode::Up, 0),
+        ] {
+            handle_task_board_key(&mut state, KeyEvent::new(key, KeyModifiers::empty()));
+            assert_eq!(state.task_board_selected, expected);
+        }
+    }
     use crate::workspace::Workspace;
 
     fn config_env_lock() -> &'static std::sync::Mutex<()> {

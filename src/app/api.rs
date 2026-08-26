@@ -11,6 +11,7 @@ pub(crate) mod plugins;
 mod responses;
 mod session;
 mod tabs;
+mod tasks;
 mod workspaces;
 mod worktrees;
 
@@ -641,6 +642,56 @@ impl App {
             .map(|pane| pane_agent_status(update.state, pane.seen))
             .unwrap_or_else(|| pane_agent_status(update.state, update.seen));
 
+        if previous_agent_status != agent_status || update.agent_released {
+            let now = crate::task::unix_timestamp();
+            let status_label = match agent_status {
+                crate::api::schema::AgentStatus::Idle => "idle",
+                crate::api::schema::AgentStatus::Working => "working",
+                crate::api::schema::AgentStatus::Blocked => "blocked",
+                crate::api::schema::AgentStatus::Done => "done",
+                crate::api::schema::AgentStatus::Unknown => "unknown",
+            };
+            let kind = if update.agent_released {
+                crate::task::TaskActivityKind::AgentReleased
+            } else {
+                crate::task::TaskActivityKind::AgentStatus
+            };
+            let mut recorded = false;
+            for task in &mut self.state.tasks {
+                if task.pane_id.as_deref() != Some(pane_id.as_str())
+                    || !matches!(
+                        task.status,
+                        crate::task::TaskStatus::Running
+                            | crate::task::TaskStatus::Blocked
+                            | crate::task::TaskStatus::Review
+                    )
+                {
+                    continue;
+                }
+                let agent = update.agent_label.clone().or_else(|| task.agent.clone());
+                let subject = agent.as_deref().unwrap_or("attached agent");
+                let message = if update.agent_released {
+                    format!("{subject} exited or released with status {status_label}")
+                } else {
+                    format!("{subject} is {status_label}")
+                };
+                task.record_activity(crate::task::TaskActivity {
+                    timestamp: now,
+                    kind,
+                    status: Some(task.status),
+                    message: Some(message),
+                    agent,
+                    pane_id: Some(pane_id.clone()),
+                });
+                task.updated_at = now;
+                recorded = true;
+            }
+            if recorded {
+                self.state.mark_session_dirty();
+                self.schedule_session_save();
+            }
+        }
+
         if previous_agent_status != agent_status
             || update.previous_presentation != update.presentation
         {
@@ -648,8 +699,8 @@ impl App {
             self.emit_event(crate::api::schema::EventEnvelope {
                 event: crate::api::schema::EventKind::PaneAgentStatusChanged,
                 data: crate::api::schema::EventData::PaneAgentStatusChanged {
-                    pane_id,
-                    workspace_id,
+                    pane_id: pane_id.clone(),
+                    workspace_id: workspace_id.clone(),
                     agent_status,
                     agent: update.agent_label.clone(),
                     title: presentation.title,
@@ -1058,6 +1109,13 @@ impl App {
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
+            Method::TaskList(params) => return self.handle_task_list(request.id, params),
+            Method::TaskGet(target) => return self.handle_task_get(request.id, target),
+            Method::TaskCreate(params) => return self.handle_task_create(request.id, params),
+            Method::TaskUpdate(params) => return self.handle_task_update(request.id, params),
+            Method::TaskAttach(params) => return self.handle_task_attach(request.id, params),
+            Method::TaskDispatch(params) => return self.handle_task_dispatch(request.id, params),
+            Method::TaskReport(params) => return self.handle_task_report(request.id, params),
             Method::AgentList(_) => return self.handle_agent_list(request.id),
             Method::AgentGet(target) => return self.handle_agent_get(request.id, target),
             Method::AgentFocus(target) => return self.handle_agent_focus(request.id, target),
@@ -1992,6 +2050,54 @@ mod tests {
                 }
             )));
         }
+    }
+
+    #[test]
+    fn attached_task_records_agent_lifecycle_activity() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("task-agent-activity");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let mut task = crate::task::Task::new(
+            "task-1".into(),
+            "watch agent".into(),
+            String::new(),
+            100,
+            Vec::new(),
+            None,
+            1,
+        );
+        task.transition(crate::task::TaskStatus::Running, 2)
+            .unwrap();
+        task.pane_id = Some(public_pane_id);
+        task.agent = Some("worker-1".into());
+        app.state.tasks.push(task);
+
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Codex),
+            state: AgentState::Working,
+            visible_blocker: false,
+            visible_working: true,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+
+        let activity = app.state.tasks[0].activities.last().unwrap();
+        assert_eq!(activity.kind, crate::task::TaskActivityKind::AgentStatus);
+        assert!(activity
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("working")));
     }
 
     #[test]

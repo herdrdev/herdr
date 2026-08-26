@@ -867,6 +867,36 @@ pub enum ViewLayout {
     Mobile,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskPanelPosition {
+    #[default]
+    Hidden,
+    Right,
+    Bottom,
+}
+
+impl TaskPanelPosition {
+    pub(crate) fn cycle(self) -> Self {
+        match self {
+            Self::Hidden => Self::Right,
+            Self::Right => Self::Bottom,
+            Self::Bottom => Self::Hidden,
+        }
+    }
+}
+
+#[cfg(test)]
+mod task_panel_position_tests {
+    use super::TaskPanelPosition;
+
+    #[test]
+    fn cycles_through_hidden_right_and_bottom() {
+        assert_eq!(TaskPanelPosition::Hidden.cycle(), TaskPanelPosition::Right);
+        assert_eq!(TaskPanelPosition::Right.cycle(), TaskPanelPosition::Bottom);
+        assert_eq!(TaskPanelPosition::Bottom.cycle(), TaskPanelPosition::Hidden);
+    }
+}
+
 pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
@@ -877,6 +907,7 @@ pub struct ViewState {
     pub tab_scroll_right_hit_area: Rect,
     pub new_tab_hit_area: Rect,
     pub terminal_area: Rect,
+    pub task_panel_rect: Rect,
     pub mobile_header_rect: Rect,
     pub mobile_menu_hit_area: Rect,
     pub toast_hit_area: Rect,
@@ -904,13 +935,22 @@ pub enum Mode {
     ContextMenu,
     Settings,
     GlobalMenu,
+    TaskBoard,
+    TaskActivity,
     KeybindHelp,
     Navigator,
 }
 
 impl Mode {
     pub(crate) fn mouse_motion_changes_view(self) -> bool {
-        matches!(self, Self::GlobalMenu | Self::ContextMenu | Self::Navigator)
+        matches!(
+            self,
+            Self::GlobalMenu
+                | Self::TaskBoard
+                | Self::TaskActivity
+                | Self::ContextMenu
+                | Self::Navigator
+        )
     }
 
     /// Whether keys in this mode are commands/navigation (an ASCII input source is wanted) rather
@@ -935,6 +975,8 @@ impl Mode {
                 | Mode::ConfirmRemoveWorktree
                 | Mode::ContextMenu
                 | Mode::GlobalMenu
+                | Mode::TaskBoard
+                | Mode::TaskActivity
                 | Mode::KeybindHelp
         )
     }
@@ -1441,6 +1483,10 @@ pub struct AppState {
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,
     pub(crate) public_pane_id_aliases: std::collections::HashMap<String, PaneId>,
     pub workspaces: Vec<Workspace>,
+    /// Durable task-board records owned by the server runtime.
+    pub tasks: Vec<crate::task::Task>,
+    /// Client-local dock placement for the task list.
+    pub task_panel_position: TaskPanelPosition,
     pub active: Option<usize>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
     pub selected: usize,
@@ -1611,6 +1657,8 @@ pub struct AppState {
     pub(crate) plugin_commands_in_flight: usize,
     /// Highlight state for the bottom-right global launcher menu.
     pub global_menu: MenuListState,
+    pub task_board_selected: usize,
+    pub task_activity_scroll: u16,
     /// Resolved host terminal default colors for theming embedded panes.
     pub host_terminal_theme: TerminalTheme,
     /// Last known foreground host terminal cell size in pixels.
@@ -1832,6 +1880,8 @@ impl AppState {
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces: Vec::new(),
+            tasks: Vec::new(),
+            task_panel_position: TaskPanelPosition::default(),
             active: None,
             previous_pane_focus: None,
             selected: 0,
@@ -1883,6 +1933,7 @@ impl AppState {
                 tab_scroll_right_hit_area: Rect::default(),
                 new_tab_hit_area: Rect::default(),
                 terminal_area: Rect::default(),
+                task_panel_rect: Rect::default(),
                 mobile_header_rect: Rect::default(),
                 mobile_menu_hit_area: Rect::default(),
                 toast_hit_area: Rect::default(),
@@ -1993,6 +2044,8 @@ impl AppState {
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,
             global_menu: MenuListState::new(0),
+            task_board_selected: 0,
+            task_activity_scroll: 0,
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             host_mouse_pixels: None,

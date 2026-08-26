@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::agents::AgentInfo;
 use super::panes::{PaneInfo, PaneLayoutSnapshot};
 use super::tabs::TabInfo;
+use super::tasks::Task;
 use super::workspaces::WorkspaceInfo;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -20,4 +21,6 @@ pub struct SessionSnapshot {
     pub panes: Vec<PaneInfo>,
     pub layouts: Vec<PaneLayoutSnapshot>,
     pub agents: Vec<AgentInfo>,
+    #[serde(default)]
+    pub tasks: Vec<Task>,
 }

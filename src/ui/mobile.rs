@@ -1424,7 +1424,14 @@ mod tests {
             agent_hit,
             Some(MobileSwitcherTarget::Agent { .. })
         ));
-        let workspace_hit = mobile_switcher_target_at(&app, viewport.x + 2, viewport.y + 7);
+        let scroll = app
+            .mobile_switcher_scroll
+            .min(mobile_switcher_max_scroll_for_height(&app, viewport.height));
+        let workspace_row = mobile_switcher_workspace_doc_range(&app, 0)
+            .start
+            .saturating_sub(scroll) as u16;
+        let workspace_hit =
+            mobile_switcher_target_at(&app, viewport.x + 2, viewport.y + workspace_row);
         assert_eq!(workspace_hit, Some(MobileSwitcherTarget::Workspace(0)));
     }
 

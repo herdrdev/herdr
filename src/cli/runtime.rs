@@ -5,6 +5,7 @@ use crate::api::schema::{
     WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget, WorktreeCreateParams,
     WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
 };
+use crate::task::TaskStatus;
 
 fn print_method_response(id: &'static str, method: Method) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
@@ -18,6 +19,90 @@ pub(super) fn workspace_list() -> std::io::Result<i32> {
         "cli:workspace:list",
         Method::WorkspaceList(EmptyParams::default()),
     )
+}
+
+pub(super) fn task_list(status: Option<TaskStatus>) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:task:list",
+        Method::TaskList(crate::api::schema::TaskListParams { status }),
+    )
+}
+
+pub(super) fn task_board() -> std::io::Result<i32> {
+    let response = super::send_request(&Request {
+        id: "cli:task:board".into(),
+        method: Method::TaskList(crate::api::schema::TaskListParams { status: None }),
+    })?;
+    if response.get("error").is_some() {
+        return super::print_response(&response);
+    }
+    let tasks = response
+        .get("result")
+        .and_then(|result| result.get("tasks"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for status in [
+        TaskStatus::Backlog,
+        TaskStatus::Ready,
+        TaskStatus::Running,
+        TaskStatus::Blocked,
+        TaskStatus::Review,
+        TaskStatus::Done,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ] {
+        println!("\n{:?}", status);
+        for task in tasks.iter().filter(|task| {
+            serde_json::from_value::<TaskStatus>(task.get("status").cloned().unwrap_or_default())
+                .ok()
+                == Some(status)
+        }) {
+            let id = task
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let title = task
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("(untitled)");
+            let priority = task
+                .get("priority")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(100);
+            println!("  {id:<10} p{priority:<3} {title}");
+        }
+    }
+    Ok(0)
+}
+
+pub(super) fn task_get(task_id: String) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:task:get",
+        Method::TaskGet(crate::api::schema::TaskTarget { task_id }),
+    )
+}
+
+pub(super) fn task_create(params: crate::api::schema::TaskCreateParams) -> std::io::Result<i32> {
+    print_method_response("cli:task:create", Method::TaskCreate(params))
+}
+
+pub(super) fn task_update(params: crate::api::schema::TaskUpdateParams) -> std::io::Result<i32> {
+    print_method_response("cli:task:update", Method::TaskUpdate(params))
+}
+
+pub(super) fn task_attach(params: crate::api::schema::TaskAttachParams) -> std::io::Result<i32> {
+    print_method_response("cli:task:attach", Method::TaskAttach(params))
+}
+
+pub(super) fn task_dispatch(
+    params: crate::api::schema::TaskDispatchParams,
+) -> std::io::Result<i32> {
+    print_method_response("cli:task:dispatch", Method::TaskDispatch(params))
+}
+
+pub(super) fn task_report(params: crate::api::schema::TaskReportParams) -> std::io::Result<i32> {
+    print_method_response("cli:task:report", Method::TaskReport(params))
 }
 
 pub(super) fn workspace_create(params: WorkspaceCreateParams) -> std::io::Result<i32> {

@@ -1,0 +1,176 @@
+---
+title: 任务看板
+description: 自动化持久任务、分派智能体并跟踪生命周期活动。
+---
+
+Herdr 的任务看板是一个由服务器拥有、用于管理人类与智能体工作的控制平面。任务会随会话一起保存，因此客户端断开或服务器重启后仍然可用。任务独立于窗格，可以稍后分配给正在运行的智能体；将该窗格移动到其他工作区也不会丢失任务。
+
+## 工作流自动化了什么
+
+Symphony 风格的工作流会将持久工作队列变成一个控制循环：定义工作、选择 ready 项、分派给工作智能体、观察进度、审查结果，再释放依赖任务。这与 [OpenAI 的长时间目标指南](https://learn.chatgpt.com/use-cases/follow-goals) 中的持久目标模式一致：明确目标和停止条件，提供相关上下文与边界，定义验证证据，并记录简短的检查点更新。
+
+| 工作流概念 | Herdr 原语 |
+| --- | --- |
+| 持久目标 | 包含标题、描述、工作目录、优先级和依赖关系的任务 |
+| 工作队列 | 服务器拥有的任务列表与状态看板 |
+| 协调者 | 使用任务 CLI 或 Socket API 的人、智能体或脚本 |
+| 工作智能体 | Herdr 窗格中已命名的运行中智能体 |
+| 隔离执行 | 工作区、worktree、标签页与窗格 |
+| 分派 | `herdr task dispatch` |
+| 进度与可观测性 | 状态报告、活动历史、智能体检测与 TUI |
+| 验收门 | `review` 之后进入 `done` |
+
+Herdr 现在已提供这个循环所需的持久队列、分派、状态机、活动历史和操作界面。哪个 ready 任务应由哪个工作智能体执行，仍由人类或协调智能体决定。Herdr 尚未提供一个内置后台调度器，在没有协调者的情况下自动创建智能体并清空队列。
+
+## 人类操作流程
+
+1. 定义一个可验证的结果。在描述中写明验收标准、约束和验证命令。使用 `--cwd` 将任务绑定到目标项目。
+2. 将无关或可独立审查的结果拆分为不同任务。如果一个任务必须等待另一个任务验收后才能开始，使用 `--depends-on`。
+3. 在 Herdr 窗格中启动所需智能体，并为其设置稳定名称，例如 `implementer` 或 `reviewer`。
+4. 分派一个 ready 任务。Herdr 会将任务附加到所选智能体，把状态改为 `running`，并将任务上下文作为下一条提示发送。
+5. 观察任务面板或活动详情模态。当任务变为 `blocked`、需要审批，或进度报告显示执行偏离目标时介入。
+6. 工作智能体报告 `review` 后检查证据。仅在满足验收标准后将任务标记为 `done`。依赖任务随后会自动变为 `ready`。
+
+示例：
+
+```bash
+created=$(herdr task create \
+  --title "Add retry policy" \
+  --description "Add bounded retries. Run just test and update the operator docs." \
+  --cwd ~/src/project)
+task_id=$(printf '%s\n' "$created" | jq -r '.result.task.id')
+
+herdr task dispatch "$task_id" implementer
+herdr task get "$task_id"
+herdr task report "$task_id" done --message "Review accepted; just test passes"
+```
+
+最后一条命令仅在任务已经进入 `review` 后才有效。
+
+## 工作智能体契约
+
+`task dispatch` 会将任务 ID、标题、描述和进度报告说明交给工作智能体。自定义分派提示、智能体策略或 `AGENTS.md` 可以使用以下契约：
+
+```text
+你正在处理 Herdr 任务 TASK_ID。
+
+1. 修改文件前运行 `herdr task get TASK_ID`。
+2. 只处理任务声明的结果，并遵守其约束和依赖关系。
+3. 在有意义的里程碑处，使用以下命令报告简短、可见的摘要：
+   `herdr task report TASK_ID running --message "<已完成工作与下一步>"`
+4. 如果无法继续，报告 `blocked`，并明确恢复所需的外部决定、权限、输入或失败原因。不要默默绕过重大阻塞继续工作。
+5. 运行任务要求的验证检查。当实现和证据可供验收时，报告 `review` 并附上简短的结果摘要。
+6. 不要报告私有思维链。只记录结果、证据、决定、阻塞和下一步。
+```
+
+进度消息是面向操作人员的检查点，不是操作记录全文。应在有意义的状态变化后、长时间等待前以及计划变化时报告。不要为每条命令或每次工具调用发送消息。
+
+实现工作智能体通常应停在 `review`。审查者、人类或协调者负责验收决定并将任务移到 `done`。
+
+## 协调者工作流
+
+协调者可以是另一个智能体、Shell 脚本，或使用 Herdr Socket API 的服务。它应重复执行一个有边界的序列：
+
+1. 列出 `ready`、`blocked` 和 `review` 任务。
+2. 根据优先级、依赖关系、项目归属和可用工作智能体选择 ready 任务。优先级数字越小，排序越靠前。
+3. 将任务分派给一个已命名的运行中智能体。
+4. 观察任务状态和活动，不要从终端空闲推断任务已经完成。
+5. 将 blocked 任务转给人类，将 review 任务转给验收负责人。
+6. 仅在记录再次尝试合理的原因后重试 failed 任务。
+
+任务列表和详情响应为 JSON，因此自动协调者无需抓取 TUI：
+
+```bash
+ready=$(herdr task list --status ready)
+task_id=$(printf '%s\n' "$ready" | jq -r '.result.tasks[0].id // empty')
+
+if [ -n "$task_id" ]; then
+  herdr task dispatch "$task_id" implementer
+fi
+
+herdr task list --status blocked
+herdr task list --status review
+```
+
+如果仓库与 worktree 策略允许安全的并行编辑，可以让不同的已命名智能体并行执行彼此独立的 ready 任务。关于创建工作区和窗格、启动智能体、等待生命周期状态以及读取终端结果，请参阅[智能体自动化](/docs/agent-automation/)。
+
+## 创建和查看任务
+
+```bash
+herdr task create --title "Add retry policy" --description "Document and test retries" \
+  --cwd ~/src/project
+herdr task board
+herdr task list
+herdr task get task-1
+```
+
+Herdr 会为每个任务自动分配持久、单调递增的 ID（如 `task-1`、`task-2`）。创建任务时无需提供 ID，已保存任务列表中的空缺编号也不会被重复使用。
+
+主要生命周期为：
+
+```text
+backlog -> ready -> running -> review -> done
+                       |  ^
+                       v  |
+                     blocked
+```
+
+有依赖关系的任务会停留在 `backlog`，直到所有依赖任务都变为 `done`。running 任务可转为 `blocked`、`review`、`failed` 或 `cancelled`。failed 任务可以在明确决定重试后返回 `ready`。Herdr 拒绝从 `running` 直接进入 `done`；review 是明确的验收门。
+
+## 在终端 UI 中显示任务
+
+从工作区侧边栏打开全局菜单，选择 `task panel`，即可在 `hidden`、`right` 和 `bottom` 之间循环切换任务停靠栏。停靠栏会在终端右侧或下方预留空间，工作区和智能体面板仍然可以正常使用。
+
+从同一菜单选择 `task board` 可打开完整的状态列视图。使用 `h`/`l` 或 Left/Right 在非空状态列之间移动，并尽量保持在同一行；使用 `j`/`k` 或 Up/Down 在当前列的任务之间移动。在选中的任务上按 Enter，或者点击看板或停靠栏中的任务行，即可打开活动详情模态。模态会显示任务标识、状态、分配元数据，以及按时间倒序排列的活动。可以使用 `j`/`k`、Up/Down、Page Up/Page Down 或鼠标滚轮滚动。按 Escape 返回看板。在看板中按 `p` 可切换停靠栏并关闭看板。
+
+`herdr task board` 输出的是非交互式命令行摘要。需要交互式看板和活动详情模态时，请使用 TUI 菜单。需要包含描述、依赖关系、最后消息和结构化活动的完整任务记录时，使用 `herdr task get TASK_ID`。
+
+活动历史包含任务创建、附加、分派、状态变化、智能体 working/blocked/idle 转换、释放事件以及显式进度报告。Herdr 为每个任务保留最新 256 条活动，并随会话持久化。它记录可见的进度摘要，不记录智能体私有的思维链。
+
+在窄屏上，右侧停靠栏会自动放到底部。停靠栏位置属于客户端 UI 状态；任务数据和活动历史仍由服务器拥有。
+
+## 附加或分派智能体
+
+目标可以是 `herdr agent` 接受的正在运行的智能体名称或带工作区限定的窗格 ID。这样可以附加已经在 Herdr 内运行的 Codex 会话：
+
+```bash
+herdr task attach task-1 reviewer
+herdr task dispatch task-1 reviewer
+herdr task dispatch task-1 reviewer --prompt "Review the implementation and report review with evidence"
+```
+
+`task attach` 只关联任务和智能体，不发送提示。`task dispatch` 会附加目标，并将任务标题和描述，或指定的自定义提示，作为下一条提示发送。两者都不会接管 Herdr 外部终端启动的进程，也不会创建隐藏智能体。请先在 Herdr 窗格中启动或放置智能体。
+
+要将运行中的窗格移动到其他空间，请使用现有窗格布局命令，并保存返回的窗格 ID：
+
+```bash
+herdr pane move w1:p2 --new-tab --workspace w2 --focus
+```
+
+进程和任务会继续存在，只有带工作区限定的窗格 ID 会发生变化。
+
+## 报告生命周期进度
+
+工作智能体、审查者、人类与协调者使用同一个报告接口：
+
+```bash
+herdr task report task-1 running --message "Added the retry path; writing tests"
+herdr task report task-1 blocked --message "Need the retry limit from the API owner"
+herdr task report task-1 running --message "Limit confirmed at three; tests are running"
+herdr task report task-1 review --message "Implementation complete; just test passes"
+herdr task report task-1 done --message "Review accepted"
+```
+
+每次状态变化和非空消息都会成为活动。可以重复报告 `running`，因此智能体可以追加里程碑，而无需制造虚假的状态变化。显式报告将任务完成与终端空闲检测分离：空闲智能体可能仍在等待后续指令，因此 Herdr 不会静默地把工作标记为完成。
+
+## 审查与恢复
+
+任务处于 `blocked` 时，查看最新活动，解决其中明确的问题，并在恢复工作前报告 `running`。任务处于 `failed` 时，保留失败摘要；只有输入、方法或环境有具体变化时才将它移回 `ready`。每次附加都会增加尝试计数。
+
+审查时，请检查任务记录、差异或生成物，以及验证证据。需要修改时，将任务从 `review` 返回 `running`。只能从 `review` 报告 `done`。这个明确的门确保依赖任务释放和看板完成代表已经验收，而不只是智能体停止输入。
+
+## 自动化边界
+
+Herdr 会自动持久化任务、分配 ID、强制依赖关系和有效状态转换、附加并提示运行中的智能体、记录活动并渲染共享看板。它也会观察智能体生命周期状态，但检测结果只是供操作人员和协调者判断的证据，不是任务成功的证明。
+
+协调者仍负责拆分工作、启动适当隔离的工作智能体、选择并分派 ready 任务、处理审批、评估输出、授权重试以及接受审查。因此，现在可以使用人类或智能体协调者在 Herdr 中运行 Symphony 风格的工作流；完全无人值守的队列调度器是另一项能力。
