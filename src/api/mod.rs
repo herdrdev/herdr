@@ -86,6 +86,10 @@ pub struct ApiRequestMessage {
     pub respond_to: std::sync::mpsc::Sender<String>,
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
     pub stream_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Pid of the process that sent the request, from kernel peer credentials.
+    /// `None` for server-internal requests and for platforms that cannot
+    /// report it.
+    pub peer_pid: Option<u32>,
 }
 
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;

@@ -2532,8 +2532,8 @@ mod tests {
         let mut app = test_app();
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
 
-        let response =
-            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+        let response = app.handle_api_request_after_internal_events_drained(
+            crate::api::schema::Request {
                 id: "notify".into(),
                 method: crate::api::schema::Method::NotificationShow(
                     crate::api::schema::NotificationShowParams {
@@ -2543,7 +2543,9 @@ mod tests {
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
-            });
+            },
+            None,
+        );
 
         let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(
@@ -2568,8 +2570,8 @@ mod tests {
         let mut app = test_app();
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
 
-        let response =
-            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+        let response = app.handle_api_request_after_internal_events_drained(
+            crate::api::schema::Request {
                 id: "notify".into(),
                 method: crate::api::schema::Method::NotificationShow(
                     crate::api::schema::NotificationShowParams {
@@ -2579,7 +2581,9 @@ mod tests {
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
-            });
+            },
+            None,
+        );
 
         let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(
@@ -2600,8 +2604,8 @@ mod tests {
         let mut app = test_app();
         app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
 
-        let response =
-            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+        let response = app.handle_api_request_after_internal_events_drained(
+            crate::api::schema::Request {
                 id: "notify".into(),
                 method: crate::api::schema::Method::NotificationShow(
                     crate::api::schema::NotificationShowParams {
@@ -2611,7 +2615,9 @@ mod tests {
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
-            });
+            },
+            None,
+        );
 
         let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(
@@ -2636,8 +2642,8 @@ mod tests {
             target: None,
         });
 
-        let response =
-            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+        let response = app.handle_api_request_after_internal_events_drained(
+            crate::api::schema::Request {
                 id: "notify".into(),
                 method: crate::api::schema::Method::NotificationShow(
                     crate::api::schema::NotificationShowParams {
@@ -2647,7 +2653,9 @@ mod tests {
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
-            });
+            },
+            None,
+        );
 
         let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(
@@ -2669,8 +2677,8 @@ mod tests {
         app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         app.mark_api_notification_shown(Instant::now());
 
-        let response =
-            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+        let response = app.handle_api_request_after_internal_events_drained(
+            crate::api::schema::Request {
                 id: "notify".into(),
                 method: crate::api::schema::Method::NotificationShow(
                     crate::api::schema::NotificationShowParams {
@@ -2680,7 +2688,9 @@ mod tests {
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
-            });
+            },
+            None,
+        );
 
         let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(

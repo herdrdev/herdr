@@ -2938,6 +2938,7 @@ action = "missing"
                 agent_session_id: None,
                 agent_session_path: None,
             },
+            None,
         );
 
         let root = unique_temp_path("plugin-action-context");

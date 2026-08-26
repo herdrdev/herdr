@@ -118,6 +118,26 @@ pub(crate) fn local_stream_peer_closed(stream: &mut LocalStream) -> io::Result<b
     probe_stream_closed(stream)
 }
 
+/// Pid of the process on the other end of a connected local stream, taken from
+/// kernel peer credentials. `None` when the platform cannot report it.
+pub(crate) fn local_stream_peer_pid(stream: &LocalStream) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd as _;
+
+        let LocalStream::UdSocket(socket) = stream;
+        crate::platform::socket_peer_pid(socket.inner().as_raw_fd())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
+
+        let LocalStream::NamedPipe(pipe) = stream;
+        crate::platform::named_pipe_client_pid(pipe.as_handle().as_raw_handle())
+    }
+}
+
 pub(crate) fn set_local_stream_polling(stream: &mut LocalStream, enabled: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -361,6 +381,43 @@ mod tests {
             stale_socket_connect_error(io::ErrorKind::WouldBlock),
             cfg!(windows)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_stream_peer_pid_reports_the_connected_process() {
+        use interprocess::local_socket::traits::Listener as _;
+
+        let path = std::env::temp_dir().join(format!("herdr-peer-pid-{}.sock", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let listener = bind_local_listener(&path).expect("bind listener");
+        let client = connect_local_stream(&path).expect("connect client");
+        let server = listener.accept().expect("accept client");
+
+        assert_eq!(local_stream_peer_pid(&server), Some(std::process::id()));
+        assert_eq!(local_stream_peer_pid(&client), Some(std::process::id()));
+
+        drop(client);
+        drop(server);
+        drop(listener);
+        let _ = fs::remove_file(path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_stream_peer_pid_reports_the_named_pipe_client() {
+        let path = temp_socket_marker_path("peer-pid");
+        let _ = fs::remove_file(&path);
+        let listener = bind_local_listener(&path).expect("bind listener");
+        let client = connect_local_stream(&path).expect("connect client");
+        let server = listener.accept().expect("accept client");
+
+        assert_eq!(local_stream_peer_pid(&server), Some(std::process::id()));
+
+        drop(client);
+        drop(server);
+        drop(listener);
+        let _ = fs::remove_file(path);
     }
 
     #[cfg(windows)]

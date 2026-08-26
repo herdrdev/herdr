@@ -87,7 +87,9 @@ impl App {
             self.sync_prefix_input_source(previous_mode);
             return changed | deferred_changed;
         }
-        let response = self.handle_api_request(msg.request);
+        self.drain_all_internal_events();
+        let response =
+            self.handle_api_request_after_internal_events_drained(msg.request, msg.peer_pid);
         if let (Some(params), Some(active)) = (stream_open.as_ref(), stream_active) {
             self.attach_pane_graphics_stream_active(params, active, &response);
         }

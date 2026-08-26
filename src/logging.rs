@@ -58,7 +58,12 @@ pub(crate) fn shutdown(role: &'static str) {
     );
 }
 
-pub(crate) fn api_request_started(request_id: &str, method: &'static str, changes_ui: bool) {
+pub(crate) fn api_request_started(
+    request_id: &str,
+    method: &'static str,
+    changes_ui: bool,
+    peer_pid: Option<u32>,
+) {
     let event = "api.request.start";
     let subsystem = "api";
     let outcome = "started";
@@ -71,6 +76,7 @@ pub(crate) fn api_request_started(request_id: &str, method: &'static str, change
             request_id,
             method,
             changes_ui,
+            peer_pid,
             "{message}"
         );
     } else {
@@ -81,6 +87,7 @@ pub(crate) fn api_request_started(request_id: &str, method: &'static str, change
             request_id,
             method,
             changes_ui,
+            peer_pid,
             "{message}"
         );
     }

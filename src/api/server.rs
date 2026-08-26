@@ -18,8 +18,9 @@ use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_ou
 use crate::api::{request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, EventHub};
 use crate::ipc::{
     bind_local_listener, is_connection_closed_error, local_stream_peer_closed,
-    poll_local_stream_read, remove_socket_file_if_owned, set_local_stream_polling,
-    socket_file_identity, LocalStream, LocalStreamRead, SocketFileIdentity,
+    local_stream_peer_pid, poll_local_stream_read, remove_socket_file_if_owned,
+    set_local_stream_polling, socket_file_identity, LocalStream, LocalStreamRead,
+    SocketFileIdentity,
 };
 
 mod pane_graphics_stream;
@@ -169,7 +170,10 @@ fn handle_connection_with_stop(
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "api connection write timeout unavailable");
     }
-
+    // Read while the connection is open: credentials are recorded at connect
+    // time, so this stays valid even if the sender exits immediately after
+    // writing its request.
+    let peer_pid = local_stream_peer_pid(&stream);
     let Some(line) = read_initial_request_line(&mut stream)? else {
         return Ok(());
     };
@@ -199,7 +203,7 @@ fn handle_connection_with_stop(
     let request_id = request.id.clone();
     let method = api_method_name(&request.method);
     let changes_ui = request_changes_ui(&request);
-    crate::logging::api_request_started(&request_id, method, changes_ui);
+    crate::logging::api_request_started(&request_id, method, changes_ui, peer_pid);
 
     match request.method {
         Method::PaneGraphicsStream(params) => {
@@ -289,6 +293,7 @@ fn handle_connection_with_stop(
                 capabilities,
                 server_stop,
                 Some(response_write_rx),
+                peer_pid,
             );
             let result = write_text_line_allow_disconnect(&mut stream, &response);
             let _ = response_write_tx.send(());
@@ -343,6 +348,7 @@ fn handle_request(
     capabilities: Option<ServerCapabilities>,
     server_stop: Option<&Arc<AtomicBool>>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    peer_pid: Option<u32>,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
         return serde_json::to_string(&SuccessResponse {
@@ -376,7 +382,14 @@ fn handle_request(
         );
     }
 
-    dispatch_to_app(request, api_tx, None, response_write_complete, None)
+    dispatch_to_app(
+        request,
+        api_tx,
+        None,
+        response_write_complete,
+        None,
+        peer_pid,
+    )
 }
 
 fn api_method_name(method: &Method) -> &'static str {
@@ -795,7 +808,7 @@ pub(super) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app(request, api_tx, timeout, None, None)
+    dispatch_to_app(request, api_tx, timeout, None, None, None)
 }
 
 pub(super) fn dispatch_stream_open(
@@ -804,7 +817,7 @@ pub(super) fn dispatch_stream_open(
     timeout: Duration,
     active: Arc<AtomicBool>,
 ) -> String {
-    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active))
+    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active), None)
 }
 
 pub(super) fn dispatch_stream_frame(
@@ -818,6 +831,7 @@ pub(super) fn dispatch_stream_frame(
         Some(crate::app::pane_graphics::DIRECT_OUTER_TIMEOUT),
         None,
         Some(active),
+        None,
     )
 }
 
@@ -827,6 +841,7 @@ fn dispatch_to_app(
     timeout: Option<Duration>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
     stream_active: Option<Arc<AtomicBool>>,
+    peer_pid: Option<u32>,
 ) -> String {
     let request_id = request.id.clone();
     let request_active = stream_active.clone();
@@ -836,6 +851,7 @@ fn dispatch_to_app(
         respond_to,
         response_write_complete,
         stream_active,
+        peer_pid,
     }) {
         if let Some(active) = request_active {
             active.store(false, Ordering::Release);
@@ -1091,6 +1107,7 @@ mod tests {
             }),
             None,
             None,
+            None,
         );
 
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -1111,6 +1128,7 @@ mod tests {
             None,
             Some(&stop),
             None,
+            None,
         );
 
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1127,6 +1145,7 @@ mod tests {
             None,
             Some(&stop),
             None,
+            None,
         );
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
@@ -1142,8 +1161,9 @@ mod tests {
         };
 
         let request_for_thread = request.clone();
-        let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None, None));
+        let thread = std::thread::spawn(move || {
+            handle_request(request_for_thread, &tx, None, None, None, None)
+        });
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -1198,6 +1218,40 @@ mod tests {
             .expect("response write completion");
         let response: SuccessResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response.id, "req_write");
+        server_thread.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn dispatched_request_reports_the_client_process_id() {
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel();
+        let (mut client, server, _path) = local_stream_pair("api-peer-pid");
+        client
+            .write_all(br#"{"id":"req_peer","method":"workspace.list","params":{}}"#)
+            .unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = Arc::clone(&running);
+        let event_hub = EventHub::default();
+        let server_thread = std::thread::spawn(move || {
+            handle_connection(server, &api_tx, &event_hub, &server_running, None)
+        });
+
+        let msg = api_rx.blocking_recv().unwrap();
+        assert_eq!(msg.peer_pid, Some(std::process::id()));
+        msg.respond_to
+            .send(
+                serde_json::to_string(&SuccessResponse {
+                    id: msg.request.id,
+                    result: ResponseResult::Ok {},
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let response: SuccessResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(response.id, "req_peer");
         server_thread.join().unwrap().unwrap();
     }
 

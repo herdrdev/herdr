@@ -60,7 +60,7 @@ impl HeadlessServer {
         self.app.direct_graphics_available = direct_client.is_some() && !gate_busy;
         let response = self
             .app
-            .handle_api_request_after_internal_events_drained(msg.request);
+            .handle_api_request_after_internal_events_drained(msg.request, msg.peer_pid);
         self.app.direct_graphics_available = self.direct_graphics_available();
         let succeeded = serde_json::from_str::<api::schema::SuccessResponse>(&response).is_ok();
 

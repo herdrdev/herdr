@@ -350,6 +350,31 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// Reads the pid of the process on the other end of a connected unix socket.
+///
+/// The kernel records peer credentials at connect time, so the pid stays
+/// readable after the peer exits.
+pub fn socket_peer_pid(fd: RawFd) -> Option<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `fd` is a live descriptor owned by the caller, and `len` matches
+    // the buffer the kernel writes into.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::from_mut(&mut credentials).cast(),
+            &mut len,
+        )
+    };
+    (result == 0 && credentials.pid > 0).then_some(credentials.pid as u32)
+}
+
 fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     process_pgrp_and_comm_from_stat(&stat)

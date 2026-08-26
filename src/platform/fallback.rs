@@ -202,6 +202,12 @@ pub fn process_exists(_pid: u32) -> bool {
 }
 
 /// Unsupported platform stub.
+#[cfg(unix)]
+pub fn socket_peer_pid(_fd: std::os::fd::RawFd) -> Option<u32> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn write_clipboard(_bytes: &[u8]) -> bool {
     false
 }

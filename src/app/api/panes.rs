@@ -1232,6 +1232,7 @@ impl App {
         &mut self,
         id: String,
         params: PaneReportAgentParams,
+        peer_pid: Option<u32>,
     ) -> String {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -1239,6 +1240,12 @@ impl App {
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        log_agent_report_reporter(
+            "pane.report_agent",
+            &params.pane_id,
+            &params.source,
+            peer_pid,
+        );
         self.handle_internal_event(crate::events::AppEvent::HookStateReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1261,6 +1268,7 @@ impl App {
         &mut self,
         id: String,
         params: PaneReportAgentSessionParams,
+        peer_pid: Option<u32>,
     ) -> String {
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -1268,6 +1276,12 @@ impl App {
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        log_agent_report_reporter(
+            "pane.report_agent_session",
+            &params.pane_id,
+            &params.source,
+            peer_pid,
+        );
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1896,6 +1910,26 @@ fn split_path_id(idx: usize, path: &[bool]) -> String {
 
 fn invalid_agent(id: String) -> String {
     encode_error(id, "invalid_agent", "agent label must not be empty")
+}
+
+/// Records which process sent a pane agent report. Reporter identity decides
+/// whether a report may take pane authority, so it belongs in the log next to
+/// the report itself.
+fn log_agent_report_reporter(
+    method: &'static str,
+    pane_id: &str,
+    source: &str,
+    peer_pid: Option<u32>,
+) {
+    tracing::debug!(
+        event = "agent.report.reporter",
+        subsystem = "agent",
+        method,
+        pane_id,
+        source,
+        peer_pid,
+        "pane agent report reporter"
+    );
 }
 
 #[cfg(test)]

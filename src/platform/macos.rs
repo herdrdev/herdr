@@ -391,6 +391,27 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// Reads the pid of the process on the other end of a connected unix socket.
+///
+/// `LOCAL_PEERPID` is recorded at connect time, so the pid stays readable after
+/// the peer exits.
+pub fn socket_peer_pid(fd: RawFd) -> Option<u32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: `fd` is a live descriptor owned by the caller, and `len` matches
+    // the buffer the kernel writes into.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            std::ptr::from_mut(&mut pid).cast(),
+            &mut len,
+        )
+    };
+    (result == 0 && pid > 0).then_some(pid as u32)
+}
+
 /// Get the effective process name from `argv[0]` via `sysctl(KERN_PROCARGS2)`.
 ///
 /// This is the macOS equivalent of reading `/proc/{pid}/cmdline` on Linux.

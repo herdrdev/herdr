@@ -56,6 +56,7 @@ use windows_sys::{
                 MEMORY_BASIC_INFORMATION,
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
+            Pipes::GetNamedPipeClientProcessId,
             Threading::{
                 GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
                 QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
@@ -1843,6 +1844,14 @@ pub fn process_exists(pid: u32) -> bool {
     let mut exit_code = 0;
     let ok = unsafe { GetExitCodeProcess(process.0, &mut exit_code) } != 0;
     ok && exit_code == STILL_ACTIVE
+}
+
+/// Reads the pid of the client connected to a named-pipe server handle.
+pub fn named_pipe_client_pid(pipe: std::os::windows::io::RawHandle) -> Option<u32> {
+    let mut pid = 0_u32;
+    // SAFETY: `pipe` is a live named-pipe handle owned by the caller.
+    let ok = unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) } != 0;
+    (ok && pid > 0).then_some(pid)
 }
 
 pub fn write_clipboard(bytes: &[u8]) -> bool {

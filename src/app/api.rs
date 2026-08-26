@@ -924,12 +924,16 @@ impl App {
 
     pub(crate) fn handle_api_request(&mut self, request: crate::api::schema::Request) -> String {
         self.drain_all_internal_events();
-        self.handle_api_request_after_internal_events_drained(request)
+        self.handle_api_request_after_internal_events_drained(request, None)
     }
 
+    /// Handles one API request. `peer_pid` is the pid of the process that sent
+    /// it, when the platform can report it; server-internal requests pass
+    /// `None`.
     pub(crate) fn handle_api_request_after_internal_events_drained(
         &mut self,
         request: crate::api::schema::Request,
+        peer_pid: Option<u32>,
     ) -> String {
         self.sync_pending_terminal_titles();
         use crate::api::schema::{
@@ -1135,10 +1139,10 @@ impl App {
                 return self.handle_pane_graphics_stream_close(request.id, params);
             }
             Method::PaneReportAgent(params) => {
-                return self.handle_pane_report_agent(request.id, params);
+                return self.handle_pane_report_agent(request.id, params, peer_pid);
             }
             Method::PaneReportAgentSession(params) => {
-                return self.handle_pane_report_agent_session(request.id, params);
+                return self.handle_pane_report_agent_session(request.id, params, peer_pid);
             }
             Method::PaneReportMetadata(params) => {
                 return self.handle_pane_report_metadata(request.id, params);
