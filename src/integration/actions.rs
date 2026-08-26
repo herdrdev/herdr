@@ -3,12 +3,12 @@ use std::io;
 use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
-    install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
-    install_mastracode, install_omp, install_opencode, install_pi, install_qodercli, install_qwen,
-    uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
-    uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
-    uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp, uninstall_opencode,
-    uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    install_devin, install_droid, install_goose, install_grok, install_hermes, install_kilo,
+    install_kimi, install_mastracode, install_omp, install_opencode, install_pi, install_qodercli,
+    install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
+    uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_goose, uninstall_grok,
+    uninstall_hermes, uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp,
+    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -251,6 +251,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 format!(
                     "registered grok hook config at {}",
                     installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Goose => {
+            let installed = install_goose()?;
+            vec![
+                format!(
+                    "installed goose integration plugin to {}",
+                    installed.plugin_dir.display()
+                ),
+                format!(
+                    "wrote session hook to {}",
+                    installed.script_path.display()
                 ),
             ]
         }
@@ -706,6 +719,20 @@ pub(crate) fn uninstall_target(
                 ));
             }
             messages
+        }
+        crate::api::schema::IntegrationTarget::Goose => {
+            let result = uninstall_goose()?;
+            if result.removed_plugin_dir {
+                vec![format!(
+                    "removed goose plugin directory at {}",
+                    result.plugin_dir.display()
+                )]
+            } else {
+                vec![format!(
+                    "no goose plugin directory found at {}",
+                    result.plugin_dir.display()
+                )]
+            }
         }
     };
 

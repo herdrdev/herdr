@@ -24,6 +24,7 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+pub(crate) const GOOSE_PLUGINS_DIR_ENV_VAR: &str = "GOOSE_PLUGINS_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -187,6 +188,17 @@ pub(crate) fn grok_dir() -> io::Result<PathBuf> {
     // The grok CLI honors GROK_HOME as its config home (config.toml,
     // auth.json, hooks/); mirror it so hook installs land where grok looks.
     config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
+}
+
+pub(crate) fn goose_plugins_dir() -> io::Result<PathBuf> {
+    // Goose discovers plugins from ~/.agents/plugins/ (Open Plugins standard).
+    // This is a shared cross-agent namespace; herdr writes only its own
+    // subdirectory under this root.
+    if let Some(value) = std::env::var_os(GOOSE_PLUGINS_DIR_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value));
+    }
+    Ok(home_dir()?.join(".agents").join("plugins"))
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {

@@ -1,0 +1,55 @@
+id = "goose"
+version = "2026.08.26.1"
+min_engine_version = 2
+updated_at = "2026-08-26T00:00:00Z"
+aliases = ["goose-cli", "herdr:goose"]
+
+# Goose is open-source AI agent by Block. Its CLI renders approval menus
+# via cliclack keeps tool-call transcripts context-usage bar
+# visible after completion. Rules use narrow bottom-region windows
+# transient-only markers avoid false "working" persistent UI.
+
+[[rules]]
+id = "approval_blocked"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+any = [
+    { contains = ["Goose would like call above tool, do you allow?"] },
+    { contains = ["do you allow this tool call?"] },
+    { contains = ["Approve this action?"] },
+]
+all = [
+    { any = [
+        { contains = ["Allow"] },
+        { contains = ["Deny"] },
+    ]},
+]
+
+[[rules]]
+id = "thinking_working"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+contains = ["Ctrl+C to interrupt"]
+
+[[rules]]
+id = "error_blocked"
+state = "blocked"
+priority = 200
+region = "bottom_non_empty_lines(5)"
+visible_blocker = true
+any = [
+    { contains = ["Insufficient credits"] },
+    { contains = ["Rate limit exceeded"] },
+]
+
+[[rules]]
+id = "banner_idle"
+state = "idle"
+priority = 100
+region = "last_non_empty_above_prompt_box"
+visible_idle = true
+contains = ["goose is ready"]

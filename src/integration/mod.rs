@@ -294,6 +294,11 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
+const GOOSE_PLUGIN_DIR_NAME: &str = "herdr";
+const GOOSE_HOOKS_JSON_NAME: &str = "hooks.json";
+const GOOSE_SCRIPT_INSTALL_NAME: &str = "herdr-agent-session.sh";
+const GOOSE_SCRIPT_ASSET: &str = include_str!("assets/goose/herdr-agent-session.sh");
+const GOOSE_INTEGRATION_VERSION: u32 = 1;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

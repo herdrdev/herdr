@@ -25,6 +25,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Mastracode => "mastracode",
         crate::api::schema::IntegrationTarget::AntigravityCli => "antigravity-cli",
         crate::api::schema::IntegrationTarget::Grok => "grok",
+        crate::api::schema::IntegrationTarget::Goose => "goose",
     }
 }
 
@@ -55,6 +56,7 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
         crate::api::schema::IntegrationTarget::Grok => &["grok"],
+        crate::api::schema::IntegrationTarget::Goose => &["goose"],
     }
 }
 
@@ -267,7 +269,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 17] {
+); 18] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -359,6 +361,15 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Grok,
             grok_dir().map(|dir| dir.join("hooks").join(super::GROK_HOOK_INSTALL_NAME)),
             super::GROK_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Goose,
+            goose_plugins_dir().map(|dir| {
+                dir.join(super::GOOSE_PLUGIN_DIR_NAME)
+                    .join("hooks")
+                    .join(super::GOOSE_SCRIPT_INSTALL_NAME)
+            }),
+            super::GOOSE_INTEGRATION_VERSION,
         ),
     ]
 }

@@ -19,8 +19,8 @@ use super::config_edit::{
 };
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
-    opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    goose_plugins_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir,
+    mastracode_dir, omp_extension_dir, opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -32,12 +32,12 @@ use super::types::{
     AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
     ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
     CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
-    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
-    GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
-    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths,
-    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
-    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
-    QwenInstallPaths, QwenUninstallResult,
+    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GooseInstallPaths,
+    GooseUninstallResult, GrokInstallPaths, GrokUninstallResult, HermesInstallPaths,
+    HermesUninstallResult, KiloInstallPaths, KiloUninstallResult, KimiInstallPaths,
+    KimiUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
+    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
+    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
@@ -47,6 +47,7 @@ use super::{
     CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS,
     DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
     DROID_HOOK_EVENTS, DROID_HOOK_INSTALL_NAME, DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
+
     GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
     HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
@@ -1482,5 +1483,65 @@ pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
         config_path,
         removed_hook_file,
         removed_config_file,
+    })
+}
+
+pub(crate) fn install_goose() -> io::Result<GooseInstallPaths> {
+    let plugins_root = goose_plugins_dir()?;
+    let plugin_dir = plugins_root.join(super::GOOSE_PLUGIN_DIR_NAME);
+
+    // The plugin root must not already exist as a non-directory or must be
+    // a fresh directory we can write into. If it exists and already has a
+    // hooks.json that is NOT ours, we still overwrite (same as other
+    // integrations).
+    if plugin_dir.exists() && !plugin_dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "goose plugin path {} exists but is not a directory",
+            plugin_dir.display()
+        )));
+    }
+
+    fs::create_dir_all(&plugin_dir)?;
+    let hooks_dir = plugin_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    // Write hooks.json for SessionStart/SessionEnd events
+    let hook_path = hooks_dir.join(super::GOOSE_HOOKS_JSON_NAME);
+    let hooks_json = serde_json::json!({
+        "SessionStart": [{
+            "hooks": [{
+                "type": "command",
+                "command": format!("./{}", super::GOOSE_SCRIPT_INSTALL_NAME)
+            }]
+        }],
+        "SessionEnd": [{
+            "hooks": [{
+                "type": "command",
+                "command": format!("./{}", super::GOOSE_SCRIPT_INSTALL_NAME)
+            }]
+        }]
+    });
+    fs::write(&hook_path, serde_json::to_string_pretty(&hooks_json)?)?;
+
+    // Write the session hook script
+    let script_path = hooks_dir.join(super::GOOSE_SCRIPT_INSTALL_NAME);
+    fs::write(&script_path, super::GOOSE_SCRIPT_ASSET)?;
+    make_executable(&script_path)?;
+
+    Ok(GooseInstallPaths {
+        plugin_dir,
+        script_path,
+    })
+}
+
+pub(crate) fn uninstall_goose() -> io::Result<GooseUninstallResult> {
+    let plugins_root = goose_plugins_dir()?;
+    let plugin_dir = plugins_root.join(super::GOOSE_PLUGIN_DIR_NAME);
+
+    let removed_plugin_dir = remove_dir_all_if_exists(&plugin_dir)?;
+
+    Ok(GooseUninstallResult {
+        plugin_dir,
+        removed_plugin_dir,
     })
 }

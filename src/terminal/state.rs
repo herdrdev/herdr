@@ -1339,6 +1339,11 @@ impl TerminalState {
                     "qwen",
                     Some("startup" | "clear" | "resume" | "compact" | "branch")
                 )
+                | (
+                    "herdr:goose",
+                    "goose",
+                    Some("startup" | "clear" | "resume" | "compact" | "branch")
+                )
                 | ("herdr:antigravity_cli", "agy", None)
         )
     }

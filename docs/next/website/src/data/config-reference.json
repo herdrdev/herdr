@@ -1317,7 +1317,18 @@
           "key": "ui.sound.agents.grok",
           "type": "enum",
           "default": "\"default\"",
-          "description": "Sound override for detected Grok CLI agents.",
+          "description": "Sound override for detected Grok agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
+        },
+        {
+          "key": "ui.sound.agents.goose",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Goose agents.",
           "values": [
             "default",
             "on",

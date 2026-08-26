@@ -118,6 +118,18 @@ pub(crate) struct GrokUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct GooseInstallPaths {
+    pub plugin_dir: PathBuf,
+    pub script_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct GooseUninstallResult {
+    pub plugin_dir: PathBuf,
+    pub removed_plugin_dir: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct QodercliUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,

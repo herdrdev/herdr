@@ -37,6 +37,10 @@ id = "gemini"
 path = "gemini.toml"
 
 [[agents]]
+id = "goose"
+path = "goose.toml"
+
+[[agents]]
 id = "grok"
 path = "grok.toml"
 
