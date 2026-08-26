@@ -239,6 +239,8 @@ pub fn notification_context(
 pub struct PaneStateUpdate {
     pub pane_id: PaneId,
     pub ws_idx: usize,
+    pub previous_agent_instance_id: Option<String>,
+    pub agent_instance_id: Option<String>,
     pub previous_agent_label: Option<String>,
     pub previous_known_agent: Option<Agent>,
     pub previous_state: AgentState,
@@ -1035,15 +1037,16 @@ impl AppState {
             .into_iter()
             .filter_map(|(ws_idx, pane_id, terminal_id)| {
                 let previous_seen = self.workspaces[ws_idx].pane_state(pane_id)?.seen;
-                let mutation = self
-                    .terminals
-                    .get_mut(&terminal_id)?
-                    .expire_agent_metadata_at(scheduled_deadline, now)?;
+                let terminal = self.terminals.get_mut(&terminal_id)?;
+                let agent_instance_id = terminal.agent_instance_id().map(ToString::to_string);
+                let mutation = terminal.expire_agent_metadata_at(scheduled_deadline, now)?;
                 let change = mutation.effective_state_change?;
                 let seen = self.apply_pane_state_change(ws_idx, pane_id, &change, false)?;
                 let update = PaneStateUpdate {
                     pane_id,
                     ws_idx,
+                    previous_agent_instance_id: agent_instance_id.clone(),
+                    agent_instance_id,
                     previous_agent_label: change.previous_agent_label.clone(),
                     previous_known_agent: change.previous_known_agent,
                     previous_state: change.previous_state,
@@ -2980,11 +2983,14 @@ impl AppState {
             managed_changed,
             agent_name_changed,
             agent_instance_created,
+            previous_agent_instance_id,
+            agent_instance_id,
             unchanged_change,
             managed_launch_pending,
             suppress_acquisition_completion,
         ) = {
             let terminal = self.terminals.get_mut(&terminal_id)?;
+            let previous_agent_instance_id = terminal.agent_instance_id().map(ToString::to_string);
             let previous_agent_name = terminal.agent_name.clone();
             let managed_launch_pending = terminal.managed_agent_launch_pending();
             let mutation = update(terminal)?;
@@ -3002,6 +3008,7 @@ impl AppState {
             }
             let managed_changed = terminal.reconcile_managed_agent_at(now, false);
             let agent_instance_created = terminal.ensure_agent_instance_id();
+            let agent_instance_id = terminal.agent_instance_id().map(ToString::to_string);
             let suppress_acquisition_completion = terminal.finish_agent_process_acquisition();
             let agent_name_changed = terminal.agent_name != previous_agent_name;
             let unchanged_change = (mutation.agent_released || agent_name_changed)
@@ -3011,6 +3018,8 @@ impl AppState {
                 managed_changed,
                 agent_name_changed,
                 agent_instance_created,
+                previous_agent_instance_id,
+                agent_instance_id,
                 unchanged_change,
                 managed_launch_pending,
                 suppress_acquisition_completion,
@@ -3037,6 +3046,8 @@ impl AppState {
         let update = PaneStateUpdate {
             pane_id,
             ws_idx,
+            previous_agent_instance_id,
+            agent_instance_id,
             previous_agent_label: change.previous_agent_label.clone(),
             previous_known_agent: change.previous_known_agent,
             previous_state: change.previous_state,

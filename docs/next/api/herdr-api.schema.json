@@ -629,6 +629,12 @@
                     "null"
                   ]
                 },
+                "agent_instance_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "final_status": {
                   "anyOf": [
                     {
@@ -663,6 +669,12 @@
             {
               "properties": {
                 "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_instance_id": {
                   "type": [
                     "string",
                     "null"
@@ -760,6 +772,12 @@
         "PaneInfo": {
           "properties": {
             "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_instance_id": {
               "type": [
                 "string",
                 "null"
@@ -5929,6 +5947,12 @@
                 "null"
               ]
             },
+            "agent_instance_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "agent_status": {
               "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
             },
@@ -6127,6 +6151,12 @@
         "AgentInfo": {
           "properties": {
             "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_instance_id": {
               "type": [
                 "string",
                 "null"
@@ -6917,6 +6947,12 @@
                     "null"
                   ]
                 },
+                "agent_instance_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "final_status": {
                   "anyOf": [
                     {
@@ -6951,6 +6987,12 @@
             {
               "properties": {
                 "agent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_instance_id": {
                   "type": [
                     "string",
                     "null"
@@ -7408,6 +7450,12 @@
         "PaneInfo": {
           "properties": {
             "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_instance_id": {
               "type": [
                 "string",
                 "null"

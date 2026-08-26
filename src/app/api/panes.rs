@@ -2597,6 +2597,18 @@ mod tests {
         let target_tab = app.state.workspaces[0].test_add_tab(Some("target"));
         let target = app.state.workspaces[0].tabs[target_tab].root_pane;
         seed_terminal_states(&mut app);
+        let now = std::time::Instant::now();
+        let source_agent_instance_id = {
+            let terminal = app.state.terminals.get_mut(&source_terminal).unwrap();
+            terminal.begin_managed_agent(
+                "builder".into(),
+                crate::detect::Agent::Codex,
+                now,
+                std::time::Duration::from_secs(3),
+                std::time::Duration::from_secs(30),
+            );
+            terminal.agent_instance_id().unwrap().to_string()
+        };
         let source_public = app.public_pane_id(0, source).unwrap();
         let source_tab_public = app.public_tab_id(0, 0).unwrap();
         let target_public = app.public_pane_id(0, target).unwrap();
@@ -2627,6 +2639,10 @@ mod tests {
         assert_eq!(move_result.pane.pane_id, move_result.previous_pane_id);
         assert_eq!(move_result.pane.tab_id, target_tab_public);
         assert_eq!(move_result.pane.terminal_id, source_terminal.to_string());
+        assert_eq!(
+            move_result.pane.agent_instance_id.as_deref(),
+            Some(source_agent_instance_id.as_str())
+        );
         assert_eq!(move_result.closed_tab_id, Some(source_tab_public));
         assert_eq!(move_result.closed_workspace_id, None);
         assert_eq!(move_result.target_layout.panes.len(), 2);
@@ -2635,6 +2651,13 @@ mod tests {
         assert_eq!(
             app.state.workspaces[0].tabs[0].terminal_id(source),
             Some(&source_terminal)
+        );
+        assert_eq!(
+            app.state.terminals[&source_terminal]
+                .agent_instance_id()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source_agent_instance_id.as_str())
         );
     }
 
@@ -2766,11 +2789,12 @@ mod tests {
             .clone();
         let target = app.state.workspaces[1].tabs[0].root_pane;
         seed_terminal_states(&mut app);
-        app.state
-            .terminals
-            .get_mut(&source_terminal)
-            .unwrap()
-            .set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        let source_agent_instance_id = {
+            let terminal = app.state.terminals.get_mut(&source_terminal).unwrap();
+            terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+            terminal.ensure_agent_instance_id();
+            terminal.agent_instance_id().unwrap().to_string()
+        };
         let previous_pane_id = app.public_pane_id(0, source).unwrap();
         let previous_workspace_id = app.public_workspace_id(0);
         let target_workspace_id = app.public_workspace_id(1);
@@ -2807,6 +2831,10 @@ mod tests {
         assert_eq!(move_result.pane.workspace_id, target_workspace_id);
         assert_eq!(move_result.pane.tab_id, target_tab_id);
         assert_eq!(move_result.pane.terminal_id, source_terminal.to_string());
+        assert_eq!(
+            move_result.pane.agent_instance_id.as_deref(),
+            Some(source_agent_instance_id.as_str())
+        );
         assert_eq!(app.state.workspaces.len(), 1);
         assert_eq!(
             app.state.workspaces[0].tabs[0].terminal_id(source),
@@ -2818,6 +2846,7 @@ mod tests {
             Err(crate::app::terminal_targets::TerminalTargetError::NotFound { .. })
         ));
         assert!(app.resolve_agent_target(&move_result.pane.pane_id).is_ok());
+        assert!(app.resolve_agent_target(&source_agent_instance_id).is_ok());
     }
 
     #[test]

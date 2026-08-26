@@ -614,14 +614,11 @@ impl App {
             return;
         };
         let workspace_id = self.public_workspace_id(update.ws_idx);
-        let agent_instance_id = self
-            .state
-            .workspaces
-            .get(update.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(update.pane_id))
-            .and_then(|terminal_id| self.state.terminals.get(terminal_id))
-            .and_then(crate::terminal::TerminalState::agent_instance_id)
-            .map(ToString::to_string);
+        let agent_instance_id = if update.agent_released {
+            update.previous_agent_instance_id.clone()
+        } else {
+            update.agent_instance_id.clone()
+        };
 
         if update.agent_name_changed {
             self.emit_pane_updated(update.ws_idx, update.pane_id);
@@ -1978,6 +1975,8 @@ mod tests {
             app.state.ensure_test_terminals();
             let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
             terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+            terminal.ensure_agent_instance_id();
+            let agent_instance_id = terminal.agent_instance_id().unwrap().to_string();
             if let Some(agent_name) = agent_name {
                 terminal.set_agent_name(agent_name.into());
             }
@@ -1996,10 +1995,11 @@ mod tests {
             assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
                 &event.data,
                 crate::api::schema::EventData::PaneAgentDetected {
+                    agent_instance_id: Some(released_id),
                     released: true,
                     final_status: Some(crate::api::schema::AgentStatus::Idle),
                     ..
-                }
+                } if released_id == &agent_instance_id
             )));
         }
     }

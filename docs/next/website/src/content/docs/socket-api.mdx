@@ -742,6 +742,8 @@ Session-only official integrations report native session references with `pane.r
 
 If no native session reference is stored, the field is omitted.
 
+`agent.start` returns a UUID `agent_instance_id` after the session snapshot containing it has been written. `agent.get`, `agent.list`, `pane.get`, `pane.list`, `pane.agent_detected`, and `pane.agent_status_changed` expose the same optional field. The UUID identifies one running agent instance: renaming or moving its pane and a live server handoff preserve it, while process exit or replacement makes the old UUID an invalid agent target. On a cold restart Herdr exposes the saved UUID only after the resumed provider reports the exact saved provider, agent, and native session reference; a missing, mismatched, or duplicate resume does not reuse it.
+
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` also expose `foreground_cwd` when Herdr can resolve the cwd of the process currently controlling the pane PTY. The existing `cwd` field remains the pane/workspace cwd used for labels, follow-cwd behavior, and restored session state.
 
 `PaneInfo` and `AgentInfo` expose optional `terminal_title` and `terminal_title_stripped` fields. `terminal_title` is the latest OSC 0/2 title after safety normalization. `terminal_title_stripped` removes one recognized leading activity or spinner glyph and following whitespace. These server-owned values are ephemeral across a cold restart and are independent of the metadata `title` and semantic agent state.

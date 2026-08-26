@@ -1385,7 +1385,7 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 1\necho exited > {}\n",
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 8\necho exited > {}\n",
             started_marker.display(),
             exited_marker.display()
         ),
@@ -1416,20 +1416,42 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
         .unwrap()
         .to_string();
 
-    let started = request(
-        &api_socket,
-        serde_json::json!({
-            "id": "test:agent-start",
-            "method": "agent.start",
-            "params": {
-                "name": "handoff-agent",
-                "kind": "pi",
-                "pane_id": pane_id,
-                "timeout_ms": 5000
-            }
-        }),
+    let start_deadline = Instant::now() + Duration::from_secs(10);
+    let started = loop {
+        let response = request(
+            &api_socket,
+            serde_json::json!({
+                "id": "test:agent-start",
+                "method": "agent.start",
+                "params": {
+                    "name": "handoff-agent",
+                    "kind": "pi",
+                    "pane_id": pane_id,
+                    "timeout_ms": 5000
+                }
+            }),
+        );
+        if response.get("result").is_some() {
+            break response;
+        }
+        assert_eq!(response["error"]["code"], "agent_pane_busy");
+        assert!(
+            Instant::now() < start_deadline,
+            "new pane shell never became available: {response}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_ok(started.clone());
+    let agent_instance_id = started["result"]["agent"]["agent_instance_id"]
+        .as_str()
+        .expect("agent.start must return an immutable instance id")
+        .to_string();
+    let session = fs::read_to_string(config_home.join("herdr-dev/session.json"))
+        .expect("agent.start success must follow durable session persistence");
+    assert!(
+        session.contains(&agent_instance_id),
+        "agent.start returned before its instance id was durable: {session}"
     );
-    assert_ok(started);
     support::wait_for_file(&started_marker, Duration::from_secs(5));
 
     assert_ok(request(
@@ -1438,8 +1460,32 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
-    support::wait_for_file(&exited_marker, Duration::from_secs(5));
+
+    let after_handoff = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent-by-instance-after-handoff",
+            "method": "agent.get",
+            "params": {"target": agent_instance_id}
+        }),
+    );
+    assert_ok(after_handoff.clone());
+    assert_eq!(
+        after_handoff["result"]["agent"]["agent_instance_id"],
+        agent_instance_id
+    );
+    support::wait_for_file(&exited_marker, Duration::from_secs(12));
     thread::sleep(Duration::from_millis(300));
+
+    let stale = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:stale-instance-after-exit",
+            "method": "agent.get",
+            "params": {"target": agent_instance_id}
+        }),
+    );
+    assert_eq!(stale["error"]["code"], "agent_not_found");
 
     assert_ok(request(
         &api_socket,
