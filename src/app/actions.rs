@@ -257,6 +257,20 @@ pub struct PaneStateUpdate {
     pub suppress_completion: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedAgentRelease {
+    pub agent_instance_id: String,
+    pub agent: Option<String>,
+    pub final_status: crate::api::schema::AgentStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedAgentReconcile {
+    pub pane_id: PaneId,
+    pub ws_idx: usize,
+    pub release: Option<ManagedAgentRelease>,
+}
+
 // ---------------------------------------------------------------------------
 // Navigator operations
 // ---------------------------------------------------------------------------
@@ -3081,11 +3095,20 @@ impl AppState {
             .min()
     }
 
-    pub(crate) fn reconcile_managed_agents_at(&mut self, now: Instant) -> Vec<(usize, PaneId)> {
-        let mut changed_terminals = std::collections::HashSet::new();
+    pub(crate) fn reconcile_managed_agents_at(
+        &mut self,
+        now: Instant,
+    ) -> Vec<ManagedAgentReconcile> {
+        let mut changed_terminals = std::collections::HashMap::new();
         for (terminal_id, terminal) in &mut self.terminals {
+            let previous_agent_instance_id = terminal.agent_instance_id().map(ToString::to_string);
+            let previous_agent = terminal.effective_agent_label().map(str::to_string);
+            let previous_state = terminal.state;
             if terminal.reconcile_managed_agent_at(now, false) {
-                changed_terminals.insert(terminal_id.clone());
+                let released = previous_agent_instance_id
+                    .filter(|_| terminal.agent_instance_id().is_none())
+                    .map(|agent_instance_id| (agent_instance_id, previous_agent, previous_state));
+                changed_terminals.insert(terminal_id.clone(), released);
             }
         }
         if changed_terminals.is_empty() {
@@ -3100,8 +3123,18 @@ impl AppState {
                 workspace.tabs.iter().flat_map(move |tab| {
                     tab.panes.iter().filter_map(move |(&pane_id, pane)| {
                         changed_terminals
-                            .contains(&pane.attached_terminal_id)
-                            .then_some((ws_idx, pane_id))
+                            .get(&pane.attached_terminal_id)
+                            .map(|release| ManagedAgentReconcile {
+                                pane_id,
+                                ws_idx,
+                                release: release.clone().map(
+                                    |(agent_instance_id, agent, state)| ManagedAgentRelease {
+                                        agent_instance_id,
+                                        agent,
+                                        final_status: pane_agent_status(state, pane.seen),
+                                    },
+                                ),
+                            })
                     })
                 })
             })
@@ -3455,6 +3488,7 @@ mod tests {
     use crate::detect::{Agent, AgentState};
     use crate::workspace::Workspace;
     use ratatui::layout::Direction;
+    use std::time::Duration;
 
     fn app_with_workspaces(names: &[&str]) -> AppState {
         let mut state = AppState::test_new();
@@ -3469,6 +3503,36 @@ mod tests {
             state.mode = Mode::Terminal;
         }
         state
+    }
+
+    #[test]
+    fn managed_agent_timeout_reports_the_ended_instance() {
+        let mut state = app_with_workspaces(&["one"]);
+        let pane_id = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].terminal_id(pane_id).cloned().unwrap();
+        let now = Instant::now();
+        let agent_instance_id = {
+            let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.begin_managed_agent(
+                "builder".into(),
+                Agent::Codex,
+                now,
+                Duration::ZERO,
+                Duration::from_secs(1),
+            );
+            terminal.agent_instance_id().unwrap().to_string()
+        };
+
+        let updates = state.reconcile_managed_agents_at(now + Duration::from_secs(1));
+
+        assert_eq!(updates.len(), 1);
+        let release = updates[0]
+            .release
+            .as_ref()
+            .expect("timeout must report an ended managed instance");
+        assert_eq!(release.agent_instance_id, agent_instance_id);
+        assert_eq!(release.agent, None);
+        assert_eq!(state.terminals[&terminal_id].agent_instance_id(), None);
     }
 
     fn mark_linked_worktree(state: &mut AppState, ws_idx: usize) {

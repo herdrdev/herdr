@@ -49,14 +49,44 @@ impl App {
         else {
             return;
         };
-        let changed = self
+        let previous_seen = self.state.workspaces[resolved.ws_idx]
+            .pane_state(resolved.pane_id)
+            .is_some_and(|pane| pane.seen);
+        let (changed, release) = self
             .state
             .terminals
             .get_mut(&terminal_id)
-            .is_some_and(|terminal| terminal.reconcile_managed_agent_at(Instant::now(), false));
+            .map(|terminal| {
+                let previous_agent_instance_id =
+                    terminal.agent_instance_id().map(ToString::to_string);
+                let previous_agent = terminal.effective_agent_label().map(str::to_string);
+                let previous_state = terminal.state;
+                let changed = terminal.reconcile_managed_agent_at(Instant::now(), false);
+                let release = changed
+                    .then_some(previous_agent_instance_id)
+                    .flatten()
+                    .filter(|_| terminal.agent_instance_id().is_none())
+                    .map(
+                        |agent_instance_id| crate::app::actions::ManagedAgentRelease {
+                            agent_instance_id,
+                            agent: previous_agent,
+                            final_status: super::api_helpers::pane_agent_status(
+                                previous_state,
+                                previous_seen,
+                            ),
+                        },
+                    );
+                (changed, release)
+            })
+            .unwrap_or((false, None));
         if changed {
             self.state.mark_session_dirty();
             self.schedule_session_save();
+            self.emit_managed_agent_release(&crate::app::actions::ManagedAgentReconcile {
+                pane_id: resolved.pane_id,
+                ws_idx: resolved.ws_idx,
+                release,
+            });
             self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
         }
     }

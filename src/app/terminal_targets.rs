@@ -89,6 +89,7 @@ impl App {
                             .agent_instance_id()
                             .is_some_and(|id| id.to_string() == target)
                     })
+                    && self.target_is_agent(candidate)
             })
             .collect();
         if let Some(resolved) = self.single_terminal_match(target, instance_matches)? {
@@ -210,5 +211,42 @@ impl App {
                 .map(|cwd| cwd.display().to_string()),
             agent_status: pane_agent_status(terminal.state, pane.seen),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_id_does_not_resolve_after_terminal_stops_being_an_agent() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .cloned()
+            .unwrap();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Idle,
+        );
+        terminal.ensure_agent_instance_id();
+        let agent_instance_id = terminal.agent_instance_id().unwrap().to_string();
+        terminal.set_detected_state(None, crate::detect::AgentState::Unknown);
+
+        assert!(matches!(
+            app.resolve_agent_target(&agent_instance_id),
+            Err(TerminalTargetError::NotFound { .. })
+        ));
     }
 }

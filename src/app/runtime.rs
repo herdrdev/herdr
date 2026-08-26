@@ -334,8 +334,9 @@ impl App {
         {
             let panes = self.state.reconcile_managed_agents_at(now);
             if !panes.is_empty() {
-                for (ws_idx, pane_id) in panes {
-                    self.emit_pane_updated(ws_idx, pane_id);
+                for update in panes {
+                    self.emit_managed_agent_release(&update);
+                    self.emit_pane_updated(update.ws_idx, update.pane_id);
                 }
                 self.schedule_session_save();
                 changed = true;

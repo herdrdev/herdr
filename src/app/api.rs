@@ -667,6 +667,29 @@ impl App {
         }
     }
 
+    pub(crate) fn emit_managed_agent_release(
+        &mut self,
+        update: &crate::app::actions::ManagedAgentReconcile,
+    ) {
+        let Some(release) = update.release.as_ref() else {
+            return;
+        };
+        let Some(pane_id) = self.public_pane_id(update.ws_idx, update.pane_id) else {
+            return;
+        };
+        self.emit_event(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::PaneAgentDetected,
+            data: crate::api::schema::EventData::PaneAgentDetected {
+                pane_id,
+                workspace_id: self.public_workspace_id(update.ws_idx),
+                agent_instance_id: Some(release.agent_instance_id.clone()),
+                agent: release.agent.clone(),
+                released: true,
+                final_status: Some(release.final_status),
+            },
+        });
+    }
+
     fn emit_terminal_or_system_agent_notifications(
         &self,
         pane_updates: &[crate::app::actions::PaneStateUpdate],
