@@ -1,0 +1,51 @@
+id = "omp"
+version = "2026.08.26.1"
+min_engine_version = 2
+updated_at = "2026-08-26T00:00:00Z"
+aliases = ["herdr:omp"]
+
+# omp writes its run state into the terminal title: `π > label` when the turn is
+# the user's, `π <braille> label` while it works (`π : label` on Windows/ConPTY),
+# and `π ! label` while a prompt waits. The attention separator is deliberately
+# not a blocked rule: omp keeps it for the whole tool call once the user
+# approves, so it outlives the prompt that raised it. Blocked comes from the
+# dialog on screen instead.
+
+[[rules]]
+id = "prompt_dialog_blocked"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+# Every omp dialog that holds the turn renders one control line pairing a submit
+# control with `esc cancel`. A picker the user opened offers `Esc close`.
+line_regex = ['(?i)enter\s+(?:select|toggle|submit)\b.*\besc\s+cancel\b']
+
+[[rules]]
+id = "live_turn_working"
+state = "working"
+priority = 220
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+# The turn loader line ends with omp's interrupt hint. The bracket pair follows
+# the active symbol preset: unicode `⟦esc⟧`, nerd `⟨esc⟩`, ascii `[esc]`.
+line_regex = ['[\x{27E6}\x{27E8}\[]esc[\x{27E7}\x{27E9}\]]\s*$']
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 210
+region = "osc_title"
+visible_working = true
+any = [
+  { regex = ['^π [\x{2800}-\x{28FF}](?:\s|$)'] },
+  { regex = ['^π :(?:\s|$)'] },
+]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 150
+region = "osc_title"
+visible_idle = true
+regex = ['^π >(?:\s|$)']

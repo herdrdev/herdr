@@ -91,7 +91,7 @@ impl Agent {
         Self::Maki,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -100,6 +100,7 @@ impl Agent {
         Self::Devin,
         Self::Antigravity,
         Self::Cline,
+        Self::Omp,
         Self::OpenCode,
         Self::GithubCopilot,
         Self::Kimi,
@@ -858,6 +859,15 @@ mod tests {
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+    }
+
+    // A pane must never be left without a state source: omp reports through a
+    // full-lifecycle hook, and the screen manifest carries the pane whenever
+    // that hook is absent, refused, or released.
+    #[test]
+    fn omp_is_hook_authority_with_screen_manifest_fallback() {
+        assert!(full_lifecycle_hook_authority("herdr:omp", "omp"));
+        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Omp));
     }
 
     #[test]

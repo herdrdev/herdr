@@ -928,3 +928,167 @@ fn codex_osc_working_beats_weak_blocker_screen() {
         Some("osc_title_working")
     );
 }
+
+// --- omp rules ---
+//
+// Screens below are trimmed captures from a live omp 18.0.6 pane read with
+// `herdr agent read <pane> --source detection --format text`.
+
+#[test]
+fn omp_turn_loader_hint_is_working() {
+    let screen = " 2026-08-26 10:11:56  5.4K  76  11K  6.8s\n\n\
+         ⠼ Sleeping for 45 seconds ⟨esc⟩\n\n\
+        ╭── GLM-5.3 · max · repro-3246-omp ───2%───1M─ Run sleep 45 command ──╮\n\
+        ╰─                                                                   ─╯\n";
+    let result = osc_explain(Agent::Omp, screen, "π ! Run sleep 45 command", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("live_turn_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn omp_turn_loader_hint_covers_every_symbol_preset() {
+    for hint in ["⟨esc⟩", "⟦esc⟧", "[esc]"] {
+        let screen = format!(" - Working… {hint}\n\n╭── GLM-5.3 ──╮\n╰─          ─╯\n");
+        let result = osc_explain(Agent::Omp, &screen, "", "");
+        assert_eq!(result.state, AgentState::Working, "hint {hint}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_turn_working"),
+            "hint {hint}"
+        );
+    }
+}
+
+#[test]
+fn omp_tool_approval_dialog_outranks_turn_loader() {
+    let screen = " ⠧ Sleeping for 45 seconds ⟨esc⟩\n\n\
+        ╭─ Allow tool: bash ─────────────────────────╮\n\
+        │                                            │\n\
+        │ Command: sleep 45                          │\n\
+        │                                            │\n\
+        │   Approve                                  │\n\
+        │   Deny                                     │\n\
+        │                                            │\n\
+        │ up/down navigate  enter select  esc cancel │\n\
+        │                                            │\n\
+        ╰────────────────────────────────────────────╯\n";
+    let result = osc_explain(Agent::Omp, screen, "π ! Run sleep 45 command", "");
+
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("prompt_dialog_blocked")
+    );
+    assert!(result.visible_blocker);
+    assert!(!result.visible_working);
+}
+
+#[test]
+fn omp_ask_dialog_is_blocked() {
+    let screen = "╭─ Ask ────────────────────────────────────────────╮\n\
+        │ Pick a color                                     │\n\
+        ├──────────────────────────────────────────────────┤\n\
+        │   Red                                            │\n\
+        │   Blue                                           │\n\
+        │   Other (type your own)                          │\n\
+        │                                                  │\n\
+        ├──────────────────────────────────────────────────┤\n\
+        │ Enter select · n note · ↑/↓ move · Esc cancel    │\n\
+        ╰──────────────────────────────────────────────────╯\n";
+    let result = osc_explain(Agent::Omp, screen, "π ! Ask the user to pick a color", "");
+
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("prompt_dialog_blocked")
+    );
+    assert!(result.visible_blocker);
+}
+
+#[test]
+fn omp_user_opened_picker_is_not_blocked() {
+    // The model picker is opened by the human and offers `Esc close`, not the
+    // `esc cancel` control every turn-holding dialog renders.
+    let screen =
+        "├─────────────────────────────┴────────────────────────────────────────────────╮\n\
+        │ Enter assign roles · ↑/↓ providers · → models · type to search · Esc close   │\n\
+        ╰──────────────────────────────────────────────────────────────────────────────╯\n";
+    let result = osc_explain(Agent::Omp, screen, "π > repro-3246-omp", "");
+
+    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("osc_title_idle")
+    );
+    assert!(result.visible_idle);
+}
+
+#[test]
+fn omp_osc_title_spinner_is_working() {
+    for frame in ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] {
+        let title = format!("π {frame} Run sleep 45 command");
+        let result = osc_explain(Agent::Omp, "", &title, "");
+        assert_eq!(result.state, AgentState::Working, "frame {frame}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("osc_title_working"),
+            "frame {frame}"
+        );
+        assert!(result.visible_working, "frame {frame}");
+    }
+}
+
+#[test]
+fn omp_osc_title_windows_separator_is_working() {
+    // omp cannot animate a spinner under ConPTY, so its working separator on
+    // Windows is a spaced colon. A disabled title state renders `π: label`.
+    for title in ["π : Run sleep 45 command", "π :"] {
+        let result = osc_explain(Agent::Omp, "", title, "");
+        assert_eq!(result.state, AgentState::Working, "title {title}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("osc_title_working"),
+            "title {title}"
+        );
+    }
+
+    let disabled = osc_explain(Agent::Omp, "", "π: Run sleep 45 command", "");
+    assert_eq!(disabled.state, AgentState::Idle);
+    assert_eq!(
+        disabled.fallback_reason.as_deref(),
+        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+    );
+}
+
+#[test]
+fn omp_osc_title_user_turn_is_idle() {
+    for title in ["π > repro-3246-omp", "π >"] {
+        let result = osc_explain(Agent::Omp, "", title, "");
+        assert_eq!(result.state, AgentState::Idle, "title {title}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("osc_title_idle"),
+            "title {title}"
+        );
+        assert!(result.visible_idle, "title {title}");
+    }
+}
+
+#[test]
+fn omp_osc_attention_title_alone_is_not_blocked() {
+    // omp keeps the `!` separator for the whole tool call after the user
+    // approves it, so the title alone cannot stand in for a live dialog.
+    let result = osc_explain(Agent::Omp, "", "π ! Run sleep 45 command", "");
+
+    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(
+        result.fallback_reason.as_deref(),
+        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+    );
+    assert!(!result.visible_blocker);
+}
