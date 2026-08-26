@@ -4,8 +4,11 @@
 
 ### Added
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
+- The task dock can now receive mouse focus and use `h`, `j`, `k`, `l`, arrows, Enter, Escape, and `q` for keyboard navigation.
+- Tasks can retain an optional native agent session ID supplied at creation and show it in task activity details.
 
 ### Fixed
+- Task activity timestamps now use the local system timezone instead of displaying UTC wall-clock time.
 - Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)
 - New lifecycle event subscriptions now stream only events emitted after subscription begins instead of replaying retained history. (#1270)
 - Windows users whose endpoint security blocks the fileless PowerShell install command can now use a local `install.cmd` bootstrap; installer downloads use `curl.exe` while preserving package checksum verification. (#2751)

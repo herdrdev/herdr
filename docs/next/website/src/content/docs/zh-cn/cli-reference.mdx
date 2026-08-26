@@ -132,13 +132,13 @@ herdr workspace create --cwd ~/project --label api --no-focus
 
 ```bash
 herdr task board
-herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID] [--agent-session-id ID]
 herdr task attach <task_id> <agent-or-pane>
 herdr task dispatch <task_id> <agent-or-pane>
 herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
 ```
 
-任务是保存在服务器上的持久记录。`task attach` 和 `task dispatch` 接受正在运行的 Herdr 智能体名称或窗格 ID，不会接管 Herdr 外部启动的进程。要将运行中的窗格移动到其他工作区，请使用 `pane move`。
+任务是保存在服务器上的持久记录。`task attach` 和 `task dispatch` 接受正在运行的 Herdr 智能体名称或窗格 ID，不会接管 Herdr 外部启动的进程。`--agent-session-id` 会将已知的 Codex、Claude、Pi 或其他智能体原生会话 ID 记录为任务元数据，但不会附加或恢复该会话。要将运行中的窗格移动到其他工作区，请使用 `pane move`。
 
 ## Worktree
 

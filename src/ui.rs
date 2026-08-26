@@ -136,8 +136,29 @@ pub(crate) fn task_panel_task_at(app: &AppState, column: u16, row: u16) -> Optio
         return None;
     }
     let inner = task_panel_inner_rect(area);
-    let row = row.checked_sub(inner.y + 1).map(usize::from)?;
-    app.tasks.get(row).map(|_| row)
+    let visible_rows = inner.height.saturating_sub(1) as usize;
+    let visible_row = row.checked_sub(inner.y + 1).map(usize::from)?;
+    if visible_row >= visible_rows {
+        return None;
+    }
+    let index = task_panel_visible_start(app, visible_rows).saturating_add(visible_row);
+    app.tasks.get(index).map(|_| index)
+}
+
+pub(crate) fn task_panel_visible_start(app: &AppState, visible_rows: usize) -> usize {
+    if visible_rows == 0 || app.tasks.len() <= visible_rows {
+        return 0;
+    }
+    let max_start = app.tasks.len() - visible_rows;
+    let start = app.task_panel_scroll.min(max_start);
+    let selected = app.task_board_selected.min(app.tasks.len() - 1);
+    if selected < start {
+        selected
+    } else if selected >= start.saturating_add(visible_rows) {
+        selected.saturating_add(1).saturating_sub(visible_rows)
+    } else {
+        start
+    }
 }
 
 fn split_task_panel(area: Rect, position: TaskPanelPosition) -> (Rect, Rect) {
@@ -293,6 +314,8 @@ fn compute_view_internal(
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
+    sync_task_activity_timestamp_labels(app);
+
     if is_mobile_width(area, app.mobile_width_threshold) {
         compute_mobile_view(app, terminal_runtimes, area, resize_panes, cell_size);
         return;
@@ -397,6 +420,40 @@ fn compute_view_internal(
         split_borders,
     };
     app.sync_copy_mode_search_geometry();
+}
+
+fn sync_task_activity_timestamp_labels(app: &mut AppState) {
+    if app.mode != Mode::TaskActivity {
+        return;
+    }
+
+    let labels_are_current = app.tasks.get(app.task_board_selected).is_some_and(|task| {
+        task.activities.len() == app.task_activity_timestamp_labels.len()
+            && task
+                .activities
+                .iter()
+                .zip(&app.task_activity_timestamp_labels)
+                .all(|(activity, (cached_timestamp, _))| activity.timestamp == *cached_timestamp)
+    });
+    if labels_are_current {
+        return;
+    }
+
+    app.task_activity_timestamp_labels = app
+        .tasks
+        .get(app.task_board_selected)
+        .map(|task| {
+            task.activities
+                .iter()
+                .map(|activity| {
+                    (
+                        activity.timestamp,
+                        task_board::format_activity_timestamp(activity.timestamp),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 }
 
 fn compute_mobile_view(
@@ -540,6 +597,7 @@ pub fn render_with_runtime_registry(
         Mode::ConfirmRemoveWorktree => render_remove_worktree_overlay(app, frame, frame.area()),
         Mode::GlobalMenu => render_global_launcher_menu(app, frame),
         Mode::TaskBoard => render_task_board_overlay(app, frame),
+        Mode::TaskPanel => {}
         Mode::TaskActivity => render_task_activity_overlay(app, frame),
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),
@@ -859,6 +917,105 @@ mod tests {
     }
 
     #[test]
+    fn task_panel_rows_align_status_id_and_title_columns() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.mode = Mode::TaskPanel;
+        app.task_panel_position = TaskPanelPosition::Bottom;
+        for (id, title, status) in [
+            ("task-1", "First title", TaskStatus::Review),
+            ("task-20", "Second title", TaskStatus::Done),
+        ] {
+            let mut task = crate::task::Task::new(
+                id.into(),
+                title.into(),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            );
+            task.status = status;
+            app.tasks.push(task);
+        }
+
+        let area = Rect::new(0, 0, 120, 40);
+        compute_view(&mut app, area);
+        let panel = app.view.task_panel_rect;
+        let inner = task_panel_inner_rect(panel);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let first = buffer_row_text(terminal.backend().buffer(), inner, inner.y + 1);
+        let second = buffer_row_text(terminal.backend().buffer(), inner, inner.y + 2);
+
+        assert_eq!(first.find("review"), Some(0), "{first}");
+        assert_eq!(second.find("done"), Some(0), "{second}");
+        assert_eq!(
+            first.find("task-1"),
+            second.find("task-20"),
+            "{first}\n{second}"
+        );
+        assert_eq!(
+            first.find("First title"),
+            second.find("Second title"),
+            "{first}\n{second}"
+        );
+    }
+
+    #[test]
+    fn task_panel_header_hint_aligns_with_task_id_column() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.selected = 0;
+        app.task_panel_position = TaskPanelPosition::Bottom;
+        for (id, title, status) in [
+            ("task-1", "First title", TaskStatus::Review),
+            ("task-2", "Second title", TaskStatus::Done),
+        ] {
+            let mut task = crate::task::Task::new(
+                id.into(),
+                title.into(),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            );
+            task.status = status;
+            app.tasks.push(task);
+        }
+
+        let area = Rect::new(0, 0, 120, 40);
+        compute_view(&mut app, area);
+        let panel = app.view.task_panel_rect;
+        let inner = task_panel_inner_rect(panel);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let header = buffer_row_text(terminal.backend().buffer(), inner, inner.y);
+        let first = buffer_row_text(terminal.backend().buffer(), inner, inner.y + 1);
+        let second = buffer_row_text(terminal.backend().buffer(), inner, inner.y + 2);
+
+        assert!(header.starts_with("2 tasks   | click to focus"), "{header}");
+        assert!(
+            first.starts_with("review    | task-1 First title"),
+            "{first}"
+        );
+        assert!(
+            second.starts_with("done      | task-2 Second title"),
+            "{second}"
+        );
+        assert_eq!(header.find('|'), first.find('|'), "{header}\n{first}");
+        assert_eq!(
+            header.find("click"),
+            first.find("task-1"),
+            "{header}\n{first}"
+        );
+    }
+
+    #[test]
     fn task_activity_modal_renders_progress_summary() {
         let mut app = crate::app::state::AppState::test_new();
         let mut task = crate::task::Task::new(
@@ -884,6 +1041,7 @@ mod tests {
         });
         task.agent = Some("worker-1".into());
         task.pane_id = Some("w1:p1".into());
+        task.agent_session_id = Some("01a03dda-cfca-7c62-87a0-17bf3d49a96c".into());
         app.tasks.push(task);
         app.mode = Mode::TaskActivity;
 
@@ -898,6 +1056,22 @@ mod tests {
 
         assert!(screen.contains("TASK ACTIVITY"), "{screen}");
         assert!(screen.contains("Build activity modal"), "{screen}");
+        assert!(
+            screen.contains("01a03dda-cfca-7c62-87a0-17bf3d49a96c"),
+            "{screen}"
+        );
+        let expected_timestamp = crate::platform::local_datetime_at(3)
+            .map(|datetime| {
+                let time = datetime.time();
+                format!(
+                    "{:02}:{:02}:{:02}",
+                    time.hour(),
+                    time.minute(),
+                    time.second()
+                )
+            })
+            .unwrap_or_else(|| "00:00:03".into());
+        assert!(screen.contains(&expected_timestamp), "{screen}");
         let first_message_row = screen
             .lines()
             .find(|line| line.contains("| Focused tests pass"))

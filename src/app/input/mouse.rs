@@ -19,7 +19,8 @@ use super::WheelRouting;
 use super::{
     modal::{
         apply_global_menu_action, confirm_close_cancel, global_menu_actions, leave_modal,
-        modal_action_from_buttons, open_global_menu, open_new_tab_dialog, ModalAction,
+        modal_action_from_buttons, move_task_panel_selection, open_global_menu,
+        open_new_tab_dialog, ModalAction,
     },
     settings::SettingsAction,
     ScrollbarClickTarget, TAB_DRAG_THRESHOLD, WORKSPACE_DRAG_THRESHOLD,
@@ -135,6 +136,7 @@ impl AppState {
                     | Mode::Navigate
                     | Mode::Resize
                     | Mode::GlobalMenu
+                    | Mode::TaskPanel
                     | Mode::KeybindHelp
             );
         let launcher = self.global_launcher_rect();
@@ -184,6 +186,8 @@ impl AppState {
                     ) {
                         self.task_board_selected = index;
                         self.task_activity_scroll = 0;
+                        self.task_activity_timestamp_labels.clear();
+                        self.task_activity_from_panel = false;
                         self.mode = Mode::TaskActivity;
                     }
                 }
@@ -218,6 +222,54 @@ impl AppState {
             return None;
         }
 
+        let task_panel = self.view.task_panel_rect;
+        let in_task_panel = task_panel.width > 0
+            && task_panel.height > 0
+            && mouse.column >= task_panel.x
+            && mouse.column < task_panel.x.saturating_add(task_panel.width)
+            && mouse.row >= task_panel.y
+            && mouse.row < task_panel.y.saturating_add(task_panel.height);
+
+        if in_task_panel {
+            let panel_was_focused = self.mode == Mode::TaskPanel;
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(index) =
+                        crate::ui::task_panel_task_at(self, mouse.column, mouse.row)
+                    {
+                        let open_activity = panel_was_focused && index == self.task_board_selected;
+                        self.task_board_selected = index;
+                        if open_activity {
+                            self.task_activity_scroll = 0;
+                            self.task_activity_timestamp_labels.clear();
+                            self.task_activity_from_panel = true;
+                            self.mode = Mode::TaskActivity;
+                        } else {
+                            self.mode = Mode::TaskPanel;
+                        }
+                    } else {
+                        self.mode = Mode::TaskPanel;
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    self.mode = Mode::TaskPanel;
+                    move_task_panel_selection(self, false);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.mode = Mode::TaskPanel;
+                    move_task_panel_selection(self, true);
+                }
+                _ => {}
+            }
+            return None;
+        }
+
+        if self.mode == Mode::TaskPanel
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            leave_modal(self);
+        }
+
         if self.view.layout == ViewLayout::Mobile {
             match self.handle_mobile_mouse(mouse) {
                 MobileMouseResult::Ignored => {}
@@ -227,42 +279,10 @@ impl AppState {
         }
 
         let sidebar = self.view.sidebar_rect;
-        let task_panel = self.view.task_panel_rect;
         let in_sidebar = mouse.column >= sidebar.x
             && mouse.column < sidebar.x + sidebar.width
             && mouse.row >= sidebar.y
             && mouse.row < sidebar.y + sidebar.height;
-
-        if task_panel.width > 0
-            && task_panel.height > 0
-            && mouse.column >= task_panel.x
-            && mouse.column < task_panel.x.saturating_add(task_panel.width)
-            && mouse.row >= task_panel.y
-            && mouse.row < task_panel.y.saturating_add(task_panel.height)
-        {
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some(index) =
-                        crate::ui::task_panel_task_at(self, mouse.column, mouse.row)
-                    {
-                        self.task_board_selected = index;
-                        self.task_activity_scroll = 0;
-                        self.mode = Mode::TaskActivity;
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    self.task_board_selected = self.task_board_selected.saturating_sub(1);
-                }
-                MouseEventKind::ScrollDown => {
-                    self.task_board_selected = self
-                        .task_board_selected
-                        .saturating_add(1)
-                        .min(self.tasks.len().saturating_sub(1));
-                }
-                _ => {}
-            }
-            return None;
-        }
 
         if self.handle_right_click_passthrough(terminal_runtimes, source_id, mouse, in_sidebar) {
             return None;
@@ -2088,7 +2108,7 @@ mod tests {
     };
 
     #[test]
-    fn task_panel_mouse_opens_activity_and_consumes_wheel_events() {
+    fn task_panel_mouse_focuses_before_opening_activity() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
@@ -2123,12 +2143,62 @@ mod tests {
             panel.y + 3,
         ));
         assert_eq!(app.state.task_board_selected, 1);
+        assert_eq!(app.state.mode, Mode::TaskPanel);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.x + 2,
+            panel.y + 3,
+        ));
         assert_eq!(app.state.mode, Mode::TaskActivity);
+        assert!(app.state.task_activity_from_panel);
 
         app.handle_mouse(mouse(MouseEventKind::ScrollDown, panel.x + 2, panel.y + 3));
         assert_eq!(app.state.task_activity_scroll, 2);
         app.handle_mouse(mouse(MouseEventKind::ScrollUp, panel.x + 2, panel.y + 3));
         assert_eq!(app.state.task_activity_scroll, 0);
+    }
+
+    #[test]
+    fn task_panel_mouse_hit_testing_tracks_keyboard_scroll() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.task_panel_position = TaskPanelPosition::Bottom;
+        for index in 1..=10 {
+            app.state.tasks.push(crate::task::Task::new(
+                format!("task-{index}"),
+                format!("task {index}"),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            ));
+        }
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let panel = app.state.view.task_panel_rect;
+        let first_task_row = crate::ui::task_panel_inner_rect(panel).y + 1;
+
+        app.state.mode = Mode::TaskPanel;
+        for _ in 0..7 {
+            app.handle_mouse(mouse(
+                MouseEventKind::ScrollDown,
+                panel.x + 2,
+                first_task_row,
+            ));
+        }
+        assert_eq!(app.state.task_board_selected, 7);
+        assert_eq!(app.state.task_panel_scroll, 2);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            panel.x + 2,
+            first_task_row,
+        ));
+        assert_eq!(app.state.task_board_selected, 2);
+        assert_eq!(app.state.mode, Mode::TaskPanel);
     }
 
     #[test]

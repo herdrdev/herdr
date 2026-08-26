@@ -722,7 +722,10 @@ impl App {
             plugin_commands_in_flight: 0,
             global_menu: state::MenuListState::new(0),
             task_board_selected: 0,
+            task_panel_scroll: 0,
             task_activity_scroll: 0,
+            task_activity_timestamp_labels: Vec::new(),
+            task_activity_from_panel: false,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             host_mouse_pixels: None,
@@ -1960,6 +1963,9 @@ impl App {
             }
             Mode::TaskBoard => {
                 input::handle_task_board_key(&mut self.state, key_event);
+            }
+            Mode::TaskPanel => {
+                input::handle_task_panel_key(&mut self.state, key_event);
             }
             Mode::TaskActivity => {
                 input::handle_task_activity_key(&mut self.state, key_event);

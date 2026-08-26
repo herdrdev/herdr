@@ -4154,6 +4154,13 @@
         },
         "TaskCreateParams": {
           "properties": {
+            "agent_session_id": {
+              "description": "Native Codex, Claude, Pi, or other agent session identifier to retain as task metadata.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "cwd": {
               "type": [
                 "string",
@@ -10335,6 +10342,12 @@
               "type": "array"
             },
             "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_session_id": {
               "type": [
                 "string",
                 "null"

@@ -128,7 +128,7 @@ herdr workspace close <workspace_id>
 
 ```bash
 herdr task board
-herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID] [--agent-session-id ID]
 herdr task attach <task_id> <agent-or-pane>
 herdr task dispatch <task_id> <agent-or-pane>
 herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
@@ -136,7 +136,9 @@ herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|ca
 
 Tasks are durable server records. `task attach` and `task dispatch` accept a
 live Herdr agent name or pane ID; they do not adopt processes launched outside
-Herdr. Use `pane move` when the running pane should change workspaces.
+Herdr. `--agent-session-id` records a known native Codex, Claude, Pi, or other
+agent session ID as task metadata; it does not attach or resume that session.
+Use `pane move` when the running pane should change workspaces.
 
 Create a workspace without stealing focus:
 

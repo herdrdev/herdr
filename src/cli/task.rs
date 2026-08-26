@@ -79,6 +79,7 @@ fn task_create(args: &[String]) -> std::io::Result<i32> {
     let mut priority = 100;
     let mut dependencies = Vec::new();
     let mut cwd = None;
+    let mut agent_session_id = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -128,6 +129,14 @@ fn task_create(args: &[String]) -> std::io::Result<i32> {
                 cwd = Some(value.clone());
                 index += 2;
             }
+            "--agent-session-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("missing value for --agent-session-id");
+                    return Ok(2);
+                };
+                agent_session_id = Some(value.clone());
+                index += 2;
+            }
             other => {
                 eprintln!("unknown option: {other}");
                 return Ok(2);
@@ -135,7 +144,9 @@ fn task_create(args: &[String]) -> std::io::Result<i32> {
         }
     }
     let Some(title) = title else {
-        eprintln!("usage: herdr task create --title TEXT [--description TEXT] [--depends-on ID]");
+        eprintln!(
+            "usage: herdr task create --title TEXT [--description TEXT] [--depends-on ID] [--agent-session-id ID]"
+        );
         return Ok(2);
     };
     super::runtime::task_create(TaskCreateParams {
@@ -144,6 +155,7 @@ fn task_create(args: &[String]) -> std::io::Result<i32> {
         priority,
         dependencies,
         cwd,
+        agent_session_id,
     })
 }
 
@@ -312,7 +324,7 @@ fn parse_status(raw: &str) -> Result<TaskStatus, String> {
 fn print_task_help() {
     eprintln!("usage: herdr task <board|list|get|create|update|attach|dispatch|report>");
     eprintln!("  board                                      show tasks grouped by lifecycle state");
-    eprintln!("  create --title TEXT [--description TEXT]  create a durable task");
+    eprintln!("  create --title TEXT [--agent-session-id ID]    create a durable task");
     eprintln!("  attach TASK_ID AGENT_OR_PANE              attach a live agent to a task");
     eprintln!("  dispatch TASK_ID AGENT_OR_PANE            attach and send the task prompt");
     eprintln!("  report TASK_ID STATUS [--message TEXT]    record agent or reviewer progress");

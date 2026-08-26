@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -123,6 +123,7 @@ pub(super) fn render_task_activity_overlay(app: &AppState, frame: &mut Frame) {
     );
     let agent = task.agent.as_deref().unwrap_or("unassigned");
     let pane = task.pane_id.as_deref().unwrap_or("-");
+    let agent_session_id = task.agent_session_id.as_deref().unwrap_or("-");
     let cwd = task.cwd.as_deref().unwrap_or("-");
     frame.render_widget(
         Paragraph::new(vec![
@@ -138,7 +139,11 @@ pub(super) fn render_task_activity_overlay(app: &AppState, frame: &mut Frame) {
                 ),
             ]),
             Line::from(vec![
-                Span::styled("cwd    ", Style::default().fg(app.palette.overlay0)),
+                Span::styled("session  ", Style::default().fg(app.palette.overlay0)),
+                Span::styled(agent_session_id, Style::default().fg(app.palette.text)),
+            ]),
+            Line::from(vec![
+                Span::styled("cwd      ", Style::default().fg(app.palette.overlay0)),
                 Span::styled(cwd, Style::default().fg(app.palette.text)),
             ]),
         ]),
@@ -181,15 +186,25 @@ pub(super) fn render_task_activity_overlay(app: &AppState, frame: &mut Frame) {
             .width
             .saturating_sub(MESSAGE_PREFIX.len() as u16)
             .max(1) as usize;
-        for activity in task.activities.iter().rev() {
+        for (activity_index, activity) in task.activities.iter().enumerate().rev() {
             let status = activity
                 .status
                 .map(|status| format!("[{}]", status_label(status)))
                 .unwrap_or_default();
+            let timestamp = app
+                .task_activity_timestamp_labels
+                .get(activity_index)
+                .filter(|(cached_timestamp, _)| *cached_timestamp == activity.timestamp)
+                .map(|(_, label)| label.as_str());
             lines.push(Line::from(vec![
-                Span::styled(
-                    format_activity_timestamp(activity.timestamp),
-                    Style::default().fg(app.palette.overlay0),
+                timestamp.map_or_else(
+                    || {
+                        Span::styled(
+                            format_utc_activity_timestamp(activity.timestamp),
+                            Style::default().fg(app.palette.overlay0),
+                        )
+                    },
+                    |timestamp| Span::styled(timestamp, Style::default().fg(app.palette.overlay0)),
                 ),
                 Span::styled("  + ", Style::default().fg(app.palette.accent)),
                 Span::styled(
@@ -229,7 +244,14 @@ pub(super) fn render_task_activity_overlay(app: &AppState, frame: &mut Frame) {
             Span::styled("j/k", Style::default().fg(app.palette.accent)),
             Span::styled(" scroll  ", Style::default().fg(app.palette.overlay0)),
             Span::styled("esc", Style::default().fg(app.palette.accent)),
-            Span::styled(" board  ", Style::default().fg(app.palette.overlay0)),
+            Span::styled(
+                if app.task_activity_from_panel {
+                    " panel  "
+                } else {
+                    " board  "
+                },
+                Style::default().fg(app.palette.overlay0),
+            ),
             Span::styled("q", Style::default().fg(app.palette.accent)),
             Span::styled(" close", Style::default().fg(app.palette.overlay0)),
         ])),
@@ -288,9 +310,15 @@ pub(super) fn render_task_panel(app: &AppState, frame: &mut Frame, area: Rect) {
     } else {
         "bottom"
     };
+    let focused = app.mode == crate::app::state::Mode::TaskPanel;
+    let border_color = if focused {
+        app.palette.accent
+    } else {
+        app.palette.surface1
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.palette.surface1))
+        .border_style(Style::default().fg(border_color))
         .title(format!("tasks | {placement}"));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -298,12 +326,28 @@ pub(super) fn render_task_panel(app: &AppState, frame: &mut Frame, area: Rect) {
         return;
     }
 
+    let status_width = 10_u16.min(inner.width);
+    let separator_width = 2_u16.min(inner.width.saturating_sub(status_width));
+    let task_count = format!(
+        "{} task{}",
+        app.tasks.len(),
+        if app.tasks.len() == 1 { "" } else { "s" }
+    );
+    let hint = if focused {
+        "j/k move | l open"
+    } else {
+        "click to focus"
+    };
     frame.render_widget(
-        Paragraph::new(format!(
-            "{} task{} | click for activity",
-            app.tasks.len(),
-            if app.tasks.len() == 1 { "" } else { "s" }
-        ))
+        Paragraph::new(Line::from(vec![
+            Span::raw(format!(
+                "{task_count:<width$}",
+                width = status_width as usize
+            )),
+            Span::raw(&"| "[..separator_width as usize]),
+            Span::raw(hint),
+        ]))
+        .alignment(Alignment::Left)
         .style(Style::default().fg(app.palette.overlay0)),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
@@ -314,8 +358,29 @@ pub(super) fn render_task_panel(app: &AppState, frame: &mut Frame, area: Rect) {
         inner.width,
         inner.height.saturating_sub(1),
     );
-    for (row, task) in app.tasks.iter().enumerate().take(rows.height as usize) {
-        let selected = row == app.task_board_selected;
+    let visible_rows = rows.height as usize;
+    let visible_start = super::task_panel_visible_start(app, visible_rows);
+    let remaining_width = rows
+        .width
+        .saturating_sub(status_width)
+        .saturating_sub(separator_width);
+    let id_width = app
+        .tasks
+        .iter()
+        .map(|task| task.id.len() as u16)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+        .min(remaining_width.saturating_sub(1));
+    for (row, (task_index, task)) in app
+        .tasks
+        .iter()
+        .enumerate()
+        .skip(visible_start)
+        .take(visible_rows)
+        .enumerate()
+    {
+        let selected = focused && task_index == app.task_board_selected;
         let style = if selected {
             Style::default()
                 .fg(panel_contrast_fg(&app.palette))
@@ -323,10 +388,51 @@ pub(super) fn render_task_panel(app: &AppState, frame: &mut Frame, area: Rect) {
         } else {
             Style::default().fg(app.palette.text)
         };
-        let label = format!("{}  {}  {}", status_label(task.status), task.id, task.title);
+        let row_area = Rect::new(rows.x, rows.y + row as u16, rows.width, 1);
+        let status_area = Rect::new(row_area.x, row_area.y, status_width, 1);
+        let separator_area = Rect::new(
+            status_area.x.saturating_add(status_area.width),
+            row_area.y,
+            separator_width,
+            1,
+        );
+        let id_area = Rect::new(
+            separator_area.x.saturating_add(separator_area.width),
+            row_area.y,
+            id_width,
+            1,
+        );
+        let title_area = Rect::new(
+            id_area.x.saturating_add(id_area.width),
+            row_area.y,
+            row_area
+                .width
+                .saturating_sub(status_area.width)
+                .saturating_sub(separator_area.width)
+                .saturating_sub(id_area.width),
+            1,
+        );
         frame.render_widget(
-            Paragraph::new(label).style(style).wrap(Wrap { trim: true }),
-            Rect::new(rows.x, rows.y + row as u16, rows.width, 1),
+            Paragraph::new(status_label(task.status))
+                .alignment(Alignment::Left)
+                .style(style),
+            status_area,
+        );
+        frame.render_widget(
+            Paragraph::new("| ").alignment(Alignment::Left).style(style),
+            separator_area,
+        );
+        frame.render_widget(
+            Paragraph::new(task.id.as_str())
+                .alignment(Alignment::Left)
+                .style(style),
+            id_area,
+        );
+        frame.render_widget(
+            Paragraph::new(task.title.as_str())
+                .alignment(Alignment::Left)
+                .style(style),
+            title_area,
         );
     }
 }
@@ -400,7 +506,28 @@ fn activity_kind_label(kind: TaskActivityKind) -> &'static str {
     }
 }
 
-fn format_activity_timestamp(timestamp: u64) -> String {
+pub(super) fn format_activity_timestamp(timestamp: u64) -> String {
+    format_activity_timestamp_for_local(timestamp, crate::platform::local_datetime_at(timestamp))
+}
+
+fn format_activity_timestamp_for_local(
+    timestamp: u64,
+    local_datetime: Option<time::PrimitiveDateTime>,
+) -> String {
+    if let Some(local_datetime) = local_datetime {
+        let local_time = local_datetime.time();
+        return format!(
+            "{:02}:{:02}:{:02}",
+            local_time.hour(),
+            local_time.minute(),
+            local_time.second()
+        );
+    }
+
+    format_utc_activity_timestamp(timestamp)
+}
+
+fn format_utc_activity_timestamp(timestamp: u64) -> String {
     let seconds = timestamp % 86_400;
     format!(
         "{:02}:{:02}:{:02}",
@@ -408,4 +535,27 @@ fn format_activity_timestamp(timestamp: u64) -> String {
         (seconds % 3_600) / 60,
         seconds % 60
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_activity_timestamp_for_local;
+
+    #[test]
+    fn activity_timestamp_uses_supplied_local_wall_clock_time() {
+        let local_datetime = time::Date::from_calendar_date(2026, time::Month::August, 26)
+            .unwrap()
+            .with_hms(19, 57, 42)
+            .unwrap();
+
+        assert_eq!(
+            format_activity_timestamp_for_local(0, Some(local_datetime)),
+            "19:57:42"
+        );
+    }
+
+    #[test]
+    fn activity_timestamp_falls_back_to_utc_when_local_conversion_fails() {
+        assert_eq!(format_activity_timestamp_for_local(3_723, None), "01:02:03");
+    }
 }

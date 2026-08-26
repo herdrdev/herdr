@@ -251,7 +251,8 @@ fn task_command() -> Command {
                 .arg(option("description", "TEXT"))
                 .arg(option("priority", "N"))
                 .arg(repeatable_option("depends-on", "TASK_ID"))
-                .arg(path_option("cwd", "PATH")),
+                .arg(path_option("cwd", "PATH"))
+                .arg(option("agent-session-id", "ID")),
         )
         .subcommand(
             Command::new("update")

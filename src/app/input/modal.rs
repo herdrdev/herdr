@@ -147,6 +147,7 @@ pub(super) fn apply_global_menu_action(state: &mut AppState, action: GlobalMenuA
         GlobalMenuAction::Settings => super::settings::open_settings(state),
         GlobalMenuAction::TaskBoard => {
             state.task_board_selected = 0;
+            state.task_panel_scroll = 0;
             state.mode = Mode::TaskBoard;
         }
         GlobalMenuAction::TaskPanel => {
@@ -177,10 +178,68 @@ pub(crate) fn handle_task_board_key(state: &mut AppState, key: KeyEvent) {
         }
         KeyCode::Enter if state.tasks.get(state.task_board_selected).is_some() => {
             state.task_activity_scroll = 0;
+            state.task_activity_timestamp_labels.clear();
+            state.task_activity_from_panel = false;
             state.mode = Mode::TaskActivity;
         }
         _ => {}
     }
+}
+
+pub(crate) fn handle_task_panel_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Left | KeyCode::Char('h') => {
+            leave_modal(state);
+        }
+        KeyCode::Up | KeyCode::Char('k') => move_task_panel_selection(state, false),
+        KeyCode::Down | KeyCode::Char('j') => move_task_panel_selection(state, true),
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
+            if state.tasks.get(state.task_board_selected).is_some() =>
+        {
+            state.task_activity_scroll = 0;
+            state.task_activity_timestamp_labels.clear();
+            state.task_activity_from_panel = true;
+            state.mode = Mode::TaskActivity;
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn move_task_panel_selection(state: &mut AppState, forward: bool) {
+    if state.tasks.is_empty() {
+        state.task_board_selected = 0;
+        return;
+    }
+    state.task_board_selected = if forward {
+        state
+            .task_board_selected
+            .saturating_add(1)
+            .min(state.tasks.len() - 1)
+    } else {
+        state.task_board_selected.saturating_sub(1)
+    };
+    sync_task_panel_scroll(state);
+}
+
+fn sync_task_panel_scroll(state: &mut AppState) {
+    let visible_rows = crate::ui::task_panel_inner_rect(state.view.task_panel_rect)
+        .height
+        .saturating_sub(1) as usize;
+    if visible_rows == 0 {
+        state.task_panel_scroll = 0;
+        return;
+    }
+    if state.task_board_selected < state.task_panel_scroll {
+        state.task_panel_scroll = state.task_board_selected;
+    } else if state.task_board_selected >= state.task_panel_scroll.saturating_add(visible_rows) {
+        state.task_panel_scroll = state
+            .task_board_selected
+            .saturating_add(1)
+            .saturating_sub(visible_rows);
+    }
+    state.task_panel_scroll = state
+        .task_panel_scroll
+        .min(state.tasks.len().saturating_sub(visible_rows));
 }
 
 fn move_task_board_selection_vertical(state: &mut AppState, forward: bool) {
@@ -265,9 +324,17 @@ pub(crate) fn handle_task_activity_key(state: &mut AppState, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             state.task_activity_scroll = 0;
-            state.mode = Mode::TaskBoard;
+            state.mode = if state.task_activity_from_panel {
+                Mode::TaskPanel
+            } else {
+                Mode::TaskBoard
+            };
+            state.task_activity_from_panel = false;
         }
-        KeyCode::Char('q') => leave_modal(state),
+        KeyCode::Char('q') => {
+            state.task_activity_from_panel = false;
+            leave_modal(state);
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             state.task_activity_scroll = state.task_activity_scroll.saturating_sub(1);
         }
@@ -1571,12 +1638,14 @@ mod tests {
             1,
         ));
         state.mode = Mode::TaskBoard;
+        state.task_activity_from_panel = true;
 
         handle_task_board_key(
             &mut state,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
         );
         assert_eq!(state.mode, Mode::TaskActivity);
+        assert!(!state.task_activity_from_panel);
 
         handle_task_activity_key(
             &mut state,
@@ -1589,6 +1658,58 @@ mod tests {
         );
         assert_eq!(state.mode, Mode::TaskBoard);
         assert_eq!(state.task_activity_scroll, 0);
+    }
+
+    #[test]
+    fn task_panel_hjkl_opens_activity_and_returns_to_panel() {
+        let mut state = state_with_workspaces(&["test"]);
+        for id in ["task-1", "task-2"] {
+            state.tasks.push(crate::task::Task::new(
+                id.into(),
+                id.into(),
+                String::new(),
+                100,
+                Vec::new(),
+                None,
+                1,
+            ));
+        }
+        state.mode = Mode::TaskPanel;
+
+        handle_task_panel_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 1);
+        handle_task_panel_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.task_board_selected, 0);
+        handle_task_panel_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::TaskActivity);
+        assert!(state.task_activity_from_panel);
+
+        handle_task_activity_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::TaskPanel);
+        handle_task_panel_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+
+        state.mode = Mode::TaskPanel;
+        handle_task_panel_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+        );
+        assert_eq!(state.mode, Mode::Terminal);
     }
 
     #[test]

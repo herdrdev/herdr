@@ -33,6 +33,16 @@ impl App {
         if title.is_empty() {
             return encode_error(id, "invalid_task_title", "task title must not be empty");
         }
+        let agent_session_id = params
+            .agent_session_id
+            .map(|agent_session_id| agent_session_id.trim().to_string());
+        if agent_session_id.as_deref() == Some("") {
+            return encode_error(
+                id,
+                "invalid_agent_session_id",
+                "agent session id must not be empty",
+            );
+        }
         let unique_dependencies = params
             .dependencies
             .iter()
@@ -62,7 +72,7 @@ impl App {
         }
 
         let now = crate::task::unix_timestamp();
-        let task = Task::new(
+        let mut task = Task::new(
             next_task_id(&self.state.tasks),
             title.to_string(),
             params.description,
@@ -71,6 +81,7 @@ impl App {
             params.cwd,
             now,
         );
+        task.agent_session_id = agent_session_id;
         self.state.tasks.push(task);
         refresh_ready_tasks(&mut self.state.tasks, now);
         let Some(task) = self.state.tasks.last().cloned() else {
@@ -405,6 +416,7 @@ mod tests {
                 priority: 10,
                 dependencies: Vec::new(),
                 cwd: Some("/tmp/project".into()),
+                agent_session_id: Some("  01a03dda-cfca-7c62-87a0-17bf3d49a96c  ".into()),
             },
         );
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -417,8 +429,32 @@ mod tests {
         };
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].status, TaskStatus::Ready);
+        assert_eq!(
+            tasks[0].agent_session_id.as_deref(),
+            Some("01a03dda-cfca-7c62-87a0-17bf3d49a96c")
+        );
         assert_eq!(tasks[0].activities.len(), 1);
         assert_eq!(tasks[0].activities[0].kind, TaskActivityKind::Created);
+    }
+
+    #[test]
+    fn create_rejects_blank_agent_session_id() {
+        let mut app = app();
+        let response = app.handle_task_create(
+            "create".into(),
+            TaskCreateParams {
+                title: "write tests".into(),
+                description: String::new(),
+                priority: 100,
+                dependencies: Vec::new(),
+                cwd: None,
+                agent_session_id: Some("   ".into()),
+            },
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(parsed["error"]["code"], "invalid_agent_session_id");
+        assert!(app.state.tasks.is_empty());
     }
 
     #[test]
@@ -471,6 +507,7 @@ mod tests {
                 workspace_id: None,
                 pane_id: None,
                 agent: None,
+                agent_session_id: None,
                 attempts: 1,
                 created_at: 1,
                 updated_at: 1,
@@ -488,6 +525,7 @@ mod tests {
                 workspace_id: None,
                 pane_id: None,
                 agent: None,
+                agent_session_id: None,
                 attempts: 0,
                 created_at: 1,
                 updated_at: 1,

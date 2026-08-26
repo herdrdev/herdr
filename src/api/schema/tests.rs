@@ -132,6 +132,7 @@ fn task_requests_round_trip() {
             priority: 20,
             dependencies: vec!["task-1".into()],
             cwd: Some("/tmp/herdr".into()),
+            agent_session_id: Some("01a03dda-cfca-7c62-87a0-17bf3d49a96c".into()),
         }),
     };
 
@@ -140,6 +141,10 @@ fn task_requests_round_trip() {
     assert_eq!(
         json["params"]["dependencies"],
         serde_json::json!(["task-1"])
+    );
+    assert_eq!(
+        json["params"]["agent_session_id"],
+        "01a03dda-cfca-7c62-87a0-17bf3d49a96c"
     );
     assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 }

@@ -936,6 +936,7 @@ pub enum Mode {
     Settings,
     GlobalMenu,
     TaskBoard,
+    TaskPanel,
     TaskActivity,
     KeybindHelp,
     Navigator,
@@ -976,6 +977,7 @@ impl Mode {
                 | Mode::ContextMenu
                 | Mode::GlobalMenu
                 | Mode::TaskBoard
+                | Mode::TaskPanel
                 | Mode::TaskActivity
                 | Mode::KeybindHelp
         )
@@ -1658,7 +1660,12 @@ pub struct AppState {
     /// Highlight state for the bottom-right global launcher menu.
     pub global_menu: MenuListState,
     pub task_board_selected: usize,
+    pub task_panel_scroll: usize,
     pub task_activity_scroll: u16,
+    /// Client-local clock labels cached outside the pure render path.
+    pub task_activity_timestamp_labels: Vec<(u64, String)>,
+    /// Whether Escape from task activity should return to the dock instead of the full board.
+    pub task_activity_from_panel: bool,
     /// Resolved host terminal default colors for theming embedded panes.
     pub host_terminal_theme: TerminalTheme,
     /// Last known foreground host terminal cell size in pixels.
@@ -2045,7 +2052,10 @@ impl AppState {
             plugin_commands_in_flight: 0,
             global_menu: MenuListState::new(0),
             task_board_selected: 0,
+            task_panel_scroll: 0,
             task_activity_scroll: 0,
+            task_activity_timestamp_labels: Vec::new(),
+            task_activity_from_panel: false,
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             host_mouse_pixels: None,

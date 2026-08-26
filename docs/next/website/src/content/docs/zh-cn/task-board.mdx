@@ -98,13 +98,15 @@ herdr task list --status review
 
 ```bash
 herdr task create --title "Add retry policy" --description "Document and test retries" \
-  --cwd ~/src/project
+  --cwd ~/src/project --agent-session-id "SESSION_ID"
 herdr task board
 herdr task list
 herdr task get task-1
 ```
 
 Herdr 会为每个任务自动分配持久、单调递增的 ID（如 `task-1`、`task-2`）。创建任务时无需提供 ID，已保存任务列表中的空缺编号也不会被重复使用。
+
+如果协调者已经知道 Codex、Claude、Pi 或其他智能体的原生会话 ID，可以通过 `--agent-session-id` 传入。Herdr 会持久化该值、在任务 API 中返回它，并在活动详情中显示。该字段用于记录来源，不会附加或恢复会话。
 
 主要生命周期为：
 
@@ -119,9 +121,9 @@ backlog -> ready -> running -> review -> done
 
 ## 在终端 UI 中显示任务
 
-从工作区侧边栏打开全局菜单，选择 `task panel`，即可在 `hidden`、`right` 和 `bottom` 之间循环切换任务停靠栏。停靠栏会在终端右侧或下方预留空间，工作区和智能体面板仍然可以正常使用。
+从工作区侧边栏打开全局菜单，选择 `task panel`，即可在 `hidden`、`right` 和 `bottom` 之间循环切换任务停靠栏。停靠栏会在终端右侧或下方预留空间，工作区和智能体面板仍然可以正常使用。点击停靠栏可将焦点移入其中。使用 `j`/`k` 或 Up/Down 在任务间移动，使用 `l`/Right 或 Enter 打开活动详情，使用 `h`/Left、`q` 或 Escape 将焦点返回终端而不隐藏停靠栏。第一次点击任务行会聚焦并选中它；再次点击已选中的任务行会打开活动详情。
 
-从同一菜单选择 `task board` 可打开完整的状态列视图。使用 `h`/`l` 或 Left/Right 在非空状态列之间移动，并尽量保持在同一行；使用 `j`/`k` 或 Up/Down 在当前列的任务之间移动。在选中的任务上按 Enter，或者点击看板或停靠栏中的任务行，即可打开活动详情模态。模态会显示任务标识、状态、分配元数据，以及按时间倒序排列的活动。可以使用 `j`/`k`、Up/Down、Page Up/Page Down 或鼠标滚轮滚动。按 Escape 返回看板。在看板中按 `p` 可切换停靠栏并关闭看板。
+从同一菜单选择 `task board` 可打开完整的状态列视图。使用 `h`/`l` 或 Left/Right 在非空状态列之间移动，并尽量保持在同一行；使用 `j`/`k` 或 Up/Down 在当前列的任务之间移动。在选中的任务上按 Enter，或者点击看板中的任务行，即可打开活动详情模态。模态会显示任务标识、状态、分配元数据，以及按时间倒序排列的活动。活动时间使用本机系统时区。可以使用 `j`/`k`、Up/Down、Page Up/Page Down 或鼠标滚轮滚动。按 Escape 会返回打开活动详情的界面，即看板或已聚焦的停靠栏。在看板中按 `p` 可切换停靠栏并关闭看板。
 
 `herdr task board` 输出的是非交互式命令行摘要。需要交互式看板和活动详情模态时，请使用 TUI 菜单。需要包含描述、依赖关系、最后消息和结构化活动的完整任务记录时，使用 `herdr task get TASK_ID`。
 

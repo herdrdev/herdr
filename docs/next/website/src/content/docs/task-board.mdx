@@ -136,7 +136,7 @@ and reading terminal results.
 
 ```bash
 herdr task create --title "Add retry policy" --description "Document and test retries" \
-  --cwd ~/src/project
+  --cwd ~/src/project --agent-session-id "SESSION_ID"
 herdr task board
 herdr task list
 herdr task get task-1
@@ -145,6 +145,11 @@ herdr task get task-1
 Herdr assigns each task a persistent, monotonically increasing ID (`task-1`,
 `task-2`, and so on). You do not provide the ID when creating a task, and gaps
 in the saved task list are not reused.
+
+When a coordinator already knows the native Codex, Claude, Pi, or other agent
+session ID, pass it with `--agent-session-id`. Herdr persists the value, returns
+it from task APIs, and shows it in activity details. This records provenance;
+it does not attach or resume the session.
 
 The primary lifecycle is:
 
@@ -165,15 +170,20 @@ task may return to `ready` for a deliberate retry. Herdr rejects `running` to
 Open the global menu from the workspace sidebar and choose `task panel` to cycle
 the task dock through `hidden`, `right`, and `bottom`. The dock reserves space
 next to or below the terminal, so the workspace and agent panels remain usable.
+Click the dock to focus it. Use `j`/`k` or Up/Down to move through tasks,
+`l`/Right or Enter to open activity, and `h`/Left, `q`, or Escape to return
+focus to the terminal without hiding the dock. A first row click focuses and
+selects it; click the selected row again to open its activity.
 
 Choose `task board` from the same menu for the full status-column view. Use
 `h`/`l` or Left/Right to move across non-empty status columns while keeping the
 same row when possible. Use `j`/`k` or Up/Down to move between tasks in the
-current column. Press Enter on a selected task, or click a row in either the
-board or dock, to open its activity modal. The modal shows task identity,
-status, assignment metadata, and the newest activity first. Use `j`/`k`,
-Up/Down, Page Up/Page Down, or the mouse wheel to scroll. Escape returns to the
-board. Press `p` in the board to cycle the dock and close the board.
+current column. Press Enter on a selected task, or click a board row, to open
+its activity modal. The modal shows task identity, status, assignment metadata,
+and the newest activity first. Activity timestamps use the local system
+timezone. Use `j`/`k`, Up/Down, Page Up/Page Down, or the mouse wheel to scroll.
+Escape returns to the surface that opened the activity: the board or the
+focused dock. Press `p` in the board to cycle the dock and close the board.
 
 `herdr task board` prints a non-interactive command-line summary. Use the TUI
 menu when you want the interactive board and activity modal. Use

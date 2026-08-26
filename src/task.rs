@@ -49,6 +49,8 @@ pub struct Task {
     pub pane_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
     #[serde(default)]
     pub attempts: u32,
     #[serde(default)]
@@ -127,6 +129,7 @@ impl Task {
             workspace_id: None,
             pane_id: None,
             agent: None,
+            agent_session_id: None,
             attempts: 0,
             created_at: now,
             updated_at: now,
@@ -268,8 +271,8 @@ mod tests {
     }
 
     #[test]
-    fn older_task_json_defaults_activity_history() {
-        let task = Task::new(
+    fn older_task_json_defaults_new_optional_fields() {
+        let mut task = Task::new(
             "task-1".into(),
             "legacy task".into(),
             String::new(),
@@ -278,14 +281,17 @@ mod tests {
             None,
             1,
         );
+        task.agent_session_id = Some("session-newer-than-snapshot".into());
         let mut value = serde_json::to_value(task).unwrap();
-        value
+        let object = value
             .as_object_mut()
-            .expect("task should serialize as an object")
-            .remove("activities");
+            .expect("task should serialize as an object");
+        object.remove("activities");
+        object.remove("agent_session_id");
 
         let restored: Task = serde_json::from_value(value).unwrap();
 
         assert!(restored.activities.is_empty());
+        assert_eq!(restored.agent_session_id, None);
     }
 }

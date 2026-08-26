@@ -132,13 +132,13 @@ herdr workspace create --cwd ~/project --label api --no-focus
 
 ```bash
 herdr task board
-herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID]
+herdr task create --title TEXT [--description TEXT] [--depends-on TASK_ID] [--agent-session-id ID]
 herdr task attach <task_id> <agent-or-pane>
 herdr task dispatch <task_id> <agent-or-pane>
 herdr task report <task_id> <backlog|ready|running|blocked|review|done|failed|cancelled>
 ```
 
-タスクはサーバーに保存される永続レコードです。`task attach` と `task dispatch` は Herdr で実行中のエージェント名またはペイン ID を受け取り、Herdr 外で起動したプロセスは取り込みません。実行中のペインを別のワークスペースへ移すには `pane move` を使います。
+タスクはサーバーに保存される永続レコードです。`task attach` と `task dispatch` は Herdr で実行中のエージェント名またはペイン ID を受け取り、Herdr 外で起動したプロセスは取り込みません。`--agent-session-id` は既知の Codex、Claude、Pi、またはその他のエージェントのネイティブセッション ID をタスクメタデータとして記録しますが、そのセッションをアタッチまたは再開するものではありません。実行中のペインを別のワークスペースへ移すには `pane move` を使います。
 
 ## Worktree
 
