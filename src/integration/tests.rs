@@ -2937,7 +2937,7 @@ fn omp_handler(event: &str) -> &'static str {
 }
 
 #[test]
-fn omp_root_activation_requires_ui_context() {
+fn omp_root_activation_requires_ui_and_interactive_stdio() {
     let activator = OMP_EXTENSION_ASSET
         .find("function activateRootSession(ctx: any, sessionStartSource = \"startup\"): boolean")
         .expect("omp extension should centralize root session activation");
@@ -2945,14 +2945,22 @@ fn omp_root_activation_requires_ui_context() {
     let non_ui_guard = helper
         .find("ctx?.hasUI !== true")
         .expect("omp extension checks UI context before activating");
+    let stdin_guard = helper
+        .find("process.stdin?.isTTY !== true")
+        .expect("omp extension requires interactive stdin before activating");
+    let stdout_guard = helper
+        .find("process.stdout?.isTTY !== true")
+        .expect("omp extension requires interactive stdout before activating");
     let root_session = helper
         .find("rootSession = true;")
-        .expect("omp extension activates root session after UI guard");
+        .expect("omp extension activates root session after its guards");
     let session_report = helper
         .find("void reportSession(sessionStartSource);")
         .expect("omp extension reports root session");
 
-    assert!(non_ui_guard < root_session);
+    assert!(non_ui_guard < stdin_guard);
+    assert!(stdin_guard < stdout_guard);
+    assert!(stdout_guard < root_session);
     assert!(root_session < session_report);
 }
 

@@ -324,7 +324,14 @@ export default function (pi) {
   }
 
   function activateRootSession(ctx: any, sessionStartSource = "startup"): boolean {
-    if (ctx?.hasUI !== true) {
+    // omp has no run-mode field on the extension context and reports hasUI for
+    // RPC and ACP as well, so interactive stdio is what separates the pane's
+    // real TUI from a nested headless session started by a tool call: those
+    // inherit the pane's socket and pane id and would otherwise take over the
+    // pane's agent state. This is omp's own TUI condition (see the startup gate
+    // in oh-my-pi/packages/coding-agent/src/cli.ts). A nested *TUI* session on
+    // a PTY still passes here; only the server can tell those apart.
+    if (ctx?.hasUI !== true || process.stdin?.isTTY !== true || process.stdout?.isTTY !== true) {
       return false;
     }
     rootSession = true;

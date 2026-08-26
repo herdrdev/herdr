@@ -12,6 +12,10 @@ const originalEnvironment = {
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 };
+const originalStdioIsTTY = {
+  stdin: process.stdin.isTTY,
+  stdout: process.stdout.isTTY,
+};
 
 let server: Server | undefined;
 let socketPath: string | undefined;
@@ -33,6 +37,7 @@ afterEach(async () => {
   }
 
   Object.defineProperty(process, "platform", { value: originalPlatform });
+  definePaneStdio(originalStdioIsTTY);
   net.createConnection = originalCreateConnection;
   for (const [name, value] of Object.entries(originalEnvironment)) {
     if (value === undefined) {
@@ -84,10 +89,24 @@ function createExtensionHarness() {
   };
 }
 
+// The pane's agent runs on a PTY, and `bun test` may run with piped stdio, so
+// the harness states the pane's terminal instead of depending on how the suite
+// was launched.
+function definePaneStdio(isTTY: { stdin?: boolean; stdout?: boolean }) {
+  for (const stream of ["stdin", "stdout"] as const) {
+    Object.defineProperty(process[stream], "isTTY", {
+      value: isTTY[stream],
+      configurable: true,
+      writable: true,
+    });
+  }
+}
+
 function configureIntegrationEnvironment(recordingSocketPath: string) {
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = recordingSocketPath;
   process.env.HERDR_PANE_ID = "test:p1";
+  definePaneStdio({ stdin: true, stdout: true });
 }
 
 function captureConnectionEndpoint() {
@@ -537,6 +556,38 @@ test("Oh My Pi keeps working when a turn ends with a scheduled continuation", as
   expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
 });
 
+test("Oh My Pi ignores a nested headless session", async () => {
+  const requests = await startRecordingServer("omp-nested-headless");
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
+  // A nested `omp --mode=rpc` session started from a tool call inherits the
+  // pane's socket and pane id and still reports hasUI, so piped stdio is what
+  // separates it from the pane's own TUI. See issue #3246.
+  definePaneStdio({});
+  const nested = createExtensionHarness();
+  const { default: installNested } = await importFresh("./omp/herdr-agent-state.ts");
+  installNested(nested.pi);
+
+  const nestedContext = ompContext("nested-session");
+  nested.handlers.get("session_start")?.({ reason: "startup" }, nestedContext);
+  nested.handlers.get("agent_start")?.({}, nestedContext);
+  nested.handlers.get("agent_end")?.({ messages: [] }, nestedContext);
+
+  // The pane's own agent reports through the same socket. Its request is the
+  // barrier: anything the nested session sent was issued first and would
+  // already be recorded.
+  definePaneStdio({ stdin: true, stdout: true });
+  const owner = createExtensionHarness();
+  const { default: installOwner } = await importFresh("./omp/herdr-agent-state.ts");
+  installOwner(owner.pi);
+  owner.handlers.get("session_start")?.({ reason: "startup" }, ompContext("owner-session"));
+
+  await waitFor(() => requests.length > 0);
+  expect(requests.filter((request) => requestSessionId(request) === "nested-session")).toEqual([]);
+  expect(requests.filter((request) => requestSessionId(request) === "owner-session")).not.toEqual(
+    [],
+  );
+});
+
 test("Pi retries working state after an unanswered socket attempt", async () => {
   const { attemptedRequests, deliveredRequests, connectionCount } =
     await startDroppedFirstResponseServer("pi-retry");
@@ -596,6 +647,17 @@ function piContext(isIdle: () => boolean) {
   };
 }
 
+function ompContext(sessionId: string, isIdle: () => boolean = () => true) {
+  return {
+    hasUI: true,
+    isIdle,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => sessionId,
+    },
+  };
+}
+
 function requestStates(requests: unknown[]): unknown[] {
   return requests
     .filter((request) => isRecord(request) && request.method === "pane.report_agent")
@@ -615,6 +677,13 @@ function requestState(request: unknown): unknown {
     return undefined;
   }
   return request.params.state;
+}
+
+function requestSessionId(request: unknown): unknown {
+  if (!isRecord(request) || !isRecord(request.params)) {
+    return undefined;
+  }
+  return request.params.agent_session_id;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
