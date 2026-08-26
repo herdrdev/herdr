@@ -2,13 +2,13 @@ use std::io;
 
 use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
-    install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
-    install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
-    install_mastracode, install_omp, install_opencode, install_pi, install_qodercli, install_qwen,
-    uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
-    uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
-    uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp, uninstall_opencode,
-    uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    install_antigravity_cli, install_claude, install_cline, install_codex, install_copilot,
+    install_cursor, install_devin, install_droid, install_grok, install_hermes, install_kilo,
+    install_kimi, install_mastracode, install_omp, install_opencode, install_pi, install_qodercli,
+    install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_cline, uninstall_codex,
+    uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok,
+    uninstall_hermes, uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp,
+    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -253,6 +253,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                     installed.config_path.display()
                 ),
             ]
+        }
+        crate::api::schema::IntegrationTarget::Cline => {
+            let installed = install_cline()?;
+            let mut messages = vec![format!(
+                "installed cline integration hook to {}",
+                installed.script_path.display()
+            )];
+            messages.push(format!(
+                "registered {} cline hook event files in {}",
+                super::CLINE_HOOK_WRAPPERS.len(),
+                installed.hooks_dir.display()
+            ));
+            messages
         }
     };
 
@@ -703,6 +716,30 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no grok hook config found at {}",
                     result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Cline => {
+            let result = uninstall_cline()?;
+            let mut messages = Vec::new();
+            if result.removed_wrapper_files > 0 {
+                messages.push(format!(
+                    "removed {} cline hook event files",
+                    result.removed_wrapper_files
+                ));
+            } else {
+                messages.push("no cline hook event files found".to_string());
+            }
+            if result.removed_script_file {
+                messages.push(format!(
+                    "removed cline integration hook at {}",
+                    result.script_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no cline integration hook found at {}",
+                    result.script_path.display()
                 ));
             }
             messages

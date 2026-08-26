@@ -1,6 +1,6 @@
 ---
 title: 集成
-description: 为 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Cursor Agent CLI、MastraCode、Antigravity CLI 和 Grok CLI 安装 Herdr 集成。
+description: 为 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI 和 Cline CLI 安装 Herdr 集成。
 ---
 
 Herdr 自动检测受支持的智能体。官方集成可以额外提供用于恢复的原生会话身份、生命周期状态上报,或两者兼有。
@@ -29,6 +29,7 @@ herdr integration install qwen
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install cline
 ```
 
 ## 卸载集成
@@ -51,6 +52,7 @@ herdr integration uninstall qwen
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall cline
 ```
 
 ## Herdr 如何使用集成
@@ -59,7 +61,7 @@ Herdr 以两种不同方式使用集成:
 
 | 集成类型 | 智能体 | 效果 |
 | --- | --- | --- |
-| 生命周期权威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | 已安装且在为该窗格主动上报时,由钩子或插件事件决定 `idle`、`working` 和 `blocked`。对同一个生命周期权威,Herdr 不再使用屏幕清单兜底。 |
+| 生命周期权威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode、Cline CLI | 已安装且在为该窗格主动上报时,由钩子或插件事件决定 `idle`、`working` 和 `blocked`。对同一个生命周期权威,Herdr 不再使用屏幕清单兜底。 |
 | 会话身份 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Qwen Code、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | 集成上报用于恢复的原生会话引用。状态仍来自 Herdr 的屏幕清单检测。 |
 
 自定义集成在定义了原生终端 UI 中不可见的状态时,也可以上报状态。它们不需要内置到 Herdr 中,也不要求 Herdr 识别智能体的可执行文件。
@@ -332,6 +334,22 @@ herdr integration install grok
 Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的所有 `hooks/*.json` 文件,因此安装会写入独立的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并同时写入 `hooks/herdr-agent-state.sh`（Windows 上为 `hooks/herdr-agent-state.ps1`）;它不会修改其他钩子文件。卸载只会删除这两个由 Herdr 管理的文件。
 
 Grok 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `grok --resume <id>` 恢复窗格。
+
+## Cline CLI
+
+安装 Cline CLI 钩子:
+
+```bash
+herdr integration install cline
+```
+
+这些钩子会向 Herdr 上报 Cline 的会话身份和生命周期状态,实现原生恢复以及权威的 `idle` 和 `working` 状态。可见的审批提示仍来自 Herdr 的屏幕清单检测。
+
+Herdr 默认使用 `~/.cline`,设置了 `CLINE_DIR` 时使用后者。Cline 配置目录必须已经存在。Cline 按 `hooks/` 目录中的文件名发现钩子文件,因此安装会写入一个上报脚本,并为每个 Cline 生命周期事件写入一个小的包装文件(`taskstart.sh`、`taskresume.sh`、`userpromptsubmit.sh`、`pretooluse.sh`、`posttooluse.sh`、`taskcomplete.sh`、`taskcancel.sh`、`taskerror.sh`)。卸载只删除由 Herdr 管理的文件,不会触碰该目录中的其他钩子。
+
+Cline 集成目前不支持 Windows,因为 Cline 通过 `bash`/`node` 运行器分发钩子文件,而这些运行器在 Windows 上不一定存在。没有钩子时屏幕检测仍然有效。
+
+Herdr 可以用 `cline --id <id>` 恢复已保存的 Cline 会话。
 
 ## 自定义状态标签
 

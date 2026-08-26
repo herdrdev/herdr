@@ -20,6 +20,12 @@ pub(crate) struct KimiInstallPaths {
 }
 
 #[derive(Debug)]
+pub(crate) struct ClineInstallPaths {
+    pub script_path: PathBuf,
+    pub hooks_dir: PathBuf,
+}
+
+#[derive(Debug)]
 pub(crate) struct CopilotInstallPaths {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
@@ -274,4 +280,12 @@ pub(crate) struct AntigravityCliUninstallResult {
     pub hooks_path: PathBuf,
     pub removed_hook_file: bool,
     pub updated_hooks: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClineUninstallResult {
+    pub script_path: PathBuf,
+    /// Number of Herdr-owned per-event wrapper files removed.
+    pub removed_wrapper_files: usize,
+    pub removed_script_file: bool,
 }

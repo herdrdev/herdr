@@ -1,6 +1,6 @@
 ---
 title: インテグレーション
-description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI 向けの Herdr インテグレーションをインストールします。
+description: Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Kimi Code CLI、OpenCode、Kilo Code CLI、Hermes Agent、Qoder CLI、Qwen Code、Cursor Agent CLI、MastraCode、Antigravity CLI、Grok CLI、Cline CLI 向けの Herdr インテグレーションをインストールします。
 ---
 
 Herdr は対応エージェントを自動的に検出します。公式インテグレーションは、復元のためのネイティブセッション識別、ライフサイクル状態の報告、またはその両方を追加できます。
@@ -29,6 +29,7 @@ herdr integration install qwen
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install cline
 ```
 
 ## インテグレーションをアンインストールする
@@ -51,6 +52,7 @@ herdr integration uninstall qwen
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall cline
 ```
 
 ## Herdr がインテグレーションをどう使うか
@@ -59,7 +61,7 @@ Herdr はインテグレーションを 2 つの異なる方法で使います:
 
 | インテグレーションの種類 | エージェント | 効果 |
 | --- | --- | --- |
-| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
+| ライフサイクル権威 | Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode、Cline CLI | インストールされ、そのペインについて能動的に報告している間は、フックまたはプラグインのイベントが `idle`、`working`、`blocked` を決定します。同じライフサイクル権威に対して、Herdr はスクリーンマニフェストのフォールバックを併用しません。 |
 | セッション識別 | Claude Code、Codex、GitHub Copilot CLI、Devin CLI、Droid、Qoder CLI、Qwen Code、Cursor Agent CLI、Hermes Agent、Antigravity CLI、Grok CLI | インテグレーションは復元用のネイティブセッション参照を報告します。状態は引き続き Herdr のスクリーンマニフェスト検出から得られます。 |
 
 カスタムインテグレーションも、ネイティブのターミナル UI では見えない状態を定義する場合に状態を報告できます。Herdr への組み込みや、認識済みのエージェント実行ファイルは必要ありません。
@@ -332,6 +334,22 @@ herdr integration install grok
 Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh`（Windows では `hooks/herdr-agent-state.ps1`）を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
 
 Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
+
+## Cline CLI
+
+Cline CLI フックをインストールします:
+
+```bash
+herdr integration install cline
+```
+
+このフックは、Cline のセッション識別とライフサイクル状態を Herdr に報告し、ネイティブな復元と `idle`・`working` の権威あるステータスを実現します。表示上の承認プロンプトは引き続き Herdr のスクリーンマニフェスト検出から得られます。
+
+Herdr はデフォルトで `~/.cline` を使い、`CLINE_DIR` が設定されていればそちらを使います。Cline の設定ディレクトリはあらかじめ存在している必要があります。Cline は `hooks/` 内のファイル名でフックファイルを発見するため、インストールはレポータースクリプトと、各 Cline ライフサイクルイベントごとの小さなラッパーファイル（`taskstart.sh`、`taskresume.sh`、`userpromptsubmit.sh`、`pretooluse.sh`、`posttooluse.sh`、`taskcomplete.sh`、`taskcancel.sh`、`taskerror.sh`）を書き込みます。アンインストールは Herdr 所有のファイルだけを削除し、そのディレクトリ内のほかのフックには触れません。
+
+Cline インテグレーションは現在 Windows 非対応です。Cline がフックファイルを `bash` / `node` ランナー経由で実行するためで、これらが Windows 上に存在するとは限らないためです。フックがなくてもスクリーン検出は機能します。
+
+Herdr は保存された Cline セッションを `cline --id <id>` で resume できます。
 
 ## カスタムステータスラベル
 

@@ -207,6 +207,10 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        // Cline resumes stored sessions with `cline --id <session-id>`.
+        ("herdr:cline", "cline", AgentSessionRefKind::Id) => {
+            vec!["cline".into(), "--id".into(), session_ref.value.clone()]
+        }
         _ => return None,
     };
 
@@ -244,6 +248,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:cline", "cline")
     )
 }
 
@@ -661,6 +666,9 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+
+        let cline_plan = plan("herdr:cline", "cline", &AgentSessionRef::id(id).unwrap()).unwrap();
+        assert_eq!(cline_plan.argv, vec!["cline", "--id", id]);
     }
 
     #[test]

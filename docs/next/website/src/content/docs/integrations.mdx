@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Install Herdr integrations for Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Cursor Agent CLI, MastraCode, Antigravity CLI, and Grok CLI.
+description: Install Herdr integrations for Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Cursor Agent CLI, MastraCode, Antigravity CLI, Grok CLI, and Cline CLI.
 ---
 
 Herdr detects supported agents automatically. Install official integrations when you want native agent session restore, direct lifecycle reports, or both. See [Agents](/docs/agents/) for the full status authority model.
@@ -27,6 +27,7 @@ herdr integration install cursor
 herdr integration install mastracode
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install cline
 ```
 
 ## Uninstall integrations
@@ -49,6 +50,7 @@ herdr integration uninstall cursor
 herdr integration uninstall mastracode
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall cline
 ```
 
 ## How Herdr uses integrations
@@ -57,7 +59,7 @@ Herdr uses integrations in two ways:
 
 | Integration type | Agents | Effect |
 | --- | --- | --- |
-| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
+| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode, Cline CLI | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
 | Session identity | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Qwen Code, Cursor Agent CLI, Hermes Agent, Antigravity CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection. |
 
 Custom integrations can also report state that is not visible in the native terminal UI. They do not need to be built into Herdr or use a recognized agent executable.
@@ -330,6 +332,22 @@ The hook reports session identity through Grok's `SessionStart` hook while Grok 
 Herdr uses `~/.grok` by default, or `GROK_HOME` when set. The Grok config directory must already exist. Grok merges every `hooks/*.json` file in that directory, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to `hooks/herdr-agent-state.sh` (`hooks/herdr-agent-state.ps1` on Windows), and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
 
 After Grok emits a session start event, Herdr can use the reported session id to resume the pane with `grok --resume <id>`.
+
+## Cline CLI
+
+Install the Cline CLI hooks:
+
+```bash
+herdr integration install cline
+```
+
+The hooks report Cline session identity and lifecycle state to Herdr for native restore and authoritative `idle` and `working` status. Visible approval prompts still come from Herdr's screen manifest detection.
+
+Herdr uses `~/.cline` by default, or `CLINE_DIR` when set. The Cline config directory must already exist. Cline discovers hook files by name inside `hooks/`, so install writes a reporter script plus one small per-event wrapper file for each Cline lifecycle event (`taskstart.sh`, `taskresume.sh`, `userpromptsubmit.sh`, `pretooluse.sh`, `posttooluse.sh`, `taskcomplete.sh`, `taskcancel.sh`, and `taskerror.sh`). Uninstall removes only the Herdr-owned files and never touches other hooks in that directory.
+
+The Cline integration is not currently supported on Windows because Cline dispatches hook files through `bash`/`node` runners that may not exist there. Screen detection still works without the hooks.
+
+Herdr resumes stored Cline sessions with `cline --id <id>`.
 
 ## Custom status labels
 

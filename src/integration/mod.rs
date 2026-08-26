@@ -294,6 +294,25 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
+// Cline discovers hooks by file name inside `~/.cline/hooks`: a file whose
+// base name (case-insensitive) matches a hook event name runs for that event,
+// with the JSON payload on stdin. The main reporter script's base name matches
+// no event, so it stays inert; per-event wrapper files exec it with the Herdr
+// action arguments. Wrapper names are the Cline hook-event file names.
+const CLINE_HOOK_SCRIPT_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const CLINE_HOOK_SCRIPT_ASSET: &str = include_str!("assets/cline/herdr-agent-state.sh");
+const CLINE_INTEGRATION_VERSION: u32 = 1;
+/// `(wrapper file name, action argument, detail argument)` triples.
+const CLINE_HOOK_WRAPPERS: [(&str, &str, &str); 8] = [
+    ("taskstart.sh", "session", "startup"),
+    ("taskresume.sh", "session", "resume"),
+    ("userpromptsubmit.sh", "working", ""),
+    ("pretooluse.sh", "working", ""),
+    ("posttooluse.sh", "working", ""),
+    ("taskcomplete.sh", "idle", ""),
+    ("taskcancel.sh", "idle", ""),
+    ("taskerror.sh", "idle", ""),
+];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

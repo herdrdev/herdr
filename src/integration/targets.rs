@@ -18,9 +18,9 @@ use super::config_edit::{
     remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
 };
 use super::env::{
-    antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
-    opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    antigravity_cli_dir, claude_dir, cline_dir, codex_dir, copilot_dir, cursor_dir, devin_dir,
+    droid_dir, grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir,
+    omp_extension_dir, opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -30,19 +30,20 @@ use super::opencode_config::{
 };
 use super::types::{
     AntigravityCliInstallPaths, AntigravityCliUninstallResult, ClaudeInstallPaths,
-    ClaudeUninstallResult, CodexInstallPaths, CodexUninstallResult, CopilotInstallPaths,
-    CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
-    DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
-    GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
-    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths,
-    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
-    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
-    QwenInstallPaths, QwenUninstallResult,
+    ClaudeUninstallResult, ClineInstallPaths, ClineUninstallResult, CodexInstallPaths,
+    CodexUninstallResult, CopilotInstallPaths, CopilotUninstallResult, CursorInstallPaths,
+    CursorUninstallResult, DevinInstallPaths, DevinUninstallResult, DroidInstallPaths,
+    DroidUninstallResult, GrokInstallPaths, GrokUninstallResult, HermesInstallPaths,
+    HermesUninstallResult, KiloInstallPaths, KiloUninstallResult, KimiInstallPaths,
+    KimiUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
+    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
+    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
     ANTIGRAVITY_CLI_HOOK_INSTALL_NAME, ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC, CLAUDE_HOOK_ASSET,
-    CLAUDE_HOOK_INSTALL_NAME, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET,
+    CLAUDE_HOOK_INSTALL_NAME, CLINE_HOOK_SCRIPT_ASSET, CLINE_HOOK_SCRIPT_INSTALL_NAME,
+    CLINE_HOOK_WRAPPERS, CODEX_HOOK_ASSET, CODEX_HOOK_INSTALL_NAME, COPILOT_HOOK_ASSET,
     COPILOT_HOOK_EVENTS, COPILOT_HOOK_INSTALL_NAME, COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
     CURSOR_HOOK_ASSET, CURSOR_HOOK_INSTALL_NAME, DEVIN_HOOK_ASSET, DEVIN_HOOK_EVENTS,
     DEVIN_HOOK_INSTALL_NAME, DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS, DROID_HOOK_ASSET,
@@ -1482,5 +1483,120 @@ pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
         config_path,
         removed_hook_file,
         removed_config_file,
+    })
+}
+
+/// The complete per-event wrapper file body. Cline runs hook files named after
+/// each event with the JSON payload on stdin, so every wrapper just forwards to
+/// the main reporter script with its action arguments.
+fn cline_wrapper_content(script_path: &Path, action: &str, detail: &str) -> String {
+    // This integration is Windows-gated off in integration_target_supported,
+    // so the wrapper body only needs a POSIX sh quoting style.
+    #[cfg(windows)]
+    let quoted = {
+        let _ = script_path;
+        String::new()
+    };
+    #[cfg(not(windows))]
+    let quoted = shell_single_quote(&script_path.display().to_string());
+
+    if detail.is_empty() {
+        format!(
+            "#!/bin/sh\n# managed by herdr; reinstalling the integration replaces this file.\n# HERDR_INTEGRATION_ID=cline\n# HERDR_INTEGRATION_VERSION={}\nexec {} {}\n",
+            super::CLINE_INTEGRATION_VERSION,
+            quoted,
+            action
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n# managed by herdr; reinstalling the integration replaces this file.\n# HERDR_INTEGRATION_ID=cline\n# HERDR_INTEGRATION_VERSION={}\nexec {} {} {}\n",
+            super::CLINE_INTEGRATION_VERSION,
+            quoted,
+            action,
+            detail
+        )
+    }
+}
+
+/// Cline discovers hook files purely by base name inside its hooks directory,
+/// so a same-named file may be a user's own hook. Only replace files that
+/// Herdr already owns.
+fn ensure_cline_file_replaceable(path: &Path) -> io::Result<()> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Ok(());
+    };
+    if content.contains("HERDR_INTEGRATION_ID=cline") {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "{} already exists and was not installed by herdr; move or rename it first",
+        path.display()
+    )))
+}
+
+fn remove_cline_owned_file(path: &Path) -> io::Result<bool> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    if !content.contains("HERDR_INTEGRATION_ID=cline") {
+        return Ok(false);
+    }
+    fs::remove_file(path)?;
+    Ok(true)
+}
+
+pub(crate) fn install_cline() -> io::Result<ClineInstallPaths> {
+    let dir = cline_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "cline config directory not found at {}. install cline first",
+            dir.display()
+        )));
+    }
+
+    // Cline also scans workspace-level hook directories, but installing into
+    // the global hooks directory covers every session regardless of cwd.
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let script_path = hooks_dir.join(CLINE_HOOK_SCRIPT_INSTALL_NAME);
+    ensure_cline_file_replaceable(&script_path)?;
+    fs::write(&script_path, CLINE_HOOK_SCRIPT_ASSET)?;
+    make_executable(&script_path)?;
+
+    for (file_name, action, detail) in CLINE_HOOK_WRAPPERS {
+        let wrapper_path = hooks_dir.join(file_name);
+        ensure_cline_file_replaceable(&wrapper_path)?;
+        fs::write(
+            &wrapper_path,
+            cline_wrapper_content(&script_path, action, detail),
+        )?;
+        make_executable(&wrapper_path)?;
+    }
+
+    Ok(ClineInstallPaths {
+        script_path,
+        hooks_dir,
+    })
+}
+
+pub(crate) fn uninstall_cline() -> io::Result<ClineUninstallResult> {
+    let hooks_dir = cline_dir()?.join("hooks");
+    let script_path = hooks_dir.join(CLINE_HOOK_SCRIPT_INSTALL_NAME);
+
+    let mut removed_wrapper_files = 0usize;
+    for (file_name, _, _) in CLINE_HOOK_WRAPPERS {
+        if remove_cline_owned_file(&hooks_dir.join(file_name))? {
+            removed_wrapper_files += 1;
+        }
+    }
+    let removed_script_file = remove_cline_owned_file(&script_path)?;
+
+    Ok(ClineUninstallResult {
+        script_path,
+        removed_wrapper_files,
+        removed_script_file,
     })
 }

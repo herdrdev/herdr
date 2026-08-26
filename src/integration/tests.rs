@@ -106,6 +106,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(CLINE_CONFIG_DIR_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -4155,6 +4156,235 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     );
 
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+fn cline_hooks_dir(home: &Path) -> PathBuf {
+    home.join(".cline").join("hooks")
+}
+
+fn assert_cline_wrapper(
+    hooks_dir: &Path,
+    script_path: &Path,
+    file_name: &str,
+    action: &str,
+    detail: &str,
+) {
+    let content = fs::read_to_string(hooks_dir.join(file_name)).unwrap();
+    assert!(
+        content.contains("HERDR_INTEGRATION_ID=cline"),
+        "wrapper {file_name} must be herdr-owned"
+    );
+    let expected_command = if detail.is_empty() {
+        format!(
+            "exec {} {}",
+            shell_single_quote(&script_path.display().to_string()),
+            action
+        )
+    } else {
+        format!(
+            "exec {} {} {}",
+            shell_single_quote(&script_path.display().to_string()),
+            action,
+            detail
+        )
+    };
+    assert!(
+        content.contains(&expected_command),
+        "wrapper {file_name} must exec the reporter with ({action}, {detail}): {content}"
+    );
+}
+
+#[test]
+fn install_cline_writes_script_and_event_wrappers() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".cline")).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_cline().unwrap();
+    assert_eq!(
+        installed.script_path,
+        cline_hooks_dir(&home).join(CLINE_HOOK_SCRIPT_INSTALL_NAME)
+    );
+    assert_eq!(installed.hooks_dir, cline_hooks_dir(&home));
+
+    let script_content = fs::read_to_string(&installed.script_path).unwrap();
+    assert_eq!(script_content, CLINE_HOOK_SCRIPT_ASSET);
+    assert!(script_content.contains("HERDR_INTEGRATION_ID=cline"));
+
+    assert_eq!(CLINE_HOOK_WRAPPERS.len(), 8);
+    for (file_name, action, detail) in CLINE_HOOK_WRAPPERS {
+        assert_cline_wrapper(
+            &installed.hooks_dir,
+            &installed.script_path,
+            file_name,
+            action,
+            detail,
+        );
+    }
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_cline_requires_config_directory() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let err = install_cline().unwrap_err().to_string();
+
+    assert!(err.contains("cline config directory not found"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_cline_never_replaces_foreign_hook_files() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let hooks_dir = home.join(".cline").join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    // A same-named file may be the user's own hook; cline discovers hooks by
+    // file name alone, so herdr must refuse to clobber it.
+    fs::write(hooks_dir.join("taskstart.sh"), "# my own hook\n").unwrap();
+
+    let err = install_cline().unwrap_err().to_string();
+    assert!(err.contains("was not installed by herdr"));
+    assert_eq!(
+        fs::read_to_string(hooks_dir.join("taskstart.sh")).unwrap(),
+        "# my own hook\n"
+    );
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_cline_is_idempotent_for_owned_files() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".cline")).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_cline().unwrap();
+    install_cline().unwrap();
+
+    let script =
+        fs::read_to_string(cline_hooks_dir(&home).join(CLINE_HOOK_SCRIPT_INSTALL_NAME)).unwrap();
+    assert_eq!(script, CLINE_HOOK_SCRIPT_ASSET);
+    assert_eq!(script.matches("HERDR_INTEGRATION_ID=cline").count(), 1);
+    for (file_name, _, _) in CLINE_HOOK_WRAPPERS {
+        let wrapper = fs::read_to_string(cline_hooks_dir(&home).join(file_name)).unwrap();
+        assert_eq!(wrapper.matches("HERDR_INTEGRATION_ID=cline").count(), 1);
+    }
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_cline_removes_only_herdr_owned_files() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let hooks_dir = home.join(".cline").join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_cline().unwrap();
+
+    // A foreign file sharing a hook-event name survives uninstall.
+    let foreign_path = hooks_dir.join("pretooluse.sh");
+    fs::write(&foreign_path, "# user hook, installed before herdr\n").unwrap();
+
+    let result = uninstall_cline().unwrap();
+
+    assert!(result.removed_script_file);
+    assert_eq!(result.removed_wrapper_files, 7);
+    assert!(!fs::exists(hooks_dir.join(CLINE_HOOK_SCRIPT_INSTALL_NAME)).unwrap());
+    assert!(!fs::exists(hooks_dir.join("taskstart.sh")).unwrap());
+    assert!(fs::read_to_string(&foreign_path)
+        .unwrap()
+        .starts_with("# user hook"));
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_cline_uses_cline_dir_env_override() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom_dir = base.join("custom-cline");
+    fs::create_dir_all(&custom_dir).unwrap();
+    std::env::set_var(CLINE_CONFIG_DIR_ENV_VAR, &custom_dir);
+
+    let installed = install_cline().unwrap();
+    assert_eq!(
+        installed.script_path,
+        custom_dir
+            .join("hooks")
+            .join(CLINE_HOOK_SCRIPT_INSTALL_NAME)
+    );
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn cline_status_flags_missing_wrappers_as_outdated() {
+    use crate::api::schema::IntegrationTarget;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let custom_dir = base.join("custom-cline");
+    let hooks_dir = custom_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var(CLINE_CONFIG_DIR_ENV_VAR, &custom_dir);
+
+    install_cline().unwrap();
+    let spec_path = hooks_dir.join(CLINE_HOOK_SCRIPT_INSTALL_NAME);
+    let status = integration_status_at(
+        IntegrationTarget::Cline,
+        spec_path.clone(),
+        CLINE_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.state, IntegrationStatusKind::Current);
+
+    // Removing one event wrapper breaks the integration.
+    fs::remove_file(hooks_dir.join("taskcomplete.sh")).unwrap();
+    let status = integration_status_at(
+        IntegrationTarget::Cline,
+        spec_path.clone(),
+        CLINE_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.state, IntegrationStatusKind::Outdated);
+
+    // Reinstall repairs it.
+    install_cline().unwrap();
+    let status = integration_status_at(
+        IntegrationTarget::Cline,
+        spec_path,
+        CLINE_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.state, IntegrationStatusKind::Current);
+
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }

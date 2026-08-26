@@ -31,10 +31,11 @@ Automatic detection works out of the box for common coding agents. The table sho
 | Amp | screen manifest | none |
 | Grok CLI | screen manifest | session |
 | Antigravity CLI | screen manifest | session |
+| Cline CLI | lifecycle hooks when installed; otherwise screen manifest | state and session |
 | Kiro CLI | screen manifest | none |
 | Maki | screen manifest | none |
 
-Detected but less thoroughly tested: Gemini CLI and Cline. Unsupported agents still run normally as terminal processes. They just may not get rich state unless you add an integration or report state over the socket API.
+Detected but less thoroughly tested: Gemini CLI. Unsupported agents still run normally as terminal processes. They just may not get rich state unless you add an integration or report state over the socket API.
 
 ## Status authority
 

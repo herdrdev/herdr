@@ -25,6 +25,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Mastracode => "mastracode",
         crate::api::schema::IntegrationTarget::AntigravityCli => "antigravity-cli",
         crate::api::schema::IntegrationTarget::Grok => "grok",
+        crate::api::schema::IntegrationTarget::Cline => "cline",
     }
 }
 
@@ -55,6 +56,7 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
         crate::api::schema::IntegrationTarget::Grok => &["grok"],
+        crate::api::schema::IntegrationTarget::Cline => &["cline"],
     }
 }
 
@@ -63,6 +65,10 @@ pub(crate) fn cursor_command_names() -> &'static [&'static str] {
 }
 
 pub(crate) fn integration_target_supported(target: crate::api::schema::IntegrationTarget) -> bool {
+    // Note: IntegrationTarget::Cline is deliberately absent from the Windows
+    // allowlist. Cline dispatches hook files through `bash`/`node` runners
+    // that are not guaranteed to exist on Windows, so the integration stays
+    // Unix-only until that dispatch path is verified there.
     #[cfg(windows)]
     {
         matches!(
@@ -83,7 +89,6 @@ pub(crate) fn integration_target_supported(target: crate::api::schema::Integrati
                 | crate::api::schema::IntegrationTarget::Hermes
                 | crate::api::schema::IntegrationTarget::Cursor
                 | crate::api::schema::IntegrationTarget::Mastracode
-                | crate::api::schema::IntegrationTarget::Grok
         )
     }
 
@@ -267,7 +272,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 17] {
+); 18] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -359,6 +364,14 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Grok,
             grok_dir().map(|dir| dir.join("hooks").join(super::GROK_HOOK_INSTALL_NAME)),
             super::GROK_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Cline,
+            cline_dir().map(|dir| {
+                dir.join("hooks")
+                    .join(super::CLINE_HOOK_SCRIPT_INSTALL_NAME)
+            }),
+            super::CLINE_INTEGRATION_VERSION,
         ),
     ]
 }
@@ -470,6 +483,18 @@ pub(crate) fn integration_status_at(
         state = super::IntegrationStatusKind::Outdated;
     }
 
+    // Cline runs each hook through a per-event wrapper file next to the
+    // reporter script. A current script with missing wrappers is a
+    // nonfunctional install: flag it so a reinstall restores them.
+    if target == crate::api::schema::IntegrationTarget::Cline
+        && state == super::IntegrationStatusKind::Current
+        && path
+            .parent()
+            .is_some_and(|hooks_dir| !cline_hook_wrappers_present(hooks_dir))
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+
     super::IntegrationStatus {
         target,
         path,
@@ -477,6 +502,12 @@ pub(crate) fn integration_status_at(
         installed_version,
         expected_version,
     }
+}
+
+fn cline_hook_wrappers_present(hooks_dir: &Path) -> bool {
+    super::CLINE_HOOK_WRAPPERS
+        .iter()
+        .all(|(file_name, _, _)| hooks_dir.join(file_name).is_file())
 }
 
 pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {
