@@ -177,7 +177,22 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
     let name = normalized_agent_lookup_name(agent);
-    parse_canonical_agent_label(&name).or_else(|| lookup_agent(&name))
+    parse_canonical_agent_label(&name)
+        .or_else(|| lookup_agent(&name))
+        .or_else(|| kiro_term_wrapper_agent(agent))
+}
+
+/// The Kiro CLI desktop app runs its PTY host under a process name shaped like
+/// `zsh (kiro-cli-term)` (the shell prefix varies: bash/fish/nu), which
+/// disguises the foreground process as the user's shell while the real
+/// `kiro-cli` runs in a descendant process group Herdr does not read. The
+/// `(kiro-cli-term)` suffix is Kiro-specific, so treat any process carrying it
+/// as Kiro. Applies to both the v2 and v3 engines, which share the wrapper.
+fn kiro_term_wrapper_agent(name: &str) -> Option<Agent> {
+    name.trim()
+        .to_lowercase()
+        .contains("(kiro-cli-term)")
+        .then_some(Agent::Kiro)
 }
 
 pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
@@ -755,6 +770,11 @@ mod tests {
         assert_eq!(identify_agent("Kimi Code"), Some(Agent::Kimi));
         assert_eq!(identify_agent("kiro"), Some(Agent::Kiro));
         assert_eq!(identify_agent("kiro-cli"), Some(Agent::Kiro));
+        // Kiro CLI desktop app PTY-host wrapper names (shell prefix varies).
+        assert_eq!(identify_agent("zsh (kiro-cli-term)"), Some(Agent::Kiro));
+        assert_eq!(identify_agent("bash (kiro-cli-term)"), Some(Agent::Kiro));
+        assert_eq!(identify_agent("fish (kiro-cli-term)"), Some(Agent::Kiro));
+        assert_eq!(identify_agent("nu (kiro-cli-term)"), Some(Agent::Kiro));
         assert_eq!(identify_agent("copilot"), Some(Agent::GithubCopilot));
         assert_eq!(identify_agent("ghcs"), Some(Agent::GithubCopilot));
         assert_eq!(identify_agent("grok"), Some(Agent::Grok));
@@ -887,6 +907,29 @@ mod tests {
         assert_eq!(identify_agent("CLAUDE"), Some(Agent::Claude));
         assert_eq!(identify_agent("Codex"), Some(Agent::Codex));
         assert_eq!(identify_agent("Devin"), Some(Agent::Devin));
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_kiro_cli_term_wrapper() {
+        // The Kiro CLI desktop app runs its PTY host as the foreground group
+        // leader under a name like `zsh (kiro-cli-term)`; the real kiro-cli
+        // lives in a descendant process group Herdr does not read. The full
+        // wrapper name is carried on argv0 (process.name may be truncated).
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 123,
+                name: "zsh (kiro-cli-t".to_string(),
+                argv0: Some("zsh (kiro-cli-term)".to_string()),
+                argv: Some(vec!["zsh (kiro-cli-term)".to_string()]),
+                cmdline: Some("zsh (kiro-cli-term)".to_string()),
+            }],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Kiro, "zsh (kiro-cli-term)".to_string()))
+        );
     }
 
     #[test]
