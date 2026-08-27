@@ -291,6 +291,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 `agent prompt` 遵循当前的 bracketed paste 模式,即使智能体处于 working 也会先发送文本,短暂延迟后再发送编码后的 Enter。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在五秒内产生可观察的生命周期变化，否则 Herdr 返回 `agent_prompt_stalled`；调用方超时不超过五秒时，仍返回普通的 `timeout` 错误。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 
+成功的 `agent wait` 会在 `.result.agent` 返回窗格当前的状态。如果满足等待条件的状态在最终探测前已经变化,响应还会在 `.result.matched_transient_status` 中给出触发等待完成的状态。`agent prompt --wait` 不会在瞬时状态上完成,因此不会返回该字段。
+
 `idle` 表示智能体在等待输入,且其标签页已在聚焦的 Herdr 界面中显示。`done` 是相同的底层 idle 状态,用于未查看的后台工作完成后。聚焦该标签页或用 `pane focus` / `agent focus` 指向它会标记为已查看;仅通过 CLI 读取不会改变它。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
 `agent send-keys` 发送 `enter`、`up`、`esc`、`ctrl+c` 等逻辑按键。Herdr 会在写入任何字节前验证所有按键。`agent read` 读取解析出的终端流,`agent rename` 为已检测到的智能体命名。

@@ -91,6 +91,8 @@ Claude Code や OpenCode などの全画面エージェントは、トランス�
 
 成功した `agent start`、`agent prompt`、`agent wait` は現在のエージェントを `.result.agent` に返します。`pane wait-output` は `.result.pane_id`、`.result.matched_line`、一致したスナップショット `.result.read` を返します。
 
+成功した `agent wait` はペインの現在の状態を返すため、待機条件を満たした状態とは異なる場合があります。異なる場合、レスポンスには待機を完了させた状態が `.result.matched_transient_status` にも含まれます。`.result.agent.agent_status` で判定するスクリプトは、この点を考慮してください。`agent prompt --wait` は一時的な状態で解決することがないため、このフィールドを返しません。
+
 wait コマンドにはデフォルトのタイムアウトがなく、無期限に待機できます。タイムアウトやサーバーエラーでは JSON エラーを stderr に出して終了コード 1、CLI 構文エラーでは終了コード 2 を返します。
 
 ## レシピ

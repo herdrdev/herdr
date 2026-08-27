@@ -91,6 +91,8 @@ Claude Code 和 OpenCode 等全屏智能体会把对话历史绘制在终端的�
 
 成功的 `agent start`、`agent prompt` 和 `agent wait` 会在 `.result.agent` 返回当前智能体。`pane wait-output` 返回 `.result.pane_id`、`.result.matched_line` 以及位于 `.result.read` 的匹配快照。
 
+成功的 `agent wait` 返回窗格当前的状态,因此它可能与满足等待条件的状态不同。不同时,响应还会在 `.result.matched_transient_status` 中给出触发等待完成的状态。用 `.result.agent.agent_status` 判断的脚本需要考虑这一点。`agent prompt --wait` 不会在瞬时状态上完成,因此不会返回该字段。
+
 等待命令没有默认超时,可能无限等待。超时或服务器错误会把 JSON 错误写到 stderr 并以状态 1 退出;CLI 语法错误以状态 2 退出。
 
 ## 示例

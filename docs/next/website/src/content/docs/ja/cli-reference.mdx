@@ -291,6 +291,8 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 `agent prompt` は現在の bracketed paste モードを尊重し、working 中でもテキストを送信してから短い遅延の後にエンコード済み Enter を送信します。エージェントがすでに `blocked` の場合は、入力を送信せずに `agent_blocked` を返します。`--wait` を使う場合、別の non-working 状態から受け付けたプロンプトは 5 秒以内に観測可能なライフサイクル変化を起こす必要があり、変化がなければ Herdr は `agent_prompt_stalled` を返します。呼び出し側のタイムアウトが 5 秒以下なら、通常の `timeout` エラーを維持します。活動を観測した後、要求された安定状態を待ちます。個々のターンは追跡しません。すでに working の場合、進行中ターンの完了が待機を満たすことがあります。`--until` は一致状態を絞り込み、`--wait` なしでは拒否されます。単独の `agent wait` は現在の状態が一致すれば即座に返ります。どちらもデフォルトは `idle`、`done`、`blocked` です。
 
+成功した `agent wait` は、ペインの現在の状態を `.result.agent` に返します。待機条件を満たした状態が最終検査までに変化していた場合、レスポンスには待機を完了させた状態が `.result.matched_transient_status` にも含まれます。`agent prompt --wait` は一時的な状態で解決することがないため、このフィールドを返しません。
+
 `idle` は入力待ちで、そのタブがフォーカス中の Herdr UI ですでに表示済みの状態です。`done` は同じ基礎的な idle 状態ですが、表示していないバックグラウンド作業が完了したときに使われます。そのタブをフォーカスするか `pane focus` / `agent focus` で対象にすると表示済みになりますが、CLI で読み取るだけでは変わりません。`blocked` は承認または質問 UI を Herdr が認識した状態です。`unknown` はエージェントが存在するものの確実に分類できない状態で、作業の成功を意味しません。
 
 `agent send-keys` は `enter`、`up`、`esc`、`ctrl+c` などの論理キーを送ります。Herdr は 1 バイトも書き込む前に全キーを検証します。`agent read` は解決されたターミナルストリームを読み、`agent rename` は検出済みエージェントに名前を付けます。

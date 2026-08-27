@@ -91,6 +91,8 @@ If a full response is still unavailable, ask the agent to write it as Markdown i
 
 Successful `agent start`, `agent prompt`, and `agent wait` commands return the current agent at `.result.agent`. `pane wait-output` returns `.result.pane_id`, `.result.matched_line`, and the matched snapshot at `.result.read`.
 
+A successful `agent wait` reports the pane's current status, which can differ from the status that satisfied the wait. When it differs, the response also carries the status that completed the wait at `.result.matched_transient_status`. Scripts that gate on `.result.agent.agent_status` must allow for that. `agent prompt --wait` never resolves on a transient status and never reports that field.
+
 Wait commands have no default timeout and can wait indefinitely. On timeout or another server error, CLI commands print a JSON error to stderr and exit with status 1; invalid CLI syntax exits with status 2.
 
 ## Recipes
