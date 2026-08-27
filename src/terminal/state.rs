@@ -1742,7 +1742,20 @@ impl TerminalState {
     }
 
     /// Binds agent-state reporting to `pid`, replacing any previous owner.
+    ///
+    /// Replacing a different pid also drops that owner's report-sequence
+    /// baseline for `source`. Reporters seed their sequence from their own
+    /// process start time, so an owner that started later leaves a baseline the
+    /// pane's real agent cannot beat, and `accept_hook_report` would then drop
+    /// every report from the new owner (#3246).
     pub fn set_agent_report_owner(&mut self, pid: u32, source: &str) {
+        if self
+            .agent_report_owner
+            .as_ref()
+            .is_some_and(|owner| owner.pid != pid)
+        {
+            self.hook_report_sequences.remove(source);
+        }
         self.agent_report_owner = Some(AgentReportOwner {
             pid,
             source: source.to_string(),

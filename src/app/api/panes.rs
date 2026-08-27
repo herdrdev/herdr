@@ -4411,4 +4411,48 @@ mod tests {
 
         assert_eq!(pane_report_owner(&app, pane_id), None);
     }
+
+    #[tokio::test]
+    async fn pane_report_agent_accepts_the_owner_that_won_the_pane_back() {
+        // Reporters seed their sequence from their own process start time, so
+        // the pane's real agent always reports below a nested session's
+        // baseline. Taking the pane back must reset that baseline, or every
+        // report from the new owner is dropped by sequence.
+        let (mut app, public_pane_id, pane_id) = app_with_pane_process_tree();
+        let own_pid = std::process::id();
+        let mut nested = spawn_nested_process();
+        assert_report_accepted(&report_session(
+            &mut app,
+            &public_pane_id,
+            nested.id(),
+            "nested-session",
+            9_000,
+        ));
+        assert_eq!(pane_report_owner(&app, pane_id), Some(nested.id()));
+
+        assert_report_accepted(&report_session(
+            &mut app,
+            &public_pane_id,
+            own_pid,
+            "owner-session",
+            1,
+        ));
+        let response = app.handle_pane_report_agent(
+            "own".into(),
+            report_agent_params(
+                public_pane_id,
+                "herdr:omp",
+                "omp",
+                crate::api::schema::PaneAgentState::Working,
+                2,
+            ),
+            Some(own_pid),
+        );
+        nested.kill().expect("kill the nested process");
+        nested.wait().expect("reap the nested process");
+
+        assert_report_accepted(&response);
+        assert_eq!(pane_report_owner(&app, pane_id), Some(own_pid));
+        assert_eq!(pane_agent_state(&app, pane_id), AgentState::Working);
+    }
 }

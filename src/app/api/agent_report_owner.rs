@@ -78,6 +78,8 @@ impl App {
         ) {
             ReportOwnership::Unchanged => Ok(()),
             ReportOwnership::Latch(pid) => {
+                // The latch also drops the replaced owner's report-sequence
+                // baseline, which the new owner would otherwise never beat.
                 terminal.set_agent_report_owner(pid, source);
                 if owner_pid.is_some_and(|previous| previous != pid) {
                     tracing::debug!(
@@ -86,7 +88,7 @@ impl App {
                         source,
                         previous_owner_pid = owner_pid,
                         owner_pid = pid,
-                        "pane agent report owner replaced"
+                        "pane agent report owner replaced, sequence baseline reset"
                     );
                 }
                 Ok(())
