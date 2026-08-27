@@ -1480,6 +1480,7 @@ pub struct AppState {
     pub agent_panel_sort: AgentPanelSort,
     pub agents_view: crate::config::AgentsViewConfig,
     pub agents_hide_idle: bool,
+    pub compact_rail_numbers: bool,
     /// The focused card explicitly toggled closed; a different focused pane
     /// expands automatically without a focus-change hook.
     pub agent_card_collapsed_for: Option<PaneId>,
@@ -1866,6 +1867,7 @@ impl AppState {
             agent_panel_sort: AgentPanelSort::Spaces,
             agents_view: crate::config::AgentsViewConfig::Cards,
             agents_hide_idle: false,
+            compact_rail_numbers: true,
             agent_card_collapsed_for: None,
             #[cfg(unix)]
             agent_telemetry: std::collections::HashMap::new(),

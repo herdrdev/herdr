@@ -890,12 +890,17 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             }
         }
 
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
+        let spans = if app.compact_rail_numbers {
+            vec![
                 Span::styled(format!("{}", visible_idx + 1), num_style),
                 Span::styled(" ", row_style),
                 Span::styled(icon, icon_style),
-            ])),
+            ]
+        } else {
+            vec![Span::styled(icon, icon_style)]
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
             Rect::new(ws_area.x, y, ws_area.width, 1),
         );
     }
@@ -928,11 +933,16 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             let position = detail_idx + 1;
             let position_style = Style::default().fg(p.overlay0);
             let (icon, icon_style) = state_dot(detail.state, detail.seen, p);
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
+            let spans = if app.compact_rail_numbers {
+                vec![
                     Span::styled(format!("{position:<2}"), position_style),
                     Span::styled(icon, icon_style),
-                ])),
+                ]
+            } else {
+                vec![Span::styled(icon, icon_style)]
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)),
                 Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
             );
         }
@@ -2365,7 +2375,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn collapsed_sidebar_numbers_grouped_agents_by_list_position() {
+    fn collapsed_sidebar_numbers_toggle_both_sections() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.ensure_test_terminals();
@@ -2379,7 +2389,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         }
 
         let area = Rect::new(0, 0, 4, 12);
-        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let (ws_area, _, detail_area) = collapsed_sidebar_sections(area);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
             .expect("test terminal should initialize");
 
@@ -2388,8 +2398,25 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("collapsed sidebar should render");
 
         let buffer = terminal.backend().buffer();
+        assert!(app.compact_rail_numbers);
+        assert_eq!(buffer[(ws_area.x, ws_area.y)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
+        let workspace_dot = buffer[(ws_area.x + 2, ws_area.y)].symbol().to_owned();
+        let agent_dot = buffer[(detail_area.x + 2, detail_area.y)]
+            .symbol()
+            .to_owned();
+
+        app.compact_rail_numbers = false;
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render without numbers");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(ws_area.x, ws_area.y)].symbol(), workspace_dot);
+        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), agent_dot);
+        assert_eq!(buffer[(ws_area.x + 1, ws_area.y)].symbol(), " ");
+        assert_eq!(buffer[(detail_area.x + 1, detail_area.y)].symbol(), " ");
     }
 
     #[test]

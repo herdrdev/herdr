@@ -621,6 +621,7 @@ impl App {
             agent_panel_sort,
             agents_view: config.ui.sidebar.agents_view,
             agents_hide_idle: config.ui.sidebar.agents_hide_idle,
+            compact_rail_numbers: config.ui.sidebar.compact_rail_numbers,
             agent_card_collapsed_for: None,
             #[cfg(unix)]
             agent_telemetry: std::collections::HashMap::new(),
@@ -1458,6 +1459,7 @@ impl App {
                 let previous_agents_view = self.state.agents_view;
                 self.state.agents_view = config.ui.sidebar.agents_view;
                 self.state.agents_hide_idle = config.ui.sidebar.agents_hide_idle;
+                self.state.compact_rail_numbers = config.ui.sidebar.compact_rail_numbers;
                 if previous_agents_view != self.state.agents_view {
                     self.state.agent_card_collapsed_for = None;
                 }
@@ -3110,6 +3112,21 @@ mod tests {
             app.state.agents_view,
             crate::config::AgentsViewConfig::Cards
         );
+    }
+
+    #[test]
+    fn live_compact_rail_numbers_flip_both_ways() {
+        let mut app = test_app();
+        let mut config = Config::default();
+        assert!(app.state.compact_rail_numbers);
+
+        config.ui.sidebar.compact_rail_numbers = false;
+        app.apply_live_config(&config, &[], &[], false);
+        assert!(!app.state.compact_rail_numbers);
+
+        config.ui.sidebar.compact_rail_numbers = true;
+        app.apply_live_config(&config, &[], &[], false);
+        assert!(app.state.compact_rail_numbers);
     }
 
     #[test]

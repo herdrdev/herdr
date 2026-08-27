@@ -433,13 +433,26 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub agents_view: AgentsViewConfig,
     pub agents_hide_idle: bool,
+    pub compact_rail_numbers: bool,
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+}
+
+impl Default for SidebarConfig {
+    fn default() -> Self {
+        Self {
+            agents_view: AgentsViewConfig::default(),
+            agents_hide_idle: false,
+            compact_rail_numbers: true,
+            agents: AgentsSidebarConfig::default(),
+            spaces: SpacesSidebarConfig::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +464,7 @@ mod tests {
         let config = SidebarConfig::default();
         assert_eq!(config.agents_view, AgentsViewConfig::Cards);
         assert!(!config.agents_hide_idle);
+        assert!(config.compact_rail_numbers);
         assert_eq!(
             config.agents.rows,
             vec![
@@ -481,11 +495,13 @@ mod tests {
 [ui.sidebar]
 agents_view = "legacy"
 agents_hide_idle = true
+compact_rail_numbers = false
 "#,
         )
         .expect("valid card settings");
         assert_eq!(config.ui.sidebar.agents_view, AgentsViewConfig::Legacy);
         assert!(config.ui.sidebar.agents_hide_idle);
+        assert!(!config.ui.sidebar.compact_rail_numbers);
 
         assert!(
             toml::from_str::<crate::config::Config>("[ui.sidebar]\nagents_view = \"grid\"\n")
