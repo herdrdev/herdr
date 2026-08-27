@@ -832,6 +832,52 @@ pub(crate) fn collapsed_sidebar_sections(area: Rect) -> (Rect, Option<u16>, Rect
     (ws_area, Some(divider_y), detail_area)
 }
 
+// A future agent-letter glyph belongs in this leading-slot variant.
+enum RailLeading {
+    Number {
+        value: usize,
+        field_width: usize,
+        style: Style,
+        gap_style: Option<Style>,
+    },
+    None,
+}
+
+fn render_compact_rail_row(
+    frame: &mut Frame,
+    area: Rect,
+    leading: RailLeading,
+    dot: &str,
+    dot_style: Style,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    match leading {
+        RailLeading::Number {
+            value,
+            field_width,
+            style,
+            gap_style,
+        } => {
+            let mut spans = vec![Span::styled(format!("{value:<field_width$}"), style)];
+            if let Some(style) = gap_style {
+                spans.push(Span::styled(" ", style));
+            }
+            spans.push(Span::styled(dot.to_owned(), dot_style));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        }
+        RailLeading::None => {
+            let dot_x = area.x + area.width.saturating_sub(1) / 2;
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(dot.to_owned(), dot_style))),
+                Rect::new(dot_x, area.y, 1, 1),
+            );
+        }
+    }
+}
+
 /// Collapsed sidebar: workspace glance on top, compact agent list below.
 pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
@@ -890,18 +936,22 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             }
         }
 
-        let spans = if app.compact_rail_numbers {
-            vec![
-                Span::styled(format!("{}", visible_idx + 1), num_style),
-                Span::styled(" ", row_style),
-                Span::styled(icon, icon_style),
-            ]
+        let leading = if app.compact_rail_numbers {
+            RailLeading::Number {
+                value: visible_idx + 1,
+                field_width: 0,
+                style: num_style,
+                gap_style: Some(row_style),
+            }
         } else {
-            vec![Span::styled(icon, icon_style)]
+            RailLeading::None
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+        render_compact_rail_row(
+            frame,
             Rect::new(ws_area.x, y, ws_area.width, 1),
+            leading,
+            icon,
+            icon_style,
         );
     }
 
@@ -933,17 +983,22 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             let position = detail_idx + 1;
             let position_style = Style::default().fg(p.overlay0);
             let (icon, icon_style) = state_dot(detail.state, detail.seen, p);
-            let spans = if app.compact_rail_numbers {
-                vec![
-                    Span::styled(format!("{position:<2}"), position_style),
-                    Span::styled(icon, icon_style),
-                ]
+            let leading = if app.compact_rail_numbers {
+                RailLeading::Number {
+                    value: position,
+                    field_width: 2,
+                    style: position_style,
+                    gap_style: None,
+                }
             } else {
-                vec![Span::styled(icon, icon_style)]
+                RailLeading::None
             };
-            frame.render_widget(
-                Paragraph::new(Line::from(spans)),
+            render_compact_rail_row(
+                frame,
                 Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
+                leading,
+                icon,
+                icon_style,
             );
         }
     }
@@ -2413,10 +2468,31 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("collapsed sidebar should render without numbers");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(ws_area.x, ws_area.y)].symbol(), workspace_dot);
-        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), agent_dot);
-        assert_eq!(buffer[(ws_area.x + 1, ws_area.y)].symbol(), " ");
-        assert_eq!(buffer[(detail_area.x + 1, detail_area.y)].symbol(), " ");
+        assert_eq!(buffer[(ws_area.x + 1, ws_area.y)].symbol(), workspace_dot);
+        assert_eq!(
+            buffer[(detail_area.x + 1, detail_area.y)].symbol(),
+            agent_dot
+        );
+        assert_eq!(buffer[(ws_area.x, ws_area.y)].symbol(), " ");
+        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), " ");
+
+        let wide_area = Rect::new(0, 0, 6, 12);
+        let (wide_ws_area, _, wide_detail_area) = collapsed_sidebar_sections(wide_area);
+        let mut wide_terminal = Terminal::new(TestBackend::new(wide_area.width, wide_area.height))
+            .expect("wide test terminal should initialize");
+        wide_terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, wide_area))
+            .expect("wide collapsed sidebar should render without numbers");
+
+        let buffer = wide_terminal.backend().buffer();
+        assert_eq!(
+            buffer[(wide_ws_area.x + 2, wide_ws_area.y)].symbol(),
+            workspace_dot
+        );
+        assert_eq!(
+            buffer[(wide_detail_area.x + 2, wide_detail_area.y)].symbol(),
+            agent_dot
+        );
     }
 
     #[test]

@@ -110,7 +110,7 @@ the top of the file:
 | `src/main.rs` | Register the Unix-only native title-sync and Agent-card modules. | `f4af78b5`, `95a7db2a` |
 | `src/events.rs` | Return blocking title-reader results to the server thread for identity-checked application. | `e006a1ea` |
 | `src/ui.rs` | Export shared Agent-card geometry to sidebar input handling. | `158aabf9` |
-| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards and optionally omit compact-rail number columns. | `158aabf9`, `53970ca3`, P5 clippy gate, compact-rail numbers (this commit) |
+| `src/ui/sidebar.rs` | Delegate Agents content to adaptive cards and render the compact rail with configurable leading slots and centered dot-only rows. | `158aabf9`, `53970ca3`, P5 clippy gate, compact-rail numbers, centered rail dots (this commit) |
 
 Non-commentable modified files must also be listed in `MODIFICATIONS` beside
 `LICENSE`.
