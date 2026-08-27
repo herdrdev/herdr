@@ -1,7 +1,7 @@
 id = "opencode"
-version = "2026.06.10.1"
+version = "2026.08.27.1"
 min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+updated_at = "2026-08-27T00:00:00Z"
 aliases = ["open-code", "herdr:opencode"]
 
 [[rules]]
@@ -27,6 +27,14 @@ any = [
   { contains = ["press esc to interrupt"] },
   { line_regex = ['(?i).*opencode.*esc (again to )?interrupt'] },
 ]
+
+[[rules]]
+id = "static_interrupt_footer_working"
+state = "working"
+priority = 110
+region = "bottom_non_empty_lines(1)"
+visible_working = true
+line_regex = ['^\s*\[⋯\]\s+esc interrupt']
 
 [[rules]]
 id = "progress_bar_working"

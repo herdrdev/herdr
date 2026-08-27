@@ -301,6 +301,30 @@ fn all_bundled_manifests_parse_and_validate() {
 }
 
 #[test]
+fn opencode_static_interrupt_footer_is_working() {
+    with_manifest_dirs("opencode-static-interrupt", || {
+        let explain = explain(
+            Agent::OpenCode,
+            "Build · GPT-5.6 Sol Fast OpenAI · high\n[⋯]  esc interrupttrl+t variants 34.1K (3%) ctrl+p commands",
+        );
+
+        assert_eq!(explain.state, AgentState::Working);
+        assert_eq!(
+            explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("static_interrupt_footer_working")
+        );
+        assert!(explain.visible_working);
+
+        let stale_transcript = explain(
+            Agent::OpenCode,
+            "[⋯]  esc interrupt from an earlier status\nBuild · GPT-5.6 Sol Fast\nctrl+p commands",
+        );
+        assert_eq!(stale_transcript.state, AgentState::Idle);
+        assert!(!stale_transcript.visible_working);
+    });
+}
+
+#[test]
 fn devin_manifest_detects_idle_working_and_blocked_states() {
     let idle = explain(
         Agent::Devin,
