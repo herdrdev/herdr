@@ -618,6 +618,12 @@
           "description": "Hide seen idle agents from cards and Agent focus indexes. Cards mode only; reloads live."
         },
         {
+          "key": "ui.sidebar.compact_rail_numbers",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show position numbers beside workspace and Agent state dots in the collapsed compact rail. Reloads live."
+        },
+        {
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",

@@ -154,9 +154,10 @@ These settings reload live:
 [ui.sidebar]
 agents_view = "cards"      # default; use "legacy" for configurable rows
 agents_hide_idle = false   # hide seen idle agents from cards and focus indexes
+compact_rail_numbers = true # set false to show state dots without position numbers
 ```
 
-Switching to `legacy` restores the configurable `[ui.sidebar.agents]` row view. Agent row settings are ignored in cards mode and produce a configuration diagnostic when explicitly present. The collapsed compact rail is unchanged.
+Switching to `legacy` restores the configurable `[ui.sidebar.agents]` row view. Agent row settings are ignored in cards mode and produce a configuration diagnostic when explicitly present. Compact-rail numbering reloads live and does not change row selection or click targets.
 
 ## Custom agent labels
 
