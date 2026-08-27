@@ -1011,6 +1011,120 @@ mod tests {
         (api_tx, responder)
     }
 
+    fn agent_info(
+        pane_id: &str,
+        agent_status: crate::api::schema::AgentStatus,
+    ) -> crate::api::schema::AgentInfo {
+        serde_json::from_value(serde_json::json!({
+            "terminal_id": "term_1",
+            "agent": "pi",
+            "agent_status": agent_status,
+            "workspace_id": "ws_1",
+            "tab_id": "tab_1",
+            "pane_id": pane_id,
+            "focused": true,
+            "state_change_seq": 4,
+            "revision": 0,
+        }))
+        .unwrap()
+    }
+
+    /// Runs one `agent.wait` whose baseline probe reports `working`, so the wait
+    /// always enters its poll loop. The responder publishes a
+    /// `pane.agent_status_changed` event carrying `event_status` while that
+    /// baseline probe is in flight, so the event is always newer than the wait's
+    /// baseline sequence without any sleep. Every later probe reports
+    /// `probe_status`.
+    fn agent_wait_reply_after_status_event(
+        name: &str,
+        event_status: crate::api::schema::AgentStatus,
+        probe_status: crate::api::schema::AgentStatus,
+    ) -> serde_json::Value {
+        let event_hub = EventHub::default();
+        let responder_hub = event_hub.clone();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let responder = std::thread::spawn(move || {
+            let mut probes = 0_u32;
+            while let Some(msg) = api_rx.blocking_recv() {
+                let Method::AgentGet(_) = msg.request.method else {
+                    panic!("unexpected request: {:?}", msg.request.method);
+                };
+                probes += 1;
+                let status = if probes == 1 {
+                    responder_hub.push(crate::api::schema::EventEnvelope {
+                        event: crate::api::schema::EventKind::PaneAgentStatusChanged,
+                        data: crate::api::schema::EventData::PaneAgentStatusChanged {
+                            pane_id: "pane_1".into(),
+                            workspace_id: "ws_1".into(),
+                            agent_status: event_status,
+                            agent: Some("pi".into()),
+                            title: None,
+                            display_agent: None,
+                            state_labels: HashMap::new(),
+                        },
+                    });
+                    crate::api::schema::AgentStatus::Working
+                } else {
+                    probe_status
+                };
+                msg.respond_to
+                    .send(
+                        serde_json::to_string(&SuccessResponse {
+                            id: msg.request.id,
+                            result: ResponseResult::AgentInfo {
+                                agent: agent_info("pane_1", status),
+                                matched_transient_status: None,
+                            },
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+        });
+
+        let (mut client, server, _path) = local_stream_pair(name);
+        client
+            .write_all(br#"{"id":"wait_transient","method":"agent.wait","params":{"target":"pane_1","until":["idle","done"],"timeout_ms":5000}}"#)
+            .unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+
+        let running = Arc::new(AtomicBool::new(true));
+        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        drop(api_tx);
+        responder.join().unwrap();
+        response
+    }
+
+    #[test]
+    fn agent_wait_reports_the_probed_status_when_the_match_was_transient() {
+        let response = agent_wait_reply_after_status_event(
+            "api-agent-wait-transient",
+            crate::api::schema::AgentStatus::Idle,
+            crate::api::schema::AgentStatus::Working,
+        );
+
+        assert_eq!(response["id"], "wait_transient");
+        assert_eq!(response["result"]["type"], "agent_info");
+        assert_eq!(response["result"]["agent"]["agent_status"], "working");
+        assert_eq!(response["result"]["matched_transient_status"], "idle");
+    }
+
+    #[test]
+    fn agent_wait_omits_the_transient_status_when_the_pane_still_holds_the_match() {
+        let response = agent_wait_reply_after_status_event(
+            "api-agent-wait-settled",
+            crate::api::schema::AgentStatus::Idle,
+            crate::api::schema::AgentStatus::Idle,
+        );
+
+        assert_eq!(response["id"], "wait_transient");
+        assert_eq!(response["result"]["agent"]["agent_status"], "idle");
+        assert!(response["result"].get("matched_transient_status").is_none());
+    }
+
     #[test]
     fn socket_path_prefers_explicit_env_override() {
         let _guard = env_lock().lock().unwrap();
