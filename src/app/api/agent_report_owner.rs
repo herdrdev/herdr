@@ -53,8 +53,8 @@ impl App {
             return Ok(());
         };
         let Some(pane_tree_root) = self
-            .lookup_runtime(ws_idx, pane_id)
-            .and_then(|(runtime, _)| runtime.child_pid())
+            .lookup_runtime_sender(ws_idx, pane_id)
+            .and_then(crate::terminal::TerminalRuntime::child_pid)
         else {
             return Ok(());
         };
