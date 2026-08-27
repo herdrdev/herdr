@@ -7,9 +7,11 @@
 //! the pane's state for the rest of the pane's life (#3246).
 //!
 //! The pane therefore latches the first reporting pid and refuses reports from
-//! other pids while that owner still holds the pane. Ownership moves toward the
-//! pane root, never away from it, so a pane's real agent always wins its pane
-//! back and no gate here can silence it permanently.
+//! other pids while that owner still holds the pane. Only a process the owner
+//! started loses: any reporter that reaches the pane root without passing
+//! through the owner — the pane's own agent, the pane shell, or a second agent
+//! started beside the owner — takes the pane, so no gate here can silence a
+//! pane's real agent permanently.
 
 use crate::app::App;
 use crate::layout::PaneId;
@@ -127,23 +129,42 @@ fn resolve_report_ownership(
     }
 }
 
-/// Climbs the owner's parent chain once.
+/// Decides whether the current owner keeps the pane against `reporter_pid`.
 ///
-/// The owner keeps the pane while it is still inside the pane's process tree
-/// and the reporter is not one of its ancestors. So a session nested inside the
-/// owner loses, while the process closer to the pane root — the pane's real
-/// agent, or the pane shell — takes the pane back. A dead owner, an owner that
+/// The owner keeps the pane while it is alive, still inside the pane's process
+/// tree, and the reporter is a process it started. A dead owner, an owner that
 /// has left the pane's tree, and an owner descended from the reporter all give
-/// the pane up.
+/// the pane up, and so does an owner whose reporter sits beside it in the pane
+/// tree rather than under it — a second agent started by the pane shell is the
+/// pane's real agent too, and last report wins between the two.
+///
+/// A reporter outside the pane's process tree never takes the pane from a live
+/// owner, which is the forged-report case in #3246.
 fn owner_keeps_pane(
     owner_pid: u32,
     reporter_pid: u32,
     pane_tree_root: u32,
     parent_of: impl Fn(u32) -> Option<u32>,
 ) -> bool {
-    let mut current = owner_pid;
+    chain_reaches_pane_root(owner_pid, pane_tree_root, reporter_pid, &parent_of)
+        && !chain_reaches_pane_root(reporter_pid, pane_tree_root, owner_pid, &parent_of)
+}
+
+/// Climbs `pid`'s parent chain toward the pane root.
+///
+/// `true` when the chain reaches `pane_tree_root`, so `pid` is a live process
+/// inside the pane's tree and `halt_pid` is not one of its ancestors. `false`
+/// when the chain meets `halt_pid` first, leaves the pane's tree, or reaches a
+/// process that is gone.
+fn chain_reaches_pane_root(
+    pid: u32,
+    pane_tree_root: u32,
+    halt_pid: u32,
+    parent_of: &impl Fn(u32) -> Option<u32>,
+) -> bool {
+    let mut current = pid;
     for _ in 0..MAX_ANCESTRY_DEPTH {
-        if current == reporter_pid {
+        if current == halt_pid {
             return false;
         }
         if current == pane_tree_root {
@@ -251,6 +272,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_second_agent_started_beside_the_owner_takes_the_pane() {
+        // The pane shell 100 started agent 300, then a second agent 400 next to
+        // it: both are the pane's own agents, so the later report wins.
+        let parents = chain(&[(300, 100), (400, 100)]);
+        assert_eq!(
+            resolve_report_ownership(Some(300), 400, 100, parents),
+            ReportOwnership::Latch(400)
+        );
+    }
+
+    #[test]
+    fn a_session_under_a_sibling_of_the_owner_takes_the_pane() {
+        // pane shell 100 -> agent 300 (owner), and 100 -> wrapper 400 -> agent
+        // 410. 410 is not a session 300 started, so 300 does not hold it off.
+        let parents = chain(&[(300, 100), (400, 100), (410, 400)]);
+        assert_eq!(
+            resolve_report_ownership(Some(300), 410, 100, parents),
+            ReportOwnership::Latch(410)
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn real_process_ancestry_decides_between_two_live_reporters() {
@@ -285,5 +328,37 @@ mod tests {
 
         child.kill().expect("kill the child process");
         child.wait().expect("reap the child process");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_process_ancestry_hands_the_pane_to_a_live_sibling() {
+        let spawn_child = || {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("sleep 30")
+                .spawn()
+                .expect("spawn a child process")
+        };
+        let mut first = spawn_child();
+        let mut second = spawn_child();
+        // This process is the pane root; both children hang off it directly,
+        // the way a pane shell holds a suspended agent and its replacement.
+        let pane_tree_root = std::process::id();
+
+        assert_eq!(
+            resolve_report_ownership(
+                Some(first.id()),
+                second.id(),
+                pane_tree_root,
+                crate::platform::process_parent_pid
+            ),
+            ReportOwnership::Latch(second.id())
+        );
+
+        first.kill().expect("kill the first child process");
+        first.wait().expect("reap the first child process");
+        second.kill().expect("kill the second child process");
+        second.wait().expect("reap the second child process");
     }
 }
