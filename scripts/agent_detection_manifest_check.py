@@ -16,7 +16,15 @@ DEFAULT_BUNDLED_DIR = PROJECT_ROOT / "src" / "detect" / "manifests"
 DEFAULT_WEBSITE_DIR = PROJECT_ROOT / "website" / "agent-detection"
 ENGINE_SOURCE = PROJECT_ROOT / "src" / "detect" / "manifest_update.rs"
 
-MANIFEST_KEYS = {"id", "version", "min_engine_version", "updated_at", "aliases", "rules"}
+MANIFEST_KEYS = {
+    "id",
+    "version",
+    "min_engine_version",
+    "updated_at",
+    "aliases",
+    "resume_options",
+    "rules",
+}
 RULE_KEYS = {
     "id",
     "state",
@@ -52,6 +60,8 @@ MAX_TOTAL_GATES = 512
 MAX_MATCHERS_PER_GATE = 32
 MAX_TOTAL_MATCHERS = 1024
 MAX_MATCHER_CHARS = 512
+MAX_RESUME_OPTIONS_PER_MANIFEST = 128
+MAX_RESUME_OPTION_CHARS = 128
 
 # Keep engine-2 clients on the OSC-capable manifest until an engine-3 release
 # can consume top_non_empty_lines. Remove this entry when the website publishes
@@ -143,9 +153,32 @@ def validate_manifest(path: Path, engine_version: int) -> dict:
     if not isinstance(aliases, list) or not all(isinstance(item, str) for item in aliases):
         raise CheckError(f"{path}: aliases must be an array of strings")
 
-    rules = manifest.get("rules")
-    if not isinstance(rules, list) or not rules:
-        raise CheckError(f"{path}: rules must be a non-empty array")
+    resume_options = manifest.get("resume_options", {})
+    if not isinstance(resume_options, dict) or set(resume_options) - {"flags", "options"}:
+        raise CheckError(f"{path}: resume_options may contain only flags and options")
+    seen_resume_options: set[str] = set()
+    for key in ("flags", "options"):
+        values = resume_options.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+            raise CheckError(f"{path}: resume_options.{key} must be an array of strings")
+        for value in values:
+            if len(value) > MAX_RESUME_OPTION_CHARS:
+                raise CheckError(f"{path}: resume option exceeds {MAX_RESUME_OPTION_CHARS} characters")
+            if not value.startswith("-") or value in {"-", "--"} or "=" in value:
+                raise CheckError(f"{path}: invalid resume option {value!r}")
+            if value in seen_resume_options:
+                raise CheckError(f"{path}: duplicate resume option {value!r}")
+            seen_resume_options.add(value)
+    if len(seen_resume_options) > MAX_RESUME_OPTIONS_PER_MANIFEST:
+        raise CheckError(
+            f"{path}: manifest exceeds max resume option count {MAX_RESUME_OPTIONS_PER_MANIFEST}"
+        )
+
+    rules = manifest.get("rules", [])
+    if not isinstance(rules, list):
+        raise CheckError(f"{path}: rules must be an array")
+    if not rules and not seen_resume_options:
+        raise CheckError(f"{path}: manifest must contain rules or resume options")
     if len(rules) > MAX_RULES_PER_MANIFEST:
         raise CheckError(f"{path}: manifest exceeds max rule count {MAX_RULES_PER_MANIFEST}")
     complexity = {"gates": 0, "matchers": 0}
@@ -327,7 +360,7 @@ def validate_catalog(
         stages_new_engine_manifest = (
             staged_manifest
             == (bundled_manifest["version"], manifest["version"], website_digest)
-            and bundled_manifest["min_engine_version"] == engine_version
+            and bundled_manifest["min_engine_version"] <= engine_version
             and manifest["min_engine_version"] < bundled_manifest["min_engine_version"]
         )
         if cmp < 0 and not stages_new_engine_manifest:

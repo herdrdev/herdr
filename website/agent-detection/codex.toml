@@ -1,7 +1,27 @@
 id = "codex"
-version = "2026.08.09.1"
-min_engine_version = 3
-updated_at = "2026-08-09T00:00:00Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
+
+[resume_options]
+flags = [
+  "--approve-for-me",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
+  "--oss",
+  "--search",
+  "--strict-config",
+  "--no-alt-screen",
+]
+options = [
+  "-m",
+  "--model",
+  "-s",
+  "--sandbox",
+  "-a",
+  "--ask-for-approval",
+  "--local-provider",
+]
 
 [[rules]]
 id = "osc_title_blocked"

@@ -62,6 +62,12 @@ pub enum AppEvent {
         agent: Agent,
         observed_at: Instant,
     },
+    /// Replayable options observed on a detected agent invocation.
+    AgentResumeOptionsDetected {
+        pane_id: PaneId,
+        agent: Agent,
+        options: Vec<String>,
+    },
     /// Fallback detector state changed in a pane.
     StateChanged {
         pane_id: PaneId,

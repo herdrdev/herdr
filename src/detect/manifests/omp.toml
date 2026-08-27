@@ -1,0 +1,33 @@
+id = "omp"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
+aliases = ["oh-my-pi"]
+
+[resume_options]
+flags = [
+  "--prewalk",
+  "--no-prewalk",
+  "--plan-yolo",
+  "--allow-home",
+  "--no-tools",
+  "--no-lsp",
+  "--no-pty",
+  "--hide-thinking",
+  "--advisor",
+  "--no-extensions",
+  "--no-skills",
+  "--no-rules",
+  "--no-title",
+  "--auto-approve",
+]
+options = [
+  "--model",
+  "--smol",
+  "--slow",
+  "--plan",
+  "--provider",
+  "--thinking",
+  "--max-time",
+  "--approval-mode",
+]

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{agent_label, parse_agent_label, Agent};
 
-pub(crate) const MANIFEST_ENGINE_VERSION: u32 = 3;
+pub(crate) const MANIFEST_ENGINE_VERSION: u32 = 4;
 const DEFAULT_CATALOG_URL: &str = "https://herdr.dev/agent-detection/index.toml";
 const CATALOG_URL_ENV: &str = "HERDR_AGENT_DETECTION_MANIFEST_CATALOG_URL";
 const MAX_FETCH_BYTES: usize = 256 * 1024;

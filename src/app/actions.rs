@@ -2792,6 +2792,26 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::AgentResumeOptionsDetected {
+                pane_id,
+                agent,
+                options,
+            } => {
+                let terminal_id = self.workspaces.iter().find_map(|workspace| {
+                    workspace
+                        .pane_state(pane_id)
+                        .map(|pane| pane.attached_terminal_id.clone())
+                });
+                let changed = terminal_id.and_then(|terminal_id| {
+                    self.terminals
+                        .get_mut(&terminal_id)
+                        .map(|terminal| terminal.set_agent_resume_options(agent, options))
+                });
+                if changed == Some(true) {
+                    self.mark_session_dirty();
+                }
+                Vec::new()
+            }
             AppEvent::StateChanged {
                 pane_id,
                 agent,
@@ -4860,6 +4880,37 @@ mod tests {
         assert_eq!(state.workspaces[0].panes.len(), 1);
         assert_eq!(state.workspaces[0].panes.keys().next().unwrap(), &first_id);
         state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn detected_agent_resume_options_are_cached_and_mark_session_dirty() {
+        let mut state = app_with_workspaces(&["test"]);
+        let pane_id = state.workspaces[0].active_tab().unwrap().root_pane;
+        state.session_dirty = false;
+
+        state.handle_app_event(AppEvent::AgentResumeOptionsDetected {
+            pane_id,
+            agent: Agent::Claude,
+            options: vec!["--model".into(), "opus".into()],
+        });
+
+        let terminal_id = state.workspaces[0].active_tab().unwrap().panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let cached = state.terminals[&terminal_id]
+            .agent_resume_options
+            .as_ref()
+            .unwrap();
+        assert_eq!(cached.options, ["--model", "opus"]);
+        assert!(state.session_dirty);
+
+        state.session_dirty = false;
+        state.handle_app_event(AppEvent::AgentResumeOptionsDetected {
+            pane_id,
+            agent: Agent::Claude,
+            options: vec!["--model".into(), "opus".into()],
+        });
+        assert!(!state.session_dirty);
     }
 
     #[test]

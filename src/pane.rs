@@ -186,6 +186,46 @@ fn active_pending_release(
     }
 }
 
+async fn publish_agent_resume_options(
+    last_reported: &mut Option<(Option<u32>, Agent, Vec<String>)>,
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    process_group_id: Option<u32>,
+    agent: Option<Agent>,
+    options: Option<Vec<String>>,
+) {
+    let Some(agent) = agent else {
+        return;
+    };
+    let options = match options {
+        Some(options) => options,
+        None => match last_reported.as_ref() {
+            Some((reported_group, reported_agent, _))
+                if *reported_group != process_group_id || *reported_agent != agent =>
+            {
+                Vec::new()
+            }
+            _ => return,
+        },
+    };
+    if last_reported.as_ref().is_some_and(|reported| {
+        reported.0 == process_group_id && reported.1 == agent && reported.2 == options
+    }) {
+        return;
+    }
+    *last_reported = Some((process_group_id, agent, options.clone()));
+    if let Err(err) = state_events
+        .send(AppEvent::AgentResumeOptionsDetected {
+            pane_id,
+            agent,
+            options,
+        })
+        .await
+    {
+        warn!(pane = pane_id.raw(), %err, "failed to deliver agent resume options");
+    }
+}
+
 async fn publish_state_changed_event(
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
@@ -549,6 +589,7 @@ struct ProcessProbeResult {
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
     process_name: Option<String>,
+    resume_options: Option<Vec<String>>,
 }
 
 fn agent_hint_for_foreground_job_members(
@@ -594,6 +635,7 @@ fn process_probe_result(
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
         process_name: Some(process_name),
+        resume_options: crate::detect::resume_options_in_job(job, agent),
     }
 }
 
@@ -654,6 +696,9 @@ fn probe_foreground_process_from_jobs(
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
             agent: identified.as_ref().map(|(agent, _)| *agent),
+            resume_options: identified
+                .as_ref()
+                .and_then(|(agent, _)| crate::detect::resume_options_in_job(job, *agent)),
             process_name: identified.map(|(_, process_name)| process_name),
         };
     }
@@ -663,6 +708,7 @@ fn probe_foreground_process_from_jobs(
         foreground_is_pane_shell: false,
         agent: None,
         process_name: None,
+        resume_options: None,
     }
 }
 
@@ -713,6 +759,7 @@ fn spawn_basic_detection_task(
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
+        let mut last_reported_resume_options = None;
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -741,6 +788,7 @@ fn spawn_basic_detection_task(
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
                     pending_idle.clear();
+                    last_reported_resume_options = None;
                 }
             }
 
@@ -790,6 +838,7 @@ fn spawn_basic_detection_task(
                 let tracked_process_group_id =
                     process_group_for_change_tracking(foreground_pgid, process_group_id);
                 let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                let resume_options = probe.resume_options;
                 let mut new_agent = probe.agent;
                 if let Some(suppressed_agent) = suppressed_agent {
                     if new_agent == Some(suppressed_agent) {
@@ -798,6 +847,15 @@ fn spawn_basic_detection_task(
                         *pending_release = None;
                     }
                 }
+                publish_agent_resume_options(
+                    &mut last_reported_resume_options,
+                    &state_events,
+                    pane_id,
+                    process_group_id,
+                    new_agent,
+                    resume_options,
+                )
+                .await;
                 let previous_agent = agent_presence.current_agent();
                 let foreground_action = foreground_shell_agent_action(
                     previous_agent,
@@ -2199,6 +2257,7 @@ impl PaneRuntime {
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                let mut last_reported_resume_options = None;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2237,6 +2296,7 @@ impl PaneRuntime {
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
                             pending_idle.clear();
+                            last_reported_resume_options = None;
                         }
                     }
 
@@ -2317,6 +2377,7 @@ impl PaneRuntime {
                                 process_group_id,
                             );
                             let foreground_is_pane_shell = probe.foreground_is_pane_shell;
+                            let resume_options = probe.resume_options;
                             let mut new_agent = probe.agent;
 
                             if let Some(suppressed_agent) = suppressed_agent {
@@ -2329,6 +2390,15 @@ impl PaneRuntime {
                                 }
                             }
 
+                            publish_agent_resume_options(
+                                &mut last_reported_resume_options,
+                                &state_events,
+                                pane_id,
+                                process_group_id,
+                                new_agent,
+                                resume_options,
+                            )
+                            .await;
                             let previous_agent = agent_presence.current_agent();
                             let foreground_action = foreground_shell_agent_action(
                                 previous_agent,
@@ -3110,6 +3180,39 @@ mod tests {
         apply_pane_terminal_env(&mut cmd);
 
         assert!(cmd.get_env("WT_SESSION").is_none());
+    }
+
+    #[tokio::test]
+    async fn unreadable_options_clear_a_previous_agent_invocation() {
+        let (events, mut event_rx) = mpsc::channel(4);
+        let pane_id = PaneId::alloc();
+        let mut last = None;
+
+        publish_agent_resume_options(
+            &mut last,
+            &events,
+            pane_id,
+            Some(10),
+            Some(Agent::Claude),
+            Some(vec!["--model".into(), "opus".into()]),
+        )
+        .await;
+        let _ = event_rx.recv().await.unwrap();
+
+        publish_agent_resume_options(
+            &mut last,
+            &events,
+            pane_id,
+            Some(11),
+            Some(Agent::Claude),
+            None,
+        )
+        .await;
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppEvent::AgentResumeOptionsDetected { options, .. }) if options.is_empty()
+        ));
     }
 
     #[tokio::test]

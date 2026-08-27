@@ -106,6 +106,12 @@ struct AgentNameOwner {
     session_ref: Option<crate::agent_resume::AgentSessionRef>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentResumeOptions {
+    pub agent: Agent,
+    pub options: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecentAgentProcessExit {
     agent: Agent,
@@ -128,6 +134,7 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    pub agent_resume_options: Option<AgentResumeOptions>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -162,6 +169,7 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            agent_resume_options: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -182,6 +190,15 @@ impl TerminalState {
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
         }
+    }
+
+    pub fn set_agent_resume_options(&mut self, agent: Agent, options: Vec<String>) -> bool {
+        let observed = AgentResumeOptions { agent, options };
+        if self.agent_resume_options.as_ref() == Some(&observed) {
+            return false;
+        }
+        self.agent_resume_options = Some(observed);
+        true
     }
 
     pub fn set_detected_agent_process_at(
@@ -1587,6 +1604,13 @@ impl TerminalState {
             self.hook_authority = None;
         }
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+        if self
+            .agent_resume_options
+            .as_ref()
+            .is_some_and(|options| crate::detect::agent_label(options.agent) != agent_label)
+        {
+            self.agent_resume_options = None;
+        }
         self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
             source,
             agent: agent_label,
@@ -2053,6 +2077,7 @@ impl TerminalState {
         self.fallback_observed_at = None;
         self.hook_authority = None;
         self.persisted_agent_session = None;
+        self.agent_resume_options = None;
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
@@ -5855,6 +5880,16 @@ mod tests {
         assert!(change.is_none());
         assert_eq!(terminal.state, AgentState::Working);
         assert!(terminal.hook_authority.is_some());
+    }
+
+    #[test]
+    fn agent_resume_options_cache_deduplicates_the_persisted_payload() {
+        let mut terminal = test_terminal();
+        assert!(terminal
+            .set_agent_resume_options(Agent::Claude, vec!["--model".into(), "opus".into()],));
+        assert!(!terminal
+            .set_agent_resume_options(Agent::Claude, vec!["--model".into(), "opus".into()],));
+        assert!(terminal.set_agent_resume_options(Agent::Codex, Vec::new()));
     }
 
     #[test]

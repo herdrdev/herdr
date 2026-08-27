@@ -1,8 +1,29 @@
 id = "claude"
 version = "2026.08.21.1"
-min_engine_version = 2
+min_engine_version = 4
 updated_at = "2026-08-21T00:00:00Z"
 aliases = ["claude-code"]
+
+[resume_options]
+flags = [
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--bare",
+  "--safe-mode",
+  "--chrome",
+  "--no-chrome",
+  "--disable-slash-commands",
+  "--ide",
+  "--verbose",
+]
+options = [
+  "--agent",
+  "--autocompact",
+  "--effort",
+  "--model",
+  "--name",
+  "--permission-mode",
+]
 
 [[rules]]
 id = "osc_title_working"

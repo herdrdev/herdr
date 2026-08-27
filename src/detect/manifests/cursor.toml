@@ -1,8 +1,12 @@
 id = "cursor"
-version = "2026.08.03.1"
-min_engine_version = 1
-updated_at = "2026-08-03T01:08:04Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
 aliases = ["cursor-agent"]
+
+[resume_options]
+flags = ["-f", "--force", "--yolo", "--auto-review", "--trust"]
+options = ["--model", "--mode", "--sandbox"]
 
 [[rules]]
 id = "write_file_approval"

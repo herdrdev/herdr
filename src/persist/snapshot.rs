@@ -106,7 +106,15 @@ pub struct PaneSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_resume_options: Option<PaneAgentResumeOptionsSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneAgentResumeOptionsSnapshot {
+    pub agent: String,
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +346,16 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
+        let agent_resume_options = terminal.and_then(|terminal| {
+            terminal
+                .agent_resume_options
+                .as_ref()
+                .filter(|resume| !resume.options.is_empty())
+                .map(|resume| PaneAgentResumeOptionsSnapshot {
+                    agent: crate::detect::agent_label(resume.agent).to_string(),
+                    options: resume.options.clone(),
+                })
+        });
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -367,6 +385,7 @@ fn capture_tab(
                 agent_name,
                 managed_agent_kind,
                 agent_session,
+                agent_resume_options,
                 launch_argv,
             },
         );
@@ -647,6 +666,7 @@ mod tests {
                 agent_name: None,
                 managed_agent_kind: None,
                 agent_session: None,
+                agent_resume_options: None,
                 launch_argv: None,
             },
         );
@@ -658,6 +678,7 @@ mod tests {
                 agent_name: None,
                 managed_agent_kind: None,
                 agent_session: None,
+                agent_resume_options: None,
                 launch_argv: None,
             },
         );
@@ -1100,6 +1121,31 @@ mod tests {
     }
 
     #[test]
+    fn capture_contract_tracks_filtered_agent_resume_options() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_agent_resume_options(
+                crate::detect::Agent::Claude,
+                vec!["--model".into(), "opus".into()],
+            );
+
+        let snapshot = capture_from_state(&state);
+        let options = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+            .agent_resume_options
+            .as_ref()
+            .unwrap();
+        assert_eq!(options.agent, "claude");
+        assert_eq!(options.options, ["--model", "opus"]);
+    }
+
+    #[test]
     fn capture_contract_tracks_hook_authority_agent_session() {
         let mut state = state_with_workspaces(&["one"]);
         let session_path = test_session_path("pi-session.jsonl");
@@ -1206,6 +1252,7 @@ mod tests {
                 agent_name: None,
                 managed_agent_kind: None,
                 agent_session: None,
+                agent_resume_options: None,
                 launch_argv: None,
             },
         );
@@ -1219,6 +1266,7 @@ mod tests {
                 agent_name: None,
                 managed_agent_kind: None,
                 agent_session: None,
+                agent_resume_options: None,
                 launch_argv: None,
             },
         );

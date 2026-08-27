@@ -796,12 +796,14 @@ mod tests {
         let argv = vec![
             "claude".to_string(),
             "--resume".to_string(),
-            "session with ' quote".to_string(),
+            "session-id".to_string(),
+            "--name".to_string(),
+            "worker seven's".to_string(),
         ];
 
         assert_eq!(
             shell_command_from_argv(&argv).as_deref(),
-            Some("claude --resume 'session with '\\'' quote'")
+            Some("claude --resume session-id --name 'worker seven'\\''s'")
         );
         assert_eq!(shell_command_from_argv(&[]), None);
     }

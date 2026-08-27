@@ -88,6 +88,8 @@ Unsupported, missing, invalid, duplicated, or stale session references restore a
 
 If native agent session restore applies to a pane, Herdr resumes the agent session instead of replaying saved pane history for that pane.
 
+Herdr also remembers compatible options from the detected agent process, such as model, permission, approval, and sandbox choices. Each agent manifest declares zero-value flags and one-value options that are safe to replay; all other arguments are dropped. The active bundled, downloaded, or local override manifest is checked again when restoring, so removing an option from a manifest revokes it for future resumes.
+
 ## Live handoff
 
 Live handoff is for update and remote attach flows that need to replace a running Herdr server. It asks the old server to transfer live panes to the new server, so pane processes can keep running across the server replacement.

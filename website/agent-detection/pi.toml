@@ -1,8 +1,33 @@
 id = "pi"
-version = "2026.06.10.1"
-min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
 aliases = ["herdr:pi"]
+
+[resume_options]
+flags = [
+  "--no-tools",
+  "-nt",
+  "--no-builtin-tools",
+  "-nbt",
+  "--no-extensions",
+  "-ne",
+  "--no-skills",
+  "-ns",
+  "--no-context-files",
+  "-nc",
+  "--approve",
+  "-a",
+  "--no-approve",
+  "-na",
+  "--offline",
+]
+options = [
+  "--provider",
+  "--model",
+  "--thinking",
+  "--tui-mode",
+]
 
 [[rules]]
 id = "working_literal"

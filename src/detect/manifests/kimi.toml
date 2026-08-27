@@ -1,8 +1,12 @@
 id = "kimi"
-version = "2026.06.10.1"
-min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
 aliases = ["kimi-code", "kimi code"]
+
+[resume_options]
+flags = ["-y", "--yolo", "--auto", "--plan"]
+options = ["-m", "--model", "--agent"]
 
 [[rules]]
 id = "current_approval_panel"

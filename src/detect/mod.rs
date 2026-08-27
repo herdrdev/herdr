@@ -93,7 +93,7 @@ impl Agent {
         Self::Muse,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
+    pub const MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -102,6 +102,7 @@ impl Agent {
         Self::Devin,
         Self::Antigravity,
         Self::Cline,
+        Self::Omp,
         Self::OpenCode,
         Self::GithubCopilot,
         Self::Kimi,
@@ -241,6 +242,12 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
+    identify_agent_process_in_job(job).map(|(agent, name, _)| (agent, name))
+}
+
+fn identify_agent_process_in_job(
+    job: &crate::platform::ForegroundJob,
+) -> Option<(Agent, String, &crate::platform::ForegroundProcess)> {
     if let Some(process) = job
         .processes
         .iter()
@@ -248,26 +255,58 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     {
         let candidate = normalized_process_name(process);
         if let Some(agent) = identify_agent(&candidate) {
-            return Some((agent, candidate));
+            return Some((agent, candidate, process));
         }
     }
 
-    let mut best: Option<(u8, Agent, String)> = None;
-
+    let mut best: Option<(u8, Agent, String, &crate::platform::ForegroundProcess)> = None;
     for process in &job.processes {
         let candidate = normalized_process_name(process);
         let Some(agent) = identify_agent(&candidate) else {
             continue;
         };
         let score = process_priority(process, &candidate);
-
         match &best {
-            Some((best_score, _, _)) if *best_score >= score => {}
-            _ => best = Some((score, agent, candidate)),
+            Some((best_score, _, _, _)) if *best_score >= score => {}
+            _ => best = Some((score, agent, candidate, process)),
         }
     }
+    best.map(|(_, agent, name, process)| (agent, name, process))
+}
 
-    best.map(|(_, agent, name)| (agent, name))
+pub fn resume_options_in_job(
+    job: &crate::platform::ForegroundJob,
+    agent: Agent,
+) -> Option<Vec<String>> {
+    let (detected_agent, _, process) = identify_agent_process_in_job(job)?;
+    (detected_agent == agent)
+        .then(|| resume_options_for_process(process, agent))
+        .flatten()
+}
+
+fn resume_options_for_process(
+    process: &crate::platform::ForegroundProcess,
+    agent: Agent,
+) -> Option<Vec<String>> {
+    let argv = process.argv.as_deref()?;
+    let label = agent_label(agent);
+    let options_start = argv
+        .iter()
+        .position(|token| agent_name_from_path_token(token).as_deref() == Some(label))
+        .map(|agent_token| agent_token + 1);
+    #[cfg(windows)]
+    let options_start = options_start.or_else(|| {
+        (agent == Agent::Cursor && cursor_agent_name_from_bundled_node_argv(argv).is_some())
+            .then_some(2)
+    });
+    if let Some(options_start) = options_start {
+        return Some(manifest::filter_resume_options(
+            agent,
+            &argv[options_start..],
+        ));
+    }
+
+    command_wrapper_text(argv).and_then(|command| command_text_resume_options(command, agent))
 }
 
 /// Detect the state of an agent from the live terminal tail snapshot.
@@ -399,8 +438,13 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
     let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
 
     match runtime_name.as_str() {
-        "node" => cursor_agent_name_from_bundled_node_argv(argv)
-            .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
+        "node" => {
+            #[cfg(windows)]
+            if let Some(agent) = cursor_agent_name_from_bundled_node_argv(argv) {
+                return Some(agent);
+            }
+            script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])
+        }
         "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
         name if is_python_runtime(name) => script_arg_agent_name(argv, &["-c"], &["-m"]),
         "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
@@ -411,6 +455,7 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
     }
 }
 
+#[cfg(windows)]
 fn cursor_agent_name_from_bundled_node_argv(argv: &[String]) -> Option<String> {
     let (runtime_parent, runtime_name) = path_parent_and_basename(argv.first()?)?;
     let (script_parent, script_name) = path_parent_and_basename(argv.get(1)?)?;
@@ -434,6 +479,7 @@ fn cursor_agent_name_from_bundled_node_argv(argv: &[String]) -> Option<String> {
     .then(|| agent_label(Agent::Cursor).to_string())
 }
 
+#[cfg(windows)]
 fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
     let split = path.rfind(['/', '\\'])?;
     let parent = path[..split].trim_end_matches(['/', '\\']);
@@ -441,16 +487,25 @@ fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
     (!parent.is_empty() && !basename.is_empty()).then_some((parent, basename))
 }
 
+fn command_wrapper_text(argv: &[String]) -> Option<&str> {
+    let runtime = normalized_agent_lookup_name(path_basename(argv.first()?));
+    match runtime.as_str() {
+        "cmd" => windows_cmd_command_text(argv),
+        "powershell" | "pwsh" => powershell_command_text(argv),
+        _ => None,
+    }
+}
+
 fn windows_cmd_arg_agent_name(argv: &[String]) -> Option<String> {
+    windows_cmd_command_text(argv).and_then(command_text_agent_name)
+}
+
+fn windows_cmd_command_text(argv: &[String]) -> Option<&str> {
     let mut args = argv.iter().skip(1);
     while let Some(arg) = args.next() {
         let flag = arg.trim_matches('"').to_lowercase();
         match flag.as_str() {
-            "/c" | "/k" => {
-                return args
-                    .next()
-                    .and_then(|command| command_text_agent_name(command))
-            }
+            "/c" | "/k" => return args.next().map(String::as_str),
             "/d" | "/s" | "/q" | "/a" | "/u" | "/e:on" | "/e:off" | "/f:on" | "/f:off"
             | "/v:on" | "/v:off" => continue,
             _ => {}
@@ -486,7 +541,50 @@ fn powershell_arg_agent_name(argv: &[String]) -> Option<String> {
     None
 }
 
+fn powershell_command_text(argv: &[String]) -> Option<&str> {
+    let mut args = argv.iter().skip(1);
+    while let Some(arg) = args.next() {
+        let flag = arg.trim_matches('"').to_lowercase();
+        match flag.as_str() {
+            "-command" | "-c" | "/command" | "/c" => return args.next().map(String::as_str),
+            "-file" | "-f" | "/file" | "-encodedcommand" | "-enc" | "/encodedcommand" | "/enc" => {
+                return None
+            }
+            "-configurationname" | "-executionpolicy" | "-outputformat" | "-psconsolefile"
+            | "-version" | "-windowstyle" | "-workingdirectory" => {
+                let _ = args.next();
+            }
+            _ if flag.starts_with('-') || flag.starts_with('/') => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn command_text_agent_name(command: &str) -> Option<String> {
+    let (agent, _) = command_text_agent(command)?;
+    Some(agent)
+}
+
+fn command_text_resume_options(command: &str, agent: Agent) -> Option<Vec<String>> {
+    let (detected_agent, mut rest) = command_text_agent(command)?;
+    if detected_agent != agent_label(agent) {
+        return None;
+    }
+
+    let mut args = Vec::new();
+    while let Some((token, next)) = command_text_token(rest) {
+        let token = token.trim();
+        if matches!(token, "&" | "&&" | "|" | "||" | ";") {
+            break;
+        }
+        args.push(token.to_string());
+        rest = next;
+    }
+    Some(manifest::filter_resume_options(agent, &args))
+}
+
+fn command_text_agent(command: &str) -> Option<(String, &str)> {
     let mut rest = command;
     while let Some((token, next)) = command_text_token(rest) {
         let token = token.trim();
@@ -497,7 +595,7 @@ fn command_text_agent_name(command: &str) -> Option<String> {
             rest = next;
             continue;
         }
-        return agent_name_from_path_token(token);
+        return agent_name_from_path_token(token).map(|agent| (agent, next));
     }
     None
 }
@@ -892,7 +990,7 @@ mod tests {
             "herdr:mastracode",
             "mastracode"
         ));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+        assert!(!Agent::MANIFEST_AGENTS.contains(&Agent::Mastracode));
     }
 
     #[test]
@@ -904,7 +1002,7 @@ mod tests {
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
-            assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
+            assert!(Agent::MANIFEST_AGENTS.contains(&agent));
         }
     }
 
@@ -968,6 +1066,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn identify_agent_in_job_detects_windows_cursor_install() {
         let job = crate::platform::ForegroundJob {
@@ -988,6 +1087,35 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_cursor_install_preserves_resume_options_after_the_script() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    r"C:\Users\user\AppData\Local\cursor-agent\versions\2026.08.11-e8db854\node.exe",
+                    r"C:\Users\user\AppData\Local\cursor-agent\versions\2026.08.11-e8db854\index.js",
+                    "--model",
+                    "composer-1",
+                    "--yolo",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            resume_options_in_job(&job, Agent::Cursor),
+            Some(vec![
+                "--model".to_string(),
+                "composer-1".to_string(),
+                "--yolo".to_string(),
+            ])
+        );
+    }
+
+    #[cfg(windows)]
     #[test]
     fn identify_agent_in_job_ignores_invalid_windows_cursor_install_paths() {
         for script in [
@@ -1022,6 +1150,32 @@ mod tests {
             )],
         };
         assert_eq!(identify_agent_in_job(&lookalike), None);
+    }
+
+    #[test]
+    fn resume_options_in_job_filters_arguments_after_wrapped_agent_token() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 1,
+            processes: vec![foreground_process(
+                1,
+                "node",
+                &[
+                    "node",
+                    "/path/to/bin/claude",
+                    "--permission-mode",
+                    "bypassPermissions",
+                    "fix the bug",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            resume_options_in_job(&job, Agent::Claude),
+            Some(vec![
+                "--permission-mode".to_string(),
+                "bypassPermissions".to_string(),
+            ])
+        );
     }
 
     #[test]
@@ -1223,6 +1377,51 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Codex, "codex".to_string()))
+        );
+    }
+
+    #[test]
+    fn resume_options_in_job_reads_options_from_windows_cmd_command_text() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                1,
+                "cmd.exe",
+                &[
+                    "cmd.exe",
+                    "/D",
+                    "/S",
+                    "/C",
+                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\codex.cmd --model \"gpt 5\" && echo done",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            resume_options_in_job(&job, Agent::Codex),
+            Some(vec!["--model".to_string(), "gpt 5".to_string()])
+        );
+    }
+
+    #[test]
+    fn resume_options_in_job_reads_options_from_powershell_command_text() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                1,
+                "powershell.exe",
+                &[
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "& 'C:\\Tools\\claude.ps1' --name 'worker one' ; echo done",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            resume_options_in_job(&job, Agent::Claude),
+            Some(vec!["--name".to_string(), "worker one".to_string()])
         );
     }
 

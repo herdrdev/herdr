@@ -146,7 +146,18 @@ pub(crate) struct AgentManifest {
     #[serde(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    resume_options: ManifestResumeOptions,
+    #[serde(default)]
     rules: Vec<ManifestRule>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct ManifestResumeOptions {
+    #[serde(default)]
+    flags: Vec<String>,
+    #[serde(default)]
+    options: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -253,6 +264,7 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     ("kiro", include_str!("manifests/kiro.toml")),
     ("maki", include_str!("manifests/maki.toml")),
     ("muse", include_str!("manifests/muse.toml")),
+    ("omp", include_str!("manifests/omp.toml")),
     ("opencode", include_str!("manifests/opencode.toml")),
     ("pi", include_str!("manifests/pi.toml")),
     ("qodercli", include_str!("manifests/qodercli.toml")),
@@ -269,6 +281,8 @@ const MAX_TOTAL_GATES: usize = 512;
 const MAX_MATCHERS_PER_GATE: usize = 32;
 const MAX_TOTAL_MATCHERS: usize = 1024;
 const MAX_MATCHER_CHARS: usize = 512;
+const MAX_RESUME_OPTIONS_PER_MANIFEST: usize = 128;
+const MAX_RESUME_OPTION_CHARS: usize = 128;
 
 pub(crate) fn reload_manifests() -> Vec<AgentManifestSummary> {
     let _reload_guard = MANIFEST_RELOAD_LOCK
@@ -295,7 +309,7 @@ pub(crate) fn reload_manifests_for_agents(agents: &[Agent]) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let lock = manifest_cache();
-    let replacements = Agent::SCREEN_MANIFEST_AGENTS
+    let replacements = Agent::MANIFEST_AGENTS
         .into_iter()
         .filter(|agent| agents.contains(agent))
         .map(|agent| (agent, load_manifest_uncached(agent)))
@@ -321,7 +335,7 @@ fn manifest_cache() -> &'static RwLock<ManifestCache> {
 
 fn build_manifest_cache() -> ManifestCache {
     ManifestCache {
-        manifests: Agent::SCREEN_MANIFEST_AGENTS
+        manifests: Agent::MANIFEST_AGENTS
             .into_iter()
             .map(|agent| (agent, load_manifest_uncached(agent)))
             .collect(),
@@ -888,6 +902,17 @@ pub(crate) struct ParsedRemoteManifest {
     pub(crate) version: ManifestVersion,
 }
 
+pub(crate) fn filter_resume_options(agent: Agent, args: &[String]) -> Vec<String> {
+    let Some(loaded) = load_manifest(agent) else {
+        return Vec::new();
+    };
+    crate::agent_resume_options::filter(
+        args,
+        &loaded.manifest.resume_options.flags,
+        &loaded.manifest.resume_options.options,
+    )
+}
+
 pub(crate) fn parse_manifest(content: &str) -> Result<AgentManifest, String> {
     let manifest = toml::from_str::<AgentManifest>(content).map_err(|err| err.to_string())?;
     validate_manifest(&manifest)?;
@@ -922,9 +947,36 @@ pub(crate) fn parse_remote_manifest_for_agent(
     Ok(ParsedRemoteManifest { manifest, version })
 }
 
+fn validate_resume_options(resume_options: &ManifestResumeOptions) -> Result<(), String> {
+    if resume_options.flags.len() + resume_options.options.len() > MAX_RESUME_OPTIONS_PER_MANIFEST {
+        return Err(format!(
+            "manifest contains too many resume options, max is {MAX_RESUME_OPTIONS_PER_MANIFEST}"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for option in resume_options.flags.iter().chain(&resume_options.options) {
+        if option.chars().count() > MAX_RESUME_OPTION_CHARS {
+            return Err(format!(
+                "resume option exceeds {MAX_RESUME_OPTION_CHARS} characters"
+            ));
+        }
+        if !option.starts_with('-') || option == "-" || option == "--" || option.contains('=') {
+            return Err(format!("invalid resume option {option:?}"));
+        }
+        if !seen.insert(option.as_str()) {
+            return Err(format!("duplicate resume option {option:?}"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_manifest(manifest: &AgentManifest) -> Result<(), String> {
-    if manifest.rules.is_empty() {
-        return Err("manifest must contain at least one rule".to_string());
+    validate_resume_options(&manifest.resume_options)?;
+    if manifest.rules.is_empty()
+        && manifest.resume_options.flags.is_empty()
+        && manifest.resume_options.options.is_empty()
+    {
+        return Err("manifest must contain at least one rule or resume option".to_string());
     }
     if manifest.rules.len() > MAX_RULES_PER_MANIFEST {
         return Err(format!(

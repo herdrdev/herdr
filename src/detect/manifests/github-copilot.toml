@@ -1,8 +1,35 @@
 id = "copilot"
-version = "2026.07.07.1"
-min_engine_version = 1
-updated_at = "2026-07-07T14:15:00Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
 aliases = ["github-copilot", "ghcs"]
+
+[resume_options]
+flags = [
+  "--allow-all",
+  "--allow-all-tools",
+  "--allow-all-urls",
+  "--autopilot",
+  "--plan",
+  "--disallow-temp-dir",
+  "--enable-memory",
+  "--enable-reasoning-summaries",
+  "--experimental",
+  "--no-experimental",
+  "--no-ask-user",
+  "--no-custom-instructions",
+  "--yolo",
+]
+options = [
+  "--agent",
+  "--effort",
+  "--reasoning-effort",
+  "--max-ai-credits",
+  "--max-autopilot-continues",
+  "--mode",
+  "--model",
+  "--stream",
+]
 
 [[rules]]
 id = "selection_blocker"

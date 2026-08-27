@@ -16,6 +16,18 @@ contains = ["{contains}"]
     )
 }
 
+fn resume_options_manifest(flags: &[&str], options: &[&str]) -> String {
+    format!(
+        r#"
+id = "codex"
+
+[resume_options]
+flags = {flags:?}
+options = {options:?}
+"#
+    )
+}
+
 fn local_manifest(state: &str, contains: &str) -> String {
     format!(
         r#"
@@ -290,8 +302,65 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
 }
 
 #[test]
+fn claude_resume_options_keep_name_but_drop_system_prompt() {
+    let args = [
+        "--name",
+        "worker-7",
+        "--append-system-prompt",
+        "review database changes",
+    ]
+    .map(str::to_string);
+
+    assert_eq!(
+        filter_resume_options(Agent::Claude, &args),
+        ["--name", "worker-7"].map(str::to_string)
+    );
+}
+
+#[test]
+fn resume_options_follow_the_cached_manifest_and_hot_reload() {
+    with_manifest_dirs("resume-options-hot-reload", || {
+        write_local_codex(&resume_options_manifest(&["--full-auto"], &["--model"]));
+        let args = ["--full-auto", "--model", "o3", "prompt"].map(str::to_string);
+        assert_eq!(
+            filter_resume_options(Agent::Codex, &args),
+            ["--full-auto", "--model", "o3"].map(str::to_string)
+        );
+
+        let path = override_path(Agent::Codex).unwrap();
+        std::fs::write(&path, resume_options_manifest(&[], &["--model"])).unwrap();
+        assert_eq!(
+            filter_resume_options(Agent::Codex, &args),
+            ["--full-auto", "--model", "o3"].map(str::to_string)
+        );
+
+        reload_manifests();
+        assert_eq!(
+            filter_resume_options(Agent::Codex, &args),
+            ["--model", "o3"].map(str::to_string)
+        );
+    });
+}
+
+#[test]
+fn manifest_validation_rejects_ambiguous_resume_options() {
+    assert!(parse_manifest(&resume_options_manifest(&["--model"], &["--model"])).is_err());
+    assert!(parse_manifest(&resume_options_manifest(&["--"], &[])).is_err());
+    assert!(parse_manifest(&resume_options_manifest(&[], &["--model=value"])).is_err());
+}
+
+#[test]
+fn resume_option_length_counts_characters_like_the_website_validator() {
+    let at_limit = format!("-{}", "é".repeat(MAX_RESUME_OPTION_CHARS - 1));
+    assert!(parse_manifest(&resume_options_manifest(&[&at_limit], &[])).is_ok());
+
+    let over_limit = format!("-{}", "é".repeat(MAX_RESUME_OPTION_CHARS));
+    assert!(parse_manifest(&resume_options_manifest(&[&over_limit], &[])).is_err());
+}
+
+#[test]
 fn all_bundled_manifests_parse_and_validate() {
-    for agent in Agent::SCREEN_MANIFEST_AGENTS {
+    for agent in Agent::MANIFEST_AGENTS {
         assert!(
             bundled_manifest(agent).is_some(),
             "missing bundled manifest for {}",

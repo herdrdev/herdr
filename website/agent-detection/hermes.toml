@@ -1,8 +1,22 @@
 id = "hermes"
-version = "2026.07.24.1"
-min_engine_version = 2
-updated_at = "2026-07-24T19:12:54Z"
+version = "2026.08.12.1"
+min_engine_version = 4
+updated_at = "2026-08-12T14:05:03Z"
 aliases = ["hermes-agent"]
+
+[resume_options]
+flags = [
+  "--yolo",
+  "--accept-hooks",
+  "--ignore-user-config",
+  "--ignore-rules",
+  "--safe-mode",
+  "--no-restore-cwd",
+  "--pass-session-id",
+  "--tui",
+  "--cli",
+]
+options = ["-m", "--model", "--provider", "-t", "--toolsets", "--skills", "-s"]
 
 [[rules]]
 id = "osc_title_blocked"

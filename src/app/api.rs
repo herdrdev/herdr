@@ -69,7 +69,7 @@ impl App {
                 segment_index,
                 result,
             } => self.handle_tab_bar_command_finished(generation, segment_index, result),
-            ev @ AppEvent::TerminalBell { .. } => {
+            ev @ (AppEvent::TerminalBell { .. } | AppEvent::AgentResumeOptionsDetected { .. }) => {
                 self.handle_internal_event(ev);
                 false
             }
@@ -306,6 +306,7 @@ impl App {
                 None
             };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let resume_options_detected = matches!(ev, AppEvent::AgentResumeOptionsDetected { .. });
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
         if let Some(agents) = manifest_update_agents {
@@ -329,6 +330,9 @@ impl App {
             self.request_git_identity_refresh(Instant::now());
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
+        }
+        if resume_options_detected {
+            return pane_updates;
         }
         for update in &pane_updates {
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
