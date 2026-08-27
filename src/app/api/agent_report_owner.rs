@@ -110,7 +110,8 @@ impl App {
 }
 
 /// Pure ownership rule. `parent_of` returns the parent pid of a live process,
-/// and `None` once the process is gone.
+/// and `None` once the process is gone, including one that has exited but has
+/// not been reaped yet.
 fn resolve_report_ownership(
     owner_pid: Option<u32>,
     reporter_pid: u32,

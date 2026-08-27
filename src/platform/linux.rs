@@ -345,7 +345,10 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
     (tpgid > 0).then_some(tpgid as u32)
 }
 
-/// Reads the parent pid of a process, or `None` when the process is gone.
+/// Reads the parent pid of a live process, or `None` once the process is gone.
+///
+/// An exited process that nobody has reaped still has a `/proc` entry and a
+/// parent link, so the process state is checked as well.
 pub fn process_parent_pid(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     process_parent_pid_from_stat(&stat)
@@ -356,7 +359,12 @@ fn process_parent_pid_from_stat(stat: &str) -> Option<u32> {
     // spaces and parens, so the fields are read after the last ')'.
     let rest = stat.get(stat.rfind(')')? + 2..)?;
     // After (comm): state(0) ppid(1)
-    let ppid: i32 = rest.split_whitespace().nth(1)?.parse().ok()?;
+    let mut fields = rest.split_whitespace();
+    // "Z" is a zombie: it has exited and only its exit status is left.
+    if fields.next()? == "Z" {
+        return None;
+    }
+    let ppid: i32 = fields.next()?.parse().ok()?;
     (ppid > 0).then_some(ppid as u32)
 }
 
@@ -862,6 +870,45 @@ mod tests {
         assert_eq!(process_parent_pid_from_stat(stat), Some(4200));
         assert_eq!(process_parent_pid_from_stat("1 (systemd) S 0 1 1"), None);
         assert_eq!(process_parent_pid_from_stat("garbage"), None);
+    }
+
+    #[test]
+    fn parent_pid_reports_nothing_for_a_zombie_state_line() {
+        assert_eq!(
+            process_parent_pid_from_stat("4242 (agent) Z 4200 4242 4200 0 -1"),
+            None
+        );
+        assert_eq!(
+            process_parent_pid_from_stat("4242 (Z zombie) S 4200 4242 4200 0 -1"),
+            Some(4200)
+        );
+    }
+
+    #[test]
+    fn parent_pid_reports_nothing_for_an_exited_process_that_was_not_reaped() {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn a child process");
+        let child_pid = child.id();
+
+        // WEXITED|WNOWAIT returns once the child has exited but leaves it
+        // unreaped, so the assertion below always sees a real zombie.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child_pid,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(waited, 0, "waiting for the child to exit failed");
+
+        assert_eq!(process_parent_pid(child_pid), None);
+
+        child.wait().expect("reap the child process");
     }
 
     #[test]
