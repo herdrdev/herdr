@@ -1854,17 +1854,40 @@ pub fn named_pipe_client_pid(pipe: std::os::windows::io::RawHandle) -> Option<u3
     (ok && pid > 0).then_some(pid)
 }
 
-/// Reads the parent pid of a process, or `None` when the process is gone.
+/// Reads the parent pid of a process, or `None` when the process is gone. A
+/// process that has exited counts as gone even while a handle keeps its
+/// process object alive, because `process_exists` reads the exit code.
 ///
 /// Windows has no cheap per-process parent lookup, so this reuses the cached
-/// process snapshot and confirms liveness separately: a snapshot entry can
-/// outlive the process by the cache TTL.
+/// process snapshot and confirms liveness separately. The cache is stale in
+/// both directions: an entry can outlive its process by the cache TTL, and a
+/// process started after the snapshot was taken is missing from it.
 pub fn process_parent_pid(pid: u32) -> Option<u32> {
     if !process_exists(pid) {
         return None;
     }
-    let snapshot = cached_foreground_processes();
-    let parent_pid = snapshot.entry(pid)?.parent_pid;
+    parent_pid_of_live_process(
+        pid,
+        &cached_foreground_processes(),
+        fresh_foreground_processes,
+    )
+}
+
+/// Resolves a live process's parent from the cached snapshot, falling back to a
+/// fresh one when the process is younger than the cache.
+///
+/// Answering `None` for a live process would tell `resolve_report_ownership`
+/// that the pane's report owner is gone, so a nested reporter would take the
+/// pane during the cache TTL (#3246).
+fn parent_pid_of_live_process(
+    pid: u32,
+    cached: &ProcessSnapshot,
+    fresh: impl FnOnce() -> Arc<ProcessSnapshot>,
+) -> Option<u32> {
+    let parent_pid = match cached.entry(pid) {
+        Some(entry) => entry.parent_pid,
+        None => fresh().entry(pid)?.parent_pid,
+    };
     (parent_pid > 0).then_some(parent_pid)
 }
 
@@ -3313,6 +3336,75 @@ mod tests {
         assert!(!Arc::ptr_eq(&second, &refreshed));
         assert_eq!(builds, 2);
         assert_eq!(refreshed.entries[0].pid, 20);
+    }
+
+    #[test]
+    fn windows_parent_pid_reads_the_cached_snapshot_for_a_known_process() {
+        let cached = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "omp.exe", &["omp.exe"]),
+        ]);
+        let mut fresh_snapshots = 0;
+
+        let parent = super::parent_pid_of_live_process(20, &cached, || {
+            fresh_snapshots += 1;
+            Arc::new(super::ProcessSnapshot::new(Vec::new()))
+        });
+
+        assert_eq!(parent, Some(10));
+        assert_eq!(fresh_snapshots, 0);
+    }
+
+    #[test]
+    fn windows_parent_pid_takes_a_fresh_snapshot_for_a_process_younger_than_the_cache() {
+        // The pane's agent reported within the snapshot cache TTL of its own
+        // start, so the cached snapshot predates it. Answering `None` here
+        // would hand the pane to the next reporter (#3246).
+        let cached = super::ProcessSnapshot::new(vec![test_entry(
+            10,
+            1,
+            "powershell.exe",
+            &["powershell.exe"],
+        )]);
+        let mut fresh_snapshots = 0;
+
+        let parent = super::parent_pid_of_live_process(20, &cached, || {
+            fresh_snapshots += 1;
+            Arc::new(super::ProcessSnapshot::new(vec![
+                test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+                test_entry(20, 10, "omp.exe", &["omp.exe"]),
+            ]))
+        });
+
+        assert_eq!(parent, Some(10));
+        assert_eq!(fresh_snapshots, 1);
+    }
+
+    #[test]
+    fn windows_parent_pid_reports_nothing_when_no_snapshot_holds_the_process() {
+        let entries = || vec![test_entry(10, 1, "powershell.exe", &["powershell.exe"])];
+        let cached = super::ProcessSnapshot::new(entries());
+        let mut fresh_snapshots = 0;
+
+        let parent = super::parent_pid_of_live_process(20, &cached, || {
+            fresh_snapshots += 1;
+            Arc::new(super::ProcessSnapshot::new(entries()))
+        });
+
+        assert_eq!(parent, None);
+        assert_eq!(fresh_snapshots, 1);
+    }
+
+    #[test]
+    fn windows_parent_pid_reports_nothing_for_a_process_without_a_parent() {
+        let cached =
+            super::ProcessSnapshot::new(vec![test_entry(10, 0, "wininit.exe", &["wininit.exe"])]);
+
+        let parent = super::parent_pid_of_live_process(10, &cached, || {
+            panic!("a cached hit must not take a fresh snapshot")
+        });
+
+        assert_eq!(parent, None);
     }
 
     #[test]
