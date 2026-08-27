@@ -106,6 +106,17 @@ struct AgentNameOwner {
     session_ref: Option<crate::agent_resume::AgentSessionRef>,
 }
 
+/// The process that currently speaks for this terminal's agent state.
+///
+/// Reports from a full-lifecycle source that runs inside the agent process are
+/// bound to one pid, so a session nested inside the agent cannot take the
+/// pane's state authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReportOwner {
+    pub pid: u32,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecentAgentProcessExit {
     agent: Agent,
@@ -147,6 +158,7 @@ pub struct TerminalState {
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    agent_report_owner: Option<AgentReportOwner>,
 }
 
 impl TerminalState {
@@ -181,6 +193,7 @@ impl TerminalState {
             recent_agent_process_exit: None,
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
+            agent_report_owner: None,
         }
     }
 
@@ -1723,6 +1736,24 @@ impl TerminalState {
         })
     }
 
+    /// The pid that currently owns agent-state reporting for this terminal.
+    pub fn agent_report_owner(&self) -> Option<&AgentReportOwner> {
+        self.agent_report_owner.as_ref()
+    }
+
+    /// Binds agent-state reporting to `pid`, replacing any previous owner.
+    pub fn set_agent_report_owner(&mut self, pid: u32, source: &str) {
+        self.agent_report_owner = Some(AgentReportOwner {
+            pid,
+            source: source.to_string(),
+        });
+    }
+
+    /// Frees the pane so the next reporting process can own it.
+    pub fn clear_agent_report_owner(&mut self) {
+        self.agent_report_owner = None;
+    }
+
     pub fn release_agent_with_mutation(
         &mut self,
         source: &str,
@@ -1763,6 +1794,7 @@ impl TerminalState {
             agent_label,
             FullLifecycleHookSuppressionReason::HookClear,
         );
+        self.clear_agent_report_owner();
         if !process_owns_agent {
             self.detected_agent = None;
             self.fallback_state = AgentState::Unknown;
@@ -2064,6 +2096,7 @@ impl TerminalState {
         self.recent_agent_process_exit = None;
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
+        self.clear_agent_report_owner();
         self.clear_agent_name();
     }
 
@@ -5588,6 +5621,55 @@ mod tests {
                 session.session_ref.value.as_str()
             )),
             Some(("herdr:claude", "claude", "claude-session"))
+        );
+    }
+
+    #[test]
+    fn releasing_the_agent_frees_the_pane_report_owner() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_agent_report_owner(4242, "herdr:pi");
+
+        terminal
+            .release_agent_with_mutation("herdr:pi", "pi", Some(21))
+            .expect("visible agent release should be accepted");
+
+        assert!(terminal.agent_report_owner().is_none());
+    }
+
+    #[test]
+    fn reusing_the_pane_frees_the_pane_report_owner() {
+        let mut terminal = test_terminal();
+        terminal.set_agent_report_owner(4242, "herdr:omp");
+
+        terminal.clear_agent_runtime_identity_after_respawn();
+
+        assert!(terminal.agent_report_owner().is_none());
+    }
+
+    #[test]
+    fn clearing_hook_authority_keeps_the_pane_report_owner() {
+        // Dropping state authority does not change which process is the pane's
+        // agent, so a live reporter must keep the pane.
+        let mut terminal = test_terminal();
+        terminal
+            .set_hook_authority(
+                "custom:pi".into(),
+                "pi".into(),
+                AgentState::Working,
+                None,
+                Some(20),
+            )
+            .expect("initial hook should be accepted");
+        terminal.set_agent_report_owner(4242, "custom:pi");
+
+        terminal
+            .clear_hook_authority_with_mutation(Some("custom:pi"), Some(21))
+            .expect("hook clear should be accepted");
+
+        assert_eq!(
+            terminal.agent_report_owner().map(|owner| owner.pid),
+            Some(4242)
         );
     }
 

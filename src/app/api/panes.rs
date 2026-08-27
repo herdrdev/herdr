@@ -1234,7 +1234,7 @@ impl App {
         params: PaneReportAgentParams,
         peer_pid: Option<u32>,
     ) -> String {
-        let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
@@ -1246,6 +1246,11 @@ impl App {
             &params.source,
             peer_pid,
         );
+        if let Err(owner_pid) =
+            self.claim_agent_report_owner(ws_idx, pane_id, &params.source, &agent_label, peer_pid)
+        {
+            return agent_report_refused(id, &params.source, owner_pid, peer_pid);
+        }
         self.handle_internal_event(crate::events::AppEvent::HookStateReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1270,7 +1275,7 @@ impl App {
         params: PaneReportAgentSessionParams,
         peer_pid: Option<u32>,
     ) -> String {
-        let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
@@ -1282,6 +1287,11 @@ impl App {
             &params.source,
             peer_pid,
         );
+        if let Err(owner_pid) =
+            self.claim_agent_report_owner(ws_idx, pane_id, &params.source, &agent_label, peer_pid)
+        {
+            return agent_report_refused(id, &params.source, owner_pid, peer_pid);
+        }
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1910,6 +1920,28 @@ fn split_path_id(idx: usize, path: &[bool]) -> String {
 
 fn invalid_agent(id: String) -> String {
     encode_error(id, "invalid_agent", "agent label must not be empty")
+}
+
+/// Refuses a pane agent report from a process that does not own the pane, so
+/// the caller can tell a refused report from an accepted one.
+fn agent_report_refused(
+    id: String,
+    source: &str,
+    owner_pid: u32,
+    reporter_pid: Option<u32>,
+) -> String {
+    let reporter = match reporter_pid {
+        Some(pid) => pid.to_string(),
+        None => "unknown".to_string(),
+    };
+    encode_error(
+        id,
+        "agent_report_refused",
+        format!(
+            "process {reporter} may not report {source} state for this pane: \
+             process {owner_pid} owns it"
+        ),
+    )
 }
 
 /// Records which process sent a pane agent report. Reporter identity decides
@@ -4147,5 +4179,236 @@ mod tests {
 
             assert_eq!(metadata_error_code(&response), "invalid_metadata_ttl");
         }
+    }
+
+    /// Pane whose process tree root is this test process, so a spawned child
+    /// stands in for a session nested inside the pane's agent.
+    fn app_with_pane_process_tree() -> (App, String, PaneId) {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
+        runtime.test_set_child_pid(std::process::id());
+        app.state.insert_test_runtime(pane_id, runtime);
+        // Full-lifecycle report authority only becomes effective once the agent
+        // process is detected in the pane.
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Omp), AgentState::Unknown);
+        (app, public_pane_id, pane_id)
+    }
+
+    fn report_agent_params(
+        pane_id: String,
+        source: &str,
+        agent: &str,
+        state: crate::api::schema::PaneAgentState,
+        seq: u64,
+    ) -> PaneReportAgentParams {
+        PaneReportAgentParams {
+            pane_id,
+            source: source.into(),
+            agent: agent.into(),
+            state,
+            message: None,
+            seq: Some(seq),
+            agent_session_id: Some("owner-session".into()),
+            agent_session_path: None,
+        }
+    }
+
+    fn report_session_params(
+        pane_id: String,
+        source: &str,
+        agent: &str,
+        session_id: &str,
+        seq: u64,
+    ) -> PaneReportAgentSessionParams {
+        PaneReportAgentSessionParams {
+            pane_id,
+            source: source.into(),
+            agent: agent.into(),
+            seq: Some(seq),
+            agent_session_id: Some(session_id.into()),
+            agent_session_path: None,
+            session_start_source: Some("startup".into()),
+        }
+    }
+
+    fn pane_agent_state(app: &App, pane_id: PaneId) -> AgentState {
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        app.state.terminals.get(&terminal_id).unwrap().state
+    }
+
+    fn pane_report_owner(app: &App, pane_id: PaneId) -> Option<u32> {
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        app.state.terminals[&terminal_id]
+            .agent_report_owner()
+            .map(|owner| owner.pid)
+    }
+
+    fn spawn_nested_process() -> std::process::Child {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .expect("spawn a nested process")
+    }
+
+    /// Anchors the pane's agent session the way omp does at session start, so
+    /// later state reports from the same process take pane authority.
+    fn report_session(
+        app: &mut App,
+        public_pane_id: &str,
+        pid: u32,
+        session_id: &str,
+        seq: u64,
+    ) -> String {
+        app.handle_pane_report_agent_session(
+            "session".into(),
+            report_session_params(
+                public_pane_id.to_string(),
+                "herdr:omp",
+                "omp",
+                session_id,
+                seq,
+            ),
+            Some(pid),
+        )
+    }
+
+    fn assert_report_accepted(response: &str) {
+        let response: SuccessResponse = serde_json::from_str(response).unwrap();
+        assert!(matches!(response.result, ResponseResult::Ok {}));
+    }
+
+    #[tokio::test]
+    async fn pane_report_agent_refuses_a_session_nested_inside_the_pane_agent() {
+        let (mut app, public_pane_id, pane_id) = app_with_pane_process_tree();
+        let own_pid = std::process::id();
+        assert_report_accepted(&report_session(
+            &mut app,
+            &public_pane_id,
+            own_pid,
+            "owner-session",
+            1,
+        ));
+        assert_report_accepted(&app.handle_pane_report_agent(
+            "own".into(),
+            report_agent_params(
+                public_pane_id.clone(),
+                "herdr:omp",
+                "omp",
+                crate::api::schema::PaneAgentState::Working,
+                2,
+            ),
+            Some(own_pid),
+        ));
+        assert_eq!(pane_agent_state(&app, pane_id), AgentState::Working);
+
+        let mut nested = spawn_nested_process();
+        let response = app.handle_pane_report_agent(
+            "nested".into(),
+            report_agent_params(
+                public_pane_id,
+                "herdr:omp",
+                "omp",
+                crate::api::schema::PaneAgentState::Idle,
+                3,
+            ),
+            Some(nested.id()),
+        );
+        nested.kill().expect("kill the nested process");
+        nested.wait().expect("reap the nested process");
+
+        assert_eq!(metadata_error_code(&response), "agent_report_refused");
+        assert_eq!(pane_agent_state(&app, pane_id), AgentState::Working);
+        assert_eq!(pane_report_owner(&app, pane_id), Some(own_pid));
+    }
+
+    #[tokio::test]
+    async fn pane_report_agent_session_refuses_a_session_nested_inside_the_pane_agent() {
+        let (mut app, public_pane_id, pane_id) = app_with_pane_process_tree();
+        let own_pid = std::process::id();
+        assert_report_accepted(&report_session(
+            &mut app,
+            &public_pane_id,
+            own_pid,
+            "owner-session",
+            1,
+        ));
+
+        let mut nested = spawn_nested_process();
+        let response = report_session(&mut app, &public_pane_id, nested.id(), "nested-session", 2);
+        nested.kill().expect("kill the nested process");
+        nested.wait().expect("reap the nested process");
+
+        assert_eq!(metadata_error_code(&response), "agent_report_refused");
+        assert_eq!(pane_report_owner(&app, pane_id), Some(own_pid));
+    }
+
+    #[tokio::test]
+    async fn pane_report_agent_keeps_accepting_reports_from_the_owning_process() {
+        let (mut app, public_pane_id, pane_id) = app_with_pane_process_tree();
+        let own_pid = std::process::id();
+        assert_report_accepted(&report_session(
+            &mut app,
+            &public_pane_id,
+            own_pid,
+            "owner-session",
+            1,
+        ));
+        for (seq, state) in [
+            (2, crate::api::schema::PaneAgentState::Working),
+            (3, crate::api::schema::PaneAgentState::Idle),
+        ] {
+            assert_report_accepted(&app.handle_pane_report_agent(
+                "own".into(),
+                report_agent_params(public_pane_id.clone(), "herdr:omp", "omp", state, seq),
+                Some(own_pid),
+            ));
+        }
+
+        assert_eq!(pane_agent_state(&app, pane_id), AgentState::Idle);
+        assert_eq!(pane_report_owner(&app, pane_id), Some(own_pid));
+    }
+
+    #[tokio::test]
+    async fn pane_report_agent_does_not_bind_hook_script_sources_to_one_process() {
+        // Hook scripts get a new pid per report, so pid ownership must not
+        // apply to them.
+        let (mut app, public_pane_id, pane_id) = app_with_pane_process_tree();
+        let mut nested = spawn_nested_process();
+        for (seq, pid) in [(1, std::process::id()), (2, nested.id())] {
+            assert_report_accepted(&app.handle_pane_report_agent(
+                "hook".into(),
+                report_agent_params(
+                    public_pane_id.clone(),
+                    "herdr:kimi",
+                    "kimi",
+                    crate::api::schema::PaneAgentState::Working,
+                    seq,
+                ),
+                Some(pid),
+            ));
+        }
+        nested.kill().expect("kill the nested process");
+        nested.wait().expect("reap the nested process");
+
+        assert_eq!(pane_report_owner(&app, pane_id), None);
     }
 }

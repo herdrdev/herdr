@@ -184,6 +184,11 @@ pub fn foreground_process_group_id(_child_pid: u32) -> Option<u32> {
 }
 
 /// Unsupported platform stub.
+pub fn process_parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
     None
 }

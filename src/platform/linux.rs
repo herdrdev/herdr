@@ -345,6 +345,21 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
     (tpgid > 0).then_some(tpgid as u32)
 }
 
+/// Reads the parent pid of a process, or `None` when the process is gone.
+pub fn process_parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_parent_pid_from_stat(&stat)
+}
+
+fn process_parent_pid_from_stat(stat: &str) -> Option<u32> {
+    // /proc/<pid>/stat is "pid (comm) state ppid ...", and (comm) can contain
+    // spaces and parens, so the fields are read after the last ')'.
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    // After (comm): state(0) ppid(1)
+    let ppid: i32 = rest.split_whitespace().nth(1)?.parse().ok()?;
+    (ppid > 0).then_some(ppid as u32)
+}
+
 pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     (pgid > 0).then_some(pgid as u32)
@@ -839,6 +854,29 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn parent_pid_is_read_past_a_process_name_containing_spaces_and_parens() {
+        let stat = "4242 (weird ) name) S 4200 4242 4200 34816 4242 4194304";
+        assert_eq!(process_parent_pid_from_stat(stat), Some(4200));
+        assert_eq!(process_parent_pid_from_stat("1 (systemd) S 0 1 1"), None);
+        assert_eq!(process_parent_pid_from_stat("garbage"), None);
+    }
+
+    #[test]
+    fn parent_pid_reports_the_spawning_process_and_nothing_for_a_reaped_one() {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .spawn()
+            .expect("spawn a child process");
+        let child_pid = child.id();
+        assert_eq!(process_parent_pid(child_pid), Some(std::process::id()));
+
+        child.kill().expect("kill the child process");
+        child.wait().expect("reap the child process");
+        assert_eq!(process_parent_pid(child_pid), None);
     }
 
     #[test]

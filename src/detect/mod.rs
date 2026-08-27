@@ -305,6 +305,22 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
     )
 }
 
+/// Sources whose reports come from the long-lived agent process itself, so a
+/// pane can bind its state authority to one reporter pid.
+///
+/// `herdr:kimi`, `herdr:mastracode`, `herdr:hermes` and the reserved-native
+/// hooks report through short-lived hook scripts that get a new pid per report,
+/// so they must stay out of this table.
+pub(crate) fn in_process_hook_reporter(source: &str, agent_label: &str) -> bool {
+    matches!(
+        (source, agent_label),
+        ("herdr:pi", "pi")
+            | ("herdr:omp", "omp")
+            | ("herdr:opencode", "opencode")
+            | ("herdr:kilo", "kilo")
+    )
+}
+
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),

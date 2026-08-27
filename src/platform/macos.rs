@@ -386,6 +386,14 @@ pub fn foreground_process_group_id(pid: u32) -> Option<u32> {
     }
 }
 
+/// Reads the parent pid of a process, or `None` when the process is gone.
+pub fn process_parent_pid(pid: u32) -> Option<u32> {
+    let info = process_bsdinfo(pid)?;
+    #[allow(clippy::unnecessary_cast)] // info.pbi_ppid type is platform-dependent
+    let ppid = info.pbi_ppid as u32;
+    (ppid > 0).then_some(ppid)
+}
+
 pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     (pgid > 0).then_some(pgid as u32)

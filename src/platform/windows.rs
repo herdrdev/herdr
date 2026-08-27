@@ -1854,6 +1854,20 @@ pub fn named_pipe_client_pid(pipe: std::os::windows::io::RawHandle) -> Option<u3
     (ok && pid > 0).then_some(pid)
 }
 
+/// Reads the parent pid of a process, or `None` when the process is gone.
+///
+/// Windows has no cheap per-process parent lookup, so this reuses the cached
+/// process snapshot and confirms liveness separately: a snapshot entry can
+/// outlive the process by the cache TTL.
+pub fn process_parent_pid(pid: u32) -> Option<u32> {
+    if !process_exists(pid) {
+        return None;
+    }
+    let snapshot = cached_foreground_processes();
+    let parent_pid = snapshot.entry(pid)?.parent_pid;
+    (parent_pid > 0).then_some(parent_pid)
+}
+
 pub fn write_clipboard(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
