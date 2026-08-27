@@ -97,9 +97,9 @@ the top of the file:
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
 | `docs/next/website/src/content/docs/agents.mdx` | Document the built-in watcher, automatic agent titles, standalone-plugin migration, and adaptive Agent cards. | `18a6a734`, P5 (this commit) |
 | `docs/next/website/src/data/config-reference.json` | Add the native agent watcher, title-sync, and Agent-card configuration keys to the generated user reference snapshot. | `18a6a734`, P5 (this commit) |
-| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.3`, plus direct SQLite access for OpenCode titles. | `ebff8667`, `4df9fb1a`, `95a7db2a` |
-| `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | `ebff8667`, `4df9fb1a`, `95a7db2a` |
-| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `ebff8667`, `95a7db2a` |
+| `Cargo.toml` | Add the Unix-only `herdr-agent-watcher` runtime dependency, now pinned to `v0.2.4`, plus direct SQLite access for OpenCode titles. | `ebff8667`, `4df9fb1a`, `95a7db2a`, watcher v0.2.4 bump (this commit) |
+| `Cargo.lock` | Lock the watcher tag and direct SQLite reader dependency. | `ebff8667`, `4df9fb1a`, `95a7db2a`, watcher v0.2.4 bump (this commit) |
+| `nix/package.nix` | Supply the fixed-output hash for the watcher Git dependency. | `ebff8667`, `95a7db2a`, watcher v0.2.4 bump (this commit) |
 | `src/api/schema/tests.rs` | Keep the generated schema canonically ordered when the watcher enables `serde_json/preserve_order`. | `502f2f6b993e62e99ad98b97a71e813a0e258bc3` |
 | `src/config/model.rs` | Add startup-only native watcher and title-sync configuration sections. | `c3c70979` |
 | `src/config/io.rs` | Recognize native feature sections and diagnose legacy Agents-row settings from raw startup/live TOML. | `c3c70979`, `b8a6406c` |
