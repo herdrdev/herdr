@@ -109,6 +109,8 @@ herdr pane read w1:p2 --source recent --lines 50
 
 `agent.wait` 由服务器拥有并由事件驱动。它会固定到已解析的窗格占用者,因此替换后的智能体不能满足该等待。`agent.prompt` 接受可选的 `wait` 对象,其中包含 `until` 和 `timeout_ms`;这样可在一个请求中提交提示并开始等待,避免两个独立调用之间的竞态。如果解析出的智能体已经是 `blocked`,`agent.prompt` 不会发送输入或开始等待,而是返回 `agent_blocked`。
 
+成功的 `agent.wait` 响应始终在 `agent.agent_status` 中保留窗格当前探测到的状态。如果某个瞬时状态满足了等待条件,但在最终探测前发生变化,响应还会包含 `matched_transient_status`。该字段表示触发等待完成的状态,不是窗格的当前状态。
+
 `workspace.move_block` 会将有序的 `workspace_ids` 原子地移动到 `before_workspace_id` 之前;省略锚点则将该块移动到末尾。id 必须唯一,且锚点不能属于被移动的块。响应包含服务器确认的有序工作区列表。
 
 `session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅。为避免引导期间漏掉事件,应先在另一个连接上打开 `events.subscribe` 并等待确认,在调用 `session.snapshot` 时缓冲该事件流,然后安装快照、按顺序应用缓冲的事件并继续接收事件。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。
@@ -538,6 +540,8 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
 `state` 是语义性的。它影响等待、通知和汇总。只影响展示的值应通过元数据单独上报。
 
 仅提供会话的官方集成用 `pane.report_agent_session` 上报原生会话引用。上报状态的集成仍然可以在 `pane.report_agent` 中包含原生会话引用。与状态无关的会话上报不影响等待、通知或汇总。
+
+对于进程内运行的官方集成,Herdr 会将上报绑定到该窗格中第一个上报的进程。只要该进程仍控制窗格,其他进程就不能替换所有者;两种上报方法都会返回错误码 `agent_report_refused`。拥有该窗格的智能体进程退出时,请调用 `pane.release_agent`。外部编排器应使用不绑定进程的 `custom:*` 来源。
 
 ```json
 {

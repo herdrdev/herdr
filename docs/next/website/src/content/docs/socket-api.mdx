@@ -113,6 +113,8 @@ Raw socket method names use dot notation:
 
 `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls. If the resolved agent is already `blocked`, `agent.prompt` returns `agent_blocked` without sending input or starting the wait.
 
+The successful `agent.wait` response always keeps the pane's current probed status in `agent.agent_status`. If a transient status satisfied the wait but changed before the final probe, the response also includes `matched_transient_status`. Treat that field as the status that triggered completion, not as the pane's current state.
+
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
 
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
@@ -713,6 +715,8 @@ Integrations report agent state with `pane.report_agent`.
 rollups. Report display-only values separately through metadata.
 
 Session-only official integrations report native session references with `pane.report_agent_session`. State-reporting integrations can still include native session references in `pane.report_agent`. State-independent session reports do not affect waits, notifications, or rollups.
+
+For in-process official integrations, Herdr binds reports to the first reporting process for the pane. A different process cannot replace that owner while it still controls the pane: both report methods return an error with code `agent_report_refused`. Call `pane.release_agent` when the owning agent process exits. External orchestrators should use a `custom:*` source, which is not process-bound.
 
 ```json
 {
