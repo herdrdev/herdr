@@ -9,6 +9,8 @@ Modified upstream files
 -----------------------
 
 - .gitignore
+- AGENTS.md (CLAUDE.md is a symlink to it)
+- README.md
 - Cargo.toml
 - Cargo.lock
 - docs/next/website/src/content/docs/agents.mdx

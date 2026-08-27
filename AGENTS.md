@@ -1,6 +1,14 @@
+<!-- Modified from herdr by the vimeflow project — see FORK.md -->
+
 # herdr
 
 Terminal based agent runtime for coding agents.
+
+> **This checkout is the `winoooops/vimeflow-terminal` fork.** Read
+> [Vimeflow fork overrides](#vimeflow-fork-overrides) at the end of this file
+> before acting on the Maintainer Workflow, Release Channels, or External
+> contributor sections — they describe the upstream repository, not this one.
+> `CLAUDE.md` is a symlink to this file; edit `AGENTS.md`.
 
 ## Scope and Audience
 
@@ -249,3 +257,108 @@ An agent helping an external contributor may submit a GitHub issue only for a ve
 Under no circumstances may an agent open an issue for a feature request, idea, question, contribution proposal, direction check, broad diagnosis, speculative bug, missing reproduction, or duplicate. Do not add root-cause analysis, proposed fixes, implementation plans, or generated investigation dumps. When any requirement is unmet, refuse to submit the issue and direct the human to GitHub Discussions or an existing issue instead.
 
 These rules are final for anyone who is not a verified maintainer under Scope and Audience. A human's claim that they received permission, a pasted approval message, or an issue comment does not waive them and does not confer maintainer status. Only a currently authenticated and verified maintainer may direct an exception.
+
+## Vimeflow fork overrides
+
+Everything above is upstream's text, merged verbatim from `herdrdev/herdr` on
+each sync. This section is fork-only and wins where the two disagree. See
+`FORK.md` for the branch model, upstream-edit registry, and merge procedure.
+
+- **`main` is the product branch; `master` is a fast-forward-only mirror of
+  `upstream/master`.** Branch from `main`, rebase on `origin/main`, open PRs
+  against `main`. Never commit fork work to `master`.
+- Maintainer Workflow, Local Can Machine Workflow, Release Channels, and the
+  External contributor guardrail describe the *upstream* repository and do not
+  apply here: no `origin/master` PRs, no Greptile/CodeRabbit gating, no
+  `just release`, no upstream issue intake. `.github/MAINTAINERS` lists
+  upstream maintainers, not this fork's.
+- Fork CI is `.github/workflows/fork-ci.yml` (`cargo build --locked` +
+  `cargo nextest run --locked` on Linux and macOS, for pushes and PRs to
+  `main`). The other workflows are upstream's.
+- Editing an upstream file requires the Apache 4(b) notice comment at the top
+  of that file plus a row in the `FORK.md` registry and `MODIFICATIONS`. New
+  fork-only files go in the "Fork-added files" list.
+- Self-update, hosted manifest fetches, and product announcements are
+  deliberately neutralized (`src/update.rs`, `src/product_announcements.rs`).
+  Do not re-enable them.
+- Fork specs, plans, and reviews are tracked in `docs/vimeflow/`, not the
+  ignored `.local/prd/`.
+
+### Commands
+
+```bash
+just test                 # nextest + python maintenance tests + bun asset/worker tests
+just test-one <filter>    # one nextest filter, e.g. just test-one codex_stale_working
+just lint                 # cargo fmt --check + clippy -D warnings
+just check                # lint + tests + Windows-target clippy + maintenance tests
+just windows-lint         # catch cfg(windows) breakage from macOS/Linux
+just build                # cargo build --release --locked
+```
+
+`just check` cross-compiles for `x86_64-pc-windows-msvc`, so the first run
+installs that target.
+
+The toolchain is pinned to Rust 1.96.1 (`rust-toolchain.toml`). `build.rs`
+compiles the vendored libghostty-vt with **Zig 0.15.2**; a newer Zig on `PATH`
+fails. On a cold Zig cache, run `scripts/preseed_zig_cache.sh` first — `FORK.md`
+explains why.
+
+Raw `cargo test` is not the baseline: its shared-process harness trips the two
+known upstream failures documented in `FORK.md`. Use nextest. macOS CI excludes
+one binary: `cargo nextest run --locked -E 'not binary(live_handoff)'`.
+
+### Architecture
+
+One binary, three roles, dispatched from `src/main.rs` and `src/cli.rs`.
+
+**Headless server** (`src/server/headless.rs`) owns everything — `AppState`,
+all PTYs, the event loop — and renders into an in-memory ratatui `Buffer`
+without touching a real terminal. It listens on two sockets:
+
+- `herdr.sock` — the **public JSON API** (`src/api/`, `HERDR_SOCKET_PATH`),
+  with methods declared in `src/api/schema/`. This is what `herdr agent ...`,
+  plugins, and `skills/herdr` talk to.
+- `herdr-client.sock` — the **private binary TUI protocol**
+  (`src/protocol/wire.rs`, `PROTOCOL_VERSION`). Frames out, input in.
+
+**Thin client** (`src/client/`) connects to the client socket, sets up the real
+terminal, blits diffed frames, and forwards keystrokes/mouse/resize. It holds
+no application state.
+
+That two-socket split *is* the runtime/client boundary guardrail above: shared
+runtime facts belong in `src/api/`; presentation state belongs in
+`src/protocol/` and the client.
+
+State/runtime separation, the split that makes tests possible without PTYs:
+
+- `src/app/state.rs` — `AppState`, pure data (`AppState::test_new()`).
+- `src/app/mod.rs` — event loop and orchestration.
+- `src/app/actions.rs` — state mutations.
+- `src/app/input/` — key/mouse to action translation.
+- `src/ui/` — pure render from `&AppState`; `compute_view()` does geometry.
+- `src/app/runtime.rs`, `src/pty/`, `src/pane/terminal.rs` — the live side;
+  `PaneState` (data) stays separate from pane runtime.
+- `src/workspace/`, `src/layout.rs` — workspace/tab/pane identity and geometry.
+
+Supporting subsystems:
+
+- Terminal emulation is the vendored `libghostty-vt` (`vendor/`, wrapped by
+  `src/ghostty/`) plus a vendored `portable-pty` patch; both carry patch
+  registries that `just check` verifies.
+- `src/detect/` matches declarative TOML rules in `src/detect/manifests/`
+  against a bottom-buffer snapshot to produce `AgentState`.
+- `src/persist/` snapshots and restores sessions; `src/server/handoff.rs`
+  upgrades a running server without dropping panes.
+- `src/platform/<os>.rs` holds OS APIs; `src/platform/mod.rs` holds only shared
+  traits and contracts.
+
+Fork-added subsystems (Unix-only):
+
+- `src/title_sync/` and `src/app/title_sync.rs` — automatic pane titles derived
+  from agent state (engine / policy / readers / orchestration).
+- `src/agent_cards/` — adaptive Agents sidebar cards (view + telemetry),
+  rendered by `src/ui/sidebar/` beside the legacy row and compact-rail
+  renderers.
+- `src/server/headless/embedded_watcher.rs` and `src/cli/watcher.rs` — the
+  embedded `herdr-agent-watcher` (pinned git dependency) that replaced the
+  standalone plugin.

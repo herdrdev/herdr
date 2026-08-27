@@ -21,6 +21,9 @@ separate product branch.
   Vimeflow changes.
 - Upstream releases are merged into `main` through review branches and pull
   requests, once per release rather than once per upstream commit.
+- Fork feature work follows the same rule (since 2026-08-27): no direct
+  pushes to `main` — every change lands through a reviewed GitHub PR tied to
+  a tracked issue; fork CI gates the PR.
 
 `origin` points to the fork and `upstream` points to `herdrdev/herdr`.
 
@@ -94,6 +97,8 @@ the top of the file:
 | `src/app/input/sidebar.rs` | Use card-aware body geometry for Agent hit testing. | `158aabf9`, P5 gate fix (this commit) |
 | `src/app/api/panes.rs` | Route pane-label API mutations through the shared title ownership and event helper. | `e006a1ea` |
 | `src/app/state.rs` | Track title-sync generations, live Agents-card and compact-rail presentation state, and non-blocking watcher telemetry snapshots. | `e006a1ea`, `b8a6406c`, `95a7db2a`, compact-rail numbers (this commit) |
+| `README.md` | Replace upstream's product README with fork framing: try-herdr-first redirect, the opinionated-layer scope, shipped/upcoming features, build-from-source instructions, tracking-fork model, and attribution. Upstream's sponsor block, download/stars badges, demo video, and logo are dropped; a sponsor-herdr credit line is kept. | this commit |
+| `AGENTS.md` | Add the fork-overrides section (branch model, fork CI, disabled upstream workflows), fork command reference, and architecture map. `CLAUDE.md` remains a symlink to it. | this commit |
 | `.gitignore` | Whitelist `docs/vimeflow/` (fork specs/plans) alongside upstream's docs whitelist entries. | `f8229b2e` |
 | `docs/next/website/src/content/docs/agents.mdx` | Document the built-in watcher, automatic agent titles, standalone-plugin migration, adaptive Agent cards, and compact-rail numbering. | `18a6a734`, P5, compact-rail numbers (this commit) |
 | `docs/next/website/src/data/config-reference.json` | Add the native agent watcher, title-sync, Agent-card, and compact-rail configuration keys to the generated user reference snapshot. | `18a6a734`, P5, compact-rail numbers (this commit) |
