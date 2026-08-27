@@ -4256,9 +4256,7 @@ mod tests {
             .unwrap()
             .attached_terminal_id
             .clone();
-        app.state.terminals[&terminal_id]
-            .agent_report_owner()
-            .map(|owner| owner.pid)
+        app.state.terminals[&terminal_id].agent_report_owner()
     }
 
     fn spawn_nested_process() -> std::process::Child {

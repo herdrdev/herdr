@@ -106,17 +106,6 @@ struct AgentNameOwner {
     session_ref: Option<crate::agent_resume::AgentSessionRef>,
 }
 
-/// The process that currently speaks for this terminal's agent state.
-///
-/// Reports from a full-lifecycle source that runs inside the agent process are
-/// bound to one pid, so a session nested inside the agent cannot take the
-/// pane's state authority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentReportOwner {
-    pub pid: u32,
-    pub source: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecentAgentProcessExit {
     agent: Agent,
@@ -158,7 +147,14 @@ pub struct TerminalState {
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
-    agent_report_owner: Option<AgentReportOwner>,
+    /// The process that currently speaks for this terminal's agent state.
+    ///
+    /// Reports from a full-lifecycle source that runs inside the agent process
+    /// are bound to one pid, so a session nested inside the agent cannot take
+    /// the pane's state authority. Ownership is per pane, never per source: a
+    /// nested session that reported a different in-process source would
+    /// otherwise get a slot of its own and take the pane (#3246).
+    agent_report_owner: Option<u32>,
 }
 
 impl TerminalState {
@@ -1737,8 +1733,8 @@ impl TerminalState {
     }
 
     /// The pid that currently owns agent-state reporting for this terminal.
-    pub fn agent_report_owner(&self) -> Option<&AgentReportOwner> {
-        self.agent_report_owner.as_ref()
+    pub fn agent_report_owner(&self) -> Option<u32> {
+        self.agent_report_owner
     }
 
     /// Binds agent-state reporting to `pid`, replacing any previous owner.
@@ -1751,15 +1747,11 @@ impl TerminalState {
     pub fn set_agent_report_owner(&mut self, pid: u32, source: &str) {
         if self
             .agent_report_owner
-            .as_ref()
-            .is_some_and(|owner| owner.pid != pid)
+            .is_some_and(|owner_pid| owner_pid != pid)
         {
             self.hook_report_sequences.remove(source);
         }
-        self.agent_report_owner = Some(AgentReportOwner {
-            pid,
-            source: source.to_string(),
-        });
+        self.agent_report_owner = Some(pid);
     }
 
     /// Frees the pane so the next reporting process can own it.
@@ -5680,10 +5672,7 @@ mod tests {
             .clear_hook_authority_with_mutation(Some("custom:pi"), Some(21))
             .expect("hook clear should be accepted");
 
-        assert_eq!(
-            terminal.agent_report_owner().map(|owner| owner.pid),
-            Some(4242)
-        );
+        assert_eq!(terminal.agent_report_owner(), Some(4242));
     }
 
     #[test]

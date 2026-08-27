@@ -71,7 +71,7 @@ impl App {
             return Ok(());
         };
 
-        let owner_pid = terminal.agent_report_owner().map(|owner| owner.pid);
+        let owner_pid = terminal.agent_report_owner();
         match resolve_report_ownership(
             owner_pid,
             reporter_pid,
