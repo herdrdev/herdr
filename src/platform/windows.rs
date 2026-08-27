@@ -3,7 +3,10 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::{c_void, OsStr},
     mem::{size_of, MaybeUninit},
-    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    os::windows::{
+        ffi::OsStrExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    },
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
@@ -73,12 +76,16 @@ use windows_sys::{
                 },
             },
             Shell::{
-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
-                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+                CommandLineToArgvW, ExtractIconW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON,
+                NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE,
+                NIM_MODIFY, NOTIFYICONDATAW,
             },
             WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
-                LoadIconW, SendMessageTimeoutW, IDI_APPLICATION, SMTO_ABORTIFHUNG, WM_IME_CONTROL,
+                CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW,
+                GetForegroundWindow, GetWindowThreadProcessId, LoadIconW, PeekMessageW,
+                RegisterClassW, SendMessageTimeoutW, SetForegroundWindow, ShowWindow,
+                TranslateMessage, IDI_APPLICATION, PM_REMOVE, SMTO_ABORTIFHUNG, SW_RESTORE,
+                WM_APP, WM_IME_CONTROL, HICON, MSG, WNDCLASSW,
             },
         },
     },
@@ -2008,12 +2015,81 @@ pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Re
         })?
 }
 
+const WM_HERDR_NOTIFY: u32 = WM_APP + 1;
+const NIN_BALLOONCLICK: u32 = 0x0403;
+const NIN_BALLOONUSERCLICK: u32 = 0x0405;
+
+fn load_herdr_icon() -> (HICON, bool) {
+    // Try to extract Herdr's own icon from the current executable so the toast
+    // shows the Herdr branding instead of the generic Windows placeholder.
+    // Fallback to IDI_APPLICATION if extraction fails.
+    if let Ok(exe) = std::env::current_exe() {
+        let wide: Vec<u16> = exe
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let hicon = unsafe { ExtractIconW(null_mut(), wide.as_ptr(), 0) };
+        // ExtractIconW returns 1 when the file has no icons, 0 on failure.
+        if !hicon.is_null() && hicon as usize != 1 {
+            return (hicon as HICON, true);
+        }
+    }
+    let fallback = unsafe { LoadIconW(null_mut(), IDI_APPLICATION) };
+    (fallback, false)
+}
+
+unsafe extern "system" fn herdr_notification_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if msg == WM_HERDR_NOTIFY {
+        let event = lparam as u32;
+        if event == NIN_BALLOONCLICK || event == NIN_BALLOONUSERCLICK {
+            // Bring the owning terminal / console window to the foreground when
+            // the user clicks the toast. Best-effort: try console window first,
+            // then the hidden notification window's foreground fallback.
+            let console = GetConsoleWindow();
+            if !console.is_null() {
+                ShowWindow(console, SW_RESTORE);
+                SetForegroundWindow(console);
+            } else {
+                // Fallback: try to foreground the hidden window's thread
+                ShowWindow(hwnd, SW_RESTORE);
+                SetForegroundWindow(hwnd);
+            }
+        }
+        return 0;
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
 fn show_desktop_notification_on_thread(
     title: &str,
     body: &str,
     ready_tx: std::sync::mpsc::SyncSender<std::io::Result<bool>>,
 ) {
-    let class_name = wide_null("STATIC");
+    // Register a dedicated window class so we can handle balloon-click callbacks.
+    let class_name = wide_null("HerdrNotificationWindow");
+    let wnd_class = WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(herdr_notification_wndproc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: null_mut(),
+        hIcon: null_mut(),
+        hCursor: null_mut(),
+        hbrBackground: null_mut(),
+        lpszMenuName: std::ptr::null(),
+        lpszClassName: class_name.as_ptr(),
+    };
+    let atom = unsafe { RegisterClassW(&wnd_class) };
+    // If RegisterClassW fails with ERROR_CLASS_ALREADY_EXISTS (1410) it's fine;
+    // the class is already registered from a previous notification thread.
+    let _ = atom;
+
     let window_name = wide_null("Herdr notifications");
     let hwnd = unsafe {
         CreateWindowExW(
@@ -2040,18 +2116,25 @@ fn show_desktop_notification_on_thread(
     notification.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
     notification.hWnd = hwnd;
     notification.uID = 1;
-    notification.hIcon = unsafe { LoadIconW(null_mut(), IDI_APPLICATION) };
+    let (hicon, needs_destroy) = load_herdr_icon();
+    notification.hIcon = hicon;
     notification.uFlags = NIF_TIP;
     if !notification.hIcon.is_null() {
         notification.uFlags |= NIF_ICON;
     }
     copy_wide_truncated(&mut notification.szTip, "Herdr");
+    // Request callback messages for balloon interactions.
+    notification.uFlags |= NIF_MESSAGE;
+    notification.uCallbackMessage = WM_HERDR_NOTIFY;
 
     if unsafe { Shell_NotifyIconW(NIM_ADD, &notification) } == 0 {
         let _ = ready_tx.send(Err(std::io::Error::other(
             "failed to add Herdr notification-area icon",
         )));
         unsafe {
+            if needs_destroy && !hicon.is_null() {
+                DestroyIcon(hicon);
+            }
             DestroyWindow(hwnd);
         }
         return;
@@ -2064,6 +2147,9 @@ fn show_desktop_notification_on_thread(
     if unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) } == 0 {
         unsafe {
             Shell_NotifyIconW(NIM_DELETE, &notification);
+            if needs_destroy && !hicon.is_null() {
+                DestroyIcon(hicon);
+            }
             DestroyWindow(hwnd);
         }
         let _ = ready_tx.send(Err(std::io::Error::other(
@@ -2073,9 +2159,27 @@ fn show_desktop_notification_on_thread(
     }
 
     let _ = ready_tx.send(Ok(true));
-    std::thread::sleep(Duration::from_secs(10));
+    // Pump messages for 10s so balloon-click callbacks are dispatched to
+    // herdr_notification_wndproc, which brings the terminal to foreground.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut msg = unsafe { std::mem::zeroed::<MSG>() };
+    while Instant::now() < deadline {
+        let has_msg =
+            unsafe { PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) } != 0;
+        if has_msg {
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
     unsafe {
         Shell_NotifyIconW(NIM_DELETE, &notification);
+        if needs_destroy && !hicon.is_null() {
+            DestroyIcon(hicon);
+        }
         DestroyWindow(hwnd);
     }
 }
