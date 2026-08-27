@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
-use super::common::{ClientWindowTitleReason, NotificationShowReason};
+use super::common::{AgentStatus, ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
 use super::integrations::{
     IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
@@ -96,6 +96,10 @@ pub enum ResponseResult {
     },
     AgentInfo {
         agent: AgentInfo,
+        /// Status an `agent.wait` resolved on when the pane no longer held it at
+        /// probe time. Never set by the plain agent read methods.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matched_transient_status: Option<AgentStatus>,
     },
     AgentStarted {
         agent: AgentInfo,

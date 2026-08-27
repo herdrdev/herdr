@@ -29,7 +29,13 @@ impl App {
             Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
         };
 
-        encode_success(id, ResponseResult::AgentInfo { agent })
+        encode_success(
+            id,
+            ResponseResult::AgentInfo {
+                agent,
+                matched_transient_status: None,
+            },
+        )
     }
 
     pub(super) fn handle_agent_focus(&mut self, id: String, target: AgentTarget) -> String {
@@ -38,7 +44,13 @@ impl App {
             Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
         };
 
-        encode_success(id, ResponseResult::AgentInfo { agent })
+        encode_success(
+            id,
+            ResponseResult::AgentInfo {
+                agent,
+                matched_transient_status: None,
+            },
+        )
     }
 
     pub(super) fn handle_agent_rename(&mut self, id: String, params: AgentRenameParams) -> String {
@@ -47,7 +59,13 @@ impl App {
             Err(err) => return encode_error_body(id, self.agent_rename_error_body(err)),
         };
 
-        encode_success(id, ResponseResult::AgentInfo { agent })
+        encode_success(
+            id,
+            ResponseResult::AgentInfo {
+                agent,
+                matched_transient_status: None,
+            },
+        )
     }
 
     pub(super) fn handle_agent_start(&mut self, id: String, params: AgentStartParams) -> String {
@@ -594,7 +612,7 @@ mod tests {
         );
 
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let ResponseResult::AgentInfo { agent } = success.result else {
+        let ResponseResult::AgentInfo { agent, .. } = success.result else {
             panic!("expected agent info response");
         };
         assert_eq!(agent.agent_status, AgentStatus::Idle);

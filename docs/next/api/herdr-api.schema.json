@@ -8912,6 +8912,17 @@
                 "agent": {
                   "$ref": "#/schemas/success_response/$defs/AgentInfo"
                 },
+                "matched_transient_status": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/AgentStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Status an `agent.wait` resolved on when the pane no longer held it at\nprobe time. Never set by the plain agent read methods."
+                },
                 "type": {
                   "const": "agent_info",
                   "type": "string"

@@ -148,7 +148,7 @@ pub(super) fn wait_for_agent(
     };
     let until = agent_wait_statuses(params.until);
     if agent_wait_matches(&initial, &until, None) {
-        return agent_wait_success(request_id, initial).map(Some);
+        return agent_wait_success(request_id, initial, None).map(Some);
     }
 
     match wait_for_resolved_agent(
@@ -168,7 +168,10 @@ pub(super) fn wait_for_agent(
         event_hub,
         running,
     )? {
-        Some(AgentWaitOutcome::Matched(agent)) => agent_wait_success(request_id, *agent).map(Some),
+        Some(AgentWaitOutcome::Matched {
+            agent,
+            transient_status,
+        }) => agent_wait_success(request_id, *agent, transient_status).map(Some),
         Some(AgentWaitOutcome::Response(response)) => Ok(Some(response)),
         None => Ok(None),
     }
@@ -267,7 +270,8 @@ pub(super) fn prompt_agent(
             return Ok(None);
         };
         initial = match outcome {
-            AgentWaitOutcome::Matched(agent) => *agent,
+            // Prompt waits never accept a transient match.
+            AgentWaitOutcome::Matched { agent, .. } => *agent,
             AgentWaitOutcome::Response(response) => return Ok(Some(response)),
         };
         after_state_change_seq = None;
@@ -299,7 +303,7 @@ pub(super) fn prompt_agent(
         return Ok(None);
     };
     let agent = match outcome {
-        AgentWaitOutcome::Matched(agent) => *agent,
+        AgentWaitOutcome::Matched { agent, .. } => *agent,
         AgentWaitOutcome::Response(response) => return Ok(Some(response)),
     };
     agent_prompt_success(request_id, agent).map(Some)
@@ -341,7 +345,12 @@ enum AgentWaitTimeoutKind {
 }
 
 enum AgentWaitOutcome {
-    Matched(Box<crate::api::schema::AgentInfo>),
+    Matched {
+        agent: Box<crate::api::schema::AgentInfo>,
+        /// Status that satisfied the wait when the pane no longer held it at
+        /// probe time. The pane's own status stays in `agent`.
+        transient_status: Option<crate::api::schema::AgentStatus>,
+    },
     Response(String),
 }
 
@@ -391,7 +400,10 @@ fn wait_for_resolved_agent(
                         {
                             let mut matched = wait.initial.clone();
                             matched.agent_status = status;
-                            return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
+                            return Ok(Some(AgentWaitOutcome::Matched {
+                                agent: Box::new(matched),
+                                transient_status: None,
+                            }));
                         }
                         return agent_wait_not_running(request_id)
                             .map(AgentWaitOutcome::Response)
@@ -458,12 +470,20 @@ fn wait_for_resolved_agent(
                     .map(Some);
             }
             if let Some(status) = matched_event_status {
-                let mut matched = current;
-                matched.agent_status = status;
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
+                // Report the pane's own status; the transient status that
+                // satisfied the wait is named separately so a caller can see the
+                // pane already moved on.
+                let transient_status = (current.agent_status != status).then_some(status);
+                return Ok(Some(AgentWaitOutcome::Matched {
+                    agent: Box::new(current),
+                    transient_status,
+                }));
             }
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
+                return Ok(Some(AgentWaitOutcome::Matched {
+                    agent: Box::new(current),
+                    transient_status: None,
+                }));
             }
         }
 
@@ -487,7 +507,10 @@ fn wait_for_resolved_agent(
                     .map(Some);
             }
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
+                return Ok(Some(AgentWaitOutcome::Matched {
+                    agent: Box::new(current),
+                    transient_status: None,
+                }));
             }
             return agent_wait_timeout(request_id, wait.timeout_kind, &current)
                 .map(AgentWaitOutcome::Response)
@@ -600,10 +623,14 @@ fn agent_from_response(
 fn agent_wait_success(
     request_id: String,
     agent: crate::api::schema::AgentInfo,
+    matched_transient_status: Option<crate::api::schema::AgentStatus>,
 ) -> std::io::Result<String> {
     serde_json::to_string(&SuccessResponse {
         id: request_id,
-        result: ResponseResult::AgentInfo { agent },
+        result: ResponseResult::AgentInfo {
+            agent,
+            matched_transient_status,
+        },
     })
     .map_err(std::io::Error::other)
 }
@@ -788,6 +815,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::schema::{AgentInfo, AgentStatus};
 
     #[test]
     fn agent_wait_probe_only_translates_agent_disappearance() {
@@ -814,5 +842,40 @@ mod tests {
         let unavailable: ErrorResponse = serde_json::from_str(&unavailable).unwrap();
         assert_eq!(unavailable.id, "wait");
         assert_eq!(unavailable.error.code, "server_unavailable");
+    }
+
+    fn probed_agent(agent_status: crate::api::schema::AgentStatus) -> AgentInfo {
+        serde_json::from_value(serde_json::json!({
+            "terminal_id": "t_1",
+            "agent": "omp",
+            "agent_status": agent_status,
+            "workspace_id": "w_1",
+            "tab_id": "w_1:t1",
+            "pane_id": "w_1:p1",
+            "focused": false,
+            "state_change_seq": 7,
+            "revision": 3,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn agent_wait_reply_keeps_the_probed_status_and_names_a_transient_match() {
+        let settled =
+            agent_wait_success("wait".into(), probed_agent(AgentStatus::Idle), None).unwrap();
+        let settled: serde_json::Value = serde_json::from_str(&settled).unwrap();
+        assert_eq!(settled["result"]["type"], "agent_info");
+        assert_eq!(settled["result"]["agent"]["agent_status"], "idle");
+        assert!(settled["result"].get("matched_transient_status").is_none());
+
+        let transient = agent_wait_success(
+            "wait".into(),
+            probed_agent(AgentStatus::Working),
+            Some(AgentStatus::Idle),
+        )
+        .unwrap();
+        let transient: serde_json::Value = serde_json::from_str(&transient).unwrap();
+        assert_eq!(transient["result"]["agent"]["agent_status"], "working");
+        assert_eq!(transient["result"]["matched_transient_status"], "idle");
     }
 }
