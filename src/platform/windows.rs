@@ -1710,6 +1710,38 @@ fn read_process_environment(process: HANDLE, address: *const c_void) -> Option<V
     None
 }
 
+/// Read the interpreter environment a process was started in.
+pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+    if pid == 0 {
+        return None;
+    }
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)?;
+    let parameters = read_process_parameters(process.0)?;
+    let environment = read_process_environment(process.0, parameters.environment)?;
+    virtual_env_from_utf16(&environment)
+}
+
+/// A venv nested inside a conda environment leaves both prefixes exported, and
+/// `VIRTUAL_ENV` is the inner one, so it wins when both are present.
+fn virtual_env_from_utf16(environment: &[u16]) -> Option<super::VirtualEnvActivation> {
+    let read = |name: &str| {
+        environment_variable_from_utf16(environment, name).filter(|value| !value.is_empty())
+    };
+
+    if let Some(prefix) = read("VIRTUAL_ENV") {
+        return Some(super::VirtualEnvActivation {
+            kind: super::VirtualEnvKind::Venv,
+            prefix: prefix.into(),
+            name: read("VIRTUAL_ENV_PROMPT"),
+        });
+    }
+    read("CONDA_PREFIX").map(|prefix| super::VirtualEnvActivation {
+        kind: super::VirtualEnvKind::Conda,
+        prefix: prefix.into(),
+        name: read("CONDA_DEFAULT_ENV"),
+    })
+}
+
 fn environment_variable_from_utf16(environment: &[u16], name: &str) -> Option<String> {
     for variable in environment.split(|unit| *unit == 0) {
         if variable.is_empty() {
@@ -3822,6 +3854,61 @@ mod tests {
             .as_deref(),
             Some("pane-a")
         );
+    }
+
+    fn environment_block(records: &[&str]) -> Vec<u16> {
+        let mut block = Vec::new();
+        for record in records {
+            block.extend(record.encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
+
+    #[test]
+    fn windows_virtual_env_parser_reads_a_conda_prefix_and_name() {
+        let activation = super::virtual_env_from_utf16(&environment_block(&[
+            "PATH=C:\\conda\\envs\\web\\Scripts;C:\\Windows",
+            "CONDA_PREFIX=C:\\conda\\envs\\web",
+            "CONDA_DEFAULT_ENV=web",
+        ]))
+        .expect("expected an activation");
+
+        assert_eq!(activation.kind, crate::platform::VirtualEnvKind::Conda);
+        assert_eq!(
+            activation.prefix,
+            std::path::PathBuf::from("C:\\conda\\envs\\web")
+        );
+        assert_eq!(activation.name.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn windows_virtual_env_parser_prefers_the_venv_nested_inside_a_conda_environment() {
+        let activation = super::virtual_env_from_utf16(&environment_block(&[
+            "CONDA_PREFIX=C:\\conda\\envs\\web",
+            "CONDA_DEFAULT_ENV=web",
+            "VIRTUAL_ENV=C:\\work\\api\\.venv",
+            "VIRTUAL_ENV_PROMPT=api",
+        ]))
+        .expect("expected an activation");
+
+        assert_eq!(activation.kind, crate::platform::VirtualEnvKind::Venv);
+        assert_eq!(
+            activation.prefix,
+            std::path::PathBuf::from("C:\\work\\api\\.venv")
+        );
+        assert_eq!(activation.name.as_deref(), Some("api"));
+    }
+
+    #[test]
+    fn windows_virtual_env_parser_ignores_empty_and_absent_prefixes() {
+        assert!(super::virtual_env_from_utf16(&environment_block(&["PATH=C:\\Windows"])).is_none());
+        assert!(super::virtual_env_from_utf16(&environment_block(&[
+            "CONDA_PREFIX=",
+            "VIRTUAL_ENV=",
+        ]))
+        .is_none());
     }
 
     #[test]

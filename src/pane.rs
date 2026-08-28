@@ -84,6 +84,7 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PaneLaunchEnv {
     extra: Vec<(String, String)>,
+    virtual_env: Option<crate::platform::VirtualEnvActivation>,
     identity: PaneLaunchIdentity,
 }
 
@@ -103,8 +104,22 @@ impl PaneLaunchEnv {
     pub(crate) fn from_extra(extra: Vec<(String, String)>) -> Self {
         Self {
             extra,
+            virtual_env: None,
             identity: PaneLaunchIdentity::Inherit,
         }
+    }
+
+    /// Re-enter an interpreter environment in the spawned process.
+    ///
+    /// The activation is kept whole rather than expanded into `extra` here
+    /// because its `PATH` has to be built from the `PATH` the process actually
+    /// ends up with, which is not known until every other override is applied.
+    pub(crate) fn with_virtual_env(
+        mut self,
+        virtual_env: Option<crate::platform::VirtualEnvActivation>,
+    ) -> Self {
+        self.virtual_env = virtual_env;
+        self
     }
 
     pub(crate) fn with_identity(
@@ -131,6 +146,15 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     cmd.env_remove("CODEX_THREAD_ID");
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
+    }
+    if let Some(activation) = &launch_env.virtual_env {
+        // The builder starts from the server's environment, so this reads the
+        // PATH the pane would otherwise launch with, including anything set
+        // above. The activation goes in front of that value rather than
+        // replacing it.
+        for (key, value) in activation.launch_env(cmd.get_env("PATH")) {
+            cmd.env(key, value);
+        }
     }
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
@@ -3011,6 +3035,32 @@ impl PaneRuntime {
             None
         }
     }
+
+    /// Interpreter environment the pane is currently working in, if any.
+    ///
+    /// A shell mutates its own environment in place when it activates one, and
+    /// that mutation is not visible from outside the process. What is visible
+    /// is the environment a process was launched with, so this reads the
+    /// foreground process group leader — the command the shell started, which
+    /// carries any activation that was in effect when it began.
+    ///
+    /// Session saves call this for every pane, so it stays at one process
+    /// lookup plus one environment read. In particular it does not ask the PTY
+    /// actor for the foreground group: that is a round trip which blocks while
+    /// the reader is paused for a handoff.
+    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {
+        let pid = self.child_pid.load(Ordering::Acquire);
+        if pid == 0 {
+            return None;
+        }
+        let foreground = crate::platform::foreground_process_group_id(pid)?;
+        // An idle prompt leaves the shell itself in the foreground, and the
+        // shell's own activation is the part that cannot be read.
+        if foreground == pid {
+            return None;
+        }
+        crate::platform::process_virtual_env(foreground)
+    }
 }
 
 #[cfg(test)]
@@ -3091,6 +3141,41 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_launch_env_builds_the_activation_path_on_the_effective_launch_path() {
+        // Anything that sets PATH ahead of the activation has to survive it,
+        // so the activation is composed against the value the pane would have
+        // launched with rather than against the server's own PATH.
+        let mut cmd = CommandBuilder::new("shell");
+        let activation = crate::platform::VirtualEnvActivation {
+            kind: crate::platform::VirtualEnvKind::Conda,
+            prefix: "/opt/conda/envs/web".into(),
+            name: Some("web".to_string()),
+        };
+        let inherited = std::path::PathBuf::from("/refreshed/bin");
+        let launch_env = PaneLaunchEnv::from_extra(vec![(
+            "PATH".to_string(),
+            inherited.to_string_lossy().into_owned(),
+        )])
+        .with_virtual_env(Some(activation.clone()));
+
+        apply_pane_launch_env(&mut cmd, &launch_env);
+
+        // The directory list is the host's, so it is taken from the activation
+        // rather than spelled out; what this pins is the order.
+        let expected = activation
+            .path_entries()
+            .into_iter()
+            .chain(std::iter::once(inherited))
+            .collect::<Vec<_>>();
+        let path = cmd.get_env("PATH").expect("expected PATH");
+        assert_eq!(std::env::split_paths(path).collect::<Vec<_>>(), expected);
+        assert_eq!(
+            cmd.get_env("CONDA_PREFIX"),
+            Some(std::ffi::OsStr::new("/opt/conda/envs/web"))
+        );
+    }
 
     #[test]
     fn pane_launch_env_removes_outer_codex_thread_id() {
