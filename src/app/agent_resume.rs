@@ -226,9 +226,17 @@ impl App {
             );
             return false;
         };
+        // Resume runs the agent from a freshly spawned shell, so it needs the
+        // pane's interpreter environment for the same reason restore does.
+        let virtual_env = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .and_then(|terminal| terminal.virtual_env.clone());
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, Vec::new()))
+            .map(|launch_env| launch_env.with_virtual_env(virtual_env))
         else {
             return false;
         };
