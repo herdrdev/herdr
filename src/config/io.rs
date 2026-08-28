@@ -555,7 +555,7 @@ pub(crate) fn upsert_top_level_bool(content: &str, key: &str, value: bool) -> St
         if in_section {
             continue;
         }
-        if trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}=")) {
+        if is_toml_assignment_for_key(trimmed, key) {
             *line = replacement.clone();
             return lines.join("\n") + "\n";
         }
@@ -595,9 +595,7 @@ pub fn remove_section_key(content: &str, section: &str, key: &str) -> String {
             continue;
         }
 
-        if in_section
-            && (trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}=")))
-        {
+        if in_section && is_toml_assignment_for_key(trimmed, key) {
             i += 1;
             continue;
         }
@@ -661,6 +659,11 @@ fn is_top_level_keys_assignment(trimmed: &str) -> bool {
     trimmed.starts_with("keys ") || trimmed.starts_with("keys=") || trimmed.starts_with("keys.")
 }
 
+fn is_toml_assignment_for_key(line: &str, key: &str) -> bool {
+    line.split_once('=')
+        .is_some_and(|(lhs, _)| lhs.trim() == key)
+}
+
 fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> String {
     let header = format!("[{section}]");
     let assignment = format!("{key} = {value}");
@@ -690,9 +693,7 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
                     break;
                 }
 
-                if current_trimmed.starts_with(&format!("{key} "))
-                    || current_trimmed.starts_with(&format!("{key}="))
-                {
+                if is_toml_assignment_for_key(current_trimmed, key) {
                     result.push(assignment.clone());
                     inserted = true;
                 } else {
@@ -734,10 +735,50 @@ mod tests {
     }
 
     #[test]
+    fn upsert_top_level_bool_replaces_tab_separated_assignment() {
+        let content = "onboarding\t=\ttrue\n[keys]\nprefix = \"ctrl+b\"\n";
+        let updated = upsert_top_level_bool(content, "onboarding", false);
+
+        assert_eq!(updated, "onboarding = false\n[keys]\nprefix = \"ctrl+b\"\n");
+        assert!(updated.parse::<toml::Value>().is_ok());
+    }
+
+    #[test]
     fn upsert_section_bool_adds_missing_section() {
         let updated = upsert_section_bool("", "ui.toast", "enabled", true);
         assert!(updated.contains("[ui.toast]"));
         assert!(updated.contains("enabled = true"));
+    }
+
+    #[test]
+    fn upsert_section_value_replaces_tab_separated_assignment() {
+        let content = "[theme]\nname\t=\t\"terminal\"\nauto_switch = true\n";
+        let updated = upsert_section_value(content, "theme", "name", "\"dracula\"");
+
+        assert_eq!(updated, "[theme]\nname = \"dracula\"\nauto_switch = true\n");
+        assert!(updated.parse::<toml::Value>().is_ok());
+    }
+
+    #[test]
+    fn upsert_section_value_ignores_non_assignment_matches() {
+        let content = concat!(
+            "[theme]\n",
+            "# name = \"commented\"\n",
+            "description = \"name = terminal\"\n",
+            "name_suffix = \"custom\"\n",
+        );
+        let updated = upsert_section_value(content, "theme", "name", "\"dracula\"");
+
+        assert_eq!(
+            updated,
+            concat!(
+                "[theme]\n",
+                "# name = \"commented\"\n",
+                "description = \"name = terminal\"\n",
+                "name_suffix = \"custom\"\n",
+                "name = \"dracula\"\n",
+            )
+        );
     }
 
     #[test]
@@ -748,6 +789,15 @@ mod tests {
         assert!(!updated.contains("[ui.toast]\nenabled = true"));
         assert!(updated.contains("delivery = \"herdr\""));
         assert!(updated.contains("[ui.sound]\nenabled = true"));
+    }
+
+    #[test]
+    fn remove_section_key_removes_tab_separated_assignment() {
+        let content = "[ui.toast]\nenabled\t=\ttrue\ndelivery = \"herdr\"\n";
+        let updated = remove_section_key(content, "ui.toast", "enabled");
+
+        assert_eq!(updated, "[ui.toast]\ndelivery = \"herdr\"\n");
+        assert!(updated.parse::<toml::Value>().is_ok());
     }
 
     #[test]
