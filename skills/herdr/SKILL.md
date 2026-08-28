@@ -1,6 +1,6 @@
 ---
 name: herdr
-description: "Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1."
+description: "Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work — with one sanctioned exception: handing off a failure that is not the current task (see "Hand off a failure that is not your task"). Requires HERDR_ENV=1."
 ---
 
 # Herdr
@@ -152,6 +152,56 @@ herdr agent read reviewer --source recent-unwrapped --lines 120
 ```
 
 If a wait fails or returns `blocked`, inspect `agent get` and `agent read` before deciding what input to send. Use the pane surface only when raw terminal control is intentional.
+
+## Hand off a failure that is not your task
+
+A slice's gates sometimes surface a failure that looks like it belongs to
+something else — a flake, broken infra, a defect an earlier slice missed. Two
+rules collide there: a failure is never left unfixed, and one issue gets one
+pull request.
+
+A **hand-off** satisfies both, and it is the right move **when the failure is
+cleanly independent of the current task**. Calling a failure "pre-existing" or
+"unrelated" is exactly that suspicion — a hypothesis about independence, not a
+conclusion, and not a reason to stop caring. Start a separate agent in its own
+pane to investigate and repair it, and keep the original agent's context on its
+own slice.
+
+"Pre-existing" decides *where* a failure is fixed, never *whether*.
+
+**The suspicion can be wrong, so a hand-off has a return path.** If the
+investigation shows the failure is *not* independent — the current change
+caused it, or the two share a root cause — pull the result back into the
+originating context rather than letting the finding sit in the wrong pane. Read
+it with `herdr agent read <name>` and hand it to the original agent with
+`herdr agent prompt <name> "<what the hand-off found>"`. A hand-off that
+discovers "this is actually yours" has succeeded, not failed; the failure mode
+is leaving that discovery stranded in a context that cannot act on it.
+
+Say so in the brief: *report back if this turns out to be caused by, or to
+share a root cause with, the slice it came from.*
+
+```bash
+PANE=$(herdr pane split --current --direction right --cwd "$PWD" --no-focus \
+       | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+herdr agent start fix-flake --kind claude --pane "$PANE"
+herdr agent prompt fix-flake "<the brief>"
+```
+
+Use a new tab (`herdr tab create`) when handing off more than one, so the panes
+stay readable.
+
+Hand the receiving agent the evidence already gathered, not just the symptom:
+the failing signature, how to reproduce it, and what the originating agent has
+already ruled out. Without that it repeats work the first agent already did.
+
+State explicitly whether it may run builds. Several agents compiling at once
+saturate the machine and produce failures in *both* — a hand-off that corrupts
+the slice it was meant to protect. Read-only investigation is nearly free;
+compilation is not. Check the load before deciding.
+
+For a flake, require N-run evidence before and after the fix. A single green
+run is the same weak evidence that let the flake survive in the first place.
 
 ## Run an ordinary command in another pane
 
