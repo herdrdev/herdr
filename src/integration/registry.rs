@@ -365,7 +365,10 @@ fn integration_specs() -> [(
         ),
         (
             crate::api::schema::IntegrationTarget::CommandCode,
-            command_code_dir().map(|dir| dir.join("hooks").join(super::COMMAND_CODE_HOOK_INSTALL_NAME)),
+            command_code_dir().map(|dir| {
+                dir.join("hooks")
+                    .join(super::COMMAND_CODE_HOOK_INSTALL_NAME)
+            }),
             super::COMMAND_CODE_INTEGRATION_VERSION,
         ),
     ]
