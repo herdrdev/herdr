@@ -47,6 +47,11 @@ pub(crate) fn should_query_host_terminal_palette() -> bool {
 }
 
 fn running_inside_wsl() -> bool {
+    static RUNNING_INSIDE_WSL: OnceLock<bool> = OnceLock::new();
+    *RUNNING_INSIDE_WSL.get_or_init(detect_running_inside_wsl)
+}
+
+fn detect_running_inside_wsl() -> bool {
     proc_file_indicates_wsl("/proc/sys/kernel/osrelease")
         || proc_file_indicates_wsl("/proc/version")
         || WSL_MARKER_ENV_VARS
@@ -181,8 +186,8 @@ fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<For
 /// foreground groups. This mode is explicit because background jobs cannot be
 /// distinguished from foreground jobs without the native terminal signal.
 fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
-    let shell_group_id = process_pgrp_and_comm(child_pid)
-        .map(|(pgrp, _)| pgrp)
+    let shell_group_id = process_pgrp_comm_and_state(child_pid)
+        .map(|(pgrp, _, _)| pgrp)
         .filter(|pgrp| *pgrp > 0)? as u32;
 
     child_groups_foreground_process_group_with(
@@ -190,7 +195,7 @@ fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
         shell_group_id,
         process_task_ids,
         process_task_children,
-        |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
+        |pid| process_pgrp_comm_and_state(pid).map(|(pgrp, _, _)| pgrp),
     )
 }
 
@@ -311,12 +316,12 @@ fn numeric_file_name(entry: &std::fs::DirEntry) -> Option<u32> {
 }
 
 fn live_process_group_member(process_group_id: u32, pid: u32) -> Option<ProcGroupMember> {
-    let (pgrp, comm) = process_pgrp_and_comm(pid)?;
+    let (pgrp, comm, _) = process_pgrp_comm_and_state(pid)?;
     (pgrp > 0 && pgrp as u32 == process_group_id).then_some(ProcGroupMember { pid, comm })
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
-    let (pgrp, name) = process_pgrp_and_comm(process_group_id)?;
+    let (pgrp, name, _) = process_pgrp_comm_and_state(process_group_id)?;
     if pgrp as u32 != process_group_id {
         return None;
     }
@@ -350,18 +355,34 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
-fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
+fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    process_pgrp_and_comm_from_stat(&stat)
+    process_pgrp_comm_and_state_from_stat(&stat)
 }
 
-fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
+fn process_pgrp_comm_and_state_from_stat(stat: &str) -> Option<(i32, String, char)> {
     let close = stat.rfind(')')?;
     let comm = stat.get(1 + stat.find('(')?..close)?.to_string();
     let rest = stat.get(close + 2..)?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
+    let state = fields.first()?.chars().next()?;
     let pgrp: i32 = fields.get(2)?.parse().ok()?;
-    Some((pgrp, comm))
+    Some((pgrp, comm, state))
+}
+
+/// Whether `/proc/<pid>/environ` can be read without risking a stall.
+///
+/// That read enters `access_remote_vm`. A process that is exiting or in
+/// uninterruptible sleep can hold it there, and on WSL it has been seen to
+/// block indefinitely while a multithreaded agent exits. The environment is
+/// optional, so it is skipped in both cases rather than blocking the caller.
+fn process_state_allows_remote_memory_read(state: char) -> bool {
+    !matches!(state, 'D' | 'Z' | 'X' | 'x')
+}
+
+fn process_allows_remote_memory_read(state: char, comm: &str, running_inside_wsl: bool) -> bool {
+    process_state_allows_remote_memory_read(state)
+        && (!running_inside_wsl || crate::detect::identify_agent(comm).is_none())
 }
 
 fn process_argv(pid: u32) -> Option<Vec<String>> {
@@ -393,6 +414,22 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     }
     let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
     super::parse_agent_env_hint(&environ)
+}
+
+/// Read the interpreter environment a process was started in.
+///
+/// A pane whose foreground process cannot be read safely reports no
+/// environment; the pane is still restored, just without one.
+pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+    if pid == 0 {
+        return None;
+    }
+    let (_, comm, state) = process_pgrp_comm_and_state(pid)?;
+    if !process_allows_remote_memory_read(state, &comm, running_inside_wsl()) {
+        return None;
+    }
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    super::parse_virtual_env_activation(&environ)
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
@@ -1051,9 +1088,35 @@ mod tests {
     #[test]
     fn proc_stat_parsing_keeps_group_leader_inputs_live() {
         assert_eq!(
-            process_pgrp_and_comm_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
-            Some((456, "name with ) paren".to_string()))
+            process_pgrp_comm_and_state_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
+            Some((456, "name with ) paren".to_string(), 'S'))
         );
+    }
+
+    #[test]
+    fn exiting_and_uninterruptible_processes_are_not_read_from_remote_memory() {
+        for state in ['D', 'Z', 'X', 'x'] {
+            assert!(
+                !process_allows_remote_memory_read(state, "python", false),
+                "{state}"
+            );
+        }
+        for state in ['R', 'S', 'T', 'I'] {
+            assert!(
+                process_allows_remote_memory_read(state, "python", false),
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_skips_remote_memory_reads_for_named_agents_but_not_for_wrappers() {
+        // The stall was seen while an identified agent was exiting, and a state
+        // check alone races with it, so on WSL the name is enough to skip.
+        assert!(!process_allows_remote_memory_read('S', "codex", true));
+        assert!(process_allows_remote_memory_read('S', "codex", false));
+        assert!(process_allows_remote_memory_read('S', "node", true));
+        assert!(process_allows_remote_memory_read('S', "python", true));
     }
 
     #[test]
