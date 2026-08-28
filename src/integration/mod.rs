@@ -294,6 +294,17 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 1;
+#[cfg(windows)]
+const COMMAND_CODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.ps1";
+#[cfg(not(windows))]
+const COMMAND_CODE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+#[cfg(windows)]
+const COMMAND_CODE_HOOK_ASSET: &str =
+    include_str!("assets/command_code/herdr-agent-state.ps1");
+#[cfg(not(windows))]
+const COMMAND_CODE_HOOK_ASSET: &str =
+    include_str!("assets/command_code/herdr-agent-state.sh");
+const COMMAND_CODE_INTEGRATION_VERSION: u32 = 1;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

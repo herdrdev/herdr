@@ -1,0 +1,47 @@
+id = "command-code"
+version = "2026.08.28.1"
+min_engine_version = 2
+updated_at = "2026-08-28T00:00:00Z"
+aliases = ["cmd"]
+
+[[rules]]
+id = "permission_prompt_blocked"
+state = "blocked"
+priority = 980
+region = "whole_recent"
+visible_blocker = true
+# Command Code hooks fire on PreToolUse with tool_display_name SHELL/READ/WRITE/EDIT.
+# The TUI shows permission prompts with tool-specific context.
+any = [
+  { contains = ["allow this action"], any = [
+    { contains = ["shell"] },
+    { contains = ["file"] },
+    { contains = ["write"] },
+    { contains = ["edit"] },
+  ] },
+  { contains = ["permission required"] },
+  { contains = ["approve this tool"] },
+]
+
+[[rules]]
+id = "working_indicator"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+# Braille spinner is the standard terminal activity indicator.
+line_regex = ['^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s']
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 950
+region = "prompt_box_body"
+visible_idle = true
+line_regex = ['^\s*❯']
+not = [
+  { contains = ["allow"] },
+  { contains = ["deny"] },
+  { contains = ["permission"] },
+  { contains = ["approve"] },
+]
