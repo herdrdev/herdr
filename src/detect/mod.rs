@@ -221,7 +221,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
-        "cmd" | "command-code" => Some(Agent::CommandCode),
+        "command-code" => Some(Agent::CommandCode),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }

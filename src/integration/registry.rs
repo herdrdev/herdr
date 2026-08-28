@@ -56,7 +56,13 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
         crate::api::schema::IntegrationTarget::AntigravityCli => &["agy"],
         crate::api::schema::IntegrationTarget::Grok => &["grok"],
-        crate::api::schema::IntegrationTarget::CommandCode => &["cmd", "command-code"],
+        crate::api::schema::IntegrationTarget::CommandCode => {
+            if cfg!(windows) {
+                &["cmdc", "command-code"]
+            } else {
+                &["command-code"]
+            }
+        }
     }
 }
 

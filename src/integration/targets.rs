@@ -1520,7 +1520,7 @@ pub(crate) fn install_command_code() -> io::Result<CommandCodeInstallPaths> {
         "command-code settings",
         "command-code settings hooks",
     )?;
-    let command = hook_command(&hook_path, None);
+    let command = hook_command(&hook_path, Some("session"));
     ensure_direct_command_hook(hooks, "SessionStart", command, 10, None)?;
 
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;

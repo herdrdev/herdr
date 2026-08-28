@@ -345,7 +345,7 @@ The hook reports session identity through Command Code's `SessionStart` hook whi
 
 Herdr uses `~/.commandcode` by default, or `COMMANDCODE_CONFIG_DIR` when set. The Command Code config directory must already exist. Install writes `hooks/herdr-agent-state.sh` (`hooks/herdr-agent-state.ps1` on Windows) and adds a Herdr `SessionStart` entry to `settings.json`. Uninstall removes the matching hook entries and deletes the hook script.
 
-After Command Code emits a session start event, Herdr can use the reported session id to resume the pane with `cmd --resume <id>`.
+After Command Code emits a session start event, Herdr can use the reported session id to resume the pane with `command-code --resume <id>`.
 
 ## Custom status labels
 
