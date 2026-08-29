@@ -320,10 +320,12 @@ pub(super) fn read_ref_oid(common_dir: &Path, full_ref: &str) -> Option<String> 
     match read_git_ref_file_state(&loose_ref) {
         RefFileRead::Content(contents) => {
             let oid = contents.trim();
-            if !oid.is_empty() {
-                return Some(oid.to_string());
+            if oid.is_empty() {
+                // An empty loose ref is present but broken. Git does not fall
+                // back to an older same-name packed ref in this case.
+                return None;
             }
-            // Git treats an empty loose ref file as missing; use packed-refs.
+            return Some(oid.to_string());
         }
         // A loose ref that exists — or whose existence cannot be ruled out
         // because of a metadata or I/O error — must not fall back to
@@ -408,6 +410,30 @@ mod tests {
             oid, None,
             "an oversized loose ref must make the ref unavailable, not fall back to the stale packed OID"
         );
+    }
+
+    #[test]
+    fn empty_or_whitespace_loose_ref_is_unavailable_not_absent() {
+        let root = temp_test_dir("empty-loose-ref");
+        let refs_dir = root.join("refs/heads");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+        )
+        .unwrap();
+        let loose = refs_dir.join("main");
+
+        for contents in ["", " \n\t"] {
+            std::fs::write(&loose, contents).unwrap();
+            assert_eq!(
+                read_ref_oid(&root, "refs/heads/main"),
+                None,
+                "an empty or whitespace-only loose ref must not fall back to the stale packed OID"
+            );
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
