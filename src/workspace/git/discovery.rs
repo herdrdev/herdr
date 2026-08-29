@@ -124,13 +124,50 @@ fn git_common_dir_for_git_dir(git_dir: &Path) -> PathBuf {
     }
 }
 
-pub(super) fn read_git_ref_file(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
+/// Outcome of reading one Git ref file, classified at open time so callers can
+/// distinguish "this ref does not exist" from "this ref exists (or cannot be
+/// ruled out) but its content must not be trusted". A separate existence probe
+/// cannot make that distinction: `Path::exists()` returns `false` on metadata
+/// errors too, which would let a stale packed-refs entry stand in for a loose
+/// ref that is merely unreadable.
+pub(super) enum RefFileRead {
+    Content(String),
+    Absent,
+    Unavailable,
+}
+
+pub(super) fn read_git_ref_file_state(path: &Path) -> RefFileRead {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        // NotADirectory (ENOTDIR): a parent component is a file, so this
+        // loose ref cannot exist; packed-refs may still legitimately hold it.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || error.kind() == std::io::ErrorKind::NotADirectory =>
+        {
+            return RefFileRead::Absent;
+        }
+        // Permission or I/O errors: the ref may exist, so its identity is
+        // unavailable rather than absent.
+        Err(_) => return RefFileRead::Unavailable,
+    };
     let mut contents = String::new();
-    file.take((MAX_GIT_REF_FILE_BYTES + 1) as u64)
+    if file
+        .take((MAX_GIT_REF_FILE_BYTES + 1) as u64)
         .read_to_string(&mut contents)
-        .ok()?;
-    (contents.len() <= MAX_GIT_REF_FILE_BYTES).then_some(contents)
+        .is_err()
+        || contents.len() > MAX_GIT_REF_FILE_BYTES
+    {
+        return RefFileRead::Unavailable;
+    }
+    RefFileRead::Content(contents)
+}
+
+pub(super) fn read_git_ref_file(path: &Path) -> Option<String> {
+    match read_git_ref_file_state(path) {
+        RefFileRead::Content(contents) => Some(contents),
+        RefFileRead::Absent | RefFileRead::Unavailable => None,
+    }
 }
 
 pub fn git_branch(cwd: &Path) -> Option<String> {
@@ -280,18 +317,20 @@ pub(super) fn git_repo_root(start: &Path) -> Option<PathBuf> {
 
 pub(super) fn read_ref_oid(common_dir: &Path, full_ref: &str) -> Option<String> {
     let loose_ref = common_dir.join(full_ref);
-    match read_git_ref_file(&loose_ref) {
-        Some(contents) => {
+    match read_git_ref_file_state(&loose_ref) {
+        RefFileRead::Content(contents) => {
             let oid = contents.trim();
             if !oid.is_empty() {
                 return Some(oid.to_string());
             }
+            // Git treats an empty loose ref file as missing; use packed-refs.
         }
-        // A loose ref that exists but is oversized or unreadable is malformed.
-        // Falling back to packed-refs here could resurrect a stale same-name
-        // OID into the status fingerprint, so report the ref as unavailable.
-        None if loose_ref.exists() => return None,
-        None => {}
+        // A loose ref that exists — or whose existence cannot be ruled out
+        // because of a metadata or I/O error — must not fall back to
+        // packed-refs: that could resurrect a stale same-name OID into the
+        // status fingerprint. Report the ref as unavailable instead.
+        RefFileRead::Unavailable => return None,
+        RefFileRead::Absent => {}
     }
 
     let packed_refs = std::fs::read_to_string(common_dir.join("packed-refs")).ok()?;
@@ -368,6 +407,61 @@ mod tests {
         assert_eq!(
             oid, None,
             "an oversized loose ref must make the ref unavailable, not fall back to the stale packed OID"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_loose_ref_dir_is_unavailable_not_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_test_dir("unreadable-loose-ref");
+        let refs_dir = root.join("refs/heads");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+        )
+        .unwrap();
+        std::fs::write(
+            refs_dir.join("main"),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&refs_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let oid = read_ref_oid(&root, "refs/heads/main");
+        std::fs::set_permissions(&refs_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            oid, None,
+            "a loose ref behind a metadata error must be unavailable, not fall back to the stale packed OID"
+        );
+    }
+
+    #[test]
+    fn ref_path_through_a_file_still_reads_packed_refs() {
+        let root = temp_test_dir("ref-path-through-file");
+        let refs_dir = root.join("refs/heads");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        // refs/heads/main is a file, so refs/heads/main/nested cannot exist as
+        // a loose ref; the packed entry is the legitimate source.
+        std::fs::write(
+            refs_dir.join("main"),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main/nested\n",
+        )
+        .unwrap();
+
+        let oid = read_ref_oid(&root, "refs/heads/main/nested");
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            oid.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
     }
 
