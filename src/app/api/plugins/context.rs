@@ -382,7 +382,7 @@ impl App {
 
     fn selected_text_for_pane(&self, pane_id: crate::layout::PaneId) -> Option<String> {
         let selection = self.state.selection.as_ref()?;
-        if selection.pane_id != pane_id || !selection.is_visible() {
+        if selection.pane_id != pane_id {
             return None;
         }
         let terminal_id = self
