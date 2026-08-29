@@ -280,11 +280,18 @@ pub(super) fn git_repo_root(start: &Path) -> Option<PathBuf> {
 
 pub(super) fn read_ref_oid(common_dir: &Path, full_ref: &str) -> Option<String> {
     let loose_ref = common_dir.join(full_ref);
-    if let Some(contents) = read_git_ref_file(&loose_ref) {
-        let oid = contents.trim();
-        if !oid.is_empty() {
-            return Some(oid.to_string());
+    match read_git_ref_file(&loose_ref) {
+        Some(contents) => {
+            let oid = contents.trim();
+            if !oid.is_empty() {
+                return Some(oid.to_string());
+            }
         }
+        // A loose ref that exists but is oversized or unreadable is malformed.
+        // Falling back to packed-refs here could resurrect a stale same-name
+        // OID into the status fingerprint, so report the ref as unavailable.
+        None if loose_ref.exists() => return None,
+        None => {}
     }
 
     let packed_refs = std::fs::read_to_string(common_dir.join("packed-refs")).ok()?;
@@ -335,6 +342,51 @@ mod tests {
         assert_eq!(git_branch(&root).as_deref(), Some("main"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_loose_ref_is_unavailable_not_absent() {
+        let root = temp_test_dir("oversized-loose-ref");
+        let refs_dir = root.join("refs/heads");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "# pack-refs with: peeled fully-peeled sorted \naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+        )
+        .unwrap();
+        let loose = refs_dir.join("main");
+        std::fs::write(&loose, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(loose)
+            .unwrap()
+            .set_len(8 * 1024 * 1024)
+            .unwrap();
+
+        let oid = read_ref_oid(&root, "refs/heads/main");
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            oid, None,
+            "an oversized loose ref must make the ref unavailable, not fall back to the stale packed OID"
+        );
+    }
+
+    #[test]
+    fn absent_loose_ref_still_reads_packed_refs() {
+        let root = temp_test_dir("packed-only-ref");
+        std::fs::create_dir_all(root.join("refs/heads")).unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+        )
+        .unwrap();
+
+        let oid = read_ref_oid(&root, "refs/heads/main");
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            oid.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
     }
 
     #[test]
