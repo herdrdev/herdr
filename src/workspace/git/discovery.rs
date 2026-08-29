@@ -1,4 +1,7 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+const MAX_GIT_REF_FILE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitSpaceMetadata {
@@ -121,6 +124,15 @@ fn git_common_dir_for_git_dir(git_dir: &Path) -> PathBuf {
     }
 }
 
+pub(super) fn read_git_ref_file(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut contents = String::new();
+    file.take((MAX_GIT_REF_FILE_BYTES + 1) as u64)
+        .read_to_string(&mut contents)
+        .ok()?;
+    (contents.len() <= MAX_GIT_REF_FILE_BYTES).then_some(contents)
+}
+
 pub fn git_branch(cwd: &Path) -> Option<String> {
     let repo_root = git_repo_root(cwd)?;
     let git_dir = git_dir_for_repo_root(&repo_root)?;
@@ -129,7 +141,7 @@ pub fn git_branch(cwd: &Path) -> Option<String> {
         return git_symbolic_head_short(&repo_root);
     }
 
-    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = read_git_ref_file(&git_dir.join("HEAD"))?;
     parse_git_head_branch(&head)
 }
 
@@ -268,7 +280,7 @@ pub(super) fn git_repo_root(start: &Path) -> Option<PathBuf> {
 
 pub(super) fn read_ref_oid(common_dir: &Path, full_ref: &str) -> Option<String> {
     let loose_ref = common_dir.join(full_ref);
-    if let Ok(contents) = std::fs::read_to_string(loose_ref) {
+    if let Some(contents) = read_git_ref_file(&loose_ref) {
         let oid = contents.trim();
         if !oid.is_empty() {
             return Some(oid.to_string());
@@ -323,6 +335,30 @@ mod tests {
         assert_eq!(git_branch(&root).as_deref(), Some("main"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_git_head_is_rejected() {
+        let root = temp_test_dir("oversized-head");
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let head = git_dir.join("HEAD");
+        std::fs::write(&head, "ref: refs/heads/main\n").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(head)
+            .unwrap()
+            .set_len(60 * 1024 * 1024)
+            .unwrap();
+
+        let branch = git_branch(&root);
+        let branch_len = branch.as_ref().map(String::len);
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            branch.is_none(),
+            "oversized Git HEAD produced branch with {branch_len:?} bytes"
+        );
     }
 
     #[test]
