@@ -151,6 +151,10 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "exceeds engine"):
                 check.load_manifest_dir(bundled, engine_version=1)
 
+    def test_codex_manifests_use_engine_two_compatible_regions(self):
+        check.validate_manifest(check.DEFAULT_BUNDLED_DIR / "codex.toml", engine_version=2)
+        check.validate_manifest(check.DEFAULT_WEBSITE_DIR / "codex.toml", engine_version=2)
+
     def test_rejects_top_non_empty_lines_below_engine_three(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled = Path(tmp) / "bundled"

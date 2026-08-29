@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.08.28.1"
-min_engine_version = 3
-updated_at = "2026-08-28T00:00:00Z"
+version = "2026.08.29.1"
+min_engine_version = 2
+updated_at = "2026-08-29T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -35,7 +35,7 @@ any = [
 id = "trust_directory"
 state = "blocked"
 priority = 950
-region = "top_non_empty_lines(20)"
+region = "whole_recent"
 visible_blocker = true
 all = [
   { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },

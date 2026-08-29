@@ -795,7 +795,7 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
-fn codex_trust_directory_requires_live_top_region() {
+fn codex_trust_directory_requires_live_screen_prefix() {
     let screen = "> You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
         directory? Working with untrusted\n\
@@ -812,6 +812,13 @@ fn codex_trust_directory_requires_live_top_region() {
     assert_eq!(
         result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
         Some("trust_directory")
+    );
+    assert_eq!(
+        result
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.region.as_str()),
+        Some("whole_recent")
     );
     assert!(result.visible_blocker);
 
