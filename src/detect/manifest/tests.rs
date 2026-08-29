@@ -747,6 +747,30 @@ fn claude_blocker_screen_outranks_osc_idle_title() {
 }
 
 #[test]
+fn claude_mcp_elicitation_is_blocked() {
+    // Regression for issue #3283: an MCP elicitation dialog has Accept/Decline
+    // controls and an "Esc to cancel" footer but no Enter hint, so no blocked
+    // rule matched and the static OSC title reported idle.
+    // Live capture uses curly quotes around the server name; the issue report
+    // transcribed straight quotes. Both must classify as blocked.
+    for screen in [
+        "MCP server \u{201c}my-server\u{201d} requests your input\n\nGrant temporary access to the demo gateway for 15 minutes?\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
+        "MCP server \"my-server\" requests your input\n\nserver-supplied message\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
+    ] {
+        let result = with_manifest_dirs("claude-mcp-elicitation", || {
+            osc_explain(Agent::Claude, screen, "\u{2733} Claude Code", "")
+        });
+        assert_eq!(result.state, AgentState::Blocked, "{result:#?}");
+        assert!(result.visible_blocker, "{result:#?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|r| r.id.as_str()),
+            Some("mcp_elicitation_prompt"),
+            "{result:#?}"
+        );
+    }
+}
+
+#[test]
 fn claude_empty_osc_empty_screen_is_idle_fallback() {
     // No OSC data, no matching screen rule → fallback idle (unchanged V3 behavior)
     let result = osc_explain(Agent::Claude, "", "", "");
