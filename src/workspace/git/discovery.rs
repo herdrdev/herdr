@@ -124,12 +124,13 @@ fn git_common_dir_for_git_dir(git_dir: &Path) -> PathBuf {
     }
 }
 
-/// Outcome of reading one Git ref file, classified at open time so callers can
-/// distinguish "this ref does not exist" from "this ref exists (or cannot be
-/// ruled out) but its content must not be trusted". A separate existence probe
-/// cannot make that distinction: `Path::exists()` returns `false` on metadata
-/// errors too, which would let a stale packed-refs entry stand in for a loose
-/// ref that is merely unreadable.
+/// Outcome of reading one Git ref file, classified without collapsing metadata
+/// errors so callers can distinguish "this ref does not exist" from "this ref
+/// exists (or cannot be ruled out) but its content must not be trusted".
+/// `Path::exists()` cannot distinguish them because it returns `false` on
+/// metadata errors. When opening reports `NotFound`, `symlink_metadata`
+/// distinguishes a genuinely absent path from a dangling symlink without
+/// following the final link.
 pub(super) enum RefFileRead {
     Content(String),
     Absent,
@@ -139,12 +140,24 @@ pub(super) enum RefFileRead {
 pub(super) fn read_git_ref_file_state(path: &Path) -> RefFileRead {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return match std::fs::symlink_metadata(path) {
+                // The directory entry exists but its symlink target does not.
+                // Git treats the loose ref as broken and does not fall back to
+                // an older same-name packed ref.
+                Ok(_) => RefFileRead::Unavailable,
+                Err(metadata_error)
+                    if metadata_error.kind() == std::io::ErrorKind::NotFound
+                        || metadata_error.kind() == std::io::ErrorKind::NotADirectory =>
+                {
+                    RefFileRead::Absent
+                }
+                Err(_) => RefFileRead::Unavailable,
+            };
+        }
         // NotADirectory (ENOTDIR): a parent component is a file, so this
         // loose ref cannot exist; packed-refs may still legitimately hold it.
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                || error.kind() == std::io::ErrorKind::NotADirectory =>
-        {
+        Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
             return RefFileRead::Absent;
         }
         // Permission or I/O errors: the ref may exist, so its identity is
@@ -434,6 +447,29 @@ mod tests {
         }
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_loose_ref_is_unavailable_not_absent() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("dangling-symlink-loose-ref");
+        let refs_dir = root.join("refs/heads");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(
+            root.join("packed-refs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
+        )
+        .unwrap();
+        symlink("missing-target", refs_dir.join("main")).unwrap();
+
+        let oid = read_ref_oid(&root, "refs/heads/main");
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            oid, None,
+            "a dangling loose ref must not fall back to the stale packed OID"
+        );
     }
 
     #[cfg(unix)]
