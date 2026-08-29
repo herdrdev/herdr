@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.08.21.1"
+version = "2026.08.29.1"
 min_engine_version = 2
-updated_at = "2026-08-21T00:00:00Z"
+updated_at = "2026-08-29T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -109,6 +109,25 @@ priority = 980
 region = "whole_recent"
 visible_blocker = true
 contains = ["run a dynamic workflow?", "esc to cancel"]
+
+[[rules]]
+id = "mcp_elicitation_prompt"
+state = "blocked"
+priority = 980
+region = "whole_recent"
+visible_blocker = true
+# MCP elicitation dialogs (elicitation/create) show Accept/Decline controls
+# with an "Esc to cancel" footer but no Enter hint, so live_blocked_form
+# cannot see them (issue #3283). Gate on the invariant header line, the
+# Accept/Decline control line, and the cancel footer.
+contains = ["esc to cancel"]
+line_regex = ['(?i)^\s*MCP server ["\x{201C}].+["\x{201D}] requests your input\s*$']
+all = [
+  { any = [
+    { line_regex = ['^\s*\x{276F}?\s*Accept\b'] },
+    { line_regex = ['^\s*\x{276F}?\s*Decline\b'] },
+  ] },
+]
 
 [[rules]]
 id = "live_prompt_box"
