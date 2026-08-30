@@ -1534,11 +1534,25 @@ mod tests {
         assert!(first.starts_with('w'));
         assert!(second.starts_with('w'));
         assert_ne!(first, second);
-        assert!(first.len() <= 3, "unexpectedly long workspace id: {first}");
+
+        // The counter is process-global, so other tests in the same binary may
+        // have advanced it. Assert on the encoding and ordering instead of on
+        // the absolute length of the handle.
+        let first_number = decode_public_number(&first[1..]).expect("first id decodes");
+        let second_number = decode_public_number(&second[1..]).expect("second id decodes");
         assert!(
-            second.len() <= 3,
-            "unexpectedly long workspace id: {second}"
+            second_number > first_number,
+            "workspace ids must be monotonic: {first} then {second}"
         );
+
+        for value in 1..=1056 {
+            let encoded = encode_public_number(value);
+            assert!(
+                encoded.len() <= 2,
+                "unexpectedly long public number {value}: {encoded}"
+            );
+        }
+        assert_eq!(encode_public_number(1057).len(), 3);
     }
 
     #[test]
