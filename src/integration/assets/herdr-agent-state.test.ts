@@ -315,6 +315,81 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });
 
+test("Pi reports blocked for native ui_prompt events with title or kind label", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+
+  handlers.get("ui_prompt_start")?.({ kind: "select", title: "Pick a branch" }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
+  expect(requestMessages(requests)[2]).toBe("Pick a branch");
+
+  handlers.get("ui_prompt_end")?.({ kind: "select" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)[3]).toBe("working");
+
+  handlers.get("ui_prompt_start")?.({ kind: "confirm" }, context);
+  await waitFor(() => requestStates(requests).length === 5);
+  expect(requestStates(requests)[4]).toBe("blocked");
+  expect(requestMessages(requests)[4]).toBe("Confirm");
+
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests).length).toBe(5);
+
+  handlers.get("ui_prompt_end")?.({ kind: "confirm" }, context);
+  await waitFor(() => requestStates(requests).length === 6);
+  expect(requestStates(requests)[5]).toBe("idle");
+});
+
+test("Pi ignores ui_prompt events outside the root TUI session", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt-rpc");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = { ...piContext(() => true), mode: "rpc" };
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("ui_prompt_start")?.({ kind: "select" }, context);
+  handlers.get("ui_prompt_end")?.({ kind: "select" }, context);
+  await Bun.sleep(25);
+
+  expect(requests).toEqual([]);
+});
+
+test("Pi re-queues a state report that Herdr never acknowledged", async () => {
+  const { attemptedRequests, deliveredRequests } =
+    await startUnansweredConnectionsServer("pi-requeue", 2);
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = false;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(deliveredRequests).length === 1, 5_000);
+  expect(requestStates(deliveredRequests)).toEqual(["working"]);
+
+  // Both socket attempts for the idle report go unanswered; the report must
+  // be retried after backoff rather than dropped.
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await waitFor(() => requestStates(deliveredRequests).length === 2, 5_000);
+  expect(requestStates(deliveredRequests)).toEqual(["working", "idle"]);
+  expect(requestStates(attemptedRequests).filter((state) => state === "idle").length).toBe(3);
+});
+
 test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
   const { handlers, pi } = createExtensionHarness();
@@ -425,6 +500,46 @@ test("Pi waits for a replacement session report before publishing state", async 
     "pane.report_agent",
   ]);
 });
+
+async function startUnansweredConnectionsServer(name: string, unansweredAfterFirst: number) {
+  const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
+  socketPath = recordingSocketPath;
+  await rm(recordingSocketPath, { force: true });
+
+  let connectionCount = 0;
+  const attemptedRequests: unknown[] = [];
+  const deliveredRequests: unknown[] = [];
+  const recordingServer = createServer((socket) => {
+    connectionCount += 1;
+    const connectionNumber = connectionCount;
+    let input = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      input += chunk;
+      const newline = input.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      const request = JSON.parse(input.slice(0, newline));
+      attemptedRequests.push(request);
+      // Answer the first connection, then leave the next N unanswered so the
+      // client exhausts both immediate attempts for one report.
+      if (connectionNumber > 1 && connectionNumber <= 1 + unansweredAfterFirst) {
+        return;
+      }
+      deliveredRequests.push(request);
+      socket.end("{}\n");
+    });
+  });
+  server = recordingServer;
+  await new Promise<void>((resolve, reject) => {
+    recordingServer.once("error", reject);
+    recordingServer.listen(recordingSocketPath, resolve);
+  });
+
+  configureIntegrationEnvironment(recordingSocketPath);
+  return { attemptedRequests, deliveredRequests };
+}
 
 async function startDroppedFirstResponseServer(name: string) {
   const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
@@ -608,6 +723,12 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
     await Bun.sleep(5);
   }
   expect(predicate()).toBe(true);
+}
+
+function requestMessages(requests: unknown[]): unknown[] {
+  return requests
+    .filter((request) => isRecord(request) && request.method === "pane.report_agent")
+    .map((request) => (isRecord(request) && isRecord(request.params) ? request.params.message : undefined));
 }
 
 function requestState(request: unknown): unknown {

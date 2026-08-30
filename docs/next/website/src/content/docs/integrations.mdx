@@ -109,6 +109,8 @@ Herdr writes the bundled extension to:
 
 If `PI_CODING_AGENT_DIR` is set, Herdr writes to `$PI_CODING_AGENT_DIR/extensions/herdr-agent-state.ts` instead. Herdr creates the extensions directory when the Pi agent directory already exists. Uninstall removes only that extension file.
 
+The extension reports `blocked` while Pi shows a native select, confirm, input, editor, or custom prompt. That requires Pi `0.84.4` or newer, which emits `ui_prompt_start` and `ui_prompt_end`; older Pi releases still report `idle` and `working` and can raise `blocked` only through a `herdr:blocked` bus event from another extension.
+
 ## OMP
 
 Install the OMP integration:
