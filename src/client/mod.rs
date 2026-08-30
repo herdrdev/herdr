@@ -1852,8 +1852,12 @@ async fn run_client_loop(
                     handle_notify(kind, &message, body.as_deref(), &state.sound_config);
                 }
                 ServerMessage::Clipboard { data } => {
-                    forward_clipboard(&data);
+                    let outcome = forward_clipboard(&data);
                     let _ = io::stdout().flush();
+                    let written = ClientMessage::ClipboardWritten { outcome };
+                    if let Err(err) = write_to_server(&mut write_stream, &written) {
+                        return Err(ClientError::ConnectionLost(err));
+                    }
                 }
                 ServerMessage::WindowTitle { title } => {
                     let _ = crate::terminal_effects::write_window_title(
@@ -2347,13 +2351,13 @@ fn decode_clipboard_payload(data: &str) -> Option<Vec<u8>> {
 }
 
 /// Forwards a clipboard write from the server to the local client clipboard.
-fn forward_clipboard(data: &str) {
+fn forward_clipboard(data: &str) -> crate::protocol::ClipboardWriteOutcome {
     let Some(bytes) = decode_clipboard_payload(data) else {
         warn!("received invalid clipboard payload from server");
-        return;
+        return crate::protocol::ClipboardWriteOutcome::Failed;
     };
 
-    crate::selection::write_osc52_bytes(&bytes);
+    crate::selection::write_osc52_bytes(&bytes)
 }
 
 // ---------------------------------------------------------------------------

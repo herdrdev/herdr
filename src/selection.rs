@@ -325,14 +325,28 @@ fn should_prefer_osc52() -> bool {
 ///
 /// Some terminals still only honor BEL-terminated OSC 52 writes, so herdr
 /// emits BEL here even though ST works in newer emulators.
-pub fn write_osc52_bytes(bytes: &[u8]) {
+///
+/// Returns how the write was delivered. Only `Native` is a confirmed copy;
+/// `Osc52` means an unacknowledged escape was handed to the outer terminal,
+/// which may ignore it, and `Failed` means nothing was delivered. Callers
+/// showing copy feedback must not present `Osc52` or `Failed` as success.
+pub fn write_osc52_bytes(bytes: &[u8]) -> crate::protocol::ClipboardWriteOutcome {
     if !should_prefer_osc52() && crate::platform::write_clipboard(bytes) {
-        return;
+        return crate::protocol::ClipboardWriteOutcome::Native;
     }
 
     let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout();
+    if stdout
+        .write_all(sequence.as_bytes())
+        .and_then(|()| stdout.flush())
+        .is_ok()
+    {
+        crate::protocol::ClipboardWriteOutcome::Osc52
+    } else {
+        tracing::warn!("clipboard write failed: could not emit OSC 52 to stdout");
+        crate::protocol::ClipboardWriteOutcome::Failed
+    }
 }
 
 #[cfg(test)]

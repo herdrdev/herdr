@@ -124,10 +124,13 @@ impl App {
 
         if let AppEvent::ClipboardWrite { content } = ev {
             #[cfg(not(test))]
-            crate::selection::write_osc52_bytes(&content);
+            let outcome = crate::selection::write_osc52_bytes(&content);
             #[cfg(test)]
-            let _ = content;
-            self.show_clipboard_feedback();
+            let outcome = {
+                let _ = content;
+                crate::protocol::ClipboardWriteOutcome::Native
+            };
+            self.show_clipboard_feedback(outcome);
             return Vec::new();
         }
 
@@ -464,14 +467,24 @@ impl App {
         }
     }
 
-    pub(crate) fn show_clipboard_feedback(&mut self) {
+    pub(crate) fn show_clipboard_feedback(
+        &mut self,
+        outcome: crate::protocol::ClipboardWriteOutcome,
+    ) {
         if !self.state.toast_config.clipboard.enabled {
             self.state.copy_feedback = None;
             self.copy_feedback_deadline = None;
             return;
         }
+        // Only a native platform tool confirms delivery; an OSC 52 escape is
+        // one-way and the outer terminal may ignore it (refs #2399).
+        let message = match outcome {
+            crate::protocol::ClipboardWriteOutcome::Native => "copied to clipboard",
+            crate::protocol::ClipboardWriteOutcome::Osc52 => "copy sent to terminal",
+            crate::protocol::ClipboardWriteOutcome::Failed => "copy failed",
+        };
         self.state.copy_feedback = Some(crate::app::state::CopyFeedback {
-            message: "copied to clipboard".to_string(),
+            message: message.to_string(),
         });
         self.copy_feedback_deadline = Some(Instant::now() + super::COPY_FEEDBACK_DURATION);
     }

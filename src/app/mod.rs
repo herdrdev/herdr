@@ -2489,6 +2489,29 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_feedback_message_tracks_delivery_outcome() {
+        let mut app = test_app();
+
+        app.show_clipboard_feedback(crate::protocol::ClipboardWriteOutcome::Osc52);
+        assert_eq!(
+            app.state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message.as_str()),
+            Some("copy sent to terminal")
+        );
+
+        app.show_clipboard_feedback(crate::protocol::ClipboardWriteOutcome::Failed);
+        assert_eq!(
+            app.state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message.as_str()),
+            Some("copy failed")
+        );
+    }
+
+    #[test]
     fn clipboard_feedback_can_be_disabled() {
         let mut app = test_app();
         app.state.toast_config.clipboard.enabled = false;

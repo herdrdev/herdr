@@ -332,6 +332,11 @@ pub(crate) enum ServerEvent {
         transfer_id: u64,
         image_id: u32,
     },
+    /// A client reported how it delivered a forwarded clipboard write.
+    ClientClipboardWritten {
+        client_id: u64,
+        outcome: crate::protocol::ClipboardWriteOutcome,
+    },
     /// One confirmed SGR pixel report with client read-time geometry.
     ClientInputPixels {
         client_id: u64,
@@ -970,6 +975,9 @@ fn client_read_loop(
                 row,
                 modifiers,
             },
+            ClientMessage::ClipboardWritten { outcome } => {
+                ServerEvent::ClientClipboardWritten { client_id, outcome }
+            }
             ClientMessage::Hello { .. } => {
                 // Duplicate Hello — ignore.
                 continue;

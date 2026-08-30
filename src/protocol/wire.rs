@@ -449,6 +449,23 @@ pub enum ClientMessage {
 
     /// The direct command was written and flushed; terminal response timing starts now.
     GraphicsTransmissionStarted { transfer_id: u64, image_id: u32 },
+
+    /// Reports how this client delivered a forwarded `ServerMessage::Clipboard` write.
+    ClipboardWritten {
+        /// Delivery outcome observed on the client host.
+        outcome: ClipboardWriteOutcome,
+    },
+}
+
+/// How a clipboard write was delivered on the client host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardWriteOutcome {
+    /// A native platform clipboard tool confirmed the write.
+    Native,
+    /// An unacknowledged OSC 52 escape was emitted to the outer terminal.
+    Osc52,
+    /// The write could not be delivered at all.
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1047,6 +1064,21 @@ mod tests {
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn client_clipboard_written_roundtrip() {
+        for outcome in [
+            ClipboardWriteOutcome::Native,
+            ClipboardWriteOutcome::Osc52,
+            ClipboardWriteOutcome::Failed,
+        ] {
+            let msg = ClientMessage::ClipboardWritten { outcome };
+            let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
+            let (decoded, _): (ClientMessage, _) =
+                bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
+            assert_eq!(msg, decoded);
+        }
     }
 
     #[test]

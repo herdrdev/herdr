@@ -2326,9 +2326,11 @@ impl HeadlessServer {
             AppEvent::ClipboardWrite { content } => {
                 // Clipboard writes are client-local side effects. Forward them only to
                 // the foreground client instead of broadcasting to every attached client.
+                // Copy feedback waits for the client's `ClipboardWritten` report so the
+                // toast reflects the real delivery outcome instead of a queued send.
                 let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
-                if self.send_to_foreground_client(ServerMessage::Clipboard { data }) {
-                    self.app.show_clipboard_feedback();
+                if !self.send_to_foreground_client(ServerMessage::Clipboard { data }) {
+                    debug!("dropped clipboard write without a foreground client");
                 }
                 true
             }
@@ -3075,6 +3077,18 @@ impl HeadlessServer {
                 transfer_id,
                 image_id,
             } => self.start_direct_graphics_response(client_id, transfer_id, image_id),
+            ServerEvent::ClientClipboardWritten { client_id, outcome } => {
+                if self.foreground_client_id == Some(client_id) {
+                    self.app.show_clipboard_feedback(outcome);
+                    true
+                } else {
+                    debug!(
+                        client_id,
+                        "ignoring clipboard delivery report from non-foreground client"
+                    );
+                    false
+                }
+            }
             ServerEvent::ClientAttachTerminal {
                 client_id,
                 terminal_id,
@@ -10628,14 +10642,9 @@ next_tab = ""
         });
 
         assert!(changed);
-        assert_eq!(
-            server
-                .app
-                .state
-                .copy_feedback
-                .as_ref()
-                .map(|feedback| feedback.message.as_str()),
-            Some("copied to clipboard")
+        assert!(
+            server.app.state.copy_feedback.is_none(),
+            "copy feedback must wait for the client's delivery report"
         );
         match read_server_message(
             foreground_control_rx
@@ -10650,6 +10659,78 @@ next_tab = ""
                 .recv_timeout(Duration::from_millis(50))
                 .is_err(),
             "background client should not receive clipboard writes"
+        );
+
+        let changed = server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 1,
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
+        });
+        assert!(!changed);
+        assert!(
+            server.app.state.copy_feedback.is_none(),
+            "delivery reports from non-foreground clients must be ignored"
+        );
+
+        let changed = server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 2,
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
+        });
+        assert!(changed);
+        assert_eq!(
+            server
+                .app
+                .state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message.as_str()),
+            Some("copied to clipboard")
+        );
+    }
+
+    #[test]
+    fn clipboard_delivery_report_sets_outcome_specific_feedback() {
+        let mut server = test_headless_server();
+        let (foreground_tx, _foreground_control_rx, _foreground_rx) = test_client_writer();
+        server.clients.insert(
+            7,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                7,
+                RenderEncoding::SemanticFrame,
+                Some(foreground_tx),
+            ),
+        );
+        server.foreground_client_id = Some(7);
+
+        server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 7,
+            outcome: crate::protocol::ClipboardWriteOutcome::Osc52,
+        });
+        assert_eq!(
+            server
+                .app
+                .state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message.as_str()),
+            Some("copy sent to terminal")
+        );
+
+        server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 7,
+            outcome: crate::protocol::ClipboardWriteOutcome::Failed,
+        });
+        assert_eq!(
+            server
+                .app
+                .state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message.as_str()),
+            Some("copy failed")
         );
     }
 
