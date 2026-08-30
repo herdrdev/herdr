@@ -3614,7 +3614,12 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
     server.clients.get_mut(&71).unwrap().outer_terminal_focus = Some(true);
     server.clients.get_mut(&72).unwrap().outer_terminal_focus = Some(false);
 
-    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id: dead_pane }));
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+            pane_id: dead_pane,
+            checkpoint_session: false
+        })
+    );
 
     assert_eq!(
         server.shell_tab_id_for_client(71).as_deref(),
@@ -3678,7 +3683,12 @@ async fn pane_death_reapplies_controller_geometry() {
     let shrunk = server.app.state.workspaces[0].test_runtimes[&first_pane].current_size();
     assert!(shrunk.0 < 46);
 
-    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id: dead_pane }));
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+            pane_id: dead_pane,
+            checkpoint_session: false
+        })
+    );
 
     let runtime = &server.app.state.workspaces[0].test_runtimes[&first_pane];
     let grown = runtime.current_size();
@@ -3858,7 +3868,12 @@ fn expected_worktree_runtime_exit_does_not_release_agent() {
         .pending_worktree_remove_runtime_exits
         .insert(pane_id, 1);
 
-    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id }));
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+            pane_id,
+            checkpoint_session: false
+        })
+    );
 
     assert_eq!(
         server.app.state.terminals[&terminal_id].state,

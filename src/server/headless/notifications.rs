@@ -663,7 +663,7 @@ impl HeadlessServer {
                 }
                 true
             }
-            AppEvent::PaneDied { pane_id }
+            AppEvent::PaneDied { pane_id, .. }
             | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
