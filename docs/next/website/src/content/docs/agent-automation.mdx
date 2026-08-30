@@ -105,6 +105,8 @@ herdr agent prompt reviewer "Review the current diff" --wait --timeout 120000
 herdr agent read reviewer --source recent-unwrapped --lines 120
 ```
 
+Without `--timeout`, `agent wait` and `agent prompt --wait` wait indefinitely after the stall check; always pass `--timeout` when calling from an agent.
+
 Wait for an agent to ask for input, inspect it, and interact with its UI:
 
 ```bash

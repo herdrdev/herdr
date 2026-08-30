@@ -1469,3 +1469,101 @@ fn agent_wait_ignores_other_panes_and_errors_when_its_pane_closes() {
 
     cleanup_spawned_herdr(herdr, base);
 }
+
+#[test]
+fn agent_read_reports_usage_errors_with_exit_status_2() {
+    for (args, expected) in [
+        (
+            &["agent", "read", "reviewer", "--lines", "abc"][..],
+            "invalid value for --lines: abc",
+        ),
+        (
+            &["agent", "read", "reviewer", "--source", "bogus"][..],
+            "invalid read source: bogus",
+        ),
+        (
+            &["agent", "read", "reviewer", "--format", "bogus"][..],
+            "invalid read format: bogus",
+        ),
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .args(args)
+            .env("HERDR_SOCKET_PATH", "/nonexistent/herdr.sock")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "herdr {}: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            stderr.contains(expected),
+            "herdr {}: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            !stderr.contains("Custom {"),
+            "herdr {}: {stderr}",
+            args.join(" ")
+        );
+        assert!(stderr.contains("usage: herdr agent read"), "{stderr}");
+    }
+}
+
+#[test]
+fn agent_commands_accept_flag_equals_value_form() {
+    for args in [
+        &[
+            "agent",
+            "read",
+            "reviewer",
+            "--lines=120",
+            "--source=detection",
+        ][..],
+        &[
+            "agent",
+            "wait",
+            "reviewer",
+            "--until=blocked",
+            "--timeout=5",
+        ][..],
+        &[
+            "agent",
+            "prompt",
+            "reviewer",
+            "work",
+            "--wait",
+            "--timeout=5",
+        ][..],
+        &[
+            "agent",
+            "start",
+            "reviewer",
+            "--kind=pi",
+            "--pane=w1:p1",
+            "--timeout=5000",
+            "--",
+            "--timeout=5",
+        ][..],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .args(args)
+            .env("HERDR_SOCKET_PATH", "/nonexistent/herdr.sock")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_ne!(
+            output.status.code(),
+            Some(2),
+            "herdr {}: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            !stderr.contains("unknown option"),
+            "herdr {}: {stderr}",
+            args.join(" ")
+        );
+    }
+}

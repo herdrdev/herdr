@@ -291,10 +291,17 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]");
         return Ok(2);
     };
-    let separator = args
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(args.len());
+    // Expand `--flag=value` only before the `--` separator so pass-through
+    // agent arguments keep their exact shape.
+    let (own_args, agent_args) = args.split_at(
+        args.iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(args.len()),
+    );
+    let mut expanded = super::expand_equals_args(own_args, &["--kind", "--pane", "--timeout"]);
+    let separator = expanded.len();
+    expanded.extend_from_slice(agent_args);
+    let args = &expanded[..];
     let mut kind = None;
     let mut pane_id = None;
     let mut timeout_ms = None;
@@ -508,6 +515,7 @@ fn agent_wait(args: &[String]) -> std::io::Result<i32> {
         eprintln!("usage: herdr agent wait <target> [--until STATUS]... [--timeout MS]");
         return Ok(2);
     };
+    let args = super::expand_equals_args(args, &["--until", "--timeout"]);
     let mut until = Vec::new();
     let mut timeout_ms = None;
     let mut index = 1;
@@ -779,6 +787,7 @@ fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
         eprintln!("agent prompt requires text");
         return Ok(2);
     };
+    let args = super::expand_equals_args(args, &["--until", "--timeout"]);
     let mut wait = false;
     let mut until = Vec::new();
     let mut timeout_ms = None;
@@ -855,42 +864,59 @@ fn agent_send_keys(args: &[String]) -> std::io::Result<i32> {
     })?)
 }
 
+const AGENT_READ_USAGE: &str = "usage: herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]";
+
 fn agent_read(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+        eprintln!("{AGENT_READ_USAGE}");
         return Ok(2);
     };
+    let params = match parse_agent_read_args(target, &args[1..]) {
+        Ok(params) => params,
+        Err(err) => {
+            eprintln!("{err}");
+            eprintln!("{AGENT_READ_USAGE}");
+            return Ok(2);
+        }
+    };
 
+    let response = super::send_request(&Request {
+        id: "cli:agent:read".into(),
+        method: Method::AgentRead(params),
+    })?;
+    super::print_read_response(&response)
+}
+
+fn parse_agent_read_args(target: &str, args: &[String]) -> Result<AgentReadParams, String> {
+    let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
     let mut source = ReadSource::Recent;
     let mut lines = None;
     let mut format = ReadFormat::Text;
     let mut strip_ansi = true;
 
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--source" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
+                    return Err("missing value for --source".into());
                 };
-                source = super::parse_read_source(value)?;
+                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
                 index += 2;
             }
             "--lines" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
+                    return Err("missing value for --lines".into());
                 };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
+                lines =
+                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
                 index += 2;
             }
             "--format" => {
                 let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --format");
-                    return Ok(2);
+                    return Err("missing value for --format".into());
                 };
-                format = super::parse_read_format(value)?;
+                format = super::parse_read_format(value).map_err(|err| err.to_string())?;
                 strip_ansi = !matches!(format, ReadFormat::Ansi);
                 index += 2;
             }
@@ -899,24 +925,17 @@ fn agent_read(args: &[String]) -> std::io::Result<i32> {
                 strip_ansi = false;
                 index += 1;
             }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
+            other => return Err(format!("unknown option: {other}")),
         }
     }
 
-    let response = super::send_request(&Request {
-        id: "cli:agent:read".into(),
-        method: Method::AgentRead(AgentReadParams {
-            target: target.clone(),
-            source,
-            lines,
-            format,
-            strip_ansi,
-        }),
-    })?;
-    super::print_read_response(&response)
+    Ok(AgentReadParams {
+        target: target.to_owned(),
+        source,
+        lines,
+        format,
+        strip_ansi,
+    })
 }
 
 fn print_agent_help() {
