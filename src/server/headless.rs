@@ -1263,16 +1263,6 @@ impl HeadlessServer {
                 }
             }
         }
-        if pane_by_terminal.len() > crate::server::handoff::MAX_FDS_PER_HANDOFF {
-            let _ = std::fs::remove_file(&socket_path);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "live handoff supports at most {} panes in one update; close panes or restart herdr normally",
-                    crate::server::handoff::MAX_FDS_PER_HANDOFF
-                ),
-            ));
-        }
 
         self.handoff_in_progress = true;
         self.disconnect_all_clients_for_handoff();
