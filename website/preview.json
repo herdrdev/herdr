@@ -2,35 +2,65 @@
   "schema_version": 1,
   "channel": "preview",
   "base_version": "0.8.2",
-  "build_id": "2026-08-19-b5c4a0176e91",
-  "commit": "b5c4a0176e9183924df552eb8aecb94ed5f9e732",
-  "built_at": "2026-08-19T19:32:11Z",
-  "protocol": 20,
-  "notes": "Preview build 2026-08-19-b5c4a0176e91\n\nBuilt from `b5c4a0176e91` on `master`.\nBase stable: v0.8.2\nCompare: https://github.com/herdrdev/herdr/compare/v0.8.2...b5c4a0176e9183924df552eb8aecb94ed5f9e732\n\n### Changed\n- Rebuilt preview from the current master branch.",
+  "build_id": "2026-08-31-b1ff4582e968",
+  "commit": "b1ff4582e9688f52ffb943cfa8bee4871ae122e4",
+  "built_at": "2026-08-31T15:59:38Z",
+  "protocol": 21,
+  "notes": "Preview build 2026-08-31-b1ff4582e968\n\nBuilt from `b1ff4582e968` on `master`.\nBase stable: v0.8.2\nCompare: https://github.com/herdrdev/herdr/compare/b5c4a0176e9183924df552eb8aecb94ed5f9e732...b1ff4582e9688f52ffb943cfa8bee4871ae122e4\n\n### Added\n- Add muse agent with generic Pick blocked detection (#2489)\n- Add per-mode theme overrides (#2324)\n\n### Fixed\n- Detect pi bundled cli (#3207)\n- Make test-one work on Windows (#3442)\n- Detect copilot background agents as working (#3403)\n- Encode antigravity windows hook command (#3352)\n- Report the foreground group leader's cwd, not a descendant's (#3386)\n- Reject oversized git ref files in workspace status reads (#3373)\n- Detect claude mcp elicitation dialogs as blocked (#3383)\n- Handle associated text on special keys (#3350)\n- Keep OSC evidence through first agent acquisition (#3326)\n- Trust worktree repositories per request (#3344)\n- Ignore cursor events in claude hooks (#3342)\n- Ignore codex weak blockers above the current prompt (#3339)\n- Require explicit workspace group close (#3206)\n- Accept reordered agent report arguments (#2928)\n- Route osc 8 file links to plugin handlers (#2942)\n- Keep wayland clipboard copies responsive (#3015)\n- Report agent explain file errors as json (#3023)\n- Refresh shared agent manifest caches (#3204)\n- Batch kitty image row lifecycle (#3166)\n- Serve a google-eligible favicon\n- Keep omp panes working through scheduled continuations (#3122)\n- Start lifecycle subscriptions from live events (#3134)\n- Add local cmd installer bootstrap (#3133)\n- Preserve non-us shifted text (#3055)\n- Clear Windows Terminal identity in panes (#3127)\n- Copy selections before delayed mouse release (#3102)\n- Preserve focus after background worktree removal (#3099)\n- Publish Claude MCP detection manifest\n- Match generated characters in prefix bindings (#3085)\n- Keep background Claude MCP tasks working (#3094)\n- Preserve multiline paste in terminal attach (#3056)\n- Isolate oversized kitty images (#3035)\n- Detect cursor bundled node process (#3034)\n- Add claude screen activity fallbacks\n- Synchronize plugin pane pwd (#2985)\n- Honor mouse capture config in terminal attach (#2995)\n- Preserve mouse forwarding through handoff (#3002)\n- Strip ansi sequences from tab bar status (#3003)\n\n### Maintenance\n- Trigger ai reviews and add maintainer\n- Restrict release workflows to canonical repository\n- Move changelog curation to release prep\n- Document macos keychain launch context\n- Keep kennel authority private\n- Pin kennel maintainer identities\n- Use native path in docs parity assertion (#3043)\n- Remove akbash maintainer authority\n- Support immutable preview releases\n- Publish preview documentation",
   "assets": {
     "linux-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-19-b5c4a0176e91/herdr-linux-x86_64",
-      "sha256": "fe5d3009003113731bfe1e7a72b356acaf2d6e35aee952aa68ecb4fd63710d8c"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-linux-x86_64",
+      "sha256": "61c1c9181c0cf62a00882f21f2c6e19ce8ee6360410736a4c6c5a1387a0fc388"
     },
     "linux-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-19-b5c4a0176e91/herdr-linux-aarch64",
-      "sha256": "4d9175d8cd377537f5f70c96fade62b2493cce1fa097ae2edf39d5c4168d7b6e"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-linux-aarch64",
+      "sha256": "32609bf5f564aaafe951a79cf8e51163319f82bfad8e8c3877b87938a5952a43"
     },
     "macos-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-19-b5c4a0176e91/herdr-macos-x86_64",
-      "sha256": "7133b614f07b40979b1eca3a4607e9242ed6cd9ff988e0c17c7d8c8b5f5f05b3"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-macos-x86_64",
+      "sha256": "b00cc237c04fecaa3385a80d38d3352483a4250cbf21edef37a1c2fa3019ddce"
     },
     "macos-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-19-b5c4a0176e91/herdr-macos-aarch64",
-      "sha256": "61fe8e4e2ebe82c0267ab2ecb0c996847627be2c69c41aea12a445675c7cb097"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-macos-aarch64",
+      "sha256": "93bb174c2962e1282a0fa4df5f986956a4253e08aaf7eecdca3d919d2704106b"
     },
     "windows-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-19-b5c4a0176e91/herdr-windows-x86_64.zip",
-      "sha256": "01c8bc9f22be0ad447ceb8f4ed8ae18871b31694ccfd6b504b26ee31f0c6e25e",
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-windows-x86_64.zip",
+      "sha256": "e35e9d92a9f77c559cf814f36d0e5f6e66ab3a6f61eadac58ab5be9bb9223f7e",
       "format": "zip"
     }
   },
   "builds": {
+    "2026-08-31-b1ff4582e968": {
+      "base_version": "0.8.2",
+      "commit": "b1ff4582e9688f52ffb943cfa8bee4871ae122e4",
+      "built_at": "2026-08-31T15:59:38Z",
+      "protocol": 21,
+      "tag": "preview-2026-08-31-b1ff4582e968",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-linux-x86_64",
+          "sha256": "61c1c9181c0cf62a00882f21f2c6e19ce8ee6360410736a4c6c5a1387a0fc388"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-linux-aarch64",
+          "sha256": "32609bf5f564aaafe951a79cf8e51163319f82bfad8e8c3877b87938a5952a43"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-macos-x86_64",
+          "sha256": "b00cc237c04fecaa3385a80d38d3352483a4250cbf21edef37a1c2fa3019ddce"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-macos-aarch64",
+          "sha256": "93bb174c2962e1282a0fa4df5f986956a4253e08aaf7eecdca3d919d2704106b"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-08-31-b1ff4582e968/herdr-windows-x86_64.zip",
+          "sha256": "e35e9d92a9f77c559cf814f36d0e5f6e66ab3a6f61eadac58ab5be9bb9223f7e",
+          "format": "zip"
+        }
+      }
+    },
     "2026-08-19-b5c4a0176e91": {
       "base_version": "0.8.2",
       "commit": "b5c4a0176e9183924df552eb8aecb94ed5f9e732",

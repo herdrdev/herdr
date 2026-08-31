@@ -7433,7 +7433,9 @@ next_tab = ""
                 clear_display_agent: false,
                 clear_state_labels: false,
                 seq: None,
-                ttl: Some(Duration::from_millis(1)),
+                // Expiry is advanced with the captured deadline below; keep the
+                // pre-expiry assertion independent of wall-clock scheduling.
+                ttl: Some(Duration::from_secs(60)),
             })
         );
 

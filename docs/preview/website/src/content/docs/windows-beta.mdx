@@ -13,6 +13,12 @@ Install Herdr natively on Windows with PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
+If endpoint security blocks that fileless PowerShell command, open Command Prompt and run:
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
 Windows builds are available through both stable and preview update channels. New installs use stable by default, and stable is recommended for normal use. Existing preview installs stay on preview until you run `herdr channel set stable`. If an older preview build rejects that command, run `herdr update` once on preview and retry. Preview provides newer, less-tested fixes from `master` and may regress; opt in with `herdr channel set preview` only when you want that tradeoff.
 
 The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.

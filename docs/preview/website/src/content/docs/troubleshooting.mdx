@@ -70,6 +70,23 @@ herdr
 
 Stopping a server exits its pane processes. Named sessions use `herdr session stop <name>`. See [Install Herdr](/docs/install/#update) for updater, package-manager, and live-handoff behavior.
 
+## Keychain-backed tools fail inside Herdr on macOS
+
+Check the server launch context from a Herdr pane:
+
+```bash
+launchctl managername
+```
+
+If it prints `Background`, stop the server and start Herdr again from a normal GUI terminal:
+
+```bash
+herdr server stop
+herdr
+```
+
+Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
+
 ## The `herdr` command is not found
 
 Restart the terminal so it reloads its environment, then confirm the Herdr install directory is on `PATH`. For package-manager installs, use that package manager to update Herdr and expose it on `PATH`. See [Install Herdr](/docs/install/#verify).

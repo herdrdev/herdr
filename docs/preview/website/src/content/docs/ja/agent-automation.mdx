@@ -41,7 +41,7 @@ review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 利用可能なシェルペインとは、対話シェルのプロンプトに戻っており、フォアグラウンドをシェル自身が所有し、フォアグラウンドのコマンド、エディタ、エージェントが動いていないペインです。`agent start` の前にプロンプトへ戻してください。
 
-`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
+`--kind` は対応済みエージェントとその標準実行ファイルを選びます。対応する kind は `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki`、`muse` です。`--` より後の引数は、その実行ファイルへそのまま渡されます。
 
 成功した `agent start` は、同じターミナルで期待したエージェントを検出し、対話入力の準備ができたと Herdr が判断してから返ります。起動中の検出状態が `blocked` の場合、コマンドは直ちに `agent_not_ready` を返します。名前は `agent read` と `agent send-keys` で引き続き使用でき、検出状態が `idle` になるとプロンプトを送信できるようになります。起動待機はデフォルトで 30 秒です。`--timeout` は 3000 より大きく 300000 以下のミリ秒で指定します。
 
