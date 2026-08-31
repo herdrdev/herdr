@@ -322,6 +322,12 @@ pub struct HeadlessServer {
     deferred_alt_screen_reads: Vec<api::ApiRequestMessage>,
     /// Monotonic activity counter used to pick the most recently active client.
     next_activity_stamp: u64,
+    /// The client that was sent a clipboard write and still owes a delivery report.
+    ///
+    /// Feedback follows the client that was actually sent the write rather than
+    /// whoever is foreground when the report lands, so a foreground switch in
+    /// flight neither discards a valid result nor credits it to another client.
+    pending_clipboard_client_id: Option<u64>,
     /// Configured virtual terminal size used when no clients are connected.
     headless_size: (u16, u16),
     /// Shared pane runtime size derived from the foreground client, or the
@@ -526,6 +532,7 @@ impl HeadlessServer {
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
             next_activity_stamp: 1,
+            pending_clipboard_client_id: None,
             headless_size,
             effective_size: headless_size,
             shutting_down: false,
@@ -1601,6 +1608,10 @@ impl HeadlessServer {
 
     fn remove_client(&mut self, client_id: u64) -> bool {
         self.retire_direct_graphics_for_client(client_id);
+        if self.pending_clipboard_client_id == Some(client_id) {
+            // The report will never arrive; showing no feedback is the truthful outcome.
+            self.pending_clipboard_client_id = None;
+        }
         let was_foreground = self.foreground_client_id == Some(client_id);
         self.app.clear_input_source(client_id);
         self.send_client_graphics_cleanup(client_id);
@@ -2328,15 +2339,21 @@ impl HeadlessServer {
                 // the foreground client instead of broadcasting to every attached client.
                 // Copy feedback waits for the client's `ClipboardWritten` report so the
                 // toast reflects the real delivery outcome instead of a queued send.
-                if self.foreground_client_id.is_none() {
+                let Some(client_id) = self.foreground_client_id else {
                     debug!("dropped clipboard write without a foreground client");
+                    return false;
+                };
+                let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
+                if self.send_to_foreground_client(ServerMessage::Clipboard { data }) {
+                    // Remember who owes the report. Queuing changes no visual state now
+                    // that feedback waits for it.
+                    self.pending_clipboard_client_id = Some(client_id);
                     false
                 } else {
-                    let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
-                    // Queuing the payload changes no visual state now that feedback waits
-                    // for the client's report. A failed send is different: it removes the
-                    // client and can resize the shared runtime, so that branch re-renders.
-                    !self.send_to_foreground_client(ServerMessage::Clipboard { data })
+                    // A failed send removes the client and can resize the shared runtime,
+                    // so this is the one branch here that re-renders.
+                    self.pending_clipboard_client_id = None;
+                    true
                 }
             }
             AppEvent::PrefixInputSource { active } => {
@@ -3083,13 +3100,13 @@ impl HeadlessServer {
                 image_id,
             } => self.start_direct_graphics_response(client_id, transfer_id, image_id),
             ServerEvent::ClientClipboardWritten { client_id, outcome } => {
-                if self.foreground_client_id == Some(client_id) {
-                    self.app.show_clipboard_feedback(outcome);
-                    true
+                if self.pending_clipboard_client_id == Some(client_id) {
+                    self.pending_clipboard_client_id = None;
+                    self.app.show_clipboard_feedback(outcome)
                 } else {
                     debug!(
                         client_id,
-                        "ignoring clipboard delivery report from non-foreground client"
+                        "ignoring clipboard delivery report from a client with no pending write"
                     );
                     false
                 }
@@ -5427,6 +5444,7 @@ mod tests {
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
             next_activity_stamp: 1,
+            pending_clipboard_client_id: None,
             headless_size,
             effective_size: headless_size,
             shutting_down: false,
@@ -10676,7 +10694,7 @@ next_tab = ""
         assert!(!changed);
         assert!(
             server.app.state.copy_feedback.is_none(),
-            "delivery reports from non-foreground clients must be ignored"
+            "a report from a client that was never sent this write must be ignored"
         );
 
         let changed = server.handle_server_event(ServerEvent::ClientClipboardWritten {
@@ -10713,6 +10731,7 @@ next_tab = ""
         );
         server.foreground_client_id = Some(7);
 
+        server.pending_clipboard_client_id = Some(7);
         server.handle_server_event(ServerEvent::ClientClipboardWritten {
             client_id: 7,
             outcome: crate::protocol::ClipboardWriteOutcome::Osc52,
@@ -10727,6 +10746,7 @@ next_tab = ""
             Some("copy sent to terminal")
         );
 
+        server.pending_clipboard_client_id = Some(7);
         server.handle_server_event(ServerEvent::ClientClipboardWritten {
             client_id: 7,
             outcome: crate::protocol::ClipboardWriteOutcome::Failed,
@@ -10739,6 +10759,115 @@ next_tab = ""
                 .as_ref()
                 .map(|feedback| feedback.message()),
             Some("copy failed")
+        );
+    }
+
+    #[test]
+    fn unsolicited_clipboard_report_does_not_fabricate_feedback() {
+        let mut server = test_headless_server();
+        let (foreground_tx, _foreground_control_rx, _foreground_rx) = test_client_writer();
+        server.clients.insert(
+            3,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                3,
+                RenderEncoding::SemanticFrame,
+                Some(foreground_tx),
+            ),
+        );
+        server.foreground_client_id = Some(3);
+
+        let changed = server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 3,
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
+        });
+
+        assert!(!changed);
+        assert!(
+            server.app.state.copy_feedback.is_none(),
+            "a report with no write outstanding must not fabricate feedback"
+        );
+    }
+
+    #[test]
+    fn clipboard_report_is_honored_after_the_foreground_client_changes() {
+        let mut server = test_headless_server();
+        let (first_tx, _first_control_rx, _first_rx) = test_client_writer();
+        let (second_tx, _second_control_rx, _second_rx) = test_client_writer();
+        for (client_id, writer) in [(1, first_tx), (2, second_tx)] {
+            server.clients.insert(
+                client_id,
+                ClientConnection::new(
+                    (80, 24),
+                    crate::kitty_graphics::HostCellSize::default(),
+                    crate::terminal_theme::TerminalTheme::default(),
+                    None,
+                    client_id,
+                    RenderEncoding::SemanticFrame,
+                    Some(writer),
+                ),
+            );
+        }
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+
+        server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+            content: b"test".to_vec(),
+        });
+        assert_eq!(server.pending_clipboard_client_id, Some(1));
+
+        // Foreground moves before the report arrives. The write is still client 1's.
+        server.foreground_client_id = Some(2);
+
+        let changed = server.handle_server_event(ServerEvent::ClientClipboardWritten {
+            client_id: 1,
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
+        });
+
+        assert!(changed);
+        assert_eq!(
+            server
+                .app
+                .state
+                .copy_feedback
+                .as_ref()
+                .map(|feedback| feedback.message()),
+            Some("copied to clipboard"),
+            "the client that was sent the write still owns its result after a foreground switch"
+        );
+        assert!(
+            server.pending_clipboard_client_id.is_none(),
+            "a matched report clears the pending write"
+        );
+    }
+
+    #[test]
+    fn clipboard_pending_write_is_dropped_when_its_client_disconnects() {
+        let mut server = test_headless_server();
+        let (foreground_tx, _foreground_control_rx, _foreground_rx) = test_client_writer();
+        server.clients.insert(
+            4,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                None,
+                4,
+                RenderEncoding::SemanticFrame,
+                Some(foreground_tx),
+            ),
+        );
+        server.foreground_client_id = Some(4);
+        server.pending_clipboard_client_id = Some(4);
+
+        server.remove_client(4);
+
+        assert!(
+            server.pending_clipboard_client_id.is_none(),
+            "a report that can never arrive must not stay outstanding"
         );
     }
 

@@ -99,6 +99,21 @@ herdr
 
 先用 `ssh <host>` 确认普通 OpenSSH 连接正常。若在非交互 shell、CI 或移动终端中使用带密码的密钥，请在远程连接前把密钥载入 `ssh-agent`。见[持久化和远程访问](/zh-cn/docs/persistence-remote/#remote-attach-over-ssh)。
 
+## 复制提示 "copy sent to terminal" 或 "copy failed"
+
+复制弹窗报告的是文本实际的送达方式，而不是仅仅表示尝试过复制。
+
+`copied to clipboard` 表示原生剪贴板工具已确认写入。`copy sent to terminal` 表示
+Herdr 改为向外层终端发送了 OSC 52 转义序列；这是一次终端不会确认的单向写入，因此
+只有在终端支持 OSC 52 时才会生效。`copy failed` 表示什么都没有送达。
+
+当没有可用的原生剪贴板工具时，以及在 SSH 会话、WSL 和 VS Code 集成终端中，Herdr 会
+使用 OSC 52，因为在这些环境中服务器上的工具会写入错误那台机器的剪贴板。若需要经过
+确认的本地复制，请在该主机上安装剪贴板工具：Linux 上的 `wl-clipboard`、`xclip` 或
+`xsel`（macOS 自带 `pbcopy`）。若要继续使用 OSC 52，请在外层终端中启用它，或改用
+支持该特性的终端。另一种方式是 `herdr --remote <host>`：客户端运行在你自己的机器上，
+因此会直接写入本地剪贴板。
+
 ## 查找诊断日志
 
 Herdr 日志默认位于 `~/.config/herdr/`:

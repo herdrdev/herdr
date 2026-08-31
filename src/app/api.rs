@@ -467,17 +467,23 @@ impl App {
         }
     }
 
+    /// Shows copy feedback for `outcome`, returning whether visible state changed.
+    ///
+    /// With the toast disabled this only clears any feedback still on screen, so
+    /// callers can skip a render instead of repainting once per copy.
     pub(crate) fn show_clipboard_feedback(
         &mut self,
         outcome: crate::protocol::ClipboardWriteOutcome,
-    ) {
+    ) -> bool {
         if !self.state.toast_config.clipboard.enabled {
+            let had_feedback = self.state.copy_feedback.is_some();
             self.state.copy_feedback = None;
             self.copy_feedback_deadline = None;
-            return;
+            return had_feedback;
         }
         self.state.copy_feedback = Some(crate::app::state::CopyFeedback { outcome });
         self.copy_feedback_deadline = Some(Instant::now() + super::COPY_FEEDBACK_DURATION);
+        true
     }
 
     fn restore_overlay_after_exit(

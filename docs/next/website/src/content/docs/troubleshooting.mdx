@@ -99,6 +99,26 @@ The operating system or outer terminal may consume the chord before Herdr receiv
 
 First confirm that normal OpenSSH works with `ssh <host>`. For a passphrase-protected key in a non-interactive shell, CI job, or mobile terminal, load the key into `ssh-agent` before starting remote attach. See [Persistence and remote access](/docs/persistence-remote/#remote-attach-over-ssh).
 
+## A copy says "copy sent to terminal" or "copy failed"
+
+The copy popup reports how the text was actually delivered, not that a copy was
+attempted.
+
+`copied to clipboard` means a native clipboard tool confirmed the write.
+`copy sent to terminal` means Herdr emitted an OSC 52 escape to the outer
+terminal instead; that is a one-way write the terminal never acknowledges, so it
+works only if the terminal honors OSC 52. `copy failed` means nothing was
+delivered.
+
+Herdr uses OSC 52 when no native clipboard tool is available, and over SSH, in
+WSL, and in the VS Code integrated terminal, where a tool on the server would
+write the wrong machine's clipboard. To get confirmed local copies, install a
+clipboard tool on that host: `wl-clipboard`, `xclip`, or `xsel` on Linux
+(`pbcopy` ships with macOS). To keep using OSC 52, enable it in the outer
+terminal, or use a terminal that supports it. `herdr --remote <host>` is the
+other option: the client runs on your machine, so it writes your local clipboard
+directly.
+
 ## Find diagnostic logs
 
 Herdr logs live in `~/.config/herdr/` by default:

@@ -141,11 +141,13 @@ pub(super) fn render_copy_feedback(
         return;
     }
 
-    // Match the palette's existing state semantics: green is done, peach warns,
-    // red needs attention. An unacknowledged OSC 52 send is not a success.
+    // Match the palette's existing state semantics: green is done, blue is
+    // informational, red needs attention. An unacknowledged OSC 52 send is not a
+    // success, but it is the normal path over SSH and in WSL, so it reads as
+    // information rather than as a warning.
     let accent = match feedback.outcome {
         crate::protocol::ClipboardWriteOutcome::Native => p.green,
-        crate::protocol::ClipboardWriteOutcome::Osc52 => p.peach,
+        crate::protocol::ClipboardWriteOutcome::Osc52 => p.blue,
         crate::protocol::ClipboardWriteOutcome::Failed => p.red,
     };
 
@@ -401,8 +403,8 @@ mod tests {
         );
         assert_eq!(
             feedback_accent(ClipboardWriteOutcome::Osc52),
-            palette.peach,
-            "an unacknowledged OSC 52 send must not read as success"
+            palette.blue,
+            "an unacknowledged OSC 52 send is informational, neither success nor warning"
         );
         assert_eq!(
             feedback_accent(ClipboardWriteOutcome::Failed),
