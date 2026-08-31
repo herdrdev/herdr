@@ -520,13 +520,21 @@ fn powershell_agent_script(argv: &[String]) -> Option<String> {
         return Some(format!("& {}", super::quote_powershell_arg(program)));
     }
 
+    let powershell_args = args
+        .iter()
+        .map(|arg| super::quote_powershell_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
     let command_line = args
         .iter()
         .map(|arg| quote_windows_command_line_arg(arg))
         .collect::<Vec<_>>()
         .join(" ");
     Some(format!(
-        "$p=Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait -PassThru",
+        "if((Get-Command {} -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){{& {} {}}}else{{Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait}}",
+        super::quote_powershell_arg(program),
+        super::quote_powershell_arg(program),
+        powershell_args,
         super::quote_powershell_arg(program),
         super::quote_powershell_arg(&command_line),
     ))
@@ -2660,6 +2668,7 @@ mod tests {
             "100%".into(),
             "wow!".into(),
             "a'b".into(),
+            "--model".into(),
         ];
         let command = super::interactive_shell_command(&argv, "cmd.exe").unwrap();
         let encoded = command.split_whitespace().last().unwrap();
@@ -2672,7 +2681,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             String::from_utf16(&utf16).unwrap(),
-            "$p=Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru"
+            "if((Get-Command pi -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& pi '' 'two words' '100%' 'wow!' 'a''b' '--model'}else{Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b --model' -NoNewWindow -Wait}"
         );
     }
 
@@ -2691,7 +2700,7 @@ mod tests {
         let helper = base.join("pi.cmd");
         fs::write(
             &helper,
-            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
+            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
         )
         .unwrap();
         let argv = vec![
@@ -2702,6 +2711,7 @@ mod tests {
             "wow!".into(),
             "a'b".into(),
             "@options".into(),
+            "--model".into(),
         ];
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
@@ -2718,6 +2728,7 @@ mod tests {
             process
                 .env("PATH", &path)
                 .env("HERDR_ARGV_CAPTURE", capture)
+                .env("PSExecutionPolicyPreference", "Bypass")
                 .status()
                 .unwrap()
         };
@@ -2731,7 +2742,7 @@ mod tests {
                 fs::read_to_string(no_args_capture)
                     .unwrap()
                     .replace("\r\n", "\n"),
-                "\n\n\n\n\n\n"
+                "\n\n\n\n\n\n\n"
             );
 
             let capture = base.join(format!("{shell}.txt"));
@@ -2740,7 +2751,24 @@ mod tests {
             assert!(status.success(), "{shell} command failed");
             assert_eq!(
                 fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
-                "\ntwo words\n100%\nwow!\na'b\n@options\n"
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
+            );
+        }
+
+        fs::remove_file(helper).unwrap();
+        fs::write(
+            base.join("pi.ps1"),
+            "Set-Content -LiteralPath $env:HERDR_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
+        )
+        .unwrap();
+        for shell in ["powershell.exe", "cmd.exe"] {
+            let capture = base.join(format!("{shell}-ps1.txt"));
+            let command = super::interactive_shell_command(&argv, shell).unwrap();
+            let status = run_command(shell, &command, &capture);
+            assert!(status.success(), "{shell} PowerShell script command failed");
+            assert_eq!(
+                fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
             );
         }
 

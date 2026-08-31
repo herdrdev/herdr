@@ -280,6 +280,7 @@ pub(crate) fn interactive_unix_shell_command(
 
 pub(crate) fn quote_powershell_arg(value: &str) -> String {
     if !value.is_empty()
+        && !value.starts_with('-')
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
                 || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'+' | b'=')
