@@ -83,6 +83,7 @@ fn spawn_server_with_env(
         runtime_dir.join("herdr-client.sock"),
     );
     cmd.env("SHELL", "/bin/sh");
+    cmd.env_remove("HERDR_STARTUP_CWD");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }

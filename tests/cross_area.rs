@@ -122,6 +122,7 @@ fn spawn_server_with_path(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("HERDR_STARTUP_CWD");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
