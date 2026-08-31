@@ -53,6 +53,7 @@ use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute, terminal,
 };
+use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
 use tokio::sync::{mpsc, Notify};
@@ -1106,7 +1107,7 @@ impl App {
                 let kitty_graphics_enabled = self.state.kitty_graphics_enabled;
                 if self.full_redraw_pending {
                     for cell in &mut terminal.current_buffer_mut().content {
-                        cell.set_skip(true);
+                        cell.set_diff_option(CellDiffOption::Skip);
                     }
                     terminal.swap_buffers();
                     self.full_redraw_pending = false;

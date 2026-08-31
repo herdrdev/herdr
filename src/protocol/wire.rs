@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
+use ratatui::buffer::CellDiffOption;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -495,7 +496,7 @@ impl CellData {
             fg: color_to_u32(cell.fg),
             bg: color_to_u32(cell.bg),
             modifier: modifier_to_u16(cell.modifier),
-            skip: cell.skip,
+            skip: cell.diff_option == CellDiffOption::Skip,
             hyperlink: None,
         }
     }
@@ -622,7 +623,12 @@ impl FrameData {
                 cell.fg = u32_to_color(cell_data.fg);
                 cell.bg = u32_to_color(cell_data.bg);
                 cell.modifier = u16_to_modifier(cell_data.modifier);
-                cell.skip = cell_data.skip;
+                let diff_option = if cell_data.skip {
+                    CellDiffOption::Skip
+                } else {
+                    CellDiffOption::None
+                };
+                cell.set_diff_option(diff_option);
             }
         }
 
@@ -2023,6 +2029,29 @@ mod tests {
         assert_eq!(restored.cell((1, 0)).unwrap().symbol(), "i");
         assert_eq!(restored.cell((2, 0)).unwrap().symbol(), "!");
         assert_eq!(restored.cell((2, 0)).unwrap().fg, Color::Rgb(255, 128, 0));
+    }
+
+    #[test]
+    fn frame_data_preserves_skipped_cells() {
+        let mut cell = ratatui::buffer::Cell::new("X");
+        cell.set_diff_option(CellDiffOption::Skip);
+
+        let cell_data = CellData::from_ratatui_cell(&cell);
+
+        assert!(cell_data.skip);
+
+        let frame = FrameData {
+            cells: vec![cell_data],
+            width: 1,
+            height: 1,
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let restored = frame.to_ratatui_buffer().expect("valid frame");
+        let restored_cell = restored.cell((0, 0)).expect("cell within bounds");
+
+        assert_eq!(restored_cell.diff_option, CellDiffOption::Skip);
     }
 
     #[test]
