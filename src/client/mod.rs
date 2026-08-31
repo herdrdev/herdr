@@ -373,12 +373,18 @@ fn setup_terminal_with_capabilities(
     let host_color_scheme_reports =
         should_enable_host_color_scheme_reports(enable_client_protocols);
 
-    if enable_client_protocols {
-        if mouse_capture {
-            set_mouse_capture(true, false)?;
+    #[cfg(windows)]
+    let windows_ssh_session = is_ssh_session();
+    #[cfg(windows)]
+    let mut windows_virtual_terminal_input =
+        if windows_vti_input_backend_enabled() && windows_ssh_session {
+            enable_windows_virtual_terminal_input()
         } else {
-            set_mouse_capture(false, false)?;
-        }
+            WindowsVirtualTerminalInputSetup::default()
+        };
+
+    if enable_client_protocols {
+        set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
             write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
@@ -388,21 +394,14 @@ fn setup_terminal_with_capabilities(
         if should_query_host_terminal_theme() {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
-        if mouse_capture {
-            set_mouse_capture(true, false)?;
-        } else {
-            set_mouse_capture(false, false)?;
-        }
+        set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste)?;
     }
 
     #[cfg(windows)]
-    let windows_virtual_terminal_input =
-        if enable_client_protocols && windows_vti_input_backend_enabled() {
-            enable_windows_virtual_terminal_input()
-        } else {
-            WindowsVirtualTerminalInputSetup::default()
-        };
+    if enable_client_protocols && windows_vti_input_backend_enabled() && !windows_ssh_session {
+        windows_virtual_terminal_input = enable_windows_virtual_terminal_input();
+    }
 
     #[cfg(windows)]
     if enable_client_protocols
@@ -573,6 +572,14 @@ fn restore_windows_input_mode_value(mode: u32) {
 
 fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    #[cfg(windows)]
+    if is_ssh_session() && windows_vti_input_backend_enabled() {
+        return crate::terminal_modes::set_windows_ssh_mouse_reporting(
+            &mut io::stdout(),
+            enabled,
+            sgr_pixels,
+        );
+    }
     if enabled {
         execute!(io::stdout(), EnableMouseCapture)?;
         if sgr_pixels {
@@ -609,10 +616,9 @@ fn restore_terminal_state(
         io::stdout(),
         EnableLineWrap,
         DisableFocusChange,
-        DisableBracketedPaste,
-        DisableMouseCapture
+        DisableBracketedPaste
     );
-    let _ = crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout());
+    let _ = set_mouse_capture(false, false);
     #[cfg(windows)]
     if let Some(mode) = restore_windows_input_mode {
         restore_windows_input_mode_value(mode);
@@ -712,6 +718,10 @@ fn is_remote_client_process() -> bool {
     std::env::var(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR).is_ok()
 }
 
+fn is_ssh_session() -> bool {
+    std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
+}
+
 /// Time to wait for the server's Welcome reply during the handshake.
 ///
 /// A local client talks to an already-connected server, so 5s is plenty. The
@@ -754,8 +764,7 @@ fn direct_graphics_profile_allowed(direct_attach: bool) -> bool {
         std::env::var_os("KITTY_WINDOW_ID").is_some(),
         direct_attach
             || is_remote_client_process()
-            || std::env::var_os("SSH_CONNECTION").is_some()
-            || std::env::var_os("SSH_TTY").is_some()
+            || is_ssh_session()
             || std::env::var_os("TMUX").is_some()
             || std::env::var_os("STY").is_some(),
         io::stdin().is_terminal() && io::stdout().is_terminal(),
@@ -1868,10 +1877,14 @@ async fn run_client_loop(
                     let mouse_mode_changed = enabled != state.mouse_capture_active
                         || next_sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire);
                     if mouse_mode_changed {
+                        #[cfg(windows)]
+                        if enabled && windows_vti_input_backend_enabled() && is_ssh_session() {
+                            let _ = enable_windows_virtual_terminal_input();
+                        }
                         set_mouse_capture(enabled, next_sgr_pixels)
                             .map_err(ClientError::ConnectionFailed)?;
                         #[cfg(windows)]
-                        if enabled && windows_vti_input_backend_enabled() {
+                        if enabled && windows_vti_input_backend_enabled() && !is_ssh_session() {
                             let _ = enable_windows_virtual_terminal_input();
                         }
                     }
