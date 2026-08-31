@@ -604,9 +604,28 @@ fn agent_name_from_path_token(token: &str) -> Option<String> {
 }
 
 fn agent_name_from_known_package_path(path: &str) -> Option<String> {
-    let components: Vec<String> = path
+    let raw_components: Vec<&str> = path
         .split(['/', '\\'])
         .filter(|component| !component.is_empty())
+        .collect();
+    let kimi_entrypoint = [
+        "node_modules",
+        "@moonshot-ai",
+        "kimi-code",
+        "dist",
+        "main.mjs",
+    ];
+    if raw_components.len() >= kimi_entrypoint.len()
+        && raw_components[raw_components.len() - kimi_entrypoint.len()..]
+            .iter()
+            .zip(kimi_entrypoint)
+            .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+    {
+        return Some(agent_label(Agent::Kimi).to_string());
+    }
+
+    let components: Vec<String> = raw_components
+        .into_iter()
         .map(normalized_agent_lookup_name)
         .collect();
 
@@ -965,6 +984,49 @@ mod tests {
                 identify_agent_in_job(&job),
                 Some((Agent::Qwen, "qwen".to_string()))
             );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_kimi_on_windows() {
+        let mut process = foreground_process(
+            123,
+            "node.exe",
+            &[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Users\user\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code\dist\main.mjs",
+            ],
+        );
+        process.argv0 = Some(r"C:\Program Files\nodejs\node.exe".to_string());
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![process],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Kimi, "kimi".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_ignores_node_wrapped_kimi_near_misses() {
+        for script in [
+            r"C:\Users\user\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code\scripts\main.mjs",
+            r"C:\Users\user\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code-helper\dist\main.mjs",
+            r"C:\Users\user\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code.js\dist\main.mjs",
+            r"C:\Users\user\AppData\Roaming\npm\node_modules\@moonshot-ai\kimi-code\dist\main.mjs\helper.js",
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(
+                    123,
+                    "node.exe",
+                    &[r"C:\Program Files\nodejs\node.exe", script],
+                )],
+            };
+
+            assert_eq!(identify_agent_in_job(&job), None, "script: {script}");
         }
     }
 
