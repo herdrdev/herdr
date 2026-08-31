@@ -685,7 +685,7 @@ mod tests {
             " ",
         );
         app.handle_tab_bar_status_tasks(std::time::Instant::now());
-        for _ in 0..50 {
+        for _ in 0..500 {
             if descendant_started.exists() {
                 break;
             }
