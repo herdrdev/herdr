@@ -606,7 +606,7 @@ mod tests {
     fn copy_feedback_offset_only_increases_when_toast_rect_overlaps() {
         let area = Rect::new(0, 0, 80, 24);
         let feedback = crate::app::state::CopyFeedback {
-            message: "copied to clipboard".into(),
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
         };
         let toast = crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::Finished,

@@ -1113,13 +1113,13 @@
           "key": "ui.toast.clipboard.enabled",
           "type": "boolean",
           "default": "true",
-          "description": "Show the copied-to-clipboard popup after a mouse copy."
+          "description": "Show the clipboard delivery popup after a mouse copy. It reports whether the copy was confirmed by a native clipboard tool, sent to the terminal without acknowledgement, or failed."
         },
         {
           "key": "ui.toast.clipboard.position",
           "type": "enum",
           "default": "\"bottom-center\"",
-          "description": "Copied-to-clipboard popup position.",
+          "description": "Clipboard delivery popup position.",
           "values": [
             "top-left",
             "top-center",

@@ -476,16 +476,7 @@ impl App {
             self.copy_feedback_deadline = None;
             return;
         }
-        // Only a native platform tool confirms delivery; an OSC 52 escape is
-        // one-way and the outer terminal may ignore it (refs #2399).
-        let message = match outcome {
-            crate::protocol::ClipboardWriteOutcome::Native => "copied to clipboard",
-            crate::protocol::ClipboardWriteOutcome::Osc52 => "copy sent to terminal",
-            crate::protocol::ClipboardWriteOutcome::Failed => "copy failed",
-        };
-        self.state.copy_feedback = Some(crate::app::state::CopyFeedback {
-            message: message.to_string(),
-        });
+        self.state.copy_feedback = Some(crate::app::state::CopyFeedback { outcome });
         self.copy_feedback_deadline = Some(Instant::now() + super::COPY_FEEDBACK_DURATION);
     }
 

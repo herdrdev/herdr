@@ -2328,11 +2328,16 @@ impl HeadlessServer {
                 // the foreground client instead of broadcasting to every attached client.
                 // Copy feedback waits for the client's `ClipboardWritten` report so the
                 // toast reflects the real delivery outcome instead of a queued send.
-                let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
-                if !self.send_to_foreground_client(ServerMessage::Clipboard { data }) {
+                if self.foreground_client_id.is_none() {
                     debug!("dropped clipboard write without a foreground client");
+                    false
+                } else {
+                    let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
+                    // Queuing the payload changes no visual state now that feedback waits
+                    // for the client's report. A failed send is different: it removes the
+                    // client and can resize the shared runtime, so that branch re-renders.
+                    !self.send_to_foreground_client(ServerMessage::Clipboard { data })
                 }
-                true
             }
             AppEvent::PrefixInputSource { active } => {
                 // Input-source switching is a client-local host side effect; forward it to the
@@ -10154,7 +10159,7 @@ next_tab = ""
     async fn retained_pty_update_declines_while_copy_feedback_is_visible() {
         let (mut server, client_rx, pane_id) = retained_test_server(b"aaaa");
         server.app.state.copy_feedback = Some(crate::app::state::CopyFeedback {
-            message: "copied to clipboard".to_owned(),
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
         });
         server.render_and_stream();
         let initial = read_server_frame(
@@ -10641,7 +10646,10 @@ next_tab = ""
             content: b"test".to_vec(),
         });
 
-        assert!(changed);
+        assert!(
+            !changed,
+            "queuing a clipboard payload changes no visual state; feedback waits for the report"
+        );
         assert!(
             server.app.state.copy_feedback.is_none(),
             "copy feedback must wait for the client's delivery report"
@@ -10682,7 +10690,7 @@ next_tab = ""
                 .state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copied to clipboard")
         );
     }
@@ -10715,7 +10723,7 @@ next_tab = ""
                 .state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copy sent to terminal")
         );
 
@@ -10729,7 +10737,7 @@ next_tab = ""
                 .state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copy failed")
         );
     }
@@ -10743,7 +10751,10 @@ next_tab = ""
             content: b"test".to_vec(),
         });
 
-        assert!(changed);
+        assert!(
+            !changed,
+            "dropping a clipboard write with no foreground client changes no visual state"
+        );
         assert!(
             server.app.state.copy_feedback.is_none(),
             "clipboard feedback should only show when a foreground client can receive the write"
@@ -10775,7 +10786,10 @@ next_tab = ""
             content: b"test".to_vec(),
         });
 
-        assert!(changed);
+        assert!(
+            changed,
+            "a failed send removes the client and can resize the shared runtime, so it re-renders"
+        );
         assert!(
             server.app.state.copy_feedback.is_none(),
             "clipboard feedback should only show after the foreground client receives the write"

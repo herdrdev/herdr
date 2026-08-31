@@ -1852,10 +1852,7 @@ async fn run_client_loop(
                     handle_notify(kind, &message, body.as_deref(), &state.sound_config);
                 }
                 ServerMessage::Clipboard { data } => {
-                    let outcome = forward_clipboard(&data);
-                    let _ = io::stdout().flush();
-                    let written = ClientMessage::ClipboardWritten { outcome };
-                    if let Err(err) = write_to_server(&mut write_stream, &written) {
+                    if let Err(err) = handle_clipboard_message(&data, &mut write_stream) {
                         return Err(ClientError::ConnectionLost(err));
                     }
                 }
@@ -2000,7 +1997,7 @@ fn server_reader_thread(
 // ---------------------------------------------------------------------------
 
 /// Writes a message to the server stream (blocking).
-fn write_to_server(stream: &mut LocalStream, msg: &ClientMessage) -> io::Result<()> {
+fn write_to_server(stream: &mut impl io::Write, msg: &ClientMessage) -> io::Result<()> {
     protocol::write_message(stream, msg).map_err(|e| io::Error::other(e.to_string()))
 }
 
@@ -2348,6 +2345,17 @@ fn recognized_image_extension(extension: &str) -> Option<&'static str> {
 fn decode_clipboard_payload(data: &str) -> Option<Vec<u8>> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(data).ok()
+}
+
+/// Delivers a forwarded clipboard write and reports the outcome back to the server.
+///
+/// The server defers copy feedback until this report arrives, so every accepted
+/// `ServerMessage::Clipboard` must produce exactly one `ClientMessage::ClipboardWritten` —
+/// including when the payload cannot be decoded, which reports `Failed`.
+fn handle_clipboard_message(data: &str, out: &mut impl io::Write) -> io::Result<()> {
+    let outcome = forward_clipboard(data);
+    let _ = io::stdout().flush();
+    write_to_server(out, &ClientMessage::ClipboardWritten { outcome })
 }
 
 /// Forwards a clipboard write from the server to the local client clipboard.
@@ -3646,9 +3654,59 @@ mod tests {
         unsafe {
             std::env::set_var("SSH_CONNECTION", "1 2 3 4");
         }
-        forward_clipboard("dGVzdA==");
+        let outcome = forward_clipboard("dGVzdA==");
         unsafe {
             std::env::remove_var("SSH_CONNECTION");
+        }
+        assert_eq!(
+            outcome,
+            crate::protocol::ClipboardWriteOutcome::Osc52,
+            "forcing the OSC 52 branch must report an unacknowledged send, not success"
+        );
+    }
+
+    /// Decodes the single `ClientMessage` a clipboard handler wrote to its sink.
+    fn decode_single_client_message(buf: &[u8]) -> ClientMessage {
+        let mut cursor = std::io::Cursor::new(buf);
+        protocol::read_message::<_, ClientMessage>(&mut cursor, protocol::MAX_FRAME_SIZE)
+            .expect("framed client message")
+    }
+
+    #[test]
+    fn clipboard_message_reports_delivery_outcome_to_server() {
+        let mut out = Vec::new();
+        unsafe {
+            std::env::set_var("SSH_CONNECTION", "1 2 3 4");
+        }
+        let result = handle_clipboard_message("dGVzdA==", &mut out);
+        unsafe {
+            std::env::remove_var("SSH_CONNECTION");
+        }
+        result.expect("clipboard report should be written");
+
+        match decode_single_client_message(&out) {
+            ClientMessage::ClipboardWritten { outcome } => {
+                assert_eq!(outcome, crate::protocol::ClipboardWriteOutcome::Osc52);
+            }
+            other => panic!("expected ClipboardWritten, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clipboard_message_reports_failure_for_invalid_payload() {
+        let mut out = Vec::new();
+        handle_clipboard_message("not base64!!", &mut out)
+            .expect("an undecodable payload must still report back");
+
+        match decode_single_client_message(&out) {
+            ClientMessage::ClipboardWritten { outcome } => {
+                assert_eq!(
+                    outcome,
+                    crate::protocol::ClipboardWriteOutcome::Failed,
+                    "a payload that never reached the clipboard must not report success"
+                );
+            }
+            other => panic!("expected ClipboardWritten, got {other:?}"),
         }
     }
 }

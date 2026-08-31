@@ -1386,7 +1386,23 @@ pub struct AgentNotificationDelivery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyFeedback {
-    pub message: String,
+    /// How the write was delivered. The message and styling are both derived from
+    /// this, so a toast cannot claim more than the delivery actually confirmed.
+    pub outcome: crate::protocol::ClipboardWriteOutcome,
+}
+
+impl CopyFeedback {
+    /// The user-facing message for this delivery outcome.
+    ///
+    /// Only a native platform tool confirms delivery; an OSC 52 escape is one-way
+    /// and the outer terminal may ignore it (refs #2399).
+    pub fn message(&self) -> &'static str {
+        match self.outcome {
+            crate::protocol::ClipboardWriteOutcome::Native => "copied to clipboard",
+            crate::protocol::ClipboardWriteOutcome::Osc52 => "copy sent to terminal",
+            crate::protocol::ClipboardWriteOutcome::Failed => "copy failed",
+        }
+    }
 }
 
 pub struct ReleaseNotesState {

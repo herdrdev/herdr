@@ -24,7 +24,7 @@ pub(crate) fn copy_feedback_rect(
         return Rect::default();
     }
 
-    let content_width = feedback.message.len() as u16 + 4;
+    let content_width = feedback.message().len() as u16 + 4;
     let width = content_width.min(area.width);
     let height = 3u16.min(area.height);
     let x = match position {
@@ -141,10 +141,18 @@ pub(super) fn render_copy_feedback(
         return;
     }
 
+    // Match the palette's existing state semantics: green is done, peach warns,
+    // red needs attention. An unacknowledged OSC 52 send is not a success.
+    let accent = match feedback.outcome {
+        crate::protocol::ClipboardWriteOutcome::Native => p.green,
+        crate::protocol::ClipboardWriteOutcome::Osc52 => p.peach,
+        crate::protocol::ClipboardWriteOutcome::Failed => p.red,
+    };
+
     frame.render_widget(Clear, feedback_area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(p.green))
+        .border_style(Style::default().fg(accent))
         .style(Style::default().bg(p.panel_bg));
     let inner = block.inner(feedback_area);
     frame.render_widget(block, feedback_area);
@@ -154,10 +162,10 @@ pub(super) fn render_copy_feedback(
     }
 
     let text = Line::from(vec![
-        Span::styled("●", Style::default().fg(p.green).bg(p.panel_bg)),
+        Span::styled("●", Style::default().fg(accent).bg(p.panel_bg)),
         Span::raw(" "),
         Span::styled(
-            &feedback.message,
+            feedback.message(),
             Style::default()
                 .fg(p.text)
                 .bg(p.panel_bg)
@@ -261,8 +269,34 @@ mod tests {
 
     fn feedback() -> CopyFeedback {
         CopyFeedback {
-            message: "copied to clipboard".to_string(),
+            outcome: crate::protocol::ClipboardWriteOutcome::Native,
         }
+    }
+
+    /// Renders one copy-feedback toast and returns its border color.
+    fn feedback_accent(outcome: crate::protocol::ClipboardWriteOutcome) -> ratatui::style::Color {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let palette = Palette::catppuccin();
+        let area = Rect::new(0, 0, 40, 10);
+        let feedback = CopyFeedback { outcome };
+        let rect = copy_feedback_rect(area, &feedback, 0, ToastClipboardPosition::BottomCenter);
+
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_copy_feedback(
+                    frame,
+                    area,
+                    &feedback,
+                    0,
+                    ToastClipboardPosition::BottomCenter,
+                    &palette,
+                );
+            })
+            .unwrap();
+
+        terminal.backend().buffer()[(rect.x, rect.y)].fg
     }
 
     #[test]
@@ -351,6 +385,29 @@ mod tests {
         assert_eq!(
             bottom_center.x,
             area.x + area.width.saturating_sub(bottom_center.width) / 2
+        );
+    }
+
+    #[test]
+    fn copy_feedback_styling_distinguishes_delivery_outcomes() {
+        use crate::protocol::ClipboardWriteOutcome;
+
+        let palette = Palette::catppuccin();
+
+        assert_eq!(
+            feedback_accent(ClipboardWriteOutcome::Native),
+            palette.green,
+            "a confirmed native write is the only success"
+        );
+        assert_eq!(
+            feedback_accent(ClipboardWriteOutcome::Osc52),
+            palette.peach,
+            "an unacknowledged OSC 52 send must not read as success"
+        );
+        assert_eq!(
+            feedback_accent(ClipboardWriteOutcome::Failed),
+            palette.red,
+            "a failed copy must use the needs-attention treatment"
         );
     }
 }

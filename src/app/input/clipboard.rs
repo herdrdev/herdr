@@ -164,7 +164,7 @@ mod tests {
             app.state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copied to clipboard")
         );
 

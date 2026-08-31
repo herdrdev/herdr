@@ -2484,7 +2484,7 @@ mod tests {
 
         assert!(app.state.toast.is_none());
         let feedback = app.state.copy_feedback.as_ref().expect("copy feedback");
-        assert_eq!(feedback.message, "copied to clipboard");
+        assert_eq!(feedback.message(), "copied to clipboard");
         assert!(app.copy_feedback_deadline.is_some());
     }
 
@@ -2497,7 +2497,7 @@ mod tests {
             app.state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copy sent to terminal")
         );
 
@@ -2506,7 +2506,7 @@ mod tests {
             app.state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copy failed")
         );
     }
@@ -2545,7 +2545,7 @@ mod tests {
             app.state
                 .copy_feedback
                 .as_ref()
-                .map(|feedback| feedback.message.as_str()),
+                .map(|feedback| feedback.message()),
             Some("copied to clipboard")
         );
     }
