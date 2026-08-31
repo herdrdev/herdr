@@ -1037,6 +1037,8 @@ pub(crate) struct CopyModeState {
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub entry_offset_from_bottom: usize,
+    pub last_max_offset_from_bottom: usize,
+    pub last_offset_from_bottom: usize,
     pub selection: Option<CopyModeSelection>,
     pub search: CopyModeSearchState,
 }

@@ -1443,6 +1443,8 @@ platforms = ["linux", "macos"]
             cursor_row: 2,
             cursor_col: 3,
             entry_offset_from_bottom: 4,
+            last_max_offset_from_bottom: 0,
+            last_offset_from_bottom: 4,
             selection: None,
             search: crate::app::state::CopyModeSearchState::default(),
         };

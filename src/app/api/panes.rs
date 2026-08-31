@@ -2650,6 +2650,8 @@ mod tests {
             cursor_row: 0,
             cursor_col: 0,
             entry_offset_from_bottom: 0,
+            last_max_offset_from_bottom: 0,
+            last_offset_from_bottom: 0,
             selection: None,
             search: Default::default(),
         });
@@ -3371,6 +3373,8 @@ mod tests {
             cursor_row: 0,
             cursor_col: 0,
             entry_offset_from_bottom: 0,
+            last_max_offset_from_bottom: 0,
+            last_offset_from_bottom: 0,
             selection: None,
             search: Default::default(),
         });

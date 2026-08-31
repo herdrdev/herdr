@@ -56,9 +56,11 @@ impl AppState {
                 )
             })
             .unwrap_or_else(|| (info.inner_rect.height.saturating_sub(1), 0));
-        let entry_offset_from_bottom = self
+        let (entry_offset_from_bottom, last_max_offset_from_bottom) = self
             .pane_scroll_metrics(terminal_runtimes, pane_id)
-            .map_or(0, |metrics| metrics.offset_from_bottom);
+            .map_or((0, 0), |metrics| {
+                (metrics.offset_from_bottom, metrics.max_offset_from_bottom)
+            });
 
         self.clear_selection();
         self.copy_mode = Some(CopyModeState {
@@ -66,6 +68,8 @@ impl AppState {
             cursor_row: cursor.0.min(info.inner_rect.height.saturating_sub(1)),
             cursor_col: cursor.1.min(info.inner_rect.width.saturating_sub(1)),
             entry_offset_from_bottom,
+            last_max_offset_from_bottom,
+            last_offset_from_bottom: entry_offset_from_bottom,
             selection: None,
             search: crate::app::state::CopyModeSearchState {
                 geometry: Some((info.inner_rect.width, info.inner_rect.height)),
@@ -1813,6 +1817,36 @@ mod tests {
         let visible_before = runtime.visible_text();
         runtime.test_process_pty_bytes(b"more output\r\n");
         assert_eq!(runtime.visible_text(), visible_before);
+    }
+
+    #[tokio::test]
+    async fn copy_mode_anchors_live_bottom_when_output_arrives() {
+        let bytes = numbered_lines_bytes(32);
+        let (mut app, pane_id) = app_with_copy_scrollback(&bytes);
+        app.state.enter_copy_mode(&app.terminal_runtimes);
+        app.state.hide_tab_bar_when_single_tab = true;
+        let top_before = {
+            let top_before = copy_mode_viewport_top_row(&app, pane_id);
+            let runtime = app
+                .state
+                .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+                .expect("runtime");
+            runtime.test_process_pty_bytes(b"live output\r\n");
+            top_before
+        };
+        crate::ui::compute_view_with_runtime_registry(
+            &mut app.state,
+            &app.terminal_runtimes,
+            Rect::new(0, 0, 46, 7),
+        );
+
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        assert_eq!(copy_mode_viewport_top_row(&app, pane_id), top_before);
+        assert!(runtime.visible_text().contains("live output"));
+        assert!(app.state.copy_mode.is_some());
     }
 
     #[tokio::test]

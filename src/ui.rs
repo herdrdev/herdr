@@ -136,6 +136,46 @@ pub fn compute_view_with_cell_size(
     compute_view_internal(app, terminal_runtimes, area, true, cell_size);
 }
 
+fn preserve_copy_mode_view(app: &mut AppState, terminal_runtimes: &TerminalRuntimeRegistry) {
+    let Some(ws_idx) = app.active else {
+        return;
+    };
+    let Some(copy_mode) = app.copy_mode.as_ref() else {
+        return;
+    };
+    let pane_id = copy_mode.pane_id;
+    let Some(metrics) = app.pane_scroll_metrics(terminal_runtimes, pane_id) else {
+        return;
+    };
+    let previous_top = copy_mode
+        .last_max_offset_from_bottom
+        .saturating_sub(copy_mode.last_offset_from_bottom);
+    let output_moved_viewport = metrics.max_offset_from_bottom
+        > copy_mode.last_max_offset_from_bottom
+        && metrics.offset_from_bottom == copy_mode.last_offset_from_bottom;
+    let top = if output_moved_viewport {
+        previous_top
+    } else {
+        metrics
+            .max_offset_from_bottom
+            .saturating_sub(metrics.offset_from_bottom)
+    };
+    let desired_offset = metrics.max_offset_from_bottom.saturating_sub(top);
+    if desired_offset != metrics.offset_from_bottom {
+        if let Some(runtime) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
+        {
+            runtime.set_scroll_offset_from_bottom(desired_offset);
+        }
+    }
+    let Some(updated_metrics) = app.pane_scroll_metrics(terminal_runtimes, pane_id) else {
+        return;
+    };
+    if let Some(copy_mode) = app.copy_mode.as_mut() {
+        copy_mode.last_max_offset_from_bottom = updated_metrics.max_offset_from_bottom;
+        copy_mode.last_offset_from_bottom = updated_metrics.offset_from_bottom;
+    }
+}
+
 /// Compute view geometry for a client-sized render without resizing pane runtimes.
 ///
 /// This is used by the headless server when a non-foreground client needs its
@@ -219,6 +259,7 @@ fn compute_view_internal(
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
+    preserve_copy_mode_view(app, terminal_runtimes);
     if is_mobile_width(area, app.mobile_width_threshold) {
         compute_mobile_view(app, terminal_runtimes, area, resize_panes, cell_size);
         return;
