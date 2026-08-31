@@ -6,12 +6,14 @@
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
 
 ### Fixed
+- Claude Code integration hooks now ignore Cursor CLI's Claude-compatible session events, preventing Cursor sessions from being stored as resumable Claude sessions. (#2832)
 - Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)
 - New lifecycle event subscriptions now stream only events emitted after subscription begins instead of replaying retained history. (#1270)
 - Windows users whose endpoint security blocks the fileless PowerShell install command can now use a local `install.cmd` bootstrap; installer downloads use `curl.exe` while preserving package checksum verification. (#2751)
 - Oh My Pi panes now stay working when a turn ends with an automatic continuation already scheduled, instead of briefly reporting idle and completing `agent wait` early. (#2851, thanks @taoeffect)
 - Retained mouse selections now copy when Ctrl+C or Cmd+C arrives before a delayed mouse release instead of forwarding the copy shortcut to the pane. (#3100, thanks @moret)
 - Removing a background worktree workspace no longer changes focus to its parent workspace. (#3098)
+- Worktree commands can now trust an explicitly selected repository for one request, allowing the full lifecycle on accessible Windows repositories owned by another SID without changing global Git configuration. (#3044)
 - Prefix bindings such as `prefix+|` now recognize characters produced by macOS Option and custom keyboard layouts, while exact chords such as `prefix+alt+w` keep priority. (#3079, thanks @vlcinsky)
 - Direct terminal attaches now preserve multiline pastes as one paste instead of submitting each line separately. (#3054)
 - Windows clients now preserve layout-generated text for Shift-only keys, so characters such as `/` on German keyboards reach shell panes and pasted input. (#3045)
@@ -23,6 +25,7 @@
 - Claude Code panes now remain working while MCP tasks continue in the background after a turn ends. (#3090)
 - Tab bar status commands now remove ESC-prefixed terminal control sequences instead of displaying their sequence bodies as text. (#3001)
 - Unix plugin pane commands now default `PWD` to their resolved working directory, so direct popup tools open at explicit `--cwd` paths while preserving caller-provided `PWD` values. (#2984)
+- Plugin link handlers now receive matching OSC 8 `file://` clicks while unmatched file links remain excluded from the system URL opener. (#2941)
 
 ## [0.8.2] - 2026-08-19
 

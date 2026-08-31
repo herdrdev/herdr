@@ -1677,24 +1677,7 @@ impl AppState {
         self.selection = None;
         self.selection_autoscroll = None;
         self.mark_session_dirty();
-        let close_indices = self
-            .workspaces
-            .get(self.selected)
-            .and_then(|ws| ws.worktree_space())
-            .filter(|space| !space.is_linked_worktree)
-            .map(|space| {
-                self.workspaces
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, ws)| {
-                        ws.worktree_space()
-                            .is_some_and(|member| member.key == space.key)
-                            .then_some(idx)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|indices| indices.len() >= 2)
-            .unwrap_or_else(|| vec![self.selected]);
+        let close_indices = self.workspace_close_indices(self.selected);
 
         let mut terminal_ids = Vec::new();
         let mut pane_ids = Vec::new();
@@ -1984,31 +1967,55 @@ impl AppState {
         self.apply_pane_zoom(ws_idx, pane_id, PaneZoomCommand::Toggle);
     }
 
-    pub(crate) fn workspace_close_would_close_worktree_group(&self, ws_idx: usize) -> bool {
+    pub(crate) fn workspace_close_indices(&self, ws_idx: usize) -> Vec<usize> {
         self.workspaces
             .get(ws_idx)
             .and_then(|ws| ws.worktree_space())
             .filter(|space| !space.is_linked_worktree)
-            .is_some_and(|space| {
+            .map(|space| {
                 self.workspaces
                     .iter()
-                    .filter(|ws| {
+                    .enumerate()
+                    .filter_map(|(idx, ws)| {
                         ws.worktree_space()
                             .is_some_and(|member| member.key == space.key)
+                            .then_some(idx)
                     })
-                    .count()
-                    >= 2
+                    .collect::<Vec<_>>()
             })
+            .filter(|indices| indices.len() >= 2)
+            .unwrap_or_else(|| vec![ws_idx])
+    }
+
+    pub(crate) fn workspace_close_would_close_worktree_group(&self, ws_idx: usize) -> bool {
+        self.workspace_close_indices(ws_idx).len() >= 2
+    }
+
+    pub(crate) fn begin_workspace_close_confirmation(&mut self, ws_idx: usize) -> bool {
+        let Some(workspace_id) = self
+            .workspaces
+            .get(ws_idx)
+            .map(|workspace| workspace.id.clone())
+        else {
+            return false;
+        };
+        self.selected = ws_idx;
+        self.confirm_close_workspace_id = Some(workspace_id);
+        self.mode = Mode::ConfirmClose;
+        true
+    }
+
+    pub(crate) fn take_confirmed_workspace_close_index(&mut self) -> Option<usize> {
+        let workspace_id = self.confirm_close_workspace_id.take()?;
+        self.workspaces
+            .iter()
+            .position(|workspace| workspace.id == workspace_id)
     }
 
     pub(crate) fn confirm_implicit_worktree_group_close(&mut self, ws_idx: usize) -> bool {
-        if self.confirm_close && self.workspace_close_would_close_worktree_group(ws_idx) {
-            self.selected = ws_idx;
-            self.mode = Mode::ConfirmClose;
-            true
-        } else {
-            false
-        }
+        self.confirm_close
+            && self.workspace_close_would_close_worktree_group(ws_idx)
+            && self.begin_workspace_close_confirmation(ws_idx)
     }
 
     #[cfg(test)]
@@ -2245,7 +2252,7 @@ impl AppState {
             .into_iter()
             .find(|((x, y), _, _)| *x == screen_col && *y == screen_row)
         {
-            return safe_web_url(&uri).map(str::to_owned);
+            return Some(uri);
         }
 
         let metrics = self.pane_scroll_metrics(terminal_runtimes, pane_id);

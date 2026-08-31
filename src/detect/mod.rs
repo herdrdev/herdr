@@ -63,10 +63,11 @@ pub enum Agent {
     Qodercli,
     Qwen,
     Maki,
+    Muse,
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,9 +90,10 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::Muse,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -112,6 +114,7 @@ impl Agent {
         Self::Qodercli,
         Self::Qwen,
         Self::Maki,
+        Self::Muse,
     ];
 }
 
@@ -139,6 +142,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Muse => "muse",
     }
 }
 
@@ -172,6 +176,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
+        Agent::Muse => "muse",
     }
 }
 
@@ -186,6 +191,7 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 }
 
 fn lookup_agent(name: &str) -> Option<Agent> {
+    let name = path_basename(name);
     match name {
         "pi" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
@@ -209,8 +215,23 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
+        "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
+}
+
+/// Muse's install-dir launcher script resolves the active release and execs
+/// `muse-bin-<version>` (e.g. `muse-bin-0.1.0-R708.1`), so the running
+/// process never carries a bare `muse`/`muse-bin` alias. Require a digit
+/// immediately after the `muse-bin-` prefix so unrelated binaries such as
+/// `muse-binary` or a bare `muse-bin` stay unmatched.
+/// Accepts path-qualified `argv0` values by checking only the basename, since
+/// the launcher may `exec` with an absolute install-dir path.
+fn is_muse_versioned_binary(name: &str) -> bool {
+    path_basename(name)
+        .strip_prefix("muse-bin-")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// Identify which agent is running from the process name.
@@ -766,6 +787,19 @@ mod tests {
         assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
         assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+        assert_eq!(identify_agent("muse"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-code"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-cli"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-bin-0.1.0-R708.1"), Some(Agent::Muse));
+        assert_eq!(identify_agent("muse-bin-1.2.3"), Some(Agent::Muse));
+        assert_eq!(
+            identify_agent("/home/user/.local/bin/muse-bin-0.2.1-R1215.1"),
+            Some(Agent::Muse)
+        );
+        assert_eq!(
+            identify_agent(r"C:\Users\user\muse-bin-0.2.1-R1215.1.exe"),
+            Some(Agent::Muse)
+        );
     }
 
     #[test]
@@ -836,6 +870,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
+            (Agent::Muse, "muse"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
@@ -879,6 +914,13 @@ mod tests {
         assert_eq!(identify_agent("zsh"), None);
         assert_eq!(identify_agent("vim"), None);
         assert_eq!(identify_agent("node"), None);
+        assert_eq!(identify_agent("museum"), None);
+        assert_eq!(identify_agent("muse-helper"), None);
+        assert_eq!(identify_agent("muser"), None);
+        assert_eq!(identify_agent("musescore"), None);
+        assert_eq!(identify_agent("muse-bin"), None);
+        assert_eq!(identify_agent("muse-bin-"), None);
+        assert_eq!(identify_agent("muse-binary"), None);
     }
 
     #[test]

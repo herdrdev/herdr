@@ -3394,7 +3394,7 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("a"), Workspace::test_new("b")];
         app.state.active = Some(0);
         app.state.selected = 1;
-        app.state.mode = Mode::ConfirmClose;
+        app.state.begin_workspace_close_confirmation(1);
 
         let popup = app.state.confirm_close_rect();
         let inner = Rect::new(

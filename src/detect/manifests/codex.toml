@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.08.09.1"
+version = "2026.08.28.1"
 min_engine_version = 3
-updated_at = "2026-08-09T00:00:00Z"
+updated_at = "2026-08-28T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -59,7 +59,7 @@ any = [
 id = "weak_blocker"
 state = "blocked"
 priority = 600
-region = "whole_recent"
+region = "whole_recent_without_current_prompt_marker"
 any = [
   { contains = ["[y/n]"] },
   { contains = ["yes (y)"] },

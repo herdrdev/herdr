@@ -304,7 +304,7 @@ fn ping_over_socket_returns_version() {
     assert_eq!(value["result"]["version"], env!("CARGO_PKG_VERSION"));
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
-    assert_eq!(value["result"]["protocol"], 20);
+    assert_eq!(value["result"]["protocol"], 21);
 
     cleanup_spawned_herdr(child, base);
 }
@@ -969,9 +969,11 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
         ),
     );
     assert_eq!(pane["result"]["pane"]["cwd"], base.display().to_string());
+    // Regression for issue #3270: the foreground group leader's cwd is
+    // authoritative; the backgrounded helper's chdir must not override it.
     assert_eq!(
         pane["result"]["pane"]["foreground_cwd"],
-        helper_cwd.display().to_string()
+        base.display().to_string()
     );
 
     let split = send_request(

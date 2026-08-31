@@ -203,7 +203,7 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         let suffix_char = body.chars().last()?;
         if suffix_char.is_ascii_alphabetic() {
             let modifier_and_event = body.strip_suffix(suffix_char)?;
-            let (modifier_text, event_type) = split_modifier_and_event(modifier_and_event);
+            let (modifier_text, event_type) = split_xterm_modifier_and_event(modifier_and_event)?;
             let mod_value = modifier_text.parse::<u8>().ok()?.checked_sub(1)?;
             let code = match suffix_char {
                 'A' => KeyCode::Up,
@@ -227,7 +227,7 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
 
     let tilde_body = body.strip_suffix('~')?;
     let (code_part, modifier_part) = tilde_body.split_once(';')?;
-    let (modifier_text, event_type) = split_modifier_and_event(modifier_part);
+    let (modifier_text, event_type) = split_xterm_modifier_and_event(modifier_part)?;
     let mod_value = modifier_text.parse::<u8>().ok()?.checked_sub(1)?;
     let code = match code_part {
         "2" => KeyCode::Insert,
@@ -248,6 +248,19 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         TerminalKey::new(code, key_modifiers_from_u8(mod_value))
             .with_kind(parse_kitty_event_type(event_type)?),
     )
+}
+
+fn split_xterm_modifier_and_event(input: &str) -> Option<(&str, Option<&str>)> {
+    let modifier_and_event =
+        if let Some((modifier_and_event, associated_text)) = input.split_once(';') {
+            // Alacritty on macOS reports Cocoa function-key markers as associated
+            // text. The sequence final already identifies the key, so ignore them.
+            parse_kitty_associated_text(associated_text)?;
+            modifier_and_event
+        } else {
+            input
+        };
+    Some(split_modifier_and_event(modifier_and_event))
 }
 
 fn split_modifier_and_event(input: &str) -> (&str, Option<&str>) {
@@ -803,6 +816,22 @@ mod tests {
         let key = parse_terminal_key_sequence("\x1b[1;3B").unwrap();
         assert_eq!(key.code, KeyCode::Down);
         assert_eq!(key.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn parse_xterm_special_sequences_with_associated_text() {
+        for (sequence, expected_code) in [
+            ("\x1b[1;1;63233B", KeyCode::Down),
+            ("\x1b[5;1;63276~", KeyCode::PageUp),
+        ] {
+            let key = parse_terminal_key_sequence(sequence).unwrap();
+            assert_eq!(key.code, expected_code);
+            assert_eq!(key.modifiers, KeyModifiers::empty());
+            assert_eq!(key.kind, crossterm::event::KeyEventKind::Press);
+            assert_eq!(key.generated_text, None);
+        }
+
+        assert_eq!(parse_terminal_key_sequence("\x1b[1;1;63233;63234B"), None);
     }
 
     #[test]

@@ -1378,6 +1378,17 @@
             "on",
             "off"
           ]
+        },
+        {
+          "key": "ui.sound.agents.muse",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Muse agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
         }
       ]
     },

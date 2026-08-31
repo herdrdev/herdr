@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   preflight:
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -118,7 +119,7 @@ jobs:
 
   build:
     needs: preflight
-    if: needs.preflight.outputs.should_publish == 'true'
+    if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
     permissions:
       contents: read
     strategy:
@@ -284,7 +285,7 @@ jobs:
 
   publish:
     needs: [preflight, build]
-    if: needs.preflight.outputs.should_publish == 'true'
+    if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: docs-publish-master

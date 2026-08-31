@@ -1164,12 +1164,21 @@ fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParam
 }
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-        return Ok(2);
-    };
+    const USAGE: &str = "usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]";
 
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+    let args = super::expand_equals_args(
+        args,
+        &[
+            "--source",
+            "--agent",
+            "--state",
+            "--message",
+            "--seq",
+            "--agent-session-id",
+            "--agent-session-path",
+        ],
+    );
+    let mut pane_id = None;
     let mut source = None;
     let mut agent = None;
     let mut state = None;
@@ -1178,7 +1187,7 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
     let mut agent_session_id = None;
     let mut agent_session_path = None;
 
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--source" => {
@@ -1237,13 +1246,25 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
                 agent_session_path = Some(value.clone());
                 index += 2;
             }
-            other => {
-                eprintln!("unknown option: {other}");
+            option if option.starts_with('-') => {
+                eprintln!("unknown option: {option}");
                 return Ok(2);
+            }
+            positional => {
+                if pane_id.is_some() {
+                    eprintln!("unexpected argument: {positional}");
+                    return Ok(2);
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
 
+    let Some(pane_id) = pane_id else {
+        eprintln!("{USAGE}");
+        return Ok(2);
+    };
     let Some(source) = source.and_then(|source| {
         let source = source.trim().to_string();
         (!source.is_empty()).then_some(source)
@@ -1273,12 +1294,20 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]");
-        return Ok(2);
-    };
+    const USAGE: &str = "usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]";
 
-    let pane_id = super::normalize_pane_id(raw_pane_id);
+    let args = super::expand_equals_args(
+        args,
+        &[
+            "--source",
+            "--agent",
+            "--seq",
+            "--agent-session-id",
+            "--agent-session-path",
+            "--session-start-source",
+        ],
+    );
+    let mut pane_id = None;
     let mut source = None;
     let mut agent = None;
     let mut seq = None;
@@ -1286,7 +1315,7 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
     let mut agent_session_path = None;
     let mut session_start_source = None;
 
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--source" => {
@@ -1337,13 +1366,25 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
                 session_start_source = Some(value.clone());
                 index += 2;
             }
-            other => {
-                eprintln!("unknown option: {other}");
+            option if option.starts_with('-') => {
+                eprintln!("unknown option: {option}");
                 return Ok(2);
+            }
+            positional => {
+                if pane_id.is_some() {
+                    eprintln!("unexpected argument: {positional}");
+                    return Ok(2);
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
             }
         }
     }
 
+    let Some(pane_id) = pane_id else {
+        eprintln!("{USAGE}");
+        return Ok(2);
+    };
     let Some(source) = source.and_then(|source| {
         let source = source.trim().to_string();
         (!source.is_empty()).then_some(source)

@@ -14,6 +14,7 @@ env:
 
 jobs:
   flake-check:
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,6 +37,7 @@ jobs:
           nix flake check --all-systems --no-build --print-build-logs
 
   build:
+    if: github.repository == 'herdrdev/herdr'
     permissions:
       contents: read
     strategy:
@@ -181,6 +183,7 @@ jobs:
           path: ${{ matrix.name }}
 
   validate-release-inputs:
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -204,6 +207,7 @@ jobs:
 
   release:
     needs: [build, flake-check, validate-release-inputs]
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -232,6 +236,7 @@ jobs:
 
   close-released-issues:
     needs: release
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
@@ -368,6 +373,7 @@ jobs:
 
   update-latest-json:
     needs: release
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
     concurrency:
       group: docs-publish-master

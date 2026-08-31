@@ -718,6 +718,7 @@ impl App {
             host_mouse_pixels: None,
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
+            confirm_close_workspace_id: None,
         };
 
         state.terminals = restored_terminals;

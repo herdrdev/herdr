@@ -14,6 +14,40 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 #[test]
+fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
+    use base64::Engine;
+
+    let hook_path = Path::new(r"C:\Users\O'Neil λ\App Data\hooks\herdr-agent-state.ps1");
+    let command = powershell_encoded_hook_command(hook_path, "session");
+    let encoded = command
+        .strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ")
+        .expect("encoded PowerShell command");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("base64 payload");
+    let mut chunks = bytes.chunks_exact(2);
+    let utf16 = chunks
+        .by_ref()
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    assert!(chunks.remainder().is_empty(), "UTF-16LE payload");
+    assert_eq!(
+        String::from_utf16(&utf16).expect("PowerShell script"),
+        r"& 'C:\Users\O''Neil λ\App Data\hooks\herdr-agent-state.ps1' session"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_antigravity_cli_hook_command_uses_encoded_powershell() {
+    let hook_path = Path::new(r"C:\Users\reporter\.gemini\config\hooks\herdr-agent-state.ps1");
+    assert_eq!(
+        antigravity_cli_hook_command(hook_path, "session"),
+        powershell_encoded_hook_command(hook_path, "session")
+    );
+}
+
+#[test]
 fn extract_version_triple_parses_common_outputs() {
     assert_eq!(extract_version_triple("0.14.0"), Some((0, 14, 0)));
     assert_eq!(extract_version_triple("v1.2.3"), Some((1, 2, 3)));
@@ -1060,7 +1094,7 @@ fn claude_v1_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 8);
+    assert_eq!(claude.expected_version, 9);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1090,7 +1124,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 8);
+    assert_eq!(claude.expected_version, 9);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -3889,8 +3923,10 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
             Some(ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC)
         );
         let command = handler.get("command").and_then(Value::as_str).unwrap();
-        assert!(command.contains("herdr-agent-state"));
-        assert!(command.ends_with(action));
+        assert_eq!(
+            command,
+            antigravity_cli_hook_command(&installed.hook_path, action)
+        );
     }
 
     // The integration is session-only. Antigravity CLI cannot express blocked
@@ -3915,6 +3951,39 @@ fn install_antigravity_cli_writes_hook_and_updates_hooks_json() {
             .and_then(Value::as_str),
         Some("echo keep-me")
     );
+
+    std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn antigravity_cli_v2_install_is_outdated_until_reinstalled() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let agy_dir = base.join(".gemini").join("config");
+    let hook_dir = agy_dir.join("hooks");
+    fs::create_dir_all(&hook_dir).unwrap();
+    fs::write(
+        hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
+        ANTIGRAVITY_CLI_HOOK_ASSET
+            .replace("HERDR_INTEGRATION_VERSION=3", "HERDR_INTEGRATION_VERSION=2"),
+    )
+    .unwrap();
+    std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
+
+    let status = || {
+        installed_integration_statuses()
+            .into_iter()
+            .find(|status| status.target == crate::api::schema::IntegrationTarget::AntigravityCli)
+            .expect("antigravity cli integration status")
+    };
+    let outdated = status();
+    assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
+    assert_eq!(outdated.installed_version, Some(2));
+    assert_eq!(outdated.expected_version, 3);
+
+    install_antigravity_cli().unwrap();
+    assert_eq!(status().state, IntegrationStatusKind::Current);
 
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     let _ = fs::remove_dir_all(base);
