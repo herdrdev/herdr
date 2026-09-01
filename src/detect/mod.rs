@@ -62,12 +62,13 @@ pub enum Agent {
     Kilo,
     Qodercli,
     Qwen,
+    Letta,
     Maki,
     Muse,
 }
 
 impl Agent {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,11 +90,12 @@ impl Agent {
         Self::Kilo,
         Self::Qodercli,
         Self::Qwen,
+        Self::Letta,
         Self::Maki,
         Self::Muse,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -113,6 +115,7 @@ impl Agent {
         Self::Kilo,
         Self::Qodercli,
         Self::Qwen,
+        Self::Letta,
         Self::Maki,
         Self::Muse,
     ];
@@ -141,6 +144,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
+        Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
     }
@@ -175,6 +179,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
         Agent::Qwen => "qwen",
+        Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
     }
@@ -214,6 +219,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
+        "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
@@ -248,7 +254,9 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     {
         let candidate = normalized_process_name(process);
         if let Some(agent) = identify_agent(&candidate) {
-            return Some((agent, candidate));
+            if agent != Agent::Letta || is_interactive_letta_process(process) {
+                return Some((agent, candidate));
+            }
         }
     }
 
@@ -259,6 +267,9 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         let Some(agent) = identify_agent(&candidate) else {
             continue;
         };
+        if agent == Agent::Letta && !is_interactive_letta_process(process) {
+            continue;
+        }
         let score = process_priority(process, &candidate);
 
         match &best {
@@ -328,7 +339,10 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
+        ("herdr:hermes", "hermes")
+            | ("herdr:qwen", "qwen")
+            | ("herdr:letta", "letta")
+            | ("herdr:antigravity_cli", "agy")
     )
 }
 
@@ -378,7 +392,10 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
             if let Some(wrapped_agent) =
                 wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
             {
-                if identify_agent(&wrapped_agent) == Some(Agent::Qwen) {
+                if matches!(
+                    identify_agent(&wrapped_agent),
+                    Some(Agent::Qwen | Agent::Letta)
+                ) {
                     return wrapped_agent;
                 }
             }
@@ -645,8 +662,119 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
         if window == ["node_modules", "mastracode", "dist", "cli"] {
             return Some(agent_label(Agent::Mastracode).to_string());
         }
+        if window == ["node_modules", "@letta-ai", "letta-code", "letta"] {
+            return Some(agent_label(Agent::Letta).to_string());
+        }
     }
     None
+}
+
+fn letta_entrypoint_index(argv: &[String]) -> Option<usize> {
+    let is_letta =
+        |arg: &str| agent_name_from_path_token(arg).as_deref() == Some(agent_label(Agent::Letta));
+    if argv.first().is_some_and(|arg| is_letta(arg)) {
+        return Some(0);
+    }
+
+    let runtime = argv
+        .first()
+        .map(|arg| normalized_agent_lookup_name(path_basename(arg)))?;
+    if !matches!(runtime.as_str(), "node" | "bun") {
+        return None;
+    }
+
+    let mut index = 1;
+    while let Some(arg) = argv.get(index) {
+        if arg == "--" {
+            return argv
+                .get(index + 1)
+                .is_some_and(|arg| is_letta(arg))
+                .then_some(index + 1);
+        }
+        if flag_matches(arg, &["-e", "--eval", "-p", "--print"]) {
+            return None;
+        }
+        if arg.starts_with('-') {
+            index += if option_takes_value(arg) { 2 } else { 1 };
+            continue;
+        }
+        return is_letta(arg).then_some(index);
+    }
+    None
+}
+
+fn letta_first_arg_after_backend_selection(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--backend" {
+            let _ = args.next();
+            continue;
+        }
+        if arg.starts_with("--backend=") {
+            continue;
+        }
+        return Some(arg);
+    }
+    None
+}
+
+fn is_interactive_letta_process(process: &crate::platform::ForegroundProcess) -> bool {
+    let parsed_cmdline;
+    let argv = if let Some(argv) = process.argv.as_deref() {
+        argv
+    } else {
+        parsed_cmdline = process
+            .cmdline
+            .as_deref()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|arg| arg.trim_matches(|ch| matches!(ch, '\'' | '"')).to_string())
+            .collect::<Vec<_>>();
+        if parsed_cmdline.is_empty() {
+            return true;
+        }
+        &parsed_cmdline
+    };
+
+    let cli_args = letta_entrypoint_index(argv)
+        .map(|index| &argv[index + 1..])
+        .unwrap_or(argv);
+
+    if cli_args.iter().any(|arg| {
+        let option = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        matches!(
+            option,
+            "-p" | "--print"
+                | "--prompt"
+                | "--json"
+                | "--stream-json"
+                | "--run"
+                | "--disable-memory-guard"
+                | "--output-format"
+                | "--input-format"
+                | "--include-partial-messages"
+                | "--from-agent"
+                | "--environment"
+                | "--env"
+                | "--pre-load-skills"
+                | "--tags"
+                | "--ephemeral"
+                | "--stateless"
+                | "--max-turns"
+                | "--memfs-startup"
+                | "-h"
+                | "--help"
+                | "-v"
+                | "--version"
+                | "--info"
+                | "--update"
+                | "--upgrade"
+        )
+    }) {
+        return false;
+    }
+
+    letta_first_arg_after_backend_selection(cli_args).is_none_or(|arg| arg.starts_with('-'))
 }
 
 fn resolved_agent_name_from_path_token(token: &str) -> Option<String> {
@@ -801,6 +929,8 @@ mod tests {
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
         assert_eq!(identify_agent("qwen"), Some(Agent::Qwen));
         assert_eq!(identify_agent("Qwen Code"), Some(Agent::Qwen));
+        assert_eq!(identify_agent("letta"), Some(Agent::Letta));
+        assert_eq!(identify_agent("Letta Code"), Some(Agent::Letta));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
         assert_eq!(identify_agent("muse"), Some(Agent::Muse));
         assert_eq!(identify_agent("muse-code"), Some(Agent::Muse));
@@ -840,6 +970,7 @@ mod tests {
         assert_eq!(parse_agent_label("grok-build"), Some(Agent::Grok));
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(parse_agent_label("qwen-code"), Some(Agent::Qwen));
+        assert_eq!(parse_agent_label("letta-code"), Some(Agent::Letta));
         assert_eq!(parse_agent_label("maki"), Some(Agent::Maki));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
     }
@@ -884,6 +1015,7 @@ mod tests {
             (Agent::Kilo, "kilo"),
             (Agent::Qodercli, "qodercli"),
             (Agent::Qwen, "qwen"),
+            (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
         ];
@@ -915,6 +1047,7 @@ mod tests {
         for (source, label, agent) in [
             ("herdr:hermes", "hermes", Agent::Hermes),
             ("herdr:qwen", "qwen", Agent::Qwen),
+            ("herdr:letta", "letta", Agent::Letta),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
@@ -981,6 +1114,175 @@ mod tests {
                 Some((Agent::Qwen, "qwen".to_string()))
             );
         }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_interactive_letta_entrypoints() {
+        for argv in [
+            vec!["letta", "--backend", "local"],
+            vec![
+                "node",
+                "/home/user/project/node_modules/.bin/letta",
+                "--conversation",
+                "conversation-id",
+            ],
+            vec![
+                "node.exe",
+                r"C:\Users\user\AppData\Roaming\npm\node_modules\@letta-ai\letta-code\letta.js",
+                "--agent",
+                "agent-id",
+            ],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "MainThread", &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Letta, "letta".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_ignores_noninteractive_letta_processes() {
+        for args in [
+            vec!["--prompt", "hello"],
+            vec!["--output-format", "json"],
+            vec!["--input-format=stream-json"],
+            vec!["--ephemeral"],
+            vec!["--max-turns=1"],
+            vec!["server"],
+            vec!["--backend", "local", "server"],
+            vec!["fix this bug"],
+            vec!["agents", "list"],
+            vec!["version"],
+        ] {
+            let mut argv = vec!["node", "/home/user/project/node_modules/.bin/letta"];
+            argv.extend(args);
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "MainThread", &argv)],
+            };
+
+            assert_eq!(identify_agent_in_job(&job), None, "argv: {argv:?}");
+        }
+
+        let unrelated = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node",
+                &["node", "/tmp/server.js", "letta"],
+            )],
+        };
+        assert_eq!(identify_agent_in_job(&unrelated), None);
+
+        let source_checkout = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node",
+                &["node", "/home/user/src/letta-code/letta/build.js"],
+            )],
+        };
+        assert_eq!(identify_agent_in_job(&source_checkout), None);
+    }
+
+    #[test]
+    fn letta_manifest_detects_observed_working_and_idle_chrome() {
+        let empty = manifest::explain(Agent::Letta, "");
+        assert_eq!(empty.state, AgentState::Unknown);
+        assert_eq!(
+            empty.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("no_live_state_evidence")
+        );
+        for screen in [
+            "✻ Thinking…\nTutor is reflecting… (esc to interrupt · 2m 3s)",
+            "My Tutor is thinking about thinking… (esc to interrupt · 3s)",
+            "Tutor is calibrating… (interrupting)",
+            "• Run Compile the integration\n└ Running... (1s)",
+        ] {
+            assert_eq!(
+                detect_state(Some(Agent::Letta), screen),
+                AgentState::Working
+            );
+        }
+        assert_eq!(
+            detect_state(
+                Some(Agent::Letta),
+                "────────────────\n› Try \"debug this error\"\n────────────────\nTutor · No model selected"
+            ),
+            AgentState::Idle
+        );
+        assert_eq!(
+            detect_state(
+                Some(Agent::Letta),
+                "────────────────\n› explain this code\n────────────────\nTutor · No model selected"
+            ),
+            AgentState::Unknown
+        );
+        let selector = manifest::explain(
+            Agent::Letta,
+            "8 pinned agents available.\n\n> Resume Bob (pinned)\n  View all 8 profiles\n  Create a new agent (--new)\n\n  ↑↓ navigate · Enter select · Esc exit",
+        );
+        assert_eq!(selector.state, AgentState::Unknown);
+        assert_eq!(
+            selector.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("profile_selector")
+        );
+    }
+
+    #[test]
+    fn letta_manifest_uses_osc_activity_and_approval_signals() {
+        let idle_screen =
+            "────────────────\n› Try \"debug this error\"\n────────────────\nTutor · GPT-5.5";
+
+        for title in ["⠋ Tutor", "project | ⠏ Tutor"] {
+            let detection = detect_agent_with_osc(Some(Agent::Letta), idle_screen, title, "");
+            assert_eq!(detection.state, AgentState::Working);
+            assert!(detection.visible_working);
+        }
+
+        for title in [
+            "[ ! ] Action Required | Tutor",
+            "[ . ] Action Required | Tutor",
+        ] {
+            let detection = detect_agent_with_osc(Some(Agent::Letta), idle_screen, title, "");
+            assert_eq!(detection.state, AgentState::Blocked);
+            assert!(detection.visible_blocker);
+        }
+
+        let detection = detect_agent_with_osc(Some(Agent::Letta), idle_screen, "Tutor", "4;3;0");
+        assert_eq!(detection.state, AgentState::Blocked);
+        assert!(detection.visible_blocker);
+    }
+
+    #[test]
+    fn letta_manifest_detects_observed_command_approval() {
+        let approval = r#"✻ Thinking…
+
+────────────────────────────────────────────────────────────────
+Run this command?
+
+  $ rm -f /var/tmp/herdr-blocked-capture-never-created
+
+❯ 1. Yes
+  2. No, and tell Letta Code what to do differently
+
+Enter to select · Esc to cancel"#;
+        assert_eq!(
+            detect_state(Some(Agent::Letta), approval),
+            AgentState::Blocked
+        );
+        assert_eq!(
+            detect_state(
+                Some(Agent::Letta),
+                "The user asked: Run this command?\n›\n────\nTutor · No model selected"
+            ),
+            AgentState::Idle
+        );
     }
 
     #[test]

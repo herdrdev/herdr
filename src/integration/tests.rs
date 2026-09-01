@@ -3325,6 +3325,194 @@ fn install_qwen_errors_when_config_dir_missing() {
 }
 
 #[test]
+fn install_and_uninstall_letta_preserve_unrelated_settings_and_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let letta_dir = home.join(".letta");
+    fs::create_dir_all(&letta_dir).unwrap();
+    let settings_path = letta_dir.join("settings.json");
+    fs::write(
+        &settings_path,
+        r#"{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+    )
+    .unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let installed = install_letta().unwrap();
+    assert_eq!(
+        installed.hook_path,
+        letta_dir.join("hooks").join(LETTA_HOOK_INSTALL_NAME)
+    );
+    let first_install = fs::read_to_string(&settings_path).unwrap();
+    let settings: Value = serde_json::from_str(&first_install).unwrap();
+    let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["hooks"][0]["command"], "echo user");
+    assert!(entries[1].get("matcher").is_none());
+    assert_eq!(entries[1]["hooks"][0]["timeout"], LETTA_HOOK_TIMEOUT_MS);
+    assert_eq!(entries[1]["hooks"][0]["quiet"], true);
+    assert!(entries[1]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("session"));
+    assert_eq!(settings["theme"], "dark");
+
+    install_letta().unwrap();
+    assert_eq!(fs::read_to_string(&settings_path).unwrap(), first_install);
+
+    let result = uninstall_letta().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+    assert!(!installed.hook_path.exists());
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(settings["theme"], "dark");
+    let remaining = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["hooks"][0]["command"], "echo user");
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn letta_session_hook_is_silent_and_encodes_default_conversation() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".letta")).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+    let installed = install_letta().unwrap();
+
+    let capture = base.join("args.txt");
+    let fake_herdr = base.join("herdr");
+    fs::write(
+        &fake_herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\n",
+            capture.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&fake_herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_herdr, permissions).unwrap();
+
+    let mut child = Command::new("sh")
+        .arg(&installed.hook_path)
+        .arg("session")
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &fake_herdr)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            br#"{"event_type":"SessionStart","conversation_id":"default","agent_id":"agent-123","is_new_session":false}"#,
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let args = fs::read_to_string(capture).unwrap();
+    assert!(args.contains("report-agent-session w1:p2"));
+    assert!(args.contains("--source herdr:letta --agent letta"));
+    assert!(args.contains("--agent-session-id default:agent-123"));
+    assert!(args.contains("--session-start-source resume"));
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_letta_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let err = install_letta().unwrap_err().to_string();
+    assert!(err.contains("letta code config directory not found"));
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_letta_does_not_publish_hook_when_settings_are_invalid() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let letta_dir = home.join(".letta");
+    fs::create_dir_all(&letta_dir).unwrap();
+    fs::write(letta_dir.join("settings.json"), "not json").unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    assert!(install_letta().is_err());
+    assert!(!letta_dir
+        .join("hooks")
+        .join(LETTA_HOOK_INSTALL_NAME)
+        .exists());
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn letta_staged_install_can_restore_the_prior_file() {
+    let base = unique_base();
+    fs::create_dir_all(&base).unwrap();
+    let target = base.join("settings.json");
+    fs::write(&target, "old").unwrap();
+
+    let (staged, backup) = prepare_letta_install_file(&target, b"new", false, true).unwrap();
+    let had_original = publish_letta_install_file(&target, &staged, &backup).unwrap();
+    assert!(had_original);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+
+    rollback_letta_install_file(&target, &backup, had_original).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+    assert!(!backup.exists());
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_cursor_writes_hook_and_updates_hooks_json() {
     let _lock = integration_env_lock();
     let base = unique_base();

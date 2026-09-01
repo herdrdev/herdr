@@ -21,8 +21,8 @@ use super::config_edit::{
 };
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
-    opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir, mastracode_dir,
+    omp_extension_dir, opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -36,10 +36,10 @@ use super::types::{
     CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
     DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
     GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
-    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths,
-    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
-    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
-    QwenInstallPaths, QwenUninstallResult,
+    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, LettaInstallPaths,
+    LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
+    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
+    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
@@ -52,7 +52,8 @@ use super::{
     GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
     HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
+    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET, LETTA_HOOK_INSTALL_NAME,
+    LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
     OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
@@ -1002,6 +1003,207 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     })
 }
 
+fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other(format!("invalid install path: {}", path.display())))?;
+    let mut artifact_name = file_name.to_os_string();
+    artifact_name.push(format!(".herdr-install-{}-{role}", std::process::id()));
+    Ok(path.with_file_name(artifact_name))
+}
+
+pub(super) fn prepare_letta_install_file(
+    target: &Path,
+    contents: &[u8],
+    executable: bool,
+    preserve_permissions: bool,
+) -> io::Result<(PathBuf, PathBuf)> {
+    if target.try_exists()? && !target.is_file() {
+        return Err(io::Error::other(format!(
+            "install target is not a file: {}",
+            target.display()
+        )));
+    }
+
+    let staged = letta_install_artifact_path(target, "staged")?;
+    let backup = letta_install_artifact_path(target, "backup")?;
+    if staged.try_exists()? || backup.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("stale install artifact exists for {}", target.display()),
+        ));
+    }
+
+    let prepare_result = (|| {
+        fs::write(&staged, contents)?;
+        if preserve_permissions && target.is_file() {
+            fs::set_permissions(&staged, fs::metadata(target)?.permissions())?;
+        }
+        if executable {
+            make_executable(&staged)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = prepare_result {
+        let _ = remove_file_if_exists(&staged);
+        return Err(err);
+    }
+
+    Ok((staged, backup))
+}
+
+fn combine_letta_install_errors(primary: io::Error, rollback: io::Result<()>) -> io::Error {
+    match rollback {
+        Ok(()) => primary,
+        Err(rollback_err) => io::Error::new(
+            primary.kind(),
+            format!("{primary}; rollback failed: {rollback_err}"),
+        ),
+    }
+}
+
+pub(super) fn publish_letta_install_file(
+    target: &Path,
+    staged: &Path,
+    backup: &Path,
+) -> io::Result<bool> {
+    let had_original = target.try_exists()?;
+    if had_original {
+        fs::rename(target, backup)?;
+    }
+
+    if let Err(err) = fs::rename(staged, target) {
+        let rollback = if had_original {
+            fs::rename(backup, target)
+        } else {
+            Ok(())
+        };
+        return Err(combine_letta_install_errors(err, rollback));
+    }
+
+    Ok(had_original)
+}
+
+pub(super) fn rollback_letta_install_file(
+    target: &Path,
+    backup: &Path,
+    had_original: bool,
+) -> io::Result<()> {
+    remove_file_if_exists(target)?;
+    if had_original {
+        fs::rename(backup, target)?;
+    }
+    Ok(())
+}
+
+fn cleanup_letta_install_artifact(path: &Path) {
+    if let Err(err) = remove_file_if_exists(path) {
+        tracing::warn!(path = %path.display(), %err, "failed to remove Letta install artifact");
+    }
+}
+
+fn ensure_letta_session_hook(hooks: &mut Map<String, Value>, command: String) -> io::Result<()> {
+    let entries = hooks
+        .entry("SessionStart".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| io::Error::other("hook entries for SessionStart must be an array"))?;
+
+    entries.push(json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": LETTA_HOOK_TIMEOUT_MS,
+            "quiet": true,
+        }],
+    }));
+    Ok(())
+}
+
+pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
+    let dir = letta_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "letta code config directory not found at {}. install letta code first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(LETTA_HOOK_INSTALL_NAME);
+
+    let settings_path = dir.join("settings.json");
+    let mut settings = if settings_path.is_file() {
+        serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?).map_err(|err| {
+            io::Error::other(format!(
+                "failed to parse {}: {err}",
+                settings_path.display()
+            ))
+        })?
+    } else {
+        json!({})
+    };
+
+    let hooks = ensure_hooks_object(
+        &mut settings,
+        &settings_path,
+        "letta settings",
+        "letta settings hooks",
+    )?;
+    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+    ensure_letta_session_hook(hooks, hook_command(&hook_path, Some("session")))?;
+
+    let settings_contents = serde_json::to_string_pretty(&settings)?;
+    let (hook_staged, hook_backup) =
+        prepare_letta_install_file(&hook_path, LETTA_HOOK_ASSET.as_bytes(), true, false)?;
+    let (settings_staged, settings_backup) =
+        match prepare_letta_install_file(&settings_path, settings_contents.as_bytes(), false, true)
+        {
+            Ok(paths) => paths,
+            Err(err) => {
+                cleanup_letta_install_artifact(&hook_staged);
+                return Err(err);
+            }
+        };
+
+    let hook_had_original = match publish_letta_install_file(&hook_path, &hook_staged, &hook_backup)
+    {
+        Ok(had_original) => had_original,
+        Err(err) => {
+            cleanup_letta_install_artifact(&hook_staged);
+            cleanup_letta_install_artifact(&settings_staged);
+            return Err(err);
+        }
+    };
+
+    let settings_had_original =
+        match publish_letta_install_file(&settings_path, &settings_staged, &settings_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_letta_install_errors(
+                    err,
+                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+                );
+                cleanup_letta_install_artifact(&settings_staged);
+                return Err(err);
+            }
+        };
+
+    if hook_had_original {
+        cleanup_letta_install_artifact(&hook_backup);
+    }
+    if settings_had_original {
+        cleanup_letta_install_artifact(&settings_backup);
+    }
+
+    Ok(LettaInstallPaths {
+        hook_path,
+        settings_path,
+    })
+}
+
 pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
     let dir = cursor_dir()?;
     if !dir.is_dir() {
@@ -1137,6 +1339,46 @@ pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
     let removed_hook_file = remove_file_if_exists(&hook_path)?;
 
     Ok(QwenUninstallResult {
+        hook_path,
+        settings_path,
+        removed_hook_file,
+        updated_settings,
+    })
+}
+
+pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
+    let dir = letta_dir()?;
+    let hook_path = dir.join("hooks").join(LETTA_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
+    let mut updated_settings = false;
+
+    if settings_path.is_file() {
+        let mut settings = serde_json::from_str::<Value>(&fs::read_to_string(&settings_path)?)
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse {}: {err}",
+                    settings_path.display()
+                ))
+            })?;
+
+        if let Some(hooks) = hooks_object_if_present(
+            &mut settings,
+            &settings_path,
+            "letta settings",
+            "letta settings hooks",
+        )? {
+            updated_settings |=
+                remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
+        }
+
+        if updated_settings {
+            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+        }
+    }
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+
+    Ok(LettaUninstallResult {
         hook_path,
         settings_path,
         removed_hook_file,

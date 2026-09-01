@@ -57,6 +57,10 @@ id = "kiro"
 path = "kiro.toml"
 
 [[agents]]
+id = "letta"
+path = "letta.toml"
+
+[[agents]]
 id = "maki"
 path = "maki.toml"
 

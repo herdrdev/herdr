@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added Letta Code detection, optional native conversation restore, and `agent start --kind letta` support. (#3106, thanks @just-cameron)
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
 
 ### Fixed

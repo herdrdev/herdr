@@ -1,0 +1,95 @@
+id = "letta"
+version = "2026.08.24.1"
+min_engine_version = 3
+updated_at = "2026-08-24T00:00:00Z"
+aliases = ["letta-code", "letta code"]
+
+# Letta keeps completed tool rows and spinners in the transcript. A standalone
+# screen spinner is not working evidence. Prefer its live OSC title/progress
+# signals, with visible status chrome and running tool rows as fallbacks.
+[[rules]]
+id = "osc_progress_blocked"
+state = "blocked"
+priority = 1400
+region = "osc_progress"
+visible_blocker = true
+regex = ['^4;3(?:;|$)']
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1300
+region = "osc_title"
+visible_blocker = true
+regex = ['^\[ [!.] \] Action Required(?: \| |$)']
+
+[[rules]]
+id = "command_approval"
+state = "blocked"
+priority = 1200
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+contains = ["Run this command?", "Enter to select · Esc to cancel"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 900
+region = "osc_title"
+visible_working = true
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "active_status"
+state = "working"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*(?:\S+\s+)+is(?: \S+)*… \((?:esc to interrupt(?: · .*)?|interrupting)\)\s*$']
+
+[[rules]]
+id = "running_tool"
+state = "working"
+priority = 800
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*(?:└\s*)?Running\.\.\.\s*(?:\(.*\))?$']
+
+[[rules]]
+id = "profile_selector"
+state = "unknown"
+priority = 700
+region = "bottom_non_empty_lines(12)"
+contains = ["Create a new agent (--new)", "Enter select · Esc exit"]
+
+[[rules]]
+id = "composer_input"
+state = "unknown"
+priority = 150
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*›\s+\S.*$']
+not = [
+  { line_regex = ['^\s*›\s+Try\s+"'] },
+]
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+any = [
+  { line_regex = ['^\s*›\s*$'] },
+  { line_regex = ['^\s*›\s+Try\s+"'] },
+]
+not = [
+  { line_regex = ['^\s*(?:\S+\s+)+is(?: \S+)*… \((?:esc to interrupt(?: · .*)?|interrupting)\)\s*$'] },
+  { line_regex = ['^\s*(?:└\s*)?Running\.\.\.\s*(?:\(.*\))?$'] },
+]
+
+[[rules]]
+id = "no_live_state_evidence"
+state = "unknown"
+priority = 0
+region = "whole_recent"
+regex = ['(?s)^.*$']

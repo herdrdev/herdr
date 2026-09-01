@@ -76,6 +76,12 @@ pub(crate) struct QwenInstallPaths {
 }
 
 #[derive(Debug)]
+pub(crate) struct LettaInstallPaths {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+}
+
+#[derive(Debug)]
 pub(crate) struct CursorInstallPaths {
     pub hook_path: PathBuf,
     pub hooks_path: PathBuf,
@@ -127,6 +133,14 @@ pub(crate) struct QodercliUninstallResult {
 
 #[derive(Debug)]
 pub(crate) struct QwenUninstallResult {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_settings: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct LettaUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
     pub removed_hook_file: bool,
