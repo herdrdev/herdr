@@ -4,6 +4,7 @@
 
 ### Added
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
+- Added configurable session navigator movement bindings under `keys.navigate_navigator_up` and `keys.navigate_navigator_down`, defaulting to `ctrl+p` and `ctrl+n`.
 
 ### Fixed
 - Claude Code integration hooks now ignore Cursor CLI's Claude-compatible session events, preventing Cursor sessions from being stored as resumable Claude sessions. (#2832)
