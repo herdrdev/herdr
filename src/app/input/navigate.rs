@@ -112,10 +112,9 @@ impl App {
     }
 
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
-        let key = raw_key.as_key_event();
         self.state.update_dismissed = true;
 
-        if key.code == KeyCode::Esc || self.state.is_prefix_key(&raw_key) {
+        if raw_key.code == KeyCode::Esc || self.state.is_prefix_key(&raw_key) {
             leave_navigate_mode(&mut self.state);
             return;
         }
@@ -164,6 +163,11 @@ impl App {
         if let Some(action) = navigate_mode_indexed_action_for_key(&self.state, &raw_key) {
             self.execute_tui_navigate_action(action, ActionContext::Navigate);
             self.selection_autoscroll_deadline = None;
+            return;
+        }
+
+        if is_ctrl_bracket_key(&raw_key) {
+            leave_navigate_mode(&mut self.state);
         }
     }
 
@@ -1392,13 +1396,18 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
         return;
     }
 
-    if let Some(action) = navigate_mode_action_for_key(state, terminal_key) {
+    if let Some(action) = navigate_mode_action_for_key(state, terminal_key.clone()) {
         execute_navigate_action_in_context(
             state,
             &mut terminal_runtimes,
             action,
             ActionContext::Navigate,
         );
+        return;
+    }
+
+    if is_ctrl_bracket_key(&terminal_key) {
+        leave_navigate_mode(state);
     }
 }
 
@@ -1950,6 +1959,20 @@ fn move_active_tab_relative(state: &mut AppState, delta: isize) {
     if let Some(insert) = tab_move_insert_index(ws.tabs.len(), source, delta) {
         ws.move_tab(source, insert);
     }
+}
+
+/// True for Ctrl+[, the terminal-level equivalent of Esc.
+///
+/// A legacy terminal sends Ctrl+[ as 0x1b, the same byte as Esc, so it already
+/// arrives as `KeyCode::Esc`. Under the kitty keyboard protocol, which Herdr
+/// negotiates, the modified key is reported on its own and reaches us as
+/// `Char('[')` with CONTROL. Ctrl+Shift+[ stays distinct because it carries
+/// SHIFT.
+///
+/// Callers check this only after navigate-mode keybinding dispatch, so a
+/// configured Ctrl+[ binding keeps working and this stays a fallback cancel.
+fn is_ctrl_bracket_key(key: &TerminalKey) -> bool {
+    key.code == KeyCode::Char('[') && key.modifiers == crossterm::event::KeyModifiers::CONTROL
 }
 
 fn leave_navigate_mode(state: &mut AppState) {
@@ -3271,6 +3294,46 @@ command = "printf literal > '{}'"
         app.handle_navigate_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()));
 
         assert_eq!(app.state.selected, 1);
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_ctrl_bracket_leaves_like_esc() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+
+        app.state.mode = Mode::Navigate;
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('['), KeyModifiers::CONTROL));
+        assert_eq!(app.state.mode, Mode::Terminal);
+
+        app.state.mode = Mode::Navigate;
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()));
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn app_navigate_mode_configured_ctrl_bracket_binding_wins_over_cancel() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        let config: Config =
+            toml::from_str("[keys]\nnavigate_workspace_down = \"ctrl+[\"\n").unwrap();
+        app.state.keybinds = config.keybinds();
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('['), KeyModifiers::CONTROL));
+
+        assert_eq!(app.state.selected, 1);
+        assert_eq!(app.state.mode, Mode::Navigate);
+    }
+
+    #[test]
+    fn app_navigate_mode_ctrl_shift_bracket_stays_open() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Navigate;
+
+        app.handle_navigate_key(TerminalKey::new(
+            KeyCode::Char('['),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+
         assert_eq!(app.state.mode, Mode::Navigate);
     }
 
