@@ -55,7 +55,10 @@ pub struct WorktreeRemoveResult {
 #[derive(Debug)]
 pub enum AppEvent {
     /// A pane's child process exited.
-    PaneDied { pane_id: PaneId },
+    PaneDied {
+        pane_id: PaneId,
+        checkpoint_session: bool,
+    },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,

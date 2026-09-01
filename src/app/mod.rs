@@ -141,6 +141,7 @@ pub struct App {
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
+    pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     tab_bar_status_generation: u64,
     tab_bar_datetimes: Vec<tab_bar_status::TabBarDatetimeRuntime>,
@@ -793,6 +794,7 @@ impl App {
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
+            pane_exit_checkpoint_pending: false,
             detached_process_children: Vec::new(),
             tab_bar_status_generation: 0,
             tab_bar_datetimes: Vec::new(),
@@ -1212,7 +1214,7 @@ impl App {
 
         // Save session on exit (skip in --no-session mode)
         if !self.no_session {
-            self.save_session_now();
+            self.save_session_on_shutdown();
         }
 
         Ok(())
@@ -5112,6 +5114,108 @@ mod tests {
         releaser.join().unwrap();
         done_rx.try_recv().unwrap();
         assert!(app.session_save_thread.is_none());
+    }
+
+    #[test]
+    fn signaled_pane_exits_cannot_overwrite_the_last_good_session_on_shutdown() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let config_home = unique_temp_path("signaled-pane-session-checkpoint");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+
+        let mut app = test_app();
+        app.no_session = false;
+        let mut workspace = Workspace::test_new("preserved");
+        let first_pane = workspace.tabs[0].root_pane;
+        let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id: first_pane,
+            checkpoint_session: true,
+        });
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id: second_pane,
+            checkpoint_session: true,
+        });
+        assert!(app.state.workspaces.is_empty());
+
+        app.save_session_on_shutdown();
+
+        let snapshot = crate::persist::load().expect("checkpointed session should survive");
+        assert_eq!(snapshot.workspaces.len(), 1);
+        assert_eq!(snapshot.workspaces[0].tabs[0].panes.len(), 2);
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let config_home = unique_temp_path("signaled-pane-autosave");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+
+        let mut app = test_app();
+        app.no_session = false;
+        let workspace = Workspace::test_new("closed");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            checkpoint_session: true,
+        });
+        assert!(crate::persist::load().is_some());
+
+        app.start_background_session_save();
+        if let Some(thread) = app.session_save_thread.take() {
+            thread.join().unwrap();
+        }
+        app.save_session_on_shutdown();
+
+        assert!(crate::persist::load().is_none());
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn durable_mutation_after_pane_exit_checkpoint_wins_on_shutdown() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let config_home = unique_temp_path("pane-exit-newer-session-state");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+
+        let mut app = test_app();
+        app.no_session = false;
+        let workspace = Workspace::test_new("old");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            checkpoint_session: true,
+        });
+        app.state.workspaces = vec![Workspace::test_new("newer")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        app.state.mark_session_dirty();
+        app.save_session_on_shutdown();
+
+        let snapshot = crate::persist::load().expect("newer session should be saved");
+        assert_eq!(snapshot.workspaces.len(), 1);
+        assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("newer"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(config_home);
     }
 
     #[test]
