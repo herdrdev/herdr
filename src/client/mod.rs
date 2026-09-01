@@ -731,8 +731,13 @@ async fn run_client_loop(
     let reported_cell_size = Arc::new(AtomicU64::new(0));
     let host_sgr_pixels_active = Arc::new(AtomicBool::new(false));
 
-    // Channel for events from the stdin, resize, and server reader threads.
+    // Channel for events from the resize and server reader threads.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    // Keep Windows console draining independent of server-frame backpressure.
+    #[cfg(windows)]
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    #[cfg(unix)]
+    let stdin_tx = event_tx.clone();
 
     let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
 
@@ -744,7 +749,6 @@ async fn run_client_loop(
     let will_query_host_cell_size = state.attach_escape.is_none()
         && host_cell_size_query_required(state.kitty_graphics_enabled);
     let stdin_quit = should_quit.clone();
-    let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
     #[cfg(unix)]
@@ -835,6 +839,8 @@ async fn run_client_loop(
 
     // Main event loop.
     let mut client_timer = timer::ClientLoopTimer::new();
+    #[cfg(windows)]
+    let mut stdin_open = true;
     while !should_quit.load(Ordering::Acquire) {
         let timer_delay = state
             .shell
@@ -843,6 +849,19 @@ async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        #[cfg(windows)]
+        let event = tokio::select! {
+            _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
+            ev = stdin_rx.recv(), if stdin_open => match ev {
+                Some(event) => event,
+                None => {
+                    stdin_open = false;
+                    ClientLoopEvent::Timer
+                }
+            },
+            ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+        };
+        #[cfg(unix)]
         let event = tokio::select! {
             biased;
             _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,

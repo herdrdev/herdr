@@ -1,4 +1,6 @@
 #[cfg(windows)]
+use std::collections::VecDeque;
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::Arc;
@@ -19,23 +21,21 @@ pub(super) fn raw_console_reader_loop(
 ) {
     let mut mapper = WindowsInputMapper::default();
     let mut pump = WindowsInputPump::default();
+    let mut handoff = WindowsInputHandoff::default();
 
     while !should_quit.load(Ordering::Acquire) {
         match windows_console_input_items(handle, &mut mapper) {
             WindowsInputItems::Items(items) => {
-                if !process_platform_input_items(items, &mut pump, &event_tx) {
-                    return;
-                }
+                process_platform_input_items(items, &mut pump, &mut handoff);
             }
             WindowsInputItems::Idle => {
-                if !process_platform_input_items(mapper.idle(), &mut pump, &event_tx) {
-                    return;
-                }
-                if !send_windows_client_input_events(pump.idle(), &event_tx) {
-                    return;
-                }
+                process_platform_input_items(mapper.idle(), &mut pump, &mut handoff);
+                handoff.push(pump.idle());
             }
             WindowsInputItems::Closed => return,
+        }
+        if !handoff.try_flush(&event_tx) {
+            return;
         }
     }
 }
@@ -44,14 +44,11 @@ pub(super) fn raw_console_reader_loop(
 fn process_platform_input_items(
     items: Vec<PlatformInputItem>,
     pump: &mut WindowsInputPump,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
-) -> bool {
+    handoff: &mut WindowsInputHandoff,
+) {
     for item in items {
-        if !send_windows_client_input_events(pump.process(item), event_tx) {
-            return false;
-        }
+        handoff.push(pump.process(item));
     }
-    true
 }
 
 #[cfg(windows)]
@@ -82,6 +79,106 @@ enum WindowsInputItems {
     Items(Vec<PlatformInputItem>),
     Idle,
     Closed,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct WindowsInputHandoff {
+    pending: VecDeque<Vec<crate::protocol::ClientInputEvent>>,
+    backpressured: bool,
+}
+
+#[cfg(windows)]
+impl WindowsInputHandoff {
+    fn push(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        if windows_input_trace_enabled() {
+            tracing::info!(?events, "windows input trace: client input events");
+        }
+        if self.backpressured {
+            self.push_backpressured(events);
+        } else {
+            self.pending.push_back(events);
+        }
+    }
+
+    fn try_flush(&mut self, event_tx: &mpsc::Sender<ClientLoopEvent>) -> bool {
+        // Keep draining the console while the client loop is busy. Blocking here
+        // lets the OpenSSH/ConPTY input path lose pieces of raw VT reports.
+        loop {
+            if self.pending.is_empty() {
+                self.backpressured = false;
+                return true;
+            }
+            match event_tx.try_reserve() {
+                Ok(permit) => {
+                    let Some(events) = self.pending.pop_front() else {
+                        continue;
+                    };
+                    permit.send(ClientLoopEvent::StdinEvents(events));
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    if !self.backpressured {
+                        self.backpressured = true;
+                        let pending = std::mem::take(&mut self.pending);
+                        for events in pending {
+                            self.push_backpressured(events);
+                        }
+                    }
+                    return true;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return false,
+            }
+        }
+    }
+
+    fn push_backpressured(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
+        if let Some(previous) = self.pending.back_mut() {
+            if let ([previous_event], [next_event]) = (previous.as_slice(), events.as_slice()) {
+                if windows_mouse_motion_can_replace(previous_event, next_event) {
+                    *previous = events;
+                    return;
+                }
+            }
+        }
+        self.pending.push_back(events);
+    }
+}
+
+#[cfg(windows)]
+fn windows_mouse_motion_can_replace(
+    previous: &crate::protocol::ClientInputEvent,
+    next: &crate::protocol::ClientInputEvent,
+) -> bool {
+    use crate::protocol::{ClientInputEvent, ClientMouseKind};
+
+    let (
+        ClientInputEvent::Mouse {
+            kind: previous_kind,
+            modifiers: previous_modifiers,
+            ..
+        },
+        ClientInputEvent::Mouse {
+            kind: next_kind,
+            modifiers: next_modifiers,
+            ..
+        },
+    ) = (previous, next)
+    else {
+        return false;
+    };
+    if previous_modifiers != next_modifiers {
+        return false;
+    }
+    matches!(
+        (previous_kind, next_kind),
+        (ClientMouseKind::Moved, ClientMouseKind::Moved)
+    ) || matches!(
+        (previous_kind, next_kind),
+        (ClientMouseKind::Drag(previous), ClientMouseKind::Drag(next)) if previous == next
+    )
 }
 
 #[cfg(windows)]
@@ -1116,22 +1213,6 @@ fn windows_unicode_control_to_key_code(unicode: u16) -> Option<crate::protocol::
     })
 }
 
-#[cfg(windows)]
-fn send_windows_client_input_events(
-    events: Vec<crate::protocol::ClientInputEvent>,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
-) -> bool {
-    if events.is_empty() {
-        return true;
-    }
-    if windows_input_trace_enabled() {
-        tracing::info!(?events, "windows input trace: client input events");
-    }
-    event_tx
-        .blocking_send(ClientLoopEvent::StdinEvents(events))
-        .is_ok()
-}
-
 #[cfg(any(windows, test))]
 fn windows_input_trace_enabled() -> bool {
     std::env::var_os("HERDR_WINDOWS_INPUT_TRACE").is_some()
@@ -1347,6 +1428,100 @@ mod tests {
         .chars()
         .map(key_char)
         .collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_input_handoff_keeps_input_while_the_client_queue_is_full() {
+        use crate::protocol::{
+            ClientInputEvent, ClientKeyCode, ClientKeyKind, ClientKeySource, ClientMouseButton,
+            ClientMouseKind,
+        };
+
+        let mouse = |kind, column| ClientInputEvent::Mouse {
+            kind,
+            column,
+            row: 4,
+            modifiers: 0,
+        };
+        let down = mouse(ClientMouseKind::Down(ClientMouseButton::Left), 1);
+        let last_move = mouse(ClientMouseKind::Moved, 12);
+        let last_drag = mouse(ClientMouseKind::Drag(ClientMouseButton::Left), 9);
+        let scroll = mouse(ClientMouseKind::ScrollDown, 9);
+        let up = mouse(ClientMouseKind::Up(ClientMouseButton::Left), 9);
+        let shortcut = |kind| ClientInputEvent::Key {
+            code: ClientKeyCode::Char('v'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
+            kind,
+            repeat_count: 1,
+            generated_text: None,
+            source: ClientKeySource::Synthesized,
+        };
+        let shortcut_press = shortcut(ClientKeyKind::Press);
+        let shortcut_release = shortcut(ClientKeyKind::Release);
+        let text = ClientInputEvent::TextCommit("5;37;15M".into());
+
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        event_tx.try_send(ClientLoopEvent::Timer).unwrap();
+        let mut handoff = WindowsInputHandoff::default();
+        for event in [
+            mouse(ClientMouseKind::Moved, 10),
+            last_move.clone(),
+            down.clone(),
+            mouse(ClientMouseKind::Drag(ClientMouseButton::Left), 2),
+            mouse(ClientMouseKind::Drag(ClientMouseButton::Left), 5),
+            last_drag.clone(),
+            scroll.clone(),
+            up.clone(),
+            shortcut_press.clone(),
+            shortcut_release.clone(),
+            text.clone(),
+        ] {
+            handoff.push(vec![event]);
+        }
+
+        assert!(handoff.try_flush(&event_tx));
+        let expected = vec![
+            last_move,
+            down,
+            last_drag,
+            scroll,
+            up,
+            shortcut_press,
+            shortcut_release,
+            text,
+        ];
+        assert_eq!(
+            handoff.pending,
+            expected
+                .iter()
+                .cloned()
+                .map(|event| vec![event])
+                .collect::<VecDeque<_>>()
+        );
+        assert!(matches!(event_rx.try_recv(), Ok(ClientLoopEvent::Timer)));
+
+        let mut delivered = Vec::new();
+        let mut shortcut_preserved = false;
+        while !handoff.pending.is_empty() {
+            assert!(handoff.try_flush(&event_tx));
+            let Ok(ClientLoopEvent::StdinEvents(events)) = event_rx.try_recv() else {
+                panic!("expected retained Windows input events");
+            };
+            assert_eq!(events.len(), 1, "logical input batches must stay separate");
+            shortcut_preserved |=
+                crate::client::clipboard_images::should_bridge_clipboard_image_events(
+                    &events,
+                    true,
+                    Some((
+                        crossterm::event::KeyCode::Char('v'),
+                        crossterm::event::KeyModifiers::CONTROL,
+                    )),
+                );
+            delivered.extend(events);
+        }
+        assert_eq!(delivered, expected);
+        assert!(shortcut_preserved);
     }
 
     #[test]
