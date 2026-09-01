@@ -185,7 +185,7 @@ struct WindowsInputMapper {
 struct WindowsInputPump {
     framer: crate::raw_input::RawInputFramer,
     paste_from_win32_key_records: bool,
-    pending_physical_escape: Option<crate::protocol::ClientInputEvent>,
+    pending_physical_escape: Option<(crate::protocol::ClientInputEvent, bool)>,
 }
 
 impl Default for WindowsInputPump {
@@ -230,17 +230,31 @@ enum WindowsWin32InputModeItem {
 impl WindowsInputPump {
     fn process(&mut self, item: PlatformInputItem) -> Vec<crate::protocol::ClientInputEvent> {
         let mut events = Vec::new();
-        if let Some(escape) = self.pending_physical_escape.take() {
-            if item.starts_raw_csi_tail() {
-                let raw_events = self.framer.push(b"\x1b");
+        if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
+            let raw_bytes = item.raw_bytes();
+            let continues_sgr = if open_bracket {
+                raw_bytes.is_some_and(|bytes| bytes.starts_with(b"<"))
+            } else {
+                raw_bytes.is_some_and(|bytes| bytes.starts_with(b"[<"))
+            };
+            if continues_sgr {
+                let prefix: &[u8] = if open_bracket { b"\x1b[" } else { b"\x1b" };
+                let raw_events = self.framer.push(prefix);
                 events.extend(self.process_raw_events(raw_events));
+            } else if !open_bracket && raw_bytes == Some(b"[") {
+                self.pending_physical_escape = Some((escape, true));
+                return events;
             } else {
                 events.push(escape);
+                if open_bracket {
+                    let raw_events = self.framer.push(b"[");
+                    events.extend(self.process_raw_events(raw_events));
+                }
             }
         }
         if let Some(escape) = item.physical_escape_press() {
             if !self.framer.has_pending_bracketed_paste() {
-                self.pending_physical_escape = Some(escape);
+                self.pending_physical_escape = Some((escape, false));
                 return events;
             }
         }
@@ -303,11 +317,14 @@ impl WindowsInputPump {
     }
 
     fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
-        let mut events = self
-            .pending_physical_escape
-            .take()
-            .into_iter()
-            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
+            events.push(escape);
+            if open_bracket {
+                let raw_events = self.framer.push(b"[");
+                events.extend(self.process_raw_events(raw_events));
+            }
+        }
         let raw_events = self.framer.flush_timeout();
         events.extend(self.process_raw_events(raw_events));
         events
@@ -337,13 +354,13 @@ impl WindowsInputPump {
 }
 
 impl PlatformInputItem {
-    fn starts_raw_csi_tail(&self) -> bool {
+    fn raw_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Bytes(bytes)
             | Self::PasteAwareBytes {
                 raw_bytes: bytes, ..
-            } => bytes.starts_with(b"["),
-            Self::Semantic(_) | Self::PasteAwareKey { .. } => false,
+            } => Some(bytes),
+            Self::Semantic(_) | Self::PasteAwareKey { .. } => None,
         }
     }
 
@@ -2393,6 +2410,32 @@ mod tests {
                     modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn vti_physical_escape_and_open_bracket_remain_separate_keys() {
+        let escape = key_vk_with_scan_unicode(0x1b, 0x01, '\x1b', 0);
+        let mut translator = WindowsInputTranslator::default();
+        assert!(translator.translate(escape).is_empty());
+        assert!(translator.translate(key_char('[')).is_empty());
+        let events = translator.idle();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    crate::protocol::ClientInputEvent::Key {
+                        code: crate::protocol::ClientKeyCode::Esc,
+                        source: crate::protocol::ClientKeySource::WindowsConsole { .. },
+                        ..
+                    },
+                    crate::protocol::ClientInputEvent::Key {
+                        code: crate::protocol::ClientKeyCode::Char('['),
+                        ..
+                    }
+                ]
+            ),
+            "unexpected input events: {events:?}"
         );
     }
 
