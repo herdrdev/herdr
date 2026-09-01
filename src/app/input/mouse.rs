@@ -391,7 +391,7 @@ impl AppState {
 
                 if matches!(
                     self.mode,
-                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane
+                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::EditPaneMark
                 ) {
                     let action = self
                         .rename_modal_inner()
@@ -1125,6 +1125,11 @@ impl AppState {
                         .and_then(|pane| self.terminals.get(&pane.attached_terminal_id))
                         .and_then(|terminal| terminal.manual_label.as_ref())
                         .is_some();
+                    let has_mark = pane_state
+                        .and_then(|pane| self.terminals.get(&pane.attached_terminal_id))
+                        .is_some_and(|terminal| {
+                            terminal.metadata_tokens.values().contains_key("mark")
+                        });
                     let right_click_passthrough =
                         pane_state.is_some_and(|pane| pane.right_click_passthrough);
                     self.context_menu = Some(ContextMenuState {
@@ -1134,6 +1139,7 @@ impl AppState {
                             pane_id: info.id,
                             source_pane_id,
                             has_manual_label,
+                            has_mark,
                             right_click_passthrough,
                         },
                         x: mouse.column,
@@ -3660,19 +3666,27 @@ mod tests {
         app.state.selected = 0;
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let runtime_count = app.terminal_runtimes.len();
-        app.state.context_menu = Some(ContextMenuState {
+        let mut initial_menu = ContextMenuState {
             kind: ContextMenuKind::Pane {
                 ws_idx: 0,
                 tab_idx: 0,
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                has_mark: false,
                 right_click_passthrough: false,
             },
             x: 2,
             y: 2,
-            list: MenuListState::new(1),
-        });
+            list: MenuListState::new(0),
+        };
+        let split_idx = initial_menu
+            .items()
+            .iter()
+            .position(|item| *item == "Split right")
+            .unwrap();
+        initial_menu.list = MenuListState::new(split_idx);
+        app.state.context_menu = Some(initial_menu);
         app.state.mode = Mode::ContextMenu;
 
         handle_context_menu_key(

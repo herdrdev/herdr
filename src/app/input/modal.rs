@@ -418,11 +418,33 @@ pub(super) fn open_rename_pane(state: &mut AppState, pane_id: crate::layout::Pan
     state.requested_new_tab_name = None;
     state.pending_workspace_create_cwd = None;
     state.rename_pane_target = Some(pane_id);
+    state.mark_pane_target = None;
     state.name_input = terminal
         .and_then(|t| t.manual_label.clone())
         .unwrap_or_default();
     state.name_input_replace_on_type = terminal.and_then(|t| t.manual_label.as_ref()).is_none();
     state.mode = Mode::RenamePane;
+}
+
+pub(super) fn open_edit_mark(state: &mut AppState, pane_id: crate::layout::PaneId) {
+    let Some(ws) = state.active.and_then(|i| state.workspaces.get(i)) else {
+        return;
+    };
+    let Some(pane) = ws.pane_state(pane_id) else {
+        return;
+    };
+    let terminal = state.terminals.get(&pane.attached_terminal_id);
+    let current = terminal
+        .and_then(|t| t.metadata_tokens.values().get("mark").cloned())
+        .unwrap_or_default();
+    state.creating_new_tab = false;
+    state.requested_new_tab_name = None;
+    state.pending_workspace_create_cwd = None;
+    state.rename_pane_target = None;
+    state.mark_pane_target = Some(pane_id);
+    state.name_input = current;
+    state.name_input_replace_on_type = state.name_input.is_empty();
+    state.mode = Mode::EditPaneMark;
 }
 
 fn workspace_create_label(input: &str, suggested_name: &str) -> Option<String> {
@@ -578,11 +600,44 @@ pub(super) fn apply_rename_action(state: &mut AppState, action: ModalAction) {
                         }
                     }
                 }
+                Mode::EditPaneMark => {
+                    if let Some(pane_id) = state.mark_pane_target {
+                        let ws_idx = state
+                            .workspaces
+                            .iter()
+                            .position(|ws| ws.pane_state(pane_id).is_some());
+                        if let Some(ws_idx) = ws_idx {
+                            if let Some(ws) = state.workspaces.get(ws_idx) {
+                                if let Some(pane) = ws.pane_state(pane_id) {
+                                    let terminal_id = pane.attached_terminal_id.clone();
+                                    if let Some(terminal) = state.terminals.get_mut(&terminal_id) {
+                                        let trimmed = new_name.trim().to_string();
+                                        let mut patch = std::collections::HashMap::new();
+                                        if trimmed.is_empty() {
+                                            patch.insert("mark".to_string(), None);
+                                        } else {
+                                            patch.insert("mark".to_string(), Some(trimmed));
+                                        }
+                                        if terminal.metadata_tokens.patch(
+                                            patch,
+                                            None,
+                                            std::time::Instant::now(),
+                                        ) {
+                                            terminal.revision = terminal.revision.saturating_add(1);
+                                            state.mark_session_dirty();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             state.creating_new_tab = false;
             state.pending_workspace_create_cwd = None;
             state.rename_pane_target = None;
+            state.mark_pane_target = None;
             state.name_input.clear();
             state.name_input_replace_on_type = false;
             leave_modal(state);
@@ -596,6 +651,7 @@ pub(super) fn apply_rename_action(state: &mut AppState, action: ModalAction) {
             state.requested_new_tab_name = None;
             state.pending_workspace_create_cwd = None;
             state.rename_pane_target = None;
+            state.mark_pane_target = None;
             state.name_input.clear();
             state.name_input_replace_on_type = false;
             leave_modal(state);
@@ -850,6 +906,33 @@ pub(super) fn apply_context_menu_action(
         (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
             open_rename_pane(state, pane_id);
         }
+        (ContextMenuKind::Pane { pane_id, .. }, Some("Edit mark")) => {
+            open_edit_mark(state, pane_id);
+        }
+        (
+            ContextMenuKind::Pane {
+                ws_idx, pane_id, ..
+            },
+            Some("Clear mark"),
+        ) => {
+            if let Some(ws) = state.workspaces.get(ws_idx) {
+                if let Some(pane) = ws.pane_state(pane_id) {
+                    let terminal_id = pane.attached_terminal_id.clone();
+                    if let Some(terminal) = state.terminals.get_mut(&terminal_id) {
+                        let mut patch = std::collections::HashMap::new();
+                        patch.insert("mark".to_string(), None);
+                        if terminal
+                            .metadata_tokens
+                            .patch(patch, None, std::time::Instant::now())
+                        {
+                            terminal.revision = terminal.revision.saturating_add(1);
+                            state.mark_session_dirty();
+                        }
+                    }
+                }
+            }
+            state.mode = Mode::Terminal;
+        }
         (
             ContextMenuKind::Pane {
                 ws_idx, pane_id, ..
@@ -1098,6 +1181,40 @@ impl App {
                     }
                 }
             }
+            Mode::EditPaneMark => {
+                if let Some(pane_id) = self.state.mark_pane_target {
+                    // Resolve workspace index for this pane
+                    let ws_idx = self
+                        .state
+                        .workspaces
+                        .iter()
+                        .position(|ws| ws.pane_state(pane_id).is_some());
+                    if let Some(ws_idx) = ws_idx {
+                        if let Some(ws) = self.state.workspaces.get(ws_idx) {
+                            if let Some(pane) = ws.pane_state(pane_id) {
+                                let terminal_id = pane.attached_terminal_id.clone();
+                                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                                    let trimmed = new_name.trim().to_string();
+                                    let mut patch = std::collections::HashMap::new();
+                                    if trimmed.is_empty() {
+                                        patch.insert("mark".to_string(), None);
+                                    } else {
+                                        patch.insert("mark".to_string(), Some(trimmed));
+                                    }
+                                    if terminal.metadata_tokens.patch(
+                                        patch,
+                                        None,
+                                        std::time::Instant::now(),
+                                    ) {
+                                        terminal.revision = terminal.revision.saturating_add(1);
+                                        self.state.mark_session_dirty();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -1272,6 +1389,34 @@ impl App {
             (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
                 open_rename_pane(&mut self.state, pane_id);
             }
+            (ContextMenuKind::Pane { pane_id, .. }, Some("Edit mark")) => {
+                open_edit_mark(&mut self.state, pane_id);
+            }
+            (
+                ContextMenuKind::Pane {
+                    ws_idx, pane_id, ..
+                },
+                Some("Clear mark"),
+            ) => {
+                if let Some(ws) = self.state.workspaces.get(ws_idx) {
+                    if let Some(pane) = ws.pane_state(pane_id) {
+                        let terminal_id = pane.attached_terminal_id.clone();
+                        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                            let mut patch = std::collections::HashMap::new();
+                            patch.insert("mark".to_string(), None);
+                            if terminal.metadata_tokens.patch(
+                                patch,
+                                None,
+                                std::time::Instant::now(),
+                            ) {
+                                terminal.revision = terminal.revision.saturating_add(1);
+                                self.state.mark_session_dirty();
+                            }
+                        }
+                    }
+                }
+                self.state.mode = Mode::Terminal;
+            }
             (
                 ContextMenuKind::Pane {
                     ws_idx, pane_id, ..
@@ -1392,6 +1537,7 @@ fn cancel_rename_modal(state: &mut AppState) {
     state.requested_new_tab_name = None;
     state.pending_workspace_create_cwd = None;
     state.rename_pane_target = None;
+    state.mark_pane_target = None;
     state.name_input.clear();
     state.name_input_replace_on_type = false;
     leave_modal(state);
@@ -2239,6 +2385,7 @@ mod tests {
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                has_mark: false,
                 right_click_passthrough: false,
             },
             x: 0,
@@ -2287,6 +2434,7 @@ mod tests {
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                has_mark: false,
                 right_click_passthrough: false,
             },
             x: 0,
@@ -2397,6 +2545,7 @@ mod tests {
                 pane_id,
                 source_pane_id: None,
                 has_manual_label: false,
+                has_mark: false,
                 right_click_passthrough: false,
             },
             x: 0,

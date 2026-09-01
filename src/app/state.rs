@@ -896,6 +896,7 @@ pub enum Mode {
     RenameWorkspace,
     RenameTab,
     RenamePane,
+    EditPaneMark,
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
@@ -1275,6 +1276,7 @@ pub enum ContextMenuKind {
         pane_id: PaneId,
         source_pane_id: Option<PaneId>,
         has_manual_label: bool,
+        has_mark: bool,
         right_click_passthrough: bool,
     },
 }
@@ -1316,12 +1318,17 @@ impl ContextMenuState {
             ContextMenuKind::Pane {
                 source_pane_id,
                 has_manual_label,
+                has_mark,
                 right_click_passthrough,
                 ..
             } => {
                 let mut items = vec!["Rename pane"];
                 if has_manual_label {
                     items.push("Clear pane name");
+                }
+                items.push("Edit mark");
+                if has_mark {
+                    items.push("Clear mark");
                 }
                 if source_pane_id.is_some() {
                     items.push("Swap with focused pane");
@@ -1473,6 +1480,7 @@ pub struct AppState {
     pub requested_new_tab_name: Option<String>,
     pub pending_workspace_create_cwd: Option<std::path::PathBuf>,
     pub rename_pane_target: Option<PaneId>,
+    pub mark_pane_target: Option<PaneId>,
     pub worktree_create: Option<WorktreeCreateState>,
     pub worktree_open: Option<WorktreeOpenState>,
     pub worktree_remove: Option<WorktreeRemoveState>,
@@ -1858,6 +1866,7 @@ impl AppState {
             requested_new_tab_name: None,
             pending_workspace_create_cwd: None,
             rename_pane_target: None,
+            mark_pane_target: None,
             worktree_create: None,
             worktree_open: None,
             worktree_remove: None,
@@ -2072,6 +2081,10 @@ impl AppState {
                 "empty app state must not keep rename pane target"
             );
             assert!(
+                self.mark_pane_target.is_none(),
+                "empty app state must not keep mark pane target"
+            );
+            assert!(
                 self.selection.is_none(),
                 "empty app state must not keep text selection"
             );
@@ -2248,6 +2261,9 @@ impl AppState {
         }
         if let Some(pane_id) = self.rename_pane_target {
             assert_live_pane(pane_id, "rename pane target");
+        }
+        if let Some(pane_id) = self.mark_pane_target {
+            assert_live_pane(pane_id, "mark pane target");
         }
         if let Some(selection) = &self.selection {
             assert_live_pane(selection.pane_id, "text selection");
