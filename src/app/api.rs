@@ -922,7 +922,13 @@ impl App {
                 return self.handle_agent_view_clear(request.id, params)
             }
             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
-            Method::AgentPrompt(params) => return self.handle_agent_prompt(request.id, params),
+            Method::AgentPrompt(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "agent.prompt is handled asynchronously by the app runtime",
+                );
+            }
             Method::AgentWait(_) => {
                 return responses::encode_error(
                     request.id,
