@@ -698,14 +698,9 @@ impl CommandBuilder {
         } in self.envs.values()
         {
             let key: Vec<u16> = preferred_key.encode_wide().collect();
-            let drive_variable = key.len() == 3
-                && key[0] == b'=' as u16
-                && key[2] == b':' as u16
-                && ((b'A' as u16..=b'Z' as u16).contains(&key[1])
-                    || (b'a' as u16..=b'z' as u16).contains(&key[1]));
             if key.is_empty()
                 || key.contains(&0)
-                || (key.contains(&(b'=' as u16)) && !drive_variable)
+                || key[1..].contains(&(b'=' as u16))
                 || value.encode_wide().any(|unit| unit == 0)
             {
                 continue;
@@ -963,16 +958,21 @@ mod tests {
             OsString::from_wide(&[b'a' as u16, 0, b'b' as u16]),
         );
         cmd.env("BAD=KEY", "ignored");
+        cmd.env("=::", "colon");
         cmd.env("=C:", r"C:\valid");
+        cmd.env("=ExitCode", "hidden");
         cmd.env("EMPTY", "");
         cmd.env("VALID", "ok");
 
-        let expected: Vec<u16> = OsStr::new("=C:=C:\\valid\0EMPTY=\0VALID=ok\0\0")
-            .encode_wide()
-            .collect();
+        let expected: Vec<u16> =
+            OsStr::new("=::=colon\0=C:=C:\\valid\0=ExitCode=hidden\0EMPTY=\0VALID=ok\0\0")
+                .encode_wide()
+                .collect();
         assert_eq!(cmd.environment_block(), expected);
 
+        cmd.env_remove("=::");
         cmd.env_remove("=C:");
+        cmd.env_remove("=ExitCode");
         cmd.env_remove("EMPTY");
         cmd.env_remove("VALID");
         assert_eq!(cmd.environment_block(), vec![0, 0]);
