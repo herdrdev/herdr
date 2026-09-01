@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -160,6 +160,7 @@ pub enum ClientPaneInputEvent {
         generated_text: Option<String>,
         tracks_release: bool,
         physical_key_id: Option<u32>,
+        windows_record: Option<crate::input::WindowsKeyRecord>,
     },
     TextCommit(String),
     Mouse {
@@ -305,6 +306,7 @@ impl ClientPaneInputEvent {
     pub(crate) fn from_terminal_key(key: crate::input::TerminalKey) -> Option<Self> {
         let tracks_release = key.generated_text.is_none() || key.has_physical_identity();
         let physical_key_id = key.physical_key_id();
+        let windows_record = key.windows_record();
         Some(Self::Key {
             code: ClientKeyCode::from_crossterm(key.code)?,
             modifiers: key.modifiers.bits(),
@@ -314,6 +316,7 @@ impl ClientPaneInputEvent {
             generated_text: key.generated_text,
             tracks_release,
             physical_key_id,
+            windows_record,
         })
     }
 
@@ -327,6 +330,7 @@ impl ClientPaneInputEvent {
                 shifted_codepoint,
                 generated_text,
                 tracks_release,
+                windows_record,
                 ..
             } => {
                 let mut key = crate::input::TerminalKey::new(
@@ -340,6 +344,12 @@ impl ClientPaneInputEvent {
                 if let Some(shifted_codepoint) = shifted_codepoint {
                     key = key.with_shifted_codepoint(*shifted_codepoint);
                 }
+                #[cfg(any(windows, test))]
+                if let Some(record) = windows_record {
+                    key = key.with_windows_record(*record);
+                }
+                #[cfg(not(any(windows, test)))]
+                let _ = windows_record;
                 crate::raw_input::RawInputEvent::Key(key)
             }
             Self::TextCommit(text) => {
@@ -1819,19 +1829,41 @@ mod tests {
     }
 
     #[test]
-    fn client_shell_pane_input_roundtrips_semantic_keys() {
+    fn client_shell_pane_input_roundtrips_semantic_and_windows_keys() {
+        let windows_record = crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0x37,
+            virtual_scan_code: 0x08,
+            unicode: 0,
+            control_key_state: 0x0008,
+        };
         let message = ClientMessage::ClientShellPaneInput {
             pane_id: "w1:p2".into(),
-            events: vec![ClientPaneInputEvent::Key {
-                code: ClientKeyCode::Char('l'),
-                modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
-                kind: ClientKeyKind::Release,
-                repeat_count: 1,
-                shifted_codepoint: Some('L' as u32),
-                generated_text: None,
-                tracks_release: true,
-                physical_key_id: None,
-            }],
+            events: vec![
+                ClientPaneInputEvent::Key {
+                    code: ClientKeyCode::Char('l'),
+                    modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
+                    kind: ClientKeyKind::Release,
+                    repeat_count: 1,
+                    shifted_codepoint: Some('L' as u32),
+                    generated_text: None,
+                    tracks_release: true,
+                    physical_key_id: None,
+                    windows_record: None,
+                },
+                ClientPaneInputEvent::Key {
+                    code: ClientKeyCode::Char('7'),
+                    modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
+                    kind: ClientKeyKind::Press,
+                    repeat_count: 1,
+                    shifted_codepoint: None,
+                    generated_text: None,
+                    tracks_release: true,
+                    physical_key_id: Some(0x08),
+                    windows_record: Some(windows_record),
+                },
+            ],
         };
         let encoded = bincode::serde::encode_to_vec(&message, bincode::config::standard())
             .expect("encode targeted semantic input");
@@ -1842,11 +1874,17 @@ mod tests {
         let ClientMessage::ClientShellPaneInput { events, .. } = decoded else {
             panic!("expected targeted semantic input");
         };
-        let crate::raw_input::RawInputEvent::Key(key) = events[0].to_raw_input_event() else {
+        let crate::raw_input::RawInputEvent::Key(semantic) = events[0].to_raw_input_event() else {
             panic!("expected semantic key");
         };
-        assert_eq!(key.shifted_codepoint, Some('L' as u32));
-        assert_eq!(key.kind, crossterm::event::KeyEventKind::Release);
+        assert_eq!(semantic.shifted_codepoint, Some('L' as u32));
+        assert_eq!(semantic.kind, crossterm::event::KeyEventKind::Release);
+        let crate::raw_input::RawInputEvent::Key(key) = events[1].to_raw_input_event() else {
+            panic!("expected Windows key");
+        };
+        assert_eq!(key.code, crossterm::event::KeyCode::Char('7'));
+        assert_eq!(key.modifiers, crossterm::event::KeyModifiers::CONTROL);
+        assert_eq!(key.windows_record(), Some(windows_record));
     }
 
     #[test]

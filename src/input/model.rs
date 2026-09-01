@@ -3,7 +3,6 @@ use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowsKeyRecord {
     pub key_down: bool,
@@ -167,12 +166,14 @@ impl TerminalKey {
         }
     }
 
-    #[cfg(any(windows, test))]
     pub(crate) fn windows_record(&self) -> Option<WindowsKeyRecord> {
+        #[cfg(any(windows, test))]
         match self.source {
             KeySource::WindowsConsole { record, .. } => Some(record),
             KeySource::Synthesized | KeySource::Vt { .. } => None,
         }
+        #[cfg(not(any(windows, test)))]
+        None
     }
 
     pub(crate) fn identity(&self) -> KeyIdentity {

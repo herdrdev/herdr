@@ -13,7 +13,7 @@ static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
-pub const CURRENT_PROTOCOL: u32 = 21;
+pub const CURRENT_PROTOCOL: u32 = 22;
 pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
 pub const SERVER_MESSAGE_CLIENT_SHELL_SNAPSHOT: u32 = 12;
 pub const SERVER_MESSAGE_PANE_SURFACE: u32 = 13;
@@ -327,6 +327,7 @@ pub fn send_client_shell_shift_enter(stream: &mut UnixStream, pane_id: &str) -> 
     payload.push(0); // no generated text
     payload.push(0); // does not track release
     payload.push(0); // no physical key id
+    payload.push(0); // no Windows key record
 
     stream
         .write_all(&frame_message(&payload))

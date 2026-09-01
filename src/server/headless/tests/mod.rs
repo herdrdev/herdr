@@ -1262,6 +1262,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     generated_text: None,
                     tracks_release: true,
                     physical_key_id: None,
+                    windows_record: None,
                 },
                 crate::protocol::ClientPaneInputEvent::Key {
                     code: crate::protocol::ClientKeyCode::Char('c'),
@@ -1272,6 +1273,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     generated_text: None,
                     tracks_release: true,
                     physical_key_id: None,
+                    windows_record: None,
                 },
                 crate::protocol::ClientPaneInputEvent::Key {
                     code: crate::protocol::ClientKeyCode::Char('x'),
@@ -1282,6 +1284,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     generated_text: None,
                     tracks_release: true,
                     physical_key_id: None,
+                    windows_record: None,
                 },
                 crate::protocol::ClientPaneInputEvent::Mouse {
                     kind: crate::protocol::ClientMouseKind::Down(
@@ -1386,6 +1389,7 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
         generated_text: None,
         tracks_release: true,
         physical_key_id: Some(0x2d),
+        windows_record: None,
     };
 
     assert!(
@@ -1592,6 +1596,7 @@ async fn client_shell_release_under_popup_renders_when_it_resets_scrollback() {
                 generated_text: None,
                 tracks_release: true,
                 physical_key_id: Some(0x2d),
+                windows_record: None,
             }],
         });
 
@@ -3000,6 +3005,7 @@ fn client_page_key(
         generated_text: None,
         tracks_release: true,
         physical_key_id: None,
+        windows_record: None,
     }
 }
 
@@ -3558,6 +3564,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
         generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".to_owned()),
         tracks_release: true,
         physical_key_id: Some(0x2d),
+        windows_record: None,
     };
 
     assert!(

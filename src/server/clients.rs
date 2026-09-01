@@ -188,6 +188,7 @@ impl ClientConnection {
                     shifted_codepoint,
                     tracks_release: true,
                     physical_key_id,
+                    windows_record,
                     ..
                 } => {
                     self.shell_held_inputs.insert(
@@ -203,6 +204,7 @@ impl ClientConnection {
                                 generated_text: None,
                                 tracks_release: true,
                                 physical_key_id: *physical_key_id,
+                                windows_record: *windows_record,
                             },
                         },
                     );
@@ -458,6 +460,7 @@ mod tests {
                 generated_text: Some("x".into()),
                 tracks_release: false,
                 physical_key_id: None,
+                windows_record: None,
             }],
         );
 
@@ -467,6 +470,14 @@ mod tests {
     #[test]
     fn physical_keys_with_the_same_semantic_code_keep_distinct_release_leases() {
         let mut client = shell_client();
+        let windows_record = crate::input::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0x6c,
+            virtual_scan_code: 0x1c,
+            unicode: 13,
+            control_key_state: 0,
+        };
         let key = |kind, physical_key_id| ClientPaneInputEvent::Key {
             code: crate::protocol::ClientKeyCode::Enter,
             modifiers: 0,
@@ -476,6 +487,7 @@ mod tests {
             generated_text: None,
             tracks_release: true,
             physical_key_id: Some(physical_key_id),
+            windows_record: (physical_key_id == 108).then_some(windows_record),
         };
         client.track_shell_input(
             ClientShellInputTarget::Pane("w1:p1".into()),
@@ -494,8 +506,9 @@ mod tests {
                 code: crate::protocol::ClientKeyCode::Enter,
                 kind: ClientKeyKind::Release,
                 physical_key_id: Some(108),
+                windows_record: Some(record),
                 ..
-            }
+            } if *record == windows_record
         ));
     }
 }
