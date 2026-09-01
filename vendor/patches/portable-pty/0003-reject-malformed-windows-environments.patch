@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: herdr maintainers <maintainers@herdr.dev>
+Date: Tue, 1 Sep 2026 00:00:00 +0000
+Subject: [PATCH] reject malformed Windows process environments
+
+Windows registry environment keys can contain an empty-name default value or
+values with types other than REG_SZ and REG_EXPAND_SZ. winreg 0.10 accepts
+REG_MULTI_SZ as an OsString, preserving embedded nulls. portable-pty then
+serialized those entries unchanged, causing CreateProcessW to reject the whole
+environment block with ERROR_INVALID_PARAMETER (87).
+
+Herdr issue: https://github.com/herdrdev/herdr/issues/3430
+Vendored base: portable-pty 0.9.0
+---
+ vendor/portable-pty/src/cmdbuilder.rs | 104 ++++++++++++++++++++++++----------
+ 1 file changed, 73 insertions(+), 31 deletions(-)
+
+diff --git a/vendor/portable-pty/src/cmdbuilder.rs b/vendor/portable-pty/src/cmdbuilder.rs
+index 385fe81c..8c1235ba 100644
+--- a/vendor/portable-pty/src/cmdbuilder.rs
++++ b/vendor/portable-pty/src/cmdbuilder.rs
+@@ -71,6 +71,39 @@ fn get_shell() -> String {
+     "/bin/sh".into()
+ }
+ 
++#[cfg(windows)]
++fn reg_value_to_string(value: &winreg::RegValue) -> anyhow::Result<OsString> {
++    use std::os::windows::ffi::OsStringExt;
++    use winapi::um::processenv::ExpandEnvironmentStringsW;
++    use winreg::enums::RegType;
++    use winreg::types::FromRegValue;
++
++    match value.vtype {
++        RegType::REG_SZ => Ok(OsString::from_reg_value(value)?),
++        RegType::REG_EXPAND_SZ => {
++            let src = unsafe {
++                std::slice::from_raw_parts(
++                    value.bytes.as_ptr() as *const u16,
++                    value.bytes.len() / 2,
++                )
++            };
++            let size = unsafe { ExpandEnvironmentStringsW(src.as_ptr(), std::ptr::null_mut(), 0) };
++            let mut buf = vec![0u16; size as usize + 1];
++            unsafe { ExpandEnvironmentStringsW(src.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
++
++            let mut buf = buf.as_slice();
++            while let Some(0) = buf.last() {
++                buf = &buf[0..buf.len() - 1];
++            }
++            Ok(OsString::from_wide(buf))
++        }
++        _ => anyhow::bail!(
++            "unsupported registry type {:?} for environment variable",
++            value.vtype
++        ),
++    }
++}
++
+ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
+     let mut env: BTreeMap<OsString, EnvEntry> = std::env::vars_os()
+         .map(|(key, value)| {
+@@ -103,37 +136,8 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
+ 
+     #[cfg(windows)]
+     {
+-        use std::os::windows::ffi::OsStringExt;
+-        use winapi::um::processenv::ExpandEnvironmentStringsW;
+-        use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+-        use winreg::types::FromRegValue;
+-        use winreg::{RegKey, RegValue};
+-
+-        fn reg_value_to_string(value: &RegValue) -> anyhow::Result<OsString> {
+-            match value.vtype {
+-                RegType::REG_EXPAND_SZ => {
+-                    let src = unsafe {
+-                        std::slice::from_raw_parts(
+-                            value.bytes.as_ptr() as *const u16,
+-                            value.bytes.len() / 2,
+-                        )
+-                    };
+-                    let size =
+-                        unsafe { ExpandEnvironmentStringsW(src.as_ptr(), std::ptr::null_mut(), 0) };
+-                    let mut buf = vec![0u16; size as usize + 1];
+-                    unsafe {
+-                        ExpandEnvironmentStringsW(src.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
+-                    };
+-
+-                    let mut buf = buf.as_slice();
+-                    while let Some(0) = buf.last() {
+-                        buf = &buf[0..buf.len() - 1];
+-                    }
+-                    Ok(OsString::from_wide(buf))
+-                }
+-                _ => Ok(OsString::from_reg_value(value)?),
+-            }
+-        }
++        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
++        use winreg::RegKey;
+ 
+         if let Ok(sys_env) = RegKey::predef(HKEY_LOCAL_MACHINE)
+             .open_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
+@@ -662,6 +666,13 @@ impl CommandBuilder {
+             value,
+         } in self.envs.values()
+         {
++            if preferred_key.is_empty()
++                || preferred_key.encode_wide().any(|unit| unit == 0)
++                || value.encode_wide().any(|unit| unit == 0)
++            {
++                continue;
++            }
++
+             block.extend(preferred_key.encode_wide());
+             block.push(b'=' as u16);
+             block.extend(value.encode_wide());
+@@ -869,4 +880,35 @@ mod tests {
+         assert!(command.ends_with(r#"/d /c echo "hi""#), "{}", command);
+         assert!(!command.contains(r#"\"hi\""#), "{}", command);
+     }
++
++    #[cfg(windows)]
++    #[test]
++    fn windows_environment_rejects_malformed_entries() {
++        use std::os::windows::ffi::{OsStrExt, OsStringExt};
++        use winreg::enums::RegType;
++        use winreg::RegValue;
++
++        let multi_string = RegValue {
++            bytes: vec![b'a', 0, 0, 0],
++            vtype: RegType::REG_MULTI_SZ,
++        };
++        assert!(reg_value_to_string(&multi_string).is_err());
++
++        let mut cmd = CommandBuilder::new("dummy");
++        cmd.env_clear();
++        cmd.env("", "ignored");
++        cmd.env(
++            OsString::from_wide(&[b'B' as u16, 0, b'A' as u16, b'D' as u16]),
++            "ignored",
++        );
++        cmd.env(
++            "MULTI",
++            OsString::from_wide(&[b'a' as u16, 0, b'b' as u16]),
++        );
++        cmd.env("EMPTY", "");
++        cmd.env("VALID", "ok");
++
++        let expected: Vec<u16> = OsStr::new("EMPTY=\0VALID=ok\0\0").encode_wide().collect();
++        assert_eq!(cmd.environment_block(), expected);
++    }
+ }
