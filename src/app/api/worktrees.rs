@@ -2234,6 +2234,78 @@ mod tests {
     }
 
     #[test]
+    fn deferred_api_unregistered_worktree_remove_requests_force_confirmation() {
+        let event_hub = crate::api::EventHub::default();
+        let mut app = test_app_with_event_hub(event_hub.clone());
+        let checkout = PathBuf::from("/repo/herdr-leftover");
+        let child = Workspace::test_new("child");
+        let workspace_id = child.id.clone();
+        app.state.workspaces.push(child);
+        let checkout_key = crate::worktree::canonical_or_original(&checkout);
+        let workspace_ids = app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        app.state.mode = crate::app::Mode::ConfirmRemoveWorktree;
+        app.state.worktree_remove = Some(crate::app::state::WorktreeRemoveState {
+            workspace_id: workspace_id.clone(),
+            repo_root: PathBuf::from("/repo/herdr"),
+            path: checkout.clone(),
+            error: None,
+            removing: true,
+            force_confirmation: false,
+        });
+        app.pending_api_worktree_removes
+            .insert(workspace_id.clone(), 7);
+        app.pending_api_worktree_remove_paths
+            .insert(checkout_key.clone(), 7);
+        let (respond_to, response_rx) = response_channel();
+
+        app.handle_api_worktree_remove_finished(WorktreeRemoveResult {
+            workspace_id,
+            path: checkout,
+            workspace: None,
+            worktree: None,
+            forced: false,
+            api_request: Some(ApiWorktreeRemoveRequest {
+                id: "req".into(),
+                operation_id: 7,
+                checkout_key,
+                respond_to,
+            }),
+            result: Err("fatal: '/repo/herdr-leftover' is not a working tree".into()),
+        });
+
+        let response = response_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("failed remove should respond");
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "worktree_remove_failed");
+        assert_eq!(
+            error.error.message,
+            "fatal: '/repo/herdr-leftover' is not a working tree"
+        );
+        assert!(app.pending_api_worktree_removes.is_empty());
+        assert!(app.pending_api_worktree_remove_paths.is_empty());
+        assert_eq!(app.state.mode, crate::app::Mode::ConfirmRemoveWorktree);
+        assert_eq!(
+            app.state
+                .workspaces
+                .iter()
+                .map(|workspace| workspace.id.clone())
+                .collect::<Vec<_>>(),
+            workspace_ids
+        );
+        assert!(event_hub.events_after(0).is_empty());
+        let remove = app.state.worktree_remove.unwrap();
+        assert!(!remove.removing);
+        assert!(remove.force_confirmation);
+        assert_eq!(remove.error, None);
+    }
+
+    #[test]
     fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
         let mut app = test_app();
         let checkout = PathBuf::from("/repo/herdr-issue");

@@ -514,16 +514,21 @@ impl App {
             .remove(&api.checkout_key);
 
         if let Err(message) = result.result {
-            let code =
-                if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
-                    "dirty_worktree_requires_force"
-                } else {
-                    "worktree_remove_failed"
-                };
+            let dirty_requires_force =
+                !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message);
+            let recovery_requires_force =
+                !result.forced && crate::worktree::is_not_working_tree_remove_error(&message);
+            let code = if dirty_requires_force {
+                "dirty_worktree_requires_force"
+            } else {
+                "worktree_remove_failed"
+            };
             if let Some(remove) = &mut self.state.worktree_remove {
                 if remove.workspace_id == result.workspace_id && remove.path == result.path {
                     remove.removing = false;
-                    if code == "dirty_worktree_requires_force" && !remove.force_confirmation {
+                    if !remove.force_confirmation
+                        && (dirty_requires_force || recovery_requires_force)
+                    {
                         remove.force_confirmation = true;
                         remove.error = None;
                     } else {
