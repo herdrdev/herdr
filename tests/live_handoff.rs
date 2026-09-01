@@ -608,6 +608,79 @@ fn live_server_holds_one_pty_master_fd_per_pane() {
     cleanup_test_base(&base);
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
+    const PANES: usize = 70;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let server_pid = spawned
+        .child
+        .process_id()
+        .expect("test server should expose pid");
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // One pane per tab keeps the layout shallow, so this exercises the fd
+    // transfer rather than the depth of a single split tree.
+    for index in 1..PANES {
+        assert_ok(request(
+            &api_socket,
+            serde_json::json!({
+                "id": format!("test:tab:create-{index}"),
+                "method": "tab.create",
+                "params": {"workspace_id": workspace_id, "focus": false}
+            }),
+        ));
+    }
+    wait_for_server_ptmx_fd_count(server_pid, PANES, Duration::from_secs(60));
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    let replacement_pid =
+        wait_for_replacement_server_pid(&runtime_dir, server_pid, Duration::from_secs(30));
+    wait_for_api(&api_socket, Duration::from_secs(30));
+    wait_for_server_ptmx_fd_count(replacement_pid, PANES, Duration::from_secs(30));
+
+    let panes = request(
+        &api_socket,
+        serde_json::json!({"id":"test:pane:list","method":"pane.list","params":{}}),
+    );
+    assert_eq!(
+        panes["result"]["panes"].as_array().map(Vec::len),
+        Some(PANES),
+        "replacement server should report every pane after handoff"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
 #[test]
 fn live_handoff_preserves_named_session_socket_paths() {
     let _lock = test_lock();
