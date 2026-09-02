@@ -111,7 +111,7 @@ herdr pane read w1:p2 --source recent --lines 50
 
 `workspace.move_block` 会将有序的 `workspace_ids` 原子地移动到 `before_workspace_id` 之前;省略锚点则将该块移动到末尾。id 必须唯一,且锚点不能属于被移动的块。响应包含服务器确认的有序工作区列表。
 
-`session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅;读取后应订阅资源事件,并根据事件更新本地缓存。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。
+`session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅。为避免引导期间漏掉事件,应先在另一个连接上打开 `events.subscribe` 并等待确认,在调用 `session.snapshot` 时缓冲该事件流,然后安装快照、按顺序应用缓冲的事件并继续接收事件。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。
 
 CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSON,让客户端和智能体可以简单地完成引导。
 
@@ -298,6 +298,8 @@ Worktree 方法把 Git 检出作为 Herdr 工作区管理。`worktree.create` �
 `worktree.list`、`worktree.create` 和 `worktree.open` 中,`workspace_id` 和 `cwd` 最多用一个;两个都省略则使用活动工作区。`worktree.open` 中,`path` 和 `branch` 恰好用一个。原始 socket 的 `cwd` 和 `path` 值必须是绝对路径;CLI 在发送请求前会展开相对的 `--cwd` 和 `--path` 值。当工作区属于某个 Herdr worktree 组时,工作区响应包含可选的 `worktree` 来源信息。当已有工作区获得或改变 worktree 来源信息时,worktree 命令可能发出 `workspace.updated`。
 
 Worktree 命令也发出生命周期事件。`worktree.create` 发出 `workspace.created`、`tab.created`、`pane.created` 和 `worktree.created`。`worktree.open` 发出 `worktree.opened`,并在打开新的 Herdr 工作区时同时发出工作区/标签页/窗格创建事件。`worktree.remove` 发出 `worktree.removed`;如果关联的工作区仍然打开,还会发出 `workspace.closed`。
+
+当关联的 worktree 工作区仍然打开时，父工作区只有在 `workspace.close` 的 params 中包含 `"close_group": true` 时才会被关闭；缺少显式关闭组意图时会返回 `workspace_group_close_required`。显式关闭组时，每个被关闭的工作区都会发出一个 `workspace.closed` 事件。
 
 ## 智能体视图查询
 
@@ -631,7 +633,7 @@ workspace 的 get/list 响应会公开生成的 `tokens` 映射,空间侧边栏�
 }
 ```
 
-第一个响应确认订阅。之后的行是推送的事件。
+第一个响应确认订阅。之后的行是推送的事件。生命周期事件订阅从请求被接受时开始,不会重放在此之前保留的事件。
 
 工作区事件订阅包括 `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed` 和 `workspace.focused`。`workspace.metadata_updated` 报告令牌变更和 TTL 到期,但不会调用插件事件钩子。其他工作区事件描述 Herdr UI/运行时的生命周期。当工作区属于 worktree 组时,`workspace.created` 包含可选的 `workspace.worktree` 来源信息。`workspace.moved` 包含被移动的 `workspace_id`、请求的 `insert_index` 和更新后的有序 `workspaces` 列表。`workspace.reordered` 包含原子移动的 `workspace_ids`、可选的 `before_workspace_id` 和服务器确认的有序 `workspaces` 列表。在移除前 Herdr 仍能识别时,`workspace.closed` 包含最终的 `workspace` 快照。
 标签页事件订阅包括 `tab.created`、`tab.closed`、`tab.focused`、`tab.renamed` 和 `tab.moved`。`tab.moved` 包含被移动的 `tab_id`、`workspace_id`、请求的 `insert_index` 和该工作区更新后的有序 `tabs` 列表。

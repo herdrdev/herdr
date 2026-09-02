@@ -29,7 +29,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
         loader = (
             package.PROJECT_ROOT / "vendor/portable-pty/src/win/psuedocon.rs"
         ).read_text(encoding="utf-8")
-        installer = (package.PROJECT_ROOT / "website/install.ps1").read_text(
+        installer = (package.PROJECT_ROOT / "distribution/install.ps1").read_text(
             encoding="utf-8"
         )
         for item in metadata["bundles"]["x86_64"]["files"]:

@@ -75,13 +75,13 @@ Process:
    - Audit `skills/herdr/SKILL.md` against shipped changes to the CLI, public IDs, pane and agent workflows, lifecycle semantics, and safety guidance. Flag stale commands, options, examples, or behavioral claims. The binary bundles this exact file, so review semantic freshness rather than file synchronization.
 
 8. Verify finalization state.
-   - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `website/src/content/docs/` or `docs/preview/`.
+   - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `docs/preview/` or `docs/versions/`.
    - `nix/package.nix` imports `Cargo.lock` through `cargoLock.lockFile`; normal version and lockfile updates do not require a separate cargo hash refresh. If git dependencies are introduced, verify the required `cargoLock.outputHashes` entries.
    - Run or recommend:
      ```bash
      just pre-release-check
      ```
-   - The docs check validates the staged draft, localized heading parity, published preview and stable snapshot provenance, and both production and draft website builds.
+   - The docs check validates the staged draft, localized heading parity, the public distribution contract, and published preview and stable snapshot provenance. The private website repository owns production and draft rendering checks.
    - The render benchmark has no automatic timing threshold, but reviewing it is a required release checkpoint. Record the 1, 15, and 50-count median and p95 results for background-workspace resize/layout and active panes, compare their scaling ratios, and treat a material regression as a release blocker until investigated rather than relying on absolute timing across machines.
    - Do not run `just release` unless the working tree is clean, the docs check passes, and the render-scale result has been reviewed.
 

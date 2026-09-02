@@ -133,7 +133,7 @@ herdr --remote workbox
 
 目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
 
-Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。更新后请重启运行中的 Herdr 会话。实时交接仅限 Unix。
+Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。再次启动 Herdr 即可使用更新后的客户端;兼容的运行中服务器会让窗格继续运行。只有需要新版本的服务器端改动时,才稍后重启服务器。实时交接仅限 Unix。
 
 ## 报告 Windows 问题
 

@@ -8,7 +8,6 @@ pub(super) fn command() -> Command {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(help_flag())
-        .arg(flag("no-session").help("Run monolithically without server/client session mode"))
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
         .arg(
@@ -368,7 +367,7 @@ fn agent_command() -> Command {
                         .help("Fail after this many milliseconds"),
                 )
                 .after_help(
-                    "If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait first requires an observed state change within 5000ms; otherwise it returns agent_prompt_stalled. A shorter --timeout returns timeout instead. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match. Without --timeout, the settled-state wait is indefinite.",
+                    "If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match.",
                 ),
         )
         .subcommand(

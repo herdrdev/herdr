@@ -575,7 +575,7 @@
           "key": "keys.detach",
           "type": "keybinding",
           "default": "\"prefix+q\"",
-          "description": "Detach from server/client mode, or exit --no-session mode."
+          "description": "Detach the current client from its Herdr server."
         },
         {
           "key": "keys.reload_config",

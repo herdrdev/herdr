@@ -29,21 +29,33 @@ path = "{path}"
 
 def staged_grok_dirs(root: Path) -> tuple[Path, Path]:
     bundled = root / "bundled"
-    website = root / "website"
+    published = root / "published"
     bundled.mkdir()
-    website.mkdir()
+    published.mkdir()
     (bundled / "grok.toml").write_bytes(
         (check.DEFAULT_BUNDLED_DIR / "grok.toml").read_bytes()
     )
-    (website / "grok.toml").write_bytes(
-        (check.DEFAULT_WEBSITE_DIR / "grok.toml").read_bytes()
+    (published / "grok.toml").write_bytes(
+        (check.DEFAULT_PUBLISHED_DIR / "grok.toml").read_bytes()
     )
-    (website / "index.toml").write_text(catalog("grok", "grok.toml"))
-    return bundled, website
+    (published / "index.toml").write_text(catalog("grok", "grok.toml"))
+    return bundled, published
+
+
+def unpublished_muse_dirs(root: Path) -> tuple[Path, Path]:
+    bundled = root / "bundled"
+    published = root / "published"
+    bundled.mkdir()
+    published.mkdir()
+    (bundled / "muse.toml").write_bytes(
+        (check.DEFAULT_BUNDLED_DIR / "muse.toml").read_bytes()
+    )
+    (published / "index.toml").write_text("schema_version = 1\nagents = []\n")
+    return bundled, published
 
 
 class AgentDetectionManifestCheckTests(unittest.TestCase):
-    def test_validates_bundled_and_matching_website_catalog(self):
+    def test_validates_bundled_and_matching_published_catalog(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundled = root / "bundled"
@@ -58,7 +70,7 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=1)
             check.validate_catalog(website, bundled_manifests, engine_version=1)
 
-    def test_rejects_website_version_lower_than_bundled(self):
+    def test_rejects_published_version_lower_than_bundled(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundled = root / "bundled"
@@ -73,14 +85,14 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
                 check.validate_catalog(website, bundled_manifests, engine_version=1)
 
-    def test_allows_explicitly_staged_website_manifest(self):
+    def test_allows_explicitly_staged_published_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, website = staged_grok_dirs(Path(tmp))
 
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
             check.validate_catalog(website, bundled_manifests, engine_version=3)
 
-    def test_rejects_mutated_staged_website_manifest(self):
+    def test_rejects_mutated_staged_published_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundled, website = staged_grok_dirs(Path(tmp))
             with (website / "grok.toml").open("a") as manifest_file:
@@ -90,7 +102,7 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
                 check.validate_catalog(website, bundled_manifests, engine_version=3)
 
-    def test_rejects_unlisted_website_manifest_lag_for_new_engine(self):
+    def test_rejects_unlisted_published_manifest_lag_for_new_engine(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundled = root / "bundled"
@@ -122,6 +134,38 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=1)
             with self.assertRaisesRegex(check.CheckError, "same version"):
                 check.validate_catalog(website, bundled_manifests, engine_version=1)
+
+    def test_allows_exact_unpublished_bundled_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundled, published = unpublished_muse_dirs(Path(tmp))
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
+            check.validate_catalog(
+                published,
+                bundled_manifests,
+                engine_version=3,
+                allow_unpublished=True,
+            )
+
+    def test_release_gate_rejects_exact_unpublished_bundled_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundled, published = unpublished_muse_dirs(Path(tmp))
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
+            with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):
+                check.validate_catalog(published, bundled_manifests, engine_version=3)
+
+    def test_rejects_mutated_unpublished_bundled_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundled, published = unpublished_muse_dirs(Path(tmp))
+            with (bundled / "muse.toml").open("a") as manifest_file:
+                manifest_file.write("\n# unexpected mutation\n")
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
+            with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):
+                check.validate_catalog(
+                    published,
+                    bundled_manifests,
+                    engine_version=3,
+                    allow_unpublished=True,
+                )
 
     def test_rejects_unknown_catalog_agent(self):
         with tempfile.TemporaryDirectory() as tmp:

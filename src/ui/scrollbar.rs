@@ -1,4 +1,5 @@
 use ratatui::{
+    buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
     Frame,
@@ -75,7 +76,7 @@ pub(crate) fn scrollbar_thumb_grab_offset(
     row: u16,
 ) -> Option<u16> {
     let thumb = scrollbar_thumb(metrics, track)?;
-    (row >= thumb.top && row < thumb.top + thumb.len).then_some(row - thumb.top)
+    (row >= thumb.top && row < thumb.top + thumb.len).then(|| row - thumb.top)
 }
 
 fn scrollbar_offset_from_thumb_top(
@@ -132,8 +133,8 @@ pub(crate) fn scrollbar_offset_from_drag_row(
     scrollbar_offset_from_thumb_top(metrics, track, desired_top)
 }
 
-pub(super) fn render_scrollbar(
-    frame: &mut Frame,
+pub(crate) fn render_scrollbar_buffer(
+    buffer: &mut Buffer,
     metrics: crate::pane::ScrollMetrics,
     track: Rect,
     track_color: Color,
@@ -148,17 +149,38 @@ pub(super) fn render_scrollbar(
         return;
     };
 
-    let buf = frame.buffer_mut();
     for y in track.y..track.y + track.height {
-        let cell = &mut buf[(track.x, y)];
+        let cell = &mut buffer[(track.x, y)];
         cell.set_symbol("▕");
         cell.set_style(Style::default().fg(track_color));
     }
     for y in thumb.top..thumb.top + thumb.len {
-        let cell = &mut buf[(track.x, y)];
+        let cell = &mut buffer[(track.x, y)];
         cell.set_symbol(thumb_symbol);
         cell.set_style(Style::default().fg(thumb_color));
     }
+}
+
+pub(crate) fn render_pane_scrollbar_buffer(
+    buffer: &mut Buffer,
+    metrics: crate::pane::ScrollMetrics,
+    track: Rect,
+    palette: &crate::app::state::Palette,
+    focused: bool,
+) {
+    let (track_color, thumb_color, thumb_symbol) = if focused {
+        (palette.overlay0, palette.overlay1, "▐")
+    } else {
+        (palette.surface_dim, palette.overlay0, "▕")
+    };
+    render_scrollbar_buffer(
+        buffer,
+        metrics,
+        track,
+        track_color,
+        thumb_color,
+        thumb_symbol,
+    );
 }
 
 pub(super) fn render_pane_scrollbar(
@@ -173,19 +195,11 @@ pub(super) fn render_pane_scrollbar(
     let Some(track) = pane_scrollbar_rect(info) else {
         return;
     };
-
-    let (track_color, thumb_color, thumb_symbol) = if info.is_focused {
-        (app.palette.overlay0, app.palette.overlay1, "▐")
-    } else {
-        (app.palette.surface_dim, app.palette.overlay0, "▕")
-    };
-
-    render_scrollbar(
-        frame,
+    render_pane_scrollbar_buffer(
+        frame.buffer_mut(),
         metrics,
         track,
-        track_color,
-        thumb_color,
-        thumb_symbol,
+        &app.palette,
+        info.is_focused,
     );
 }

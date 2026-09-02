@@ -18,17 +18,7 @@ impl App {
     /// workspaces/tabs and panes hidden by zoom are not placeable. Short-lived UI modes do not
     /// suspend the producer because the pane becomes visible again without a layout event.
     fn pane_graphics_visible(&self, ws_idx: usize, pane_id: PaneId) -> bool {
-        if self.state.active != Some(ws_idx) {
-            return false;
-        }
-        let Some(tab) = self.state.workspaces[ws_idx].active_tab() else {
-            return false;
-        };
-        if tab.zoomed {
-            tab.layout.focused() == pane_id
-        } else {
-            tab.layout.pane_ids().contains(&pane_id)
-        }
+        self.state.pane_visible_on_active_surface(ws_idx, pane_id)
     }
 
     pub(super) fn handle_pane_graphics_info(
@@ -566,7 +556,7 @@ mod tests {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             rx,
             crate::api::EventHub::default(),
@@ -665,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn monolithic_info_keeps_fast_transport_and_exact_pixels_disabled() {
+    fn non_persistent_info_keeps_fast_transport_and_exact_pixels_disabled() {
         let (mut app, pane_id) = app();
         app.state.host_cell_size = crate::kitty_graphics::HostCellSize {
             width_px: 10,

@@ -9,7 +9,7 @@ use super::integrations::{
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
     PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneZoomResult,
+    PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
 };
 use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
@@ -162,6 +162,25 @@ pub enum ResponseResult {
     PaneRead {
         read: PaneReadResult,
     },
+    PaneSelection {
+        pane_id: String,
+        text: String,
+    },
+    PaneCopyMotion {
+        pane_id: String,
+        cursor: PaneTextPoint,
+        content_revision: u64,
+    },
+    PaneCopySearch {
+        pane_id: String,
+        content_revision: u64,
+        matches: Vec<PaneTextRange>,
+        total: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_global: Option<u64>,
+    },
     PaneGraphicsFrameAck {
         sequence: u64,
         revision: u64,
@@ -210,6 +229,9 @@ pub enum ResponseResult {
         changed: bool,
         reason: ClientWindowTitleReason,
     },
+    IntegrationList {
+        integrations: Vec<super::integrations::IntegrationInfo>,
+    },
     IntegrationInstall {
         target: IntegrationTarget,
         details: IntegrationInstallResult,
@@ -251,6 +273,11 @@ pub enum ResponseResult {
         action: PluginActionInfo,
         context: PluginInvocationContext,
         log: PluginCommandLogInfo,
+    },
+    PaneLinkActivated {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        handled: bool,
     },
     PluginLogList {
         logs: Vec<PluginCommandLogInfo>,

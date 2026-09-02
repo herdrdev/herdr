@@ -20,6 +20,7 @@ EXPECTED_ASSET_NAMES = {
     "windows-x86_64": "herdr-windows-x86_64.zip",
 }
 HIDDEN_SUBJECTS = (
+    "docs: publish release distribution",
     "docs: update website manifest",
     "docs: update preview manifest",
     "chore: approve contributor",
@@ -37,6 +38,7 @@ TYPE_HEADINGS = {
 }
 TYPE_ORDER = ("Added", "Fixed", "Performance", "Maintenance", "Other")
 COMMIT_RE = re.compile(r"^(?P<kind>[a-z]+)(?:\([^)]+\))?!?:\s+(?P<body>.+)$")
+ENDPOINT_PROTOCOL_SOURCE_PATH = Path("src/protocol/endpoint.rs")
 
 
 def run_git(args: list[str]) -> str:
@@ -45,6 +47,18 @@ def run_git(args: list[str]) -> str:
 
 def normalize_version(version: str) -> str:
     return version.strip().removeprefix("v")
+
+
+def read_endpoint_protocol_generation(
+    source_path: Path = ENDPOINT_PROTOCOL_SOURCE_PATH,
+) -> int:
+    content = source_path.read_text(encoding="utf-8")
+    match = re.search(r"pub const ENDPOINT_PROTOCOL_GENERATION: u32 = (\d+);", content)
+    if not match:
+        raise ValueError(
+            f"could not read ENDPOINT_PROTOCOL_GENERATION from {source_path}"
+        )
+    return int(match.group(1))
 
 
 def latest_stable_tag(ref: str | None = None) -> str:
@@ -214,11 +228,13 @@ def build_manifest(
     current = read_json(output) or {}
     builds = current.get("builds") if isinstance(current.get("builds"), dict) else {}
     builds = dict(builds)
+    endpoint_generation = read_endpoint_protocol_generation()
     builds[build_id] = {
         "base_version": normalize_version(base_version),
         "commit": commit,
         "built_at": built_at,
         "protocol": protocol,
+        "endpoint_generation": endpoint_generation,
         "tag": tag,
         "assets": assets,
     }
@@ -238,6 +254,7 @@ def build_manifest(
         "commit": commit,
         "built_at": built_at,
         "protocol": protocol,
+        "endpoint_generation": endpoint_generation,
         "notes": notes.strip(),
         "assets": assets,
         "builds": ordered_builds,
@@ -294,7 +311,7 @@ def main() -> int:
     sub = parser.add_subparsers(required=True)
 
     notes = sub.add_parser("notes")
-    notes.add_argument("--manifest", default="website/preview.json")
+    notes.add_argument("--manifest", default="distribution/preview.json")
     notes.add_argument("--previous")
     notes.add_argument("--commit", required=True)
     notes.add_argument("--build-id", required=True)
@@ -304,7 +321,7 @@ def main() -> int:
     notes.set_defaults(func=cmd_notes)
 
     manifest = sub.add_parser("manifest")
-    manifest.add_argument("--output", default="website/preview.json")
+    manifest.add_argument("--output", default="distribution/preview.json")
     manifest.add_argument("--repo", default="herdrdev/herdr")
     manifest.add_argument("--tag", required=True)
     manifest.add_argument("--build-id", required=True)
@@ -318,7 +335,7 @@ def main() -> int:
     manifest.set_defaults(func=cmd_manifest)
 
     current = sub.add_parser("current-commit")
-    current.add_argument("--manifest", default="website/preview.json")
+    current.add_argument("--manifest", default="distribution/preview.json")
     current.set_defaults(func=cmd_current_commit)
 
     select = sub.add_parser("select-commit")

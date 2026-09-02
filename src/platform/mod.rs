@@ -201,6 +201,14 @@ mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{begin_cli_output, end_cli_output};
 
+#[cfg(not(windows))]
+pub(crate) fn replace_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
 
@@ -280,6 +288,7 @@ pub(crate) fn interactive_unix_shell_command(
 
 pub(crate) fn quote_powershell_arg(value: &str) -> String {
     if !value.is_empty()
+        && !value.starts_with('-')
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
                 || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'+' | b'=')

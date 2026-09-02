@@ -7,7 +7,7 @@ use crate::api::schema::{
 };
 use crate::ui::AgentPanelEntry;
 
-use super::{AppState, Mode};
+use super::AppState;
 
 const MAX_FILTER_DEPTH: usize = 8;
 const MAX_FILTER_NODES: usize = 64;
@@ -78,11 +78,7 @@ pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentPanelEntry
 }
 
 pub(crate) fn presented_workspace_idx(app: &AppState) -> Option<usize> {
-    if app.mode == Mode::Navigate {
-        app.workspaces.get(app.selected).map(|_| app.selected)
-    } else {
-        app.active
-    }
+    app.active
 }
 
 fn normalize_source(source: &str) -> Result<String, String> {
@@ -449,6 +445,10 @@ mod tests {
         state
     }
 
+    fn projected_entries(state: &AppState) -> Vec<crate::ui::AgentPanelEntry> {
+        crate::ui::agent_panel_entries_from(state, &crate::terminal::TerminalRuntimeRegistry::new())
+    }
+
     fn current_workspace_view() -> AgentViewSetParams {
         AgentViewSetParams {
             source: "example.views".to_string(),
@@ -468,16 +468,15 @@ mod tests {
         let mut state = state_with_agents();
         state.agent_view_override = Some(current_workspace_view());
 
-        assert_eq!(crate::ui::agent_panel_entries(&state)[0].ws_idx, 0);
+        assert_eq!(projected_entries(&state)[0].ws_idx, 0);
 
-        state.mode = Mode::Navigate;
-        state.selected = 1;
-        let entries = crate::ui::agent_panel_entries(&state);
+        state.active = Some(1);
+        let entries = projected_entries(&state);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].ws_idx, 1);
 
-        state.mode = Mode::Settings;
-        let entries = crate::ui::agent_panel_entries(&state);
+        state.active = Some(0);
+        let entries = projected_entries(&state);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].ws_idx, 0);
     }
@@ -513,7 +512,7 @@ mod tests {
             }],
         });
 
-        let entries = crate::ui::agent_panel_entries(&state);
+        let entries = projected_entries(&state);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].ws_idx, 1);
         assert_eq!(entries[1].ws_idx, 0);
@@ -547,7 +546,7 @@ mod tests {
             sort: Vec::new(),
         });
 
-        let entries = crate::ui::agent_panel_entries(&state);
+        let entries = projected_entries(&state);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].agent_kind_label.as_deref(), Some("custom-agent"));
     }

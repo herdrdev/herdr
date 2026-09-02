@@ -314,25 +314,6 @@ fn read_upstream(repo: &mut RepoContext, branch: &str) -> Option<GitUpstreamIden
     })
 }
 
-#[cfg(test)]
-pub(crate) fn git_ahead_behind(cwd: &Path) -> Option<(usize, usize)> {
-    super::discovery::git_repo_root(cwd)?;
-
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    parse_git_ahead_behind_output(&stdout)
-}
-
 fn git_ahead_behind_between(
     cwd: &Path,
     head_oid: &str,

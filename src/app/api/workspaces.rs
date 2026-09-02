@@ -41,12 +41,25 @@ impl App {
         id: String,
         params: WorkspaceCreateParams,
     ) -> String {
+        let source_workspace_index = if params.cwd.is_some() {
+            None
+        } else {
+            match params.source_workspace_id.as_deref() {
+                Some(workspace_id) => match self
+                    .parse_workspace_id(workspace_id)
+                    .filter(|index| self.state.workspaces.get(*index).is_some())
+                {
+                    Some(index) => Some(index),
+                    None => return workspace_not_found(id, workspace_id),
+                },
+                None => self.workspace_creation_source(),
+            }
+        };
         let cwd = params.cwd.map(PathBuf::from).unwrap_or_else(|| {
-            let follow_cwd = self.workspace_creation_source().and_then(|ws_idx| {
-                self.focused_pane_cwd_in_workspace(ws_idx)
-                    .or_else(|| self.seed_cwd_from_workspace(ws_idx))
-            });
-            self.resolve_new_terminal_cwd(follow_cwd)
+            source_workspace_index.map_or_else(
+                || self.resolve_new_terminal_cwd(None),
+                |index| self.resolved_new_workspace_cwd_from(index),
+            )
         });
         let extra_env = match super::env::normalize_launch_env(params.env) {
             Ok(env) => env,
@@ -360,7 +373,11 @@ fn workspace_not_found(id: String, workspace_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{api::schema::SuccessResponse, config::Config, workspace::Workspace};
+    use crate::{
+        api::schema::{ErrorResponse, SuccessResponse},
+        config::Config,
+        workspace::Workspace,
+    };
 
     // `new_cwd = follow` must anchor on the focused pane for every creation
     // surface. Splits and tabs already do; a new workspace must follow the
@@ -373,7 +390,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
@@ -419,6 +436,7 @@ mod tests {
         let response = app.handle_workspace_create(
             "req".into(),
             WorkspaceCreateParams {
+                source_workspace_id: None,
                 cwd: None,
                 focus: false,
                 label: None,
@@ -444,11 +462,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(&focused_cwd);
     }
 
+    #[tokio::test]
+    async fn workspace_create_uses_explicit_source_workspace() {
+        use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
+        use crate::config::ShellModeConfig;
+
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.default_shell = exiting_test_command().into();
+        app.state.shell_mode = ShellModeConfig::NonLogin;
+        app.state.workspaces = vec![Workspace::test_new("first"), Workspace::test_new("source")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.ensure_test_terminals();
+        shutdown_test_runtimes(&mut app);
+
+        let source_cwd =
+            std::env::temp_dir().join(format!("herdr-ws-explicit-source-{}", std::process::id()));
+        std::fs::create_dir_all(&source_cwd).unwrap();
+        let pane_id = app.state.workspaces[1].focused_pane_id().unwrap();
+        let terminal_id = app.state.workspaces[1]
+            .terminal_id(pane_id)
+            .cloned()
+            .unwrap();
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = source_cwd.clone();
+        let source_workspace_id = app.public_workspace_id(1);
+
+        let response = app.handle_workspace_create(
+            "req".into(),
+            WorkspaceCreateParams {
+                source_workspace_id: Some(source_workspace_id),
+                cwd: None,
+                focus: false,
+                label: None,
+                env: Default::default(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::WorkspaceCreated { .. }
+        ));
+        assert_eq!(
+            crate::worktree::canonical_or_original(&app.state.workspaces[2].identity_cwd),
+            crate::worktree::canonical_or_original(&source_cwd)
+        );
+
+        let invalid = app.handle_workspace_create(
+            "invalid".into(),
+            WorkspaceCreateParams {
+                source_workspace_id: Some("w_999".into()),
+                cwd: None,
+                focus: false,
+                label: None,
+                env: Default::default(),
+            },
+        );
+        let error: ErrorResponse = serde_json::from_str(&invalid).unwrap();
+        assert_eq!(error.error.code, "workspace_not_found");
+
+        let captured = app.handle_workspace_create(
+            "captured".into(),
+            WorkspaceCreateParams {
+                source_workspace_id: Some("w_999".into()),
+                cwd: Some(source_cwd.display().to_string()),
+                focus: false,
+                label: None,
+                env: Default::default(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&captured).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::WorkspaceCreated { .. }
+        ));
+        assert_eq!(
+            crate::worktree::canonical_or_original(&app.state.workspaces[3].identity_cwd),
+            crate::worktree::canonical_or_original(&source_cwd)
+        );
+        shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_dir_all(&source_cwd);
+    }
+
     fn app_with_linked_worktree() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
@@ -604,7 +710,6 @@ mod tests {
 
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.id, "req");
-        assert_eq!(app.state.request_remove_linked_worktree, None);
         assert_eq!(app.state.workspaces.len(), 1);
         assert_eq!(app.state.workspaces[0].display_name(), "parent");
     }
@@ -613,7 +718,13 @@ mod tests {
     fn api_workspace_close_event_includes_final_worktree_snapshot() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = app_with_linked_worktree().state.workspaces;
         let workspace_id = app.state.workspaces[0].id.clone();
 
@@ -647,7 +758,13 @@ mod tests {
     fn workspace_metadata_tokens_patch_clear_and_emit_snapshot() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = vec![Workspace::test_new("one")];
         let workspace_id = app.public_workspace_id(0);
 
@@ -699,7 +816,13 @@ mod tests {
     fn workspace_token_ttl_expires_through_runtime_and_emits_update() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = vec![Workspace::test_new("one")];
         let workspace_id = app.public_workspace_id(0);
         let response = app.handle_workspace_report_metadata(
@@ -731,7 +854,13 @@ mod tests {
     fn api_workspace_move_reorders_workspaces() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = vec![
             Workspace::test_new("one"),
             Workspace::test_new("two"),
@@ -773,7 +902,13 @@ mod tests {
     fn api_workspace_move_block_reorders_atomically() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = vec![
             Workspace::test_new("child"),
             Workspace::test_new("normal"),
@@ -826,7 +961,13 @@ mod tests {
     fn api_workspace_move_noop_does_not_emit_event() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
         app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         let moved_id = app.public_workspace_id(0);
 

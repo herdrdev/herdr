@@ -1,17 +1,16 @@
-use super::AgentPanelEntry;
 use crate::config::{
     AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
     SpacesSidebarConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ResolvedToken {
+pub(crate) struct ResolvedToken {
     pub kind: ResolvedTokenKind,
     pub style: SidebarTokenStyle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ResolvedTokenKind {
+pub(crate) enum ResolvedTokenKind {
     StateIcon,
     StateText(String),
     Workspace(String),
@@ -35,13 +34,24 @@ impl ResolvedToken {
     }
 }
 
-pub(super) fn agent_rows(
+pub(crate) struct AgentTokenContext<'a> {
+    pub(crate) workspace: &'a str,
+    pub(crate) tab: Option<&'a str>,
+    pub(crate) pane: Option<&'a str>,
+    pub(crate) agent_label: Option<&'a str>,
+    pub(crate) terminal_title: Option<&'a str>,
+    pub(crate) terminal_title_stripped: Option<&'a str>,
+    pub(crate) canonical_agent: Option<crate::detect::Agent>,
+    pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+}
+
+pub(crate) fn agent_rows(
     config: &AgentsSidebarConfig,
-    entry: &AgentPanelEntry,
+    context: AgentTokenContext<'_>,
     state_text: &str,
 ) -> Vec<Vec<ResolvedToken>> {
     config
-        .rows_for_agent(entry.agent)
+        .rows_for_agent(context.canonical_agent)
         .iter()
         .filter_map(|row| {
             let resolved = row
@@ -54,26 +64,24 @@ pub(super) fn agent_rows(
                             Some(ResolvedTokenKind::StateText(state_text.to_string()))
                         }
                         AgentSidebarToken::Workspace => {
-                            Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
+                            Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
                         }
-                        AgentSidebarToken::Tab => {
-                            entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
-                        }
-                        AgentSidebarToken::Pane => {
-                            entry.pane_label.clone().map(ResolvedTokenKind::Pane)
-                        }
-                        AgentSidebarToken::Agent => {
-                            entry.agent_label.clone().map(ResolvedTokenKind::Agent)
-                        }
-                        AgentSidebarToken::TerminalTitle => entry
+                        AgentSidebarToken::Tab => context
+                            .tab
+                            .map(|value| ResolvedTokenKind::Tab(value.to_string())),
+                        AgentSidebarToken::Pane => context
+                            .pane
+                            .map(|value| ResolvedTokenKind::Pane(value.to_string())),
+                        AgentSidebarToken::Agent => context
+                            .agent_label
+                            .map(|value| ResolvedTokenKind::Agent(value.to_string())),
+                        AgentSidebarToken::TerminalTitle => context
                             .terminal_title
-                            .clone()
-                            .map(ResolvedTokenKind::TerminalTitle),
-                        AgentSidebarToken::TerminalTitleStripped => entry
+                            .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
+                        AgentSidebarToken::TerminalTitleStripped => context
                             .terminal_title_stripped
-                            .clone()
-                            .map(ResolvedTokenKind::TerminalTitle),
-                        AgentSidebarToken::Custom(name) => entry
+                            .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
+                        AgentSidebarToken::Custom(name) => context
                             .tokens
                             .get(name)
                             .cloned()
@@ -88,16 +96,16 @@ pub(super) fn agent_rows(
         .collect()
 }
 
-pub(super) struct SpaceTokenContext<'a> {
-    pub workspace: &'a str,
-    pub branch: Option<&'a str>,
-    pub state_text: &'a str,
-    pub ahead_behind: Option<(usize, usize)>,
-    pub tokens: &'a std::collections::HashMap<String, String>,
-    pub suppress_git_details: bool,
+pub(crate) struct SpaceTokenContext<'a> {
+    pub(crate) workspace: &'a str,
+    pub(crate) branch: Option<&'a str>,
+    pub(crate) state_text: &'a str,
+    pub(crate) ahead_behind: Option<(usize, usize)>,
+    pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+    pub(crate) suppress_git_details: bool,
 }
 
-pub(super) fn space_rows(
+pub(crate) fn space_rows(
     config: &SpacesSidebarConfig,
     context: SpaceTokenContext<'_>,
 ) -> Vec<Vec<ResolvedToken>> {
@@ -141,7 +149,7 @@ pub(super) fn space_rows(
         .collect()
 }
 
-pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
+pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
     if matches!(previous.kind, ResolvedTokenKind::StateIcon)
         || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
@@ -155,26 +163,41 @@ pub(super) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'
 mod tests {
     use super::*;
     use crate::config::{AgentSidebarToken, SpaceSidebarToken};
-    use crate::detect::AgentState;
 
-    fn entry() -> AgentPanelEntry {
-        AgentPanelEntry {
-            ws_idx: 0,
-            tab_idx: 0,
-            pane_id: crate::layout::PaneId::from_raw(1),
-            primary_label: "repo".into(),
-            primary_tab_label: None,
-            pane_label: None,
+    struct Entry {
+        workspace: String,
+        tab: Option<String>,
+        pane: Option<String>,
+        agent_label: Option<String>,
+        terminal_title: Option<String>,
+        terminal_title_stripped: Option<String>,
+        canonical_agent: Option<crate::detect::Agent>,
+        tokens: std::collections::HashMap<String, String>,
+    }
+
+    fn entry() -> Entry {
+        Entry {
+            workspace: "repo".into(),
+            tab: None,
+            pane: None,
+            agent_label: Some("pi".into()),
             terminal_title: None,
             terminal_title_stripped: None,
-            agent_label: Some("pi".into()),
-            agent_kind_label: Some("pi".into()),
-            agent: Some(crate::detect::Agent::Pi),
-            state: AgentState::Working,
-            seen: true,
-            last_agent_state_change_seq: None,
-            state_labels: std::collections::HashMap::new(),
+            canonical_agent: Some(crate::detect::Agent::Pi),
             tokens: std::collections::HashMap::new(),
+        }
+    }
+
+    fn context(entry: &Entry) -> AgentTokenContext<'_> {
+        AgentTokenContext {
+            workspace: &entry.workspace,
+            tab: entry.tab.as_deref(),
+            pane: entry.pane.as_deref(),
+            agent_label: entry.agent_label.as_deref(),
+            terminal_title: entry.terminal_title.as_deref(),
+            terminal_title_stripped: entry.terminal_title_stripped.as_deref(),
+            canonical_agent: entry.canonical_agent,
+            tokens: &entry.tokens,
         }
     }
 
@@ -193,7 +216,7 @@ mod tests {
             ..Default::default()
         };
 
-        let rows = agent_rows(&config, &entry, "working");
+        let rows = agent_rows(&config, context(&entry), "working");
 
         assert_eq!(rows.len(), 2);
         assert_eq!(
@@ -223,7 +246,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_rows(&config, &entry, "deep in the mines"),
+            agent_rows(&config, context(&entry), "deep in the mines"),
             vec![vec![
                 ResolvedToken::unstyled(ResolvedTokenKind::StateText("deep in the mines".into())),
                 ResolvedToken::unstyled(ResolvedTokenKind::Custom("reviewing auth".into())),
@@ -249,7 +272,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_rows(&config, &entry, "working"),
+            agent_rows(&config, context(&entry), "working"),
             vec![vec![
                 ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("⠋ raw title".into())),
                 ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle("raw title".into())),
@@ -271,15 +294,15 @@ mod tests {
         pi.agent_label = Some("renamed pi".into());
 
         assert_eq!(
-            agent_rows(&config, &pi, "working"),
+            agent_rows(&config, context(&pi), "working"),
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
                 "renamed pi".into()
             ))]]
         );
 
-        pi.agent = None;
+        pi.canonical_agent = None;
         assert_eq!(
-            agent_rows(&config, &pi, "working"),
+            agent_rows(&config, context(&pi), "working"),
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Workspace(
                 "repo".into()
             ))]]

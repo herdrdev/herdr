@@ -1,0 +1,35 @@
+name: Trigger Website Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/website-deploy.yml"
+      - "docs/preview/**"
+      - "docs/versions/**"
+      - "src/detect/manifests/**"
+      - "distribution/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-website-deploy
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Cloudflare Pages build
+        env:
+          DEPLOY_HOOK: ${{ secrets.HERDR_WEBSITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::HERDR_WEBSITE_DEPLOY_HOOK is not configured"
+            exit 1
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
+          echo "Triggered private website deploy"

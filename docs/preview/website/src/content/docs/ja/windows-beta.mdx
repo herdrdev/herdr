@@ -13,6 +13,12 @@ Windows に Herdr をネイティブインストールするには PowerShell �
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
+エンドポイントセキュリティによってこのファイルレス PowerShell コマンドがブロックされる場合は、コマンドプロンプトを開いて次を実行します：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
 Windows ビルドは安定版とプレビューの両方のアップデートチャンネルで提供されます。新規インストールはデフォルトで安定版を使い、通常の利用には安定版を推奨します。既存のプレビューインストールは、`herdr channel set stable` を実行するまでプレビューに残ります。古いプレビュービルドでこのコマンドが拒否される場合は、プレビューのまま一度 `herdr update` を実行してから再試行してください。プレビューでは `master` からの新しく検証の少ない修正を受け取れますが、リグレッションが起きる可能性があります。そのトレードオフを望む場合に限り、`herdr channel set preview` でオプトインしてください。
 
 インストーラーはリリースを `%USERPROFILE%\.herdr\packages\standalone\releases` に保存し、`%LOCALAPPDATA%\Programs\Herdr\bin` を現在のリリースに向け、実行中のプロセスがアップデートを妨げないよう少数の古いリリースを保持します。

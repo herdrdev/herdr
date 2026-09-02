@@ -86,10 +86,10 @@ index 0000000..0000000 100644
          // Ensure that the command line is nul terminated too!
          cmdline.push(0);
          Ok((exe, cmdline))
-@@ -820,4 +846,27 @@ mod tests {
-         cmd.env_remove("cARGO_pKG_aUTHORS");
-         assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
+@@ -810,6 +836,29 @@ mod tests {
+         }
      }
+-
 +
 +    #[cfg(windows)]
 +    #[test]
@@ -113,4 +113,7 @@ index 0000000..0000000 100644
 +        assert!(command.ends_with(r#"/d /c echo "hi""#), "{}", command);
 +        assert!(!command.contains(r#"\"hi\""#), "{}", command);
 +    }
- }
++
+     #[cfg(windows)]
+     #[test]
+     fn test_env_case_insensitive_override() {

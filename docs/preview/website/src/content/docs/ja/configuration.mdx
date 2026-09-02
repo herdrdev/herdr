@@ -273,6 +273,23 @@ yellow = "#f9e2af"
 
 色の値には、hex、名前付きの色、`rgb(r,g,b)`、または `reset`、`default`、`none`、`transparent` のようなリセットエイリアスが使えます。
 
+`auto_switch` が有効な場合は、ライト/ダーク別のサブテーブルを共有カスタム色の上に重ねられます:
+
+```toml
+[theme.custom]
+accent = "#89b4fa"
+
+[theme.custom.light]
+panel_bg = "#eff1f5"
+text = "#4c4f69"
+
+[theme.custom.dark]
+panel_bg = "#1e1e2e"
+text = "#cdd6f4"
+```
+
+有効なパレットには、組み込みテーマ、`[theme.custom]`、`[theme.custom.light]` または `[theme.custom.dark]` の順で適用されます。モード別のサブテーブルを省略すると、既存の共有上書きの挙動が維持されます。
+
 ## UI とサイドバー
 
 サイドバーは Herdr のメインダッシュボードです。サイズ、折りたたみモード、Agent パネルの並び順、マウスの挙動、ペインの境界線、その他の表示設定については、[設定リファレンス](/docs/config-reference/)で `ui.` を検索してください。

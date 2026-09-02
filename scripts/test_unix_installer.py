@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INSTALLER = REPO_ROOT / "website" / "install.sh"
+INSTALLER = REPO_ROOT / "distribution" / "install.sh"
 REQUIRED_COMMANDS = ("awk", "cat", "chmod", "cp", "mkdir", "mktemp", "mv", "rm")
 
 

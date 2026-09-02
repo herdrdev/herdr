@@ -103,6 +103,6 @@ herdr update --handoff
 herdr --remote workbox --handoff
 ```
 
-素の `herdr update` と素の `herdr --remote workbox` は、デフォルトでは通常の再起動/停止フローを使います。
+素の `herdr update` は新しいクライアントをインストールし、エンドポイント世代 1 のサーバーを動かしたままにします。素の `herdr --remote workbox` も、バージョンが違っていても互換性のあるリモートサーバーを動かしたままにします。停止が必要なのは世代 1 より前のサーバーを一度だけ更新するときです。対応する実行中サーバーをペインプロセスを失わず明示的に置き換えたい場合は `--handoff` を使います。
 
 `herdr update --handoff` は Herdr 自身のアップデーターが管理するインストールにのみ適用されます。Homebrew、mise、Nix のインストールはそれぞれのパッケージマネージャーで更新されるため、そこでは `herdr update` は無効化されており、ライブハンドオフは実行できません。

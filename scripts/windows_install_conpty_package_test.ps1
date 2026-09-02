@@ -6,8 +6,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$installerPath = (Resolve-Path -LiteralPath "$PSScriptRoot\..\website\install.ps1").Path
-$bootstrapPath = (Resolve-Path -LiteralPath "$PSScriptRoot\..\website\install.cmd").Path
+$installerPath = (Resolve-Path -LiteralPath "$PSScriptRoot\..\distribution\install.ps1").Path
+$bootstrapPath = (Resolve-Path -LiteralPath "$PSScriptRoot\..\distribution\install.cmd").Path
 $bootstrapContent = Get-Content -LiteralPath $bootstrapPath -Raw
 foreach ($forbiddenCommand in @("Invoke-RestMethod", "Invoke-WebRequest", "Invoke-Expression", "iex")) {
     if ($bootstrapContent -match "(?i)\b$forbiddenCommand\b") {
@@ -263,7 +263,7 @@ try {
     $badManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $previewManifestPath -Encoding utf8
     $downloadFailed = $false
     try {
-        & "$PSScriptRoot\..\website\install.ps1" `
+        & "$PSScriptRoot\..\distribution\install.ps1" `
             -Channel preview `
             -ManifestUrl $previewManifestUrl `
             -InstallDir $installDir `
@@ -389,7 +389,7 @@ try {
         }
     }
 
-    & "$PSScriptRoot\..\website\install.ps1" `
+    & "$PSScriptRoot\..\distribution\install.ps1" `
         -Channel preview `
         -ManifestUrl $previewManifestUrl `
         -InstallDir $installDir `
@@ -402,7 +402,7 @@ try {
     $junctionTarget = Join-Path $root "junction-target"
     Move-Item -LiteralPath $x64HostDir -Destination $junctionTarget
     New-Item -ItemType Junction -Path $x64HostDir -Target $junctionTarget | Out-Null
-    & "$PSScriptRoot\..\website\install.ps1" `
+    & "$PSScriptRoot\..\distribution\install.ps1" `
         -Channel preview `
         -ManifestUrl $previewManifestUrl `
         -InstallDir $installDir `
@@ -414,7 +414,7 @@ try {
 
     $rejected = $false
     try {
-        & "$PSScriptRoot\..\website\install.ps1" `
+        & "$PSScriptRoot\..\distribution\install.ps1" `
             -Channel preview `
             -ManifestUrl $previewManifestUrl `
             -InstallDir $installDir `
@@ -430,7 +430,7 @@ try {
     }
 
     $stableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
-    & "$PSScriptRoot\..\website\install.ps1" `
+    & "$PSScriptRoot\..\distribution\install.ps1" `
         -Channel stable `
         -ManifestUrl $stableManifestUrl `
         -InstallDir $installDir
@@ -465,7 +465,7 @@ exit /b 1
     $preserveBin = Join-Path $root "preserve-bin"
     $env:HERDR_HOME = $preserveHome
     $env:Path = "$fakeBin;$oldProcessPath"
-    & "$PSScriptRoot\..\website\install.ps1" `
+    & "$PSScriptRoot\..\distribution\install.ps1" `
         -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
         -InstallDir $preserveBin `
         -ExpectedBuildId "installer-test"
@@ -476,7 +476,7 @@ exit /b 1
         throw "installer did not preserve the existing preview channel"
     }
 
-    & "$PSScriptRoot\..\website\install.ps1" `
+    & "$PSScriptRoot\..\distribution\install.ps1" `
         -Channel stable `
         -ManifestUrl $stableManifestUrl `
         -InstallDir $preserveBin

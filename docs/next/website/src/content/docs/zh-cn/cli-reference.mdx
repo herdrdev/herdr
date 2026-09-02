@@ -15,7 +15,6 @@ herdr --session work          # 启动或连接命名会话
 herdr --remote workbox        # 通过 SSH 连接,使用本地按键绑定
 herdr --remote workbox --remote-keybindings server
 herdr --remote workbox --handoff
-herdr --no-session            # 单进程逃生舱
 herdr --default-config        # 打印默认配置
 herdr update                  # 从配置的通道下载并安装
 herdr update --handoff        # 对受支持的运行中服务器启用实时交接
@@ -291,7 +290,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
-`agent prompt` 遵循当前的 bracketed paste 模式,即使智能体处于 working 也会先发送文本,短暂延迟后再发送编码后的 Enter。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在五秒内产生可观察的生命周期变化，否则 Herdr 返回 `agent_prompt_stalled`；调用方超时不超过五秒时，仍返回普通的 `timeout` 错误。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
+`agent prompt` 遵循当前的 bracketed paste 模式,即使智能体处于 working 也会先发送文本,短暂延迟后再发送编码后的 Enter。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 
 `idle` 表示智能体在等待输入,且其标签页已在聚焦的 Herdr 界面中显示。`done` 是相同的底层 idle 状态,用于未查看的后台工作完成后。聚焦该标签页或用 `pane focus` / `agent focus` 指向它会标记为已查看;仅通过 CLI 读取不会改变它。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
@@ -324,7 +323,7 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 
 `pane wait-output` 会立即检查所选快照,所以已经存在的输出也能匹配。默认来源名是 `recent`;匹配时会把最近 80 个已渲染终端行作为未折行输出处理。`--lines` 可以修改这个行数限制。`--match` 在单行中查找字面子串;`--regex` 使用 Rust 正则表达式语法并逐行匹配。
 
-`pane wait-output`、`agent wait` 和 `agent prompt --wait` 在省略 `--timeout` 时会无限等待。超时或服务器错误以 JSON 写到 stderr,退出状态为 1。CLI 用法错误的退出状态为 2。
+`pane wait-output` 和 `agent wait` 在省略 `--timeout` 时会无限等待。对于 `agent prompt --wait`，观察到活动后，或提示开始时已处于 `working`，等待稳定状态的过程不会超时；如果提示从 non-working 状态开始且未观察到活动，五秒后仍会返回 `agent_prompt_stalled`。超时或服务器错误以 JSON 写到 stderr,退出状态为 1。CLI 用法错误的退出状态为 2。
 
 ## 集成
 

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -15,7 +13,16 @@ static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
-pub const CURRENT_PROTOCOL: u32 = 21;
+pub const CURRENT_PROTOCOL: u32 = 22;
+pub const CURRENT_ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
+pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
+pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
+pub const SERVER_MESSAGE_PANE_SURFACE: u32 = 13;
+pub const SERVER_MESSAGE_SEMANTIC_NOTIFICATION: u32 = 14;
+pub const SERVER_MESSAGE_PANE_SURFACE_PATCH: u32 = 19;
+const CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT: u32 = 13;
+const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 18;
+const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
@@ -108,7 +115,7 @@ pub fn wait_for_file(path: &Path, timeout: Duration) {
     panic!("file did not appear at {}", path.display());
 }
 
-pub fn encode_varint_u32(v: u32) -> Vec<u8> {
+fn encode_varint_u32(v: u32) -> Vec<u8> {
     if v < 251 {
         vec![v as u8]
     } else if v < 65536 {
@@ -122,7 +129,7 @@ pub fn encode_varint_u32(v: u32) -> Vec<u8> {
     }
 }
 
-pub fn encode_varint_u16(v: u16) -> Vec<u8> {
+fn encode_varint_u16(v: u16) -> Vec<u8> {
     if v < 251 {
         vec![v as u8]
     } else {
@@ -132,14 +139,14 @@ pub fn encode_varint_u16(v: u16) -> Vec<u8> {
     }
 }
 
-pub fn frame_message(payload: &[u8]) -> Vec<u8> {
+fn frame_message(payload: &[u8]) -> Vec<u8> {
     let len = payload.len() as u32;
     let mut framed = len.to_le_bytes().to_vec();
     framed.extend_from_slice(payload);
     framed
 }
 
-pub fn decode_varint_u32(payload: &[u8], offset: usize) -> Result<(u32, usize), String> {
+fn decode_varint_u32(payload: &[u8], offset: usize) -> Result<(u32, usize), String> {
     if offset >= payload.len() {
         return Err("payload too short for varint".into());
     }
@@ -178,6 +185,25 @@ fn encode_varint_enum(variant_idx: u32, fields: &[&[u8]]) -> Vec<u8> {
         buf.extend_from_slice(field);
     }
     buf
+}
+
+fn encode_string(value: &str) -> Vec<u8> {
+    let mut encoded = encode_varint_u32(value.len() as u32);
+    encoded.extend_from_slice(value.as_bytes());
+    encoded
+}
+
+fn decode_string(payload: &[u8], offset: &mut usize) -> Result<String, String> {
+    let (len, consumed) = decode_varint_u32(payload, *offset)?;
+    *offset += consumed;
+    let len = len as usize;
+    if *offset + len > payload.len() {
+        return Err("payload too short for string content".into());
+    }
+    let value = String::from_utf8(payload[*offset..*offset + len].to_vec())
+        .map_err(|err| err.to_string())?;
+    *offset += len;
+    Ok(value)
 }
 
 fn decode_welcome(payload: &[u8]) -> Result<(u32, Option<String>), String> {
@@ -220,31 +246,16 @@ fn decode_welcome(payload: &[u8]) -> Result<(u32, Option<String>), String> {
     Ok((version, error))
 }
 
-pub fn client_handshake(
+fn read_handshake_response(
     stream: &mut UnixStream,
-    version: u32,
-    cols: u16,
-    rows: u16,
-) -> Result<(u32, Option<String>), String> {
+    hello_payload: &[u8],
+) -> Result<Vec<u8>, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
-
-    let hello_payload = encode_varint_enum(
-        0,
-        &[
-            &encode_varint_u32(version),
-            &encode_varint_u16(cols),
-            &encode_varint_u16(rows),
-            &encode_varint_u32(8),  // cell_width_px
-            &encode_varint_u32(16), // cell_height_px
-            &encode_varint_u32(0),  // RenderEncoding::SemanticFrame
-            &encode_varint_u32(0),  // ClientKeybindings::Server
-            &encode_varint_u32(0),  // ClientLaunchMode::App
-        ],
-    );
-    let framed = frame_message(&hello_payload);
-    stream.write_all(&framed).map_err(|e| e.to_string())?;
+    stream
+        .write_all(&frame_message(hello_payload))
+        .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
     let mut len_buf = [0u8; 4];
@@ -253,10 +264,82 @@ pub fn client_handshake(
     if len > 2 * 1024 * 1024 {
         return Err(format!("oversized response: {len}"));
     }
-
     let mut payload = vec![0u8; len];
     stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
-    decode_welcome(&payload)
+    Ok(payload)
+}
+
+pub fn client_handshake(
+    stream: &mut UnixStream,
+    version: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(u32, Option<String>), String> {
+    let hello_payload = encode_varint_enum(
+        0,
+        &[
+            &encode_varint_u32(version),
+            &encode_varint_u16(cols),
+            &encode_varint_u16(rows),
+            &encode_varint_u32(8),  // cell_width_px
+            &encode_varint_u32(16), // cell_height_px
+            &[0],                   // pixel_mouse = false
+        ],
+    );
+    let response = read_handshake_response(stream, &hello_payload)?;
+    decode_welcome(&response)
+}
+
+pub fn client_shell_handshake(
+    stream: &mut UnixStream,
+    endpoint_generation: u32,
+    surface_cols: u16,
+    surface_rows: u16,
+) -> Result<(u32, Option<String>), String> {
+    let data = serde_json::json!({
+        "generation": endpoint_generation,
+        "cell_width_px": 8,
+        "cell_height_px": 16,
+        "surface_size": {"cols": surface_cols, "rows": surface_rows},
+        "pixel_mouse": false,
+        "direct_graphics": false,
+        "endpoint_keybindings": false,
+        "mouse_capture": false,
+        "snapshot_codecs": ["shell.snapshot.v1"],
+        "surface_codecs": ["shell.surface.v1"],
+        "input_codecs": ["shell.input.semantic.v1"],
+        "blob_codecs": ["shell.blob.v1"]
+    })
+    .to_string();
+    let hello_payload = encode_varint_enum(
+        CLIENT_MESSAGE_ENDPOINT_CONTROL,
+        &[&encode_string("endpoint.hello.v1"), &encode_string(&data)],
+    );
+    let response = read_handshake_response(stream, &hello_payload)?;
+    let mut offset = 0;
+    let (variant, consumed) = decode_varint_u32(&response, offset)?;
+    offset += consumed;
+    if variant != SERVER_MESSAGE_ENDPOINT_CONTROL {
+        return Err(format!(
+            "expected EndpointControl (variant {SERVER_MESSAGE_ENDPOINT_CONTROL}), got variant {variant}"
+        ));
+    }
+    let kind = decode_string(&response, &mut offset)?;
+    if kind != "endpoint.welcome.v1" {
+        return Err(format!("expected endpoint.welcome.v1, got {kind}"));
+    }
+    let data = decode_string(&response, &mut offset)?;
+    let value: serde_json::Value = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    let generation = value["generation"]
+        .as_u64()
+        .ok_or_else(|| "endpoint welcome omitted generation".to_owned())?
+        as u32;
+    let error = value["error"]
+        .as_object()
+        .and_then(|error| error.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok((generation, error))
 }
 
 pub fn read_server_message(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), String> {
@@ -281,16 +364,39 @@ pub fn read_server_message(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), St
     Ok((variant, payload[consumed..].to_vec()))
 }
 
-pub fn send_input(stream: &mut UnixStream, data: &[u8]) -> Result<(), String> {
-    let mut buf = encode_varint_u32(1);
-    buf.extend_from_slice(&encode_varint_u32(data.len() as u32));
-    buf.extend_from_slice(data);
-    let framed = frame_message(&buf);
+pub fn send_client_shell_shift_enter(stream: &mut UnixStream, pane_id: &str) -> Result<(), String> {
+    let mut payload = encode_varint_u32(CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT);
+    payload.extend_from_slice(&encode_varint_u32(pane_id.len() as u32));
+    payload.extend_from_slice(pane_id.as_bytes());
+    payload.extend_from_slice(&encode_varint_u32(1)); // one pane input event
+    payload.extend_from_slice(&encode_varint_u32(0)); // Key
+    payload.extend_from_slice(&encode_varint_u32(1)); // Enter
+    payload.push(1); // Shift
+    payload.extend_from_slice(&encode_varint_u32(0)); // Press
+    payload.extend_from_slice(&encode_varint_u16(1));
+    payload.push(0); // no shifted codepoint
+    payload.push(0); // no generated text
+    payload.push(0); // does not track release
+    payload.push(0); // no physical key id
+    payload.push(0); // no Windows key record
+
     stream
-        .write_all(&framed)
-        .map_err(|e| format!("write input: {e}"))?;
-    stream.flush().map_err(|e| format!("flush input: {e}"))?;
-    Ok(())
+        .write_all(&frame_message(&payload))
+        .map_err(|e| format!("write client shell key: {e}"))?;
+    stream
+        .flush()
+        .map_err(|e| format!("flush client shell key: {e}"))
+}
+
+pub fn send_client_shell_focus(stream: &mut UnixStream, focused: bool) -> Result<(), String> {
+    let mut payload = encode_varint_u32(CLIENT_MESSAGE_CLIENT_SHELL_FOCUS);
+    payload.push(u8::from(focused));
+    stream
+        .write_all(&frame_message(&payload))
+        .map_err(|e| format!("write client shell focus: {e}"))?;
+    stream
+        .flush()
+        .map_err(|e| format!("flush client shell focus: {e}"))
 }
 
 pub fn send_detach(stream: &mut UnixStream) -> Result<(), String> {
@@ -330,18 +436,60 @@ pub fn wait_for_message_variant(
     timeout: Duration,
     variant: u32,
 ) -> Result<bool, String> {
+    wait_for_message_variants(stream, timeout, &[variant])
+}
+
+pub fn wait_for_message_variants(
+    stream: &mut UnixStream,
+    timeout: Duration,
+    variants: &[u32],
+) -> Result<bool, String> {
     stream
         .set_read_timeout(Some(Duration::from_millis(200)))
         .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match read_server_message(stream) {
-            Ok((got, _)) if got == variant => return Ok(true),
+            Ok((got, _)) if variants.contains(&got) => return Ok(true),
             Ok(_) => continue,
             Err(_) => continue,
         }
     }
     Ok(false)
+}
+
+pub fn wait_for_client_shell_bootstrap(
+    stream: &mut UnixStream,
+    timeout: Duration,
+) -> Result<(), String> {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + timeout;
+    let mut saw_snapshot = false;
+    while Instant::now() < deadline {
+        match read_server_message(stream) {
+            Ok((SERVER_MESSAGE_ENDPOINT_CONTROL, payload)) => {
+                let mut offset = 0;
+                if decode_string(&payload, &mut offset).as_deref() == Ok("shell.snapshot.v1") {
+                    saw_snapshot = true;
+                }
+            }
+            Ok((SERVER_MESSAGE_PANE_SURFACE, _)) if saw_snapshot => return Ok(()),
+            Ok((SERVER_MESSAGE_PANE_SURFACE, _)) => {
+                return Err("client shell pane surface arrived before its snapshot".into());
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    Err(format!(
+        "timed out waiting for client shell {}",
+        if saw_snapshot {
+            "pane surface"
+        } else {
+            "snapshot"
+        }
+    ))
 }
 
 pub fn wait_for_disconnect(stream: &mut UnixStream, timeout: Duration) -> Result<bool, String> {

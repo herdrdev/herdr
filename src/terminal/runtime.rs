@@ -245,11 +245,6 @@ impl TerminalRuntime {
         self.0.agent_detection_reset_notify_for_test()
     }
 
-    #[cfg(test)]
-    pub(crate) fn agent_detection_enabled_for_test(&self) -> bool {
-        self.0.agent_detection_enabled_for_test()
-    }
-
     pub fn set_full_lifecycle_authority_active(&self, active: bool) {
         self.0.set_full_lifecycle_authority_active(active);
     }
@@ -283,23 +278,20 @@ impl TerminalRuntime {
         self.0.scroll_metrics()
     }
 
-    pub(crate) fn search_text_matches(
+    pub(crate) fn search_text_window(
         &self,
         query: &str,
         case_sensitive: bool,
-    ) -> Vec<crate::pane::TerminalTextMatch> {
-        self.0.search_text_matches(query, case_sensitive)
-    }
-
-    pub(crate) fn text_match_is_current(&self, text_match: crate::pane::TerminalTextMatch) -> bool {
-        self.0.text_match_is_current(text_match)
-    }
-
-    pub(crate) fn text_matches_are_current(
-        &self,
-        text_matches: &[crate::pane::TerminalTextMatch],
-    ) -> Vec<bool> {
-        self.0.text_matches_are_current(text_matches)
+        direction: crate::pane::TerminalSearchDirection,
+        cursor: crate::pane::TerminalTextPoint,
+        previous: Option<(
+            crate::pane::TerminalTextPoint,
+            crate::pane::TerminalTextPoint,
+        )>,
+        limit: usize,
+    ) -> crate::pane::TerminalSearchWindow {
+        self.0
+            .search_text_window(query, case_sensitive, direction, cursor, previous, limit)
     }
 
     pub(crate) fn word_motion_target(
@@ -311,17 +303,16 @@ impl TerminalRuntime {
         self.0.word_motion_target(row, col, motion)
     }
 
-    /// Collects the complete terminal input-mode snapshot.
-    ///
-    /// This performs multiple terminal queries. Keep it out of render/layout
-    /// and pane-scaled loops; add a narrow accessor when one fact is needed.
-    #[cfg(test)]
-    pub fn input_state(&self) -> Option<crate::pane::InputState> {
-        self.0.input_state()
+    pub(crate) fn terminal_dimensions(&self) -> Option<(u16, u16)> {
+        self.0.terminal_dimensions()
     }
 
-    pub fn keyboard_report_all_requested(&self) -> bool {
-        self.0.keyboard_report_all_requested()
+    pub(crate) fn paragraph_motion_target(
+        &self,
+        row: u32,
+        direction: i8,
+    ) -> Option<crate::pane::TerminalTextPoint> {
+        self.0.paragraph_motion_target(row, direction)
     }
 
     pub fn bracketed_paste_enabled(&self) -> bool {
@@ -446,24 +437,25 @@ impl TerminalRuntime {
         self.0.keyboard_protocol()
     }
 
-    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
-        self.0.encode_terminal_key(key)
+    pub fn modify_other_keys_level(&self) -> u8 {
+        self.0.modify_other_keys_level()
     }
 
-    pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.0.send_bytes(bytes).await
+    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+        self.0.encode_terminal_key(key)
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.0.try_send_bytes(bytes)
     }
 
-    pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        self.0.send_bytes_after(bytes, delay);
-    }
-
-    pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.0.send_paste(text).await
+    pub fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.0.queue_user_input_submission(text, enter, delay)
     }
 
     pub fn try_send_paste(&self, text: String) -> Result<(), mpsc::error::TrySendError<Bytes>> {

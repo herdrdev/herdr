@@ -191,8 +191,8 @@ layers are placed in stable `(z_index, layer_id)` order. Each stream exclusively
 closing it removes that layer. Inline frames accept `png`, `rgb`, `rgba`, or
 `bgra`; BGRA is normalized once to owned RGBA. Herdr advances the host cache
 one image transaction per render pass, so arbitrary layer sets progress without
-an aggregate frame. Headless transport keeps each transaction within its 32 MiB
-wire limit; local monolithic rendering does not apply that transport limit.
+an aggregate frame. Client transport keeps each transaction within its 32 MiB
+wire limit.
 
 ```json
 {"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
@@ -219,8 +219,8 @@ inline. Herdr replies with a `pane_graphics_frame_ack` only after the terminal
 accepts the file, or after a safe owned inline fallback is installed. Confirmed
 file-transport failure disables direct files for that client connection without
 disabling exact pixel mouse. A timeout or client loss closes the stream without
-acknowledging source reuse. Monolithic `--no-session` mode advertises neither
-fast file transport nor exact pixel mouse and remains on owned inline fallback.
+acknowledging source reuse. Clients that cannot negotiate direct file transport
+remain on the owned inline fallback.
 
 Direct files are always complete canonical `width * height * 4` RGBA frames.
 `file_frame_max_bytes` is the limit that remains eligible for owned inline fallback.
@@ -934,7 +934,15 @@ Errors look like this:
 
 ## Protocol stability
 
-Herdr has a protocol version for client/server compatibility. Protocol changes
-are reviewed for release compatibility.
+The client-rendered Herdr UI uses a stable endpoint generation for local and SSH
+servers. Client and server builds do not need to match. During connection setup,
+they agree on the core snapshot, screen, input, and blob codecs, and the server advertises
+the API methods it supports. A missing method disables only that action on that
+server and shows a client-local notice; it does not disconnect the UI. Rejected
+or timed-out actions are also reported without ending the connection. Servers
+from before endpoint generation 1 need one final update.
 
-Check the server protocol with `ping` or `herdr status` before depending on new behavior. Handle unknown fields gracefully.
+The numbered binary protocol remains for same-install and internal operations,
+including direct terminal attach and live handoff. Check `ping` or `herdr status`
+before using those operations across different builds. JSON API clients should
+ignore unknown fields and handle unsupported methods as normal errors.

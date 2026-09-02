@@ -1,21 +1,7 @@
 use super::{HeadlessServer, RenderImpact};
 use crate::api;
 use crate::protocol::{ServerMessage, MAX_GRAPHICS_FRAME_SIZE};
-use crate::server::clients::{render_targets, ClientConnectionMode, DeferredRender};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RetainedGraphicsOutcome {
-    Sent,
-    Deferred,
-    Fallback,
-}
-
-pub(super) fn frame_pane_graphics(bytes: Vec<u8>) -> Vec<u8> {
-    if bytes.is_empty() {
-        return bytes;
-    }
-    [b"\x1b7".as_slice(), &bytes, b"\x1b8"].concat()
-}
+use crate::server::clients::ClientConnectionMode;
 
 impl HeadlessServer {
     pub(super) fn pane_graphics_runtime_active(&self) -> bool {
@@ -76,7 +62,6 @@ impl HeadlessServer {
                             .and_then(crate::app::pane_graphics::Layer::direct_lease)
                             .map(|lease| {
                                 (
-                                    slot.host_image_id,
                                     lease.path().to_string_lossy().into_owned(),
                                     lease.len() as u64,
                                     lease.fingerprint(),
@@ -84,21 +69,35 @@ impl HeadlessServer {
                             })
                     })
                 });
-                if let (Some(key), Some((image_id, path, expected_len, transfer_id))) =
+                if let (Some(key), Some((path, expected_len, transfer_id))) =
                     (direct_key.clone(), direct_frame)
                 {
-                    let command = self.clients.get(&client_id).and_then(|client| {
-                        crate::kitty_graphics::prepare_direct_file(
-                            &self.app.state,
-                            &self.app.pane_graphics,
-                            self.app.state.view.tab_surface(),
-                            client.cell_size,
-                            !internal_changed,
-                            &client.graphics_cache,
-                            &key,
-                        )
+                    let prepared = self.clients.get(&client_id).and_then(|client| {
+                        matches!(client.mode, ClientConnectionMode::ClientShell).then_some(())?;
+                        let layer = self
+                            .app
+                            .pane_graphics
+                            .slots
+                            .get(&key)
+                            .and_then(|slot| slot.layer.as_ref())?;
+                        let asset = crate::kitty_graphics::surface::pane_layer_asset_key(
+                            &self.app, &key, layer,
+                        )?;
+                        let (image_id, control) =
+                            crate::kitty_graphics::surface::direct_upload_control(
+                                &self.client_shell_boot_id,
+                                &asset,
+                            );
+                        Some((
+                            crate::kitty_graphics::DirectFileCommand {
+                                leading: Vec::new(),
+                                control,
+                            },
+                            Some(asset),
+                            image_id,
+                        ))
                     });
-                    let Some(command) = command else {
+                    let Some((command, surface_asset, image_id)) = prepared else {
                         if self.install_inline_fallback(&key) {
                             if msg.respond_to.send(response).is_err() {
                                 self.retire_direct_gate(&key);
@@ -123,6 +122,7 @@ impl HeadlessServer {
                         transfer_id,
                         leading: command.leading,
                         control: command.control,
+                        surface_asset,
                     };
                     let send =
                         Self::frame_server_message_with_max(&message, MAX_GRAPHICS_FRAME_SIZE)
@@ -144,6 +144,7 @@ impl HeadlessServer {
                             if let Some(slot) = self.app.pane_graphics.slots.get_mut(&key) {
                                 slot.direct_gate = Some(crate::app::pane_graphics::DirectGate {
                                     transfer_id,
+                                    image_id,
                                     client_id,
                                     deadline: std::time::Instant::now()
                                         + crate::app::pane_graphics::DIRECT_DELIVERY_TIMEOUT,
@@ -267,10 +268,14 @@ impl HeadlessServer {
         image_id: u32,
     ) -> bool {
         if let Some(gate) = self.app.pane_graphics.slots.values_mut().find_map(|slot| {
-            (slot.host_image_id == image_id && slot.stream_is_active())
+            slot.stream_is_active()
                 .then_some(slot.direct_gate.as_mut())
                 .flatten()
-                .filter(|gate| gate.client_id == client_id && gate.transfer_id == transfer_id)
+                .filter(|gate| {
+                    gate.client_id == client_id
+                        && gate.transfer_id == transfer_id
+                        && gate.image_id == image_id
+                })
         }) {
             gate.written = true;
             gate.deadline =
@@ -297,7 +302,7 @@ impl HeadlessServer {
                     slot.stream_is_active()
                         && gate.client_id == client_id
                         && gate.transfer_id == transfer_id
-                        && slot.host_image_id == image_id
+                        && gate.image_id == image_id
                         && (!success || gate.written)
                 })
                 .then(|| key.clone())
@@ -312,11 +317,11 @@ impl HeadlessServer {
             .iter()
             .any(|workspace| workspace.pane_state(key.0).is_some());
         if !pane_is_live {
-            self.retire_direct_gate(&key);
+            self.retire_direct_gate_with_client_notice(&key);
             return false;
         }
         if success {
-            let (gate, host_image_id) = {
+            let gate = {
                 let slot = self
                     .app
                     .pane_graphics
@@ -329,23 +334,8 @@ impl HeadlessServer {
                 if let Some(layer) = slot.layer.as_mut() {
                     layer.mark_resident(client_id);
                 }
-                (
-                    slot.direct_gate.take().expect("matched gate"),
-                    slot.host_image_id,
-                )
+                slot.direct_gate.take().expect("matched gate")
             };
-            if let (Some(client), Some(layer)) = (
-                self.clients.get_mut(&client_id),
-                self.app
-                    .pane_graphics
-                    .slots
-                    .get(&key)
-                    .and_then(|slot| slot.layer.as_ref()),
-            ) {
-                client
-                    .graphics_cache
-                    .trust_pane_layer(&key, host_image_id, layer);
-            }
             if gate.respond_to.send(gate.success_response).is_err() {
                 self.retire_direct_gate(&key);
                 return true;
@@ -361,9 +351,6 @@ impl HeadlessServer {
             self.retire_direct_gate(&key);
             self.retire_all_direct_graphics();
             return true;
-        }
-        if let Some(client) = self.clients.get_mut(&client_id) {
-            client.graphics_cache.forget_pane_layer(&key, image_id);
         }
         let gate = self
             .app
@@ -404,7 +391,7 @@ impl HeadlessServer {
                         *client_id,
                         ServerMessage::GraphicsTransmissionRetired {
                             transfer_id: gate.transfer_id,
-                            image_id: slot.host_image_id,
+                            image_id: gate.image_id,
                         },
                     );
                 }
@@ -421,8 +408,53 @@ impl HeadlessServer {
         !expired.is_empty()
     }
 
+    fn retire_direct_gate_with_client_notice(&mut self, key: &crate::app::pane_graphics::Key) {
+        if let Some((client_id, transfer_id, image_id)) = self
+            .app
+            .pane_graphics
+            .slots
+            .get(key)
+            .and_then(|slot| slot.direct_gate.as_ref())
+            .map(|gate| (gate.client_id, gate.transfer_id, gate.image_id))
+        {
+            self.send_to_client(
+                client_id,
+                ServerMessage::GraphicsTransmissionRetired {
+                    transfer_id,
+                    image_id,
+                },
+            );
+        }
+        self.retire_direct_gate(key);
+    }
+
+    pub(super) fn retain_live_pane_graphics(&mut self) -> bool {
+        let dead_direct = self
+            .app
+            .pane_graphics
+            .slots
+            .iter()
+            .filter(|((pane_id, _), slot)| {
+                slot.direct_gate.is_some()
+                    && !self
+                        .app
+                        .state
+                        .workspaces
+                        .iter()
+                        .any(|workspace| workspace.pane_state(*pane_id).is_some())
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let changed = !dead_direct.is_empty();
+        for key in dead_direct {
+            self.retire_direct_gate_with_client_notice(&key);
+        }
+        let retained = self.app.pane_graphics.retain_live_panes(&self.app.state);
+        changed || retained
+    }
+
     pub(super) fn retire_all_direct_graphics(&mut self) {
-        let keys = self
+        let retired = self
             .app
             .pane_graphics
             .slots
@@ -432,9 +464,26 @@ impl HeadlessServer {
                     .as_ref()
                     .is_some_and(crate::app::pane_graphics::Layer::terminal_only)
             })
-            .map(|(key, _)| key.clone())
+            .map(|(key, slot)| {
+                let notification = slot
+                    .direct_gate
+                    .as_ref()
+                    .map(|gate| (gate.client_id, gate.transfer_id, gate.image_id));
+                (key.clone(), notification)
+            })
             .collect::<Vec<_>>();
-        for key in keys {
+        for (_, notification) in &retired {
+            if let Some((client_id, transfer_id, image_id)) = notification {
+                self.send_to_client(
+                    *client_id,
+                    ServerMessage::GraphicsTransmissionRetired {
+                        transfer_id: *transfer_id,
+                        image_id: *image_id,
+                    },
+                );
+            }
+        }
+        for (key, _) in retired {
             self.retire_direct_gate(&key);
         }
     }
@@ -458,129 +507,6 @@ impl HeadlessServer {
             .collect::<Vec<_>>();
         for key in keys {
             self.retire_direct_gate(&key);
-        }
-    }
-
-    pub(super) fn render_retained_graphics_update_and_stream(&mut self) -> RetainedGraphicsOutcome {
-        crate::render_prof::event("retained_graphics.attempt");
-        if self.app.full_redraw_pending {
-            crate::render_prof::event("retained_graphics_fallback.full_redraw_pending");
-            return RetainedGraphicsOutcome::Fallback;
-        }
-
-        let render_targets = render_targets(&self.clients, self.foreground_client_id);
-        let mut app_view_size = None;
-        for (_, terminal_size, _, _, mode) in &render_targets {
-            if !matches!(mode, ClientConnectionMode::App) {
-                continue;
-            }
-            if app_view_size.is_some_and(|size| size != *terminal_size) {
-                crate::render_prof::event("retained_graphics_fallback.mixed_app_geometry");
-                return RetainedGraphicsOutcome::Fallback;
-            }
-            app_view_size = Some(*terminal_size);
-        }
-        let mut deferred = false;
-        let mut prepared = Vec::new();
-
-        for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
-            if !matches!(mode, ClientConnectionMode::App) {
-                continue;
-            }
-            let Some(client) = self.clients.get_mut(&client_id) else {
-                crate::render_prof::event("retained_graphics_fallback.client_missing");
-                return RetainedGraphicsOutcome::Fallback;
-            };
-            if client.deferred_render() != DeferredRender::None {
-                deferred = true;
-                continue;
-            }
-            if client.graphics_surface_reset_pending || !cell_size.is_known() {
-                crate::render_prof::event("retained_graphics_fallback.client_state");
-                return RetainedGraphicsOutcome::Fallback;
-            }
-            let Some(last_frame) = client.render_state.last_frame() else {
-                crate::render_prof::event("retained_graphics_fallback.no_last_frame");
-                return RetainedGraphicsOutcome::Fallback;
-            };
-            if last_frame.width != cols || last_frame.height != rows {
-                crate::render_prof::event("retained_graphics_fallback.frame_size_mismatch");
-                return RetainedGraphicsOutcome::Fallback;
-            }
-            if client.writer.is_none() {
-                crate::render_prof::event("retained_graphics_fallback.writer_missing");
-                return RetainedGraphicsOutcome::Fallback;
-            }
-
-            let mut next_graphics_cache = client.graphics_cache.clone();
-            let encode_started = crate::render_prof::timer();
-            let encoded = crate::kitty_graphics::encode_local_pane_graphics(
-                &self.app.state,
-                &self.app.pane_graphics,
-                &self.app.terminal_runtimes,
-                self.app.state.view.tab_surface(),
-                cell_size,
-                Some(crate::kitty_graphics::HEADLESS_GRAPHICS_TRANSACTION_BUDGET),
-                &mut next_graphics_cache,
-            );
-            crate::render_prof::duration_since("retained_graphics.graphics_encode", encode_started);
-            prepared.push((client_id, encoded, next_graphics_cache));
-        }
-
-        let mut broken_clients = Vec::new();
-        for (client_id, encoded, next_graphics_cache) in prepared {
-            let Some(client) = self.clients.get_mut(&client_id) else {
-                continue;
-            };
-            let serialized = if encoded.bytes.is_empty() {
-                None
-            } else {
-                match Self::frame_server_message_with_max(
-                    &ServerMessage::Graphics {
-                        bytes: frame_pane_graphics(encoded.bytes),
-                    },
-                    MAX_GRAPHICS_FRAME_SIZE,
-                ) {
-                    Ok(serialized) => Some(serialized),
-                    Err(_) => {
-                        crate::render_prof::event("retained_graphics_fallback.oversized");
-                        return RetainedGraphicsOutcome::Fallback;
-                    }
-                }
-            };
-            let result = match (serialized, client.writer.as_ref()) {
-                (None, _) => Ok(()),
-                (Some(bytes), Some(writer)) => writer.render.try_send(bytes),
-                (Some(bytes), None) => Err(std::sync::mpsc::TrySendError::Disconnected(bytes)),
-            };
-            match result {
-                Ok(()) => {
-                    client.graphics_cache = next_graphics_cache;
-                    if encoded.incomplete {
-                        client.defer_full_render();
-                        deferred = true;
-                    } else {
-                        client.clear_deferred_render();
-                    }
-                    crate::render_prof::event("retained_graphics.sent");
-                }
-                Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                    client.defer_full_render();
-                    deferred = true;
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                    broken_clients.push(client_id)
-                }
-            }
-        }
-        for client_id in broken_clients {
-            self.remove_client_and_resize_if_needed(client_id);
-        }
-
-        if deferred {
-            RetainedGraphicsOutcome::Deferred
-        } else {
-            RetainedGraphicsOutcome::Sent
         }
     }
 }

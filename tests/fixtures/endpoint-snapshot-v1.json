@@ -1,0 +1,106 @@
+{
+  "boot_id": "boot-v1",
+  "revision": 7,
+  "config_diagnostic": "endpoint warning",
+  "product_announcement": {
+    "version": "1.0.0",
+    "id": "announcement-v1",
+    "title": "Announcement",
+    "body": "Body",
+    "preview": false
+  },
+  "update_available": "1.0.1",
+  "update_install_command": "herdr update",
+  "server_keybindings_toml": "[keys]",
+  "latest_release_notes_available": true,
+  "integration_updates_available": true,
+  "worktree_directory": "/worktrees",
+  "release_notes": {
+    "version": "1.0.1",
+    "body": "Notes",
+    "preview": true
+  },
+  "focused_workspace_id": "w1",
+  "focused_tab_id": "w1:t1",
+  "focused_pane_id": "w1:p1",
+  "tab_bar_right": [
+    {
+      "text": "host",
+      "accent": true
+    }
+  ],
+  "tab_bar_right_separator": " | ",
+  "agent_view_label": "focus",
+  "agent_order": ["w1:p1"],
+  "workspaces": [
+    {
+      "workspace_id": "w1",
+      "active_tab_id": "w1:t1",
+      "new_workspace_cwd": "/repo",
+      "number": 1,
+      "label": "repo",
+      "custom_label": false,
+      "branch": "main",
+      "git_ahead_behind": [1, 2],
+      "tokens": [["model", "opus"]],
+      "worktree": {
+        "key": "repo/main",
+        "label": "main",
+        "is_linked_worktree": true
+      },
+      "focused": true,
+      "agent_status": "future_status_from_new_server"
+    }
+  ],
+  "tabs": [
+    {
+      "tab_id": "w1:t1",
+      "workspace_id": "w1",
+      "number": 1,
+      "label": "main",
+      "custom_label": false,
+      "zoomed": false,
+      "focused": true,
+      "agent_status": "working"
+    }
+  ],
+  "panes": [
+    {
+      "pane_id": "w1:p1",
+      "workspace_id": "w1",
+      "tab_id": "w1:t1",
+      "label": "shell",
+      "cwd": "/repo",
+      "foreground_cwd": "/repo",
+      "focused": true,
+      "right_click_passthrough": false
+    }
+  ],
+  "agents": [
+    {
+      "pane_id": "w1:p1",
+      "workspace_id": "w1",
+      "tab_id": "w1:t1",
+      "name": "reviewer",
+      "display_agent": "Claude",
+      "agent": "claude",
+      "title": "Review",
+      "terminal_title": "Claude Review",
+      "terminal_title_stripped": "Claude Review",
+      "agent_status": "blocked",
+      "state_change_seq": 9,
+      "state_labels": [["blocked", "waiting"]],
+      "tokens": [["task", "review"]],
+      "focused": true
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "command-v1",
+      "binding_label": "prefix+x",
+      "binding_labels": ["prefix+x"],
+      "action": "Shell",
+      "description": "Command"
+    }
+  ]
+}

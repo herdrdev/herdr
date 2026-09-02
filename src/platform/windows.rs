@@ -15,6 +15,39 @@ use std::{
 
 mod clipboard_image;
 
+pub(crate) fn replace_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) fn set_default_plugin_pane_pwd(
     _env: &mut Vec<(String, String)>,
     _cwd: &std::path::Path,
@@ -520,13 +553,21 @@ fn powershell_agent_script(argv: &[String]) -> Option<String> {
         return Some(format!("& {}", super::quote_powershell_arg(program)));
     }
 
+    let powershell_args = args
+        .iter()
+        .map(|arg| super::quote_powershell_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
     let command_line = args
         .iter()
         .map(|arg| quote_windows_command_line_arg(arg))
         .collect::<Vec<_>>()
         .join(" ");
     Some(format!(
-        "$p=Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait -PassThru",
+        "if((Get-Command {} -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){{& {} {}}}else{{Start-Process -FilePath {} -ArgumentList {} -NoNewWindow -Wait}}",
+        super::quote_powershell_arg(program),
+        super::quote_powershell_arg(program),
+        powershell_args,
         super::quote_powershell_arg(program),
         super::quote_powershell_arg(&command_line),
     ))
@@ -2545,27 +2586,27 @@ mod tests {
     #[test]
     fn windows_conpty_native_encoder_uses_canonical_phase_and_repeat_count() {
         let key = crate::input::TerminalKey::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::empty(),
+            crossterm::event::KeyCode::Char('7'),
+            crossterm::event::KeyModifiers::CONTROL,
         )
         .with_windows_record(crate::input::WindowsKeyRecord {
             key_down: true,
             repeat_count: 3,
-            virtual_key_code: 27,
-            virtual_scan_code: 1,
-            unicode: 27,
-            control_key_state: 0,
+            virtual_key_code: 0x37,
+            virtual_scan_code: 0x08,
+            unicode: 0,
+            control_key_state: 0x0008,
         });
 
         assert_eq!(
             super::encode_windows_conpty_fallback(&key),
-            Some(b"\x1b[27;1;27;1;0;3_".to_vec())
+            Some(b"\x1b[55;8;0;1;8;3_".to_vec())
         );
         let mut release = key.with_kind(crossterm::event::KeyEventKind::Release);
         release.repeat_count = 3;
         assert_eq!(
             super::encode_windows_conpty_fallback(&release),
-            Some(b"\x1b[27;1;27;0;0;1_".to_vec())
+            Some(b"\x1b[55;8;0;0;8;1_".to_vec())
         );
     }
 
@@ -2660,6 +2701,7 @@ mod tests {
             "100%".into(),
             "wow!".into(),
             "a'b".into(),
+            "--model".into(),
         ];
         let command = super::interactive_shell_command(&argv, "cmd.exe").unwrap();
         let encoded = command.split_whitespace().last().unwrap();
@@ -2672,7 +2714,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             String::from_utf16(&utf16).unwrap(),
-            "$p=Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b' -NoNewWindow -Wait -PassThru"
+            "if((Get-Command pi -ErrorAction SilentlyContinue).CommandType -eq 'ExternalScript'){& pi '' 'two words' '100%' 'wow!' 'a''b' '--model'}else{Start-Process -FilePath pi -ArgumentList '\"\" \"two words\" 100% wow! a''b --model' -NoNewWindow -Wait}"
         );
     }
 
@@ -2691,7 +2733,7 @@ mod tests {
         let helper = base.join("pi.cmd");
         fs::write(
             &helper,
-            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\n)\r\n",
+            "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
         )
         .unwrap();
         let argv = vec![
@@ -2702,6 +2744,7 @@ mod tests {
             "wow!".into(),
             "a'b".into(),
             "@options".into(),
+            "--model".into(),
         ];
         let inherited_path = std::env::var_os("PATH").unwrap_or_default();
         let path = format!("{};{}", base.display(), inherited_path.to_string_lossy());
@@ -2718,6 +2761,7 @@ mod tests {
             process
                 .env("PATH", &path)
                 .env("HERDR_ARGV_CAPTURE", capture)
+                .env("PSExecutionPolicyPreference", "Bypass")
                 .status()
                 .unwrap()
         };
@@ -2731,7 +2775,7 @@ mod tests {
                 fs::read_to_string(no_args_capture)
                     .unwrap()
                     .replace("\r\n", "\n"),
-                "\n\n\n\n\n\n"
+                "\n\n\n\n\n\n\n"
             );
 
             let capture = base.join(format!("{shell}.txt"));
@@ -2740,7 +2784,24 @@ mod tests {
             assert!(status.success(), "{shell} command failed");
             assert_eq!(
                 fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
-                "\ntwo words\n100%\nwow!\na'b\n@options\n"
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
+            );
+        }
+
+        fs::remove_file(helper).unwrap();
+        fs::write(
+            base.join("pi.ps1"),
+            "Set-Content -LiteralPath $env:HERDR_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
+        )
+        .unwrap();
+        for shell in ["powershell.exe", "cmd.exe"] {
+            let capture = base.join(format!("{shell}-ps1.txt"));
+            let command = super::interactive_shell_command(&argv, shell).unwrap();
+            let status = run_command(shell, &command, &capture);
+            assert!(status.success(), "{shell} PowerShell script command failed");
+            assert_eq!(
+                fs::read_to_string(capture).unwrap().replace("\r\n", "\n"),
+                "\ntwo words\n100%\nwow!\na'b\n@options\n--model\n"
             );
         }
 
@@ -2766,9 +2827,10 @@ mod tests {
             fs::write(
                 capture,
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     cwd.display(),
-                    super::current_process_is_detached_server_daemon()
+                    unsafe { GetConsoleWindow() }.is_null(),
+                    !super::current_job_kills_processes_on_close().expect("inspect WMI daemon job")
                 ),
             )
             .expect("write WMI daemon test capture");
@@ -2799,7 +2861,7 @@ mod tests {
             .expect("launch detached process through WMI");
         assert_ne!(pid, 0, "WMI returned an invalid process id");
 
-        let expected = format!("{}\ntrue", base.display());
+        let expected = format!("{}\ntrue\ntrue", base.display());
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if fs::read_to_string(&capture).is_ok_and(|captured| captured == expected) {

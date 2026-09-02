@@ -70,6 +70,23 @@ herdr
 
 停止服务器会结束窗格进程。命名会话使用 `herdr session stop <name>`。更新器、软件包管理器和实时移交行为见[安装 Herdr](/zh-cn/docs/install/#update)。
 
+## macOS 上依赖钥匙串的工具仅在 Herdr 内失败
+
+在 Herdr 窗格中检查服务器的启动上下文:
+
+```bash
+launchctl managername
+```
+
+如果输出为 `Background`，请停止服务器，然后从普通 GUI 终端重新启动 Herdr:
+
+```bash
+herdr server stop
+herdr
+```
+
+停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
+
 ## 找不到 `herdr` 命令
 
 重启终端以重新加载环境，然后确认 Herdr 安装目录位于 `PATH` 中。通过软件包管理器安装的 Herdr 必须通过该管理器更新并加入环境。见[安装 Herdr](/zh-cn/docs/install/#verify)。

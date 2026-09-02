@@ -19,6 +19,12 @@ Windows では次を実行します:
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
+エンドポイントセキュリティによってこのファイルレス PowerShell コマンドがブロックされる場合は、コマンドプロンプトを開いて次を実行します：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
 インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
 
 ## Homebrew でインストール

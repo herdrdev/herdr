@@ -87,8 +87,6 @@ impl App {
 
     fn replace_agent_view_override(&mut self, view: Option<AgentViewSetParams>) {
         self.state.agent_view_override = view;
-        self.state.agent_panel_scroll = 0;
-        self.state.mobile_switcher_scroll = 0;
     }
 }
 
@@ -103,7 +101,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
             &crate::config::Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),

@@ -18,6 +18,3 @@ pub use self::{
         git_status_snapshot_for_cwd_with_demand, GitStatusCacheEntry, GitStatusRefreshDemand,
     },
 };
-
-#[cfg(test)]
-pub(super) use self::status::git_ahead_behind;

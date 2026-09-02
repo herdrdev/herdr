@@ -47,10 +47,12 @@ impl HostGeometry {
         ))
     }
 
+    #[cfg(test)]
     fn column_boundary(self, column: u16) -> Option<u32> {
         boundary(column, self.cols, self.width_px)
     }
 
+    #[cfg(test)]
     fn row_boundary(self, row: u16) -> Option<u32> {
         boundary(row, self.rows, self.height_px)
     }
@@ -63,28 +65,68 @@ impl HostPixels {
         child_width_px: u32,
         child_height_px: u32,
     ) -> Option<Position> {
-        let start_x = self.geometry.column_boundary(inner.x)?;
-        let start_y = self.geometry.row_boundary(inner.y)?;
-        let end_x = self
-            .geometry
-            .column_boundary(inner.x.checked_add(inner.width)?)?;
-        let end_y = self
-            .geometry
-            .row_boundary(inner.y.checked_add(inner.height)?)?;
-        let x = self.x.checked_sub(1)?.checked_sub(start_x)?;
-        let y = self.y.checked_sub(1)?.checked_sub(start_y)?;
-        let source_width = end_x.checked_sub(start_x)?;
-        let source_height = end_y.checked_sub(start_y)?;
-        if x >= source_width || y >= source_height || child_width_px == 0 || child_height_px == 0 {
+        let (host_column, host_row) = self.geometry.cell(self.x, self.y)?;
+        let end_column = inner.x.checked_add(inner.width)?;
+        let end_row = inner.y.checked_add(inner.height)?;
+        if host_column < inner.x
+            || host_column >= end_column
+            || host_row < inner.y
+            || host_row >= end_row
+        {
             return None;
         }
         Some(Position::Pixels {
-            x: scale(x, source_width, child_width_px).checked_add(1)?,
-            y: scale(y, source_height, child_height_px).checked_add(1)?,
+            x: map_axis_within_cell(
+                self.x,
+                host_column,
+                inner.x,
+                inner.width,
+                self.geometry.cols,
+                self.geometry.width_px,
+                child_width_px,
+            )?,
+            y: map_axis_within_cell(
+                self.y,
+                host_row,
+                inner.y,
+                inner.height,
+                self.geometry.rows,
+                self.geometry.height_px,
+                child_height_px,
+            )?,
         })
     }
 }
 
+fn map_axis_within_cell(
+    pixel: u32,
+    host_cell: u16,
+    pane_start: u16,
+    pane_cells: u16,
+    host_cells: u16,
+    host_extent: u32,
+    child_extent: u32,
+) -> Option<u32> {
+    let local_cell = host_cell.checked_sub(pane_start)?;
+    if local_cell >= pane_cells {
+        return None;
+    }
+    let source_start = boundary(host_cell, host_cells, host_extent)?;
+    let source_end = boundary(host_cell.checked_add(1)?, host_cells, host_extent)?;
+    let target_start = boundary(local_cell, pane_cells, child_extent)?;
+    let target_end = boundary(local_cell.checked_add(1)?, pane_cells, child_extent)?;
+    let source_width = source_end.checked_sub(source_start)?;
+    let target_width = target_end.checked_sub(target_start)?;
+    let offset = pixel.checked_sub(1)?.checked_sub(source_start)?;
+    if source_width == 0 || target_width == 0 || offset >= source_width {
+        return None;
+    }
+    target_start
+        .checked_add(scale(offset, source_width, target_width))?
+        .checked_add(1)
+}
+
+#[cfg(any(unix, test))]
 pub(crate) fn parse_report(data: &[u8]) -> Option<(u32, u32)> {
     let body = data.strip_prefix(b"\x1b[<")?;
     let body = body
@@ -97,6 +139,7 @@ pub(crate) fn parse_report(data: &[u8]) -> Option<(u32, u32)> {
     fields.next().is_none().then_some((x, y))
 }
 
+#[cfg(any(unix, test))]
 pub(crate) fn report_at_cell(data: &[u8], column: u16, row: u16) -> Option<Vec<u8>> {
     let body = data.strip_prefix(b"\x1b[<")?;
     let suffix = if body.ends_with(b"M") { 'M' } else { 'm' };
@@ -114,6 +157,7 @@ pub(crate) fn report_at_cell(data: &[u8], column: u16, row: u16) -> Option<Vec<u
     )
 }
 
+#[cfg(any(unix, test))]
 fn parse_number(value: &[u8]) -> Option<u32> {
     (!value.is_empty() && value.iter().all(u8::is_ascii_digit))
         .then(|| std::str::from_utf8(value).ok()?.parse().ok())
@@ -180,6 +224,21 @@ mod tests {
             }
             .pane_position(inner, 636, 1_225),
             Some(Position::Pixels { x: 636, y: 1_225 })
+        );
+    }
+
+    #[test]
+    fn fractional_scaling_preserves_the_canonical_child_cell() {
+        let geometry = HostGeometry::new(80, 1, 805, 20).unwrap();
+        assert_eq!(geometry.cell(11, 1), Some((1, 0)));
+        assert_eq!(
+            HostPixels {
+                x: 11,
+                y: 1,
+                geometry,
+            }
+            .pane_position(ratatui::layout::Rect::new(0, 0, 80, 1), 800, 20),
+            Some(Position::Pixels { x: 11, y: 1 })
         );
     }
 

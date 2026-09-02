@@ -17,10 +17,14 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::ipc::LocalStream;
+use crate::protocol::endpoint::{
+    EndpointClientHello, EndpointServerWelcome, ENDPOINT_HELLO_KIND, ENDPOINT_PROTOCOL_GENERATION,
+    ENDPOINT_WELCOME_KIND,
+};
 use crate::protocol::{
-    self, AttachScrollDirection, AttachScrollSource, ClientInputEvent, ClientKeybindings,
-    ClientLaunchMode, ClientMessage, RenderEncoding, ServerMessage, MAX_CLIPBOARD_IMAGE_PAYLOAD,
-    MAX_FRAME_SIZE, MAX_GRAPHICS_FRAME_SIZE, PROTOCOL_VERSION,
+    self, AttachScrollDirection, AttachScrollSource, ClientMessage, ClientPaneInputEvent,
+    RenderEncoding, ServerMessage, MAX_CLIPBOARD_IMAGE_PAYLOAD, MAX_FRAME_SIZE,
+    MAX_GRAPHICS_FRAME_SIZE, PROTOCOL_VERSION,
 };
 
 /// Minimum accepted attached client size.
@@ -39,10 +43,76 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Maximum input payload size (bytes) for a single `ClientMessage::Input`.
 const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
+const MAX_CLIENT_SHELL_DIMENSION: u16 = 4096;
+const MAX_CLIENT_SHELL_CELLS: u32 = 1_000_000;
+const MAX_CLIENT_CELL_SIZE_PX: u32 = 4096;
+
+fn client_shell_geometry_error(
+    surface_size: crate::protocol::ClientSurfaceSize,
+    cell_width_px: u32,
+    cell_height_px: u32,
+) -> Option<&'static str> {
+    if surface_size.cols == 0 || surface_size.rows == 0 {
+        return Some("client shell requires a non-empty pane surface");
+    }
+    if surface_size.cols > MAX_CLIENT_SHELL_DIMENSION
+        || surface_size.rows > MAX_CLIENT_SHELL_DIMENSION
+        || u32::from(surface_size.cols) * u32::from(surface_size.rows) > MAX_CLIENT_SHELL_CELLS
+    {
+        return Some("client shell pane surface exceeds the safe geometry limit");
+    }
+    if cell_width_px > MAX_CLIENT_CELL_SIZE_PX || cell_height_px > MAX_CLIENT_CELL_SIZE_PX {
+        return Some("client shell cell pixel size exceeds the safe geometry limit");
+    }
+    None
+}
+
+#[derive(serde::Deserialize)]
+struct EndpointRequestHead {
+    id: String,
+    method: String,
+}
+
+enum DecodedEndpointRequest {
+    Dispatch(Box<crate::api::schema::Request>),
+    Error {
+        request_id: String,
+        code: &'static str,
+        message: String,
+    },
+}
+
+fn write_endpoint_rejection(stream: &mut LocalStream, code: &str, message: impl Into<String>) {
+    let welcome = EndpointServerWelcome::incompatible(code, message);
+    let response = ServerMessage::EndpointControl {
+        kind: ENDPOINT_WELCOME_KIND.into(),
+        data: serde_json::to_string(&welcome).unwrap_or_else(|_| "{}".into()),
+    };
+    let _ = protocol::write_message(stream, &response);
+}
+
+fn decode_endpoint_request(request: &str) -> serde_json::Result<DecodedEndpointRequest> {
+    let head = serde_json::from_str::<EndpointRequestHead>(request)?;
+    if !crate::server::client_commands::supports_client_shell_method_name(&head.method) {
+        return Ok(DecodedEndpointRequest::Error {
+            request_id: head.id,
+            code: "unsupported_method",
+            message: format!("method {:?} is not available on this machine", head.method),
+        });
+    }
+    Ok(
+        match serde_json::from_str::<crate::api::schema::Request>(request) {
+            Ok(request) => DecodedEndpointRequest::Dispatch(Box::new(request)),
+            Err(error) => DecodedEndpointRequest::Error {
+                request_id: head.id,
+                code: "invalid_request",
+                message: format!("invalid endpoint request: {error}"),
+            },
+        },
+    )
+}
 /// Maximum structured input events accepted in one client message.
 const MAX_INPUT_EVENT_BATCH: usize = 4096;
-/// Maximum encoded mouse report accepted with pixel geometry.
-const MAX_PIXEL_MOUSE_PAYLOAD: usize = 128;
 
 /// Channels owned by the server side of a client writer thread.
 #[derive(Clone, Debug)]
@@ -54,10 +124,6 @@ pub(crate) struct ClientWriter {
 }
 
 impl ClientWriter {
-    pub(crate) fn replace_with_cleanup(&self, data: Vec<u8>) {
-        self.render.queue.replace_with_cleanup(data);
-    }
-
     #[cfg(test)]
     pub(crate) fn test_fill_render(&self, data: Vec<u8>) {
         self.render.try_send(data).unwrap();
@@ -254,16 +320,6 @@ impl ClientWriterQueue {
         Ok(())
     }
 
-    fn replace_with_cleanup(&self, data: Vec<u8>) {
-        let mut state = self.lock_state();
-        state.render = None;
-        state.ordered.clear();
-        if state.writer_alive {
-            state.control.push_back(data);
-            self.ready.notify_one();
-        }
-    }
-
     fn recv(&self) -> Option<ClientWriteItem> {
         let mut state = self.lock_state();
         loop {
@@ -312,10 +368,20 @@ pub(crate) enum ServerEvent {
         rows: u16,
         cell_width_px: u32,
         cell_height_px: u32,
-        render_encoding: RenderEncoding,
-        keybindings: Option<Box<crate::config::LiveKeybindConfig>>,
-        direct_attach_requested: bool,
+        pixel_mouse: bool,
+        writer: ClientWriter,
+    },
+    /// A client-owned shell completed its dedicated handshake.
+    ClientShellConnected {
+        client_id: u64,
+        surface_cols: u16,
+        surface_rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+        pixel_mouse: bool,
         direct_graphics: bool,
+        endpoint_keybindings: bool,
+        mouse_capture: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -332,17 +398,6 @@ pub(crate) enum ServerEvent {
         transfer_id: u64,
         image_id: u32,
     },
-    /// One confirmed SGR pixel report with client read-time geometry.
-    ClientInputPixels {
-        client_id: u64,
-        data: Vec<u8>,
-        geometry: crate::input::mouse::HostGeometry,
-    },
-    /// A client sent structured input events.
-    ClientInputEvents {
-        client_id: u64,
-        events: Vec<crate::protocol::ClientInputEvent>,
-    },
     /// A fully decoded interactive paste exceeded the text-input limit.
     ClientPasteRejected {
         client_id: u64,
@@ -352,6 +407,7 @@ pub(crate) enum ServerEvent {
     /// A client sent local clipboard image bytes to paste into a remote pane.
     ClientClipboardImage {
         client_id: u64,
+        target: crate::protocol::ClientClipboardImageTarget,
         extension: String,
         data: Vec<u8>,
     },
@@ -379,6 +435,15 @@ pub(crate) enum ServerEvent {
         row: Option<u16>,
         modifiers: u8,
     },
+    /// A direct terminal attach client delivered one structured mouse event.
+    ClientAttachMouse {
+        client_id: u64,
+        kind: crate::protocol::ClientMouseKind,
+        position: crate::protocol::ClientMousePosition,
+        geometry: Option<crate::protocol::ClientMouseGeometry>,
+        modifiers: u8,
+        lines: u16,
+    },
     /// A client sent a resize message.
     ClientResize {
         client_id: u64,
@@ -386,6 +451,59 @@ pub(crate) enum ServerEvent {
         rows: u16,
         cell_width_px: u32,
         cell_height_px: u32,
+        pixel_mouse: bool,
+    },
+    /// A client-owned shell recomputed its pane viewport.
+    ClientShellResize {
+        client_id: u64,
+        surface_cols: u16,
+        surface_rows: u16,
+        cell_width_px: u32,
+        cell_height_px: u32,
+        pixel_mouse: bool,
+    },
+    /// A client-owned shell delivered semantic input to one stable pane target.
+    ClientShellPaneInput {
+        client_id: u64,
+        pane_id: String,
+        events: Vec<ClientPaneInputEvent>,
+    },
+    /// A client-owned shell delivered semantic input to its active popup terminal.
+    ClientShellPopupInput {
+        client_id: u64,
+        terminal_id: String,
+        events: Vec<ClientPaneInputEvent>,
+    },
+    /// A client-owned shell published one host terminal theme observation.
+    ClientShellHostTheme {
+        client_id: u64,
+        update: crate::protocol::ClientHostThemeUpdate,
+    },
+    /// A client-owned shell reported whether its outer terminal has focus.
+    ClientShellFocus { client_id: u64, focused: bool },
+    /// A client-owned shell updated its local mouse-capture preference.
+    ClientShellMouseCapture { client_id: u64, enabled: bool },
+    /// A client-owned shell invoked one endpoint operation through this connection.
+    ClientShellEndpointRequest {
+        client_id: u64,
+        boot_id: String,
+        request: Box<crate::api::schema::Request>,
+    },
+    /// A well-framed endpoint request could not be dispatched by this server.
+    ClientShellEndpointRequestError {
+        client_id: u64,
+        boot_id: String,
+        request_id: String,
+        code: &'static str,
+        message: String,
+    },
+    /// One chunk of a deferred endpoint operation's final response is ready.
+    ClientShellEndpointResponseChunkReady {
+        client_id: u64,
+        boot_id: String,
+        request_id: String,
+        final_chunk: bool,
+        data: Vec<u8>,
     },
     /// A client detached gracefully.
     ClientDetach { client_id: u64 },
@@ -404,23 +522,6 @@ pub(crate) fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
     (clamped_cols, clamped_rows)
 }
 
-fn parse_client_keybindings(
-    keybindings: ClientKeybindings,
-) -> Result<Option<Box<crate::config::LiveKeybindConfig>>, String> {
-    match keybindings {
-        ClientKeybindings::Server => Ok(None),
-        ClientKeybindings::Local { keys_toml } => {
-            let mut config = toml::from_str::<crate::config::Config>(&keys_toml)
-                .map_err(|err| format!("invalid client keybindings: {err}"))?;
-            config.keys.command.clear();
-            Ok(Some(Box::new(crate::config::LiveKeybindConfig {
-                prefix: config.prefix_key(),
-                keybinds: config.keybinds(),
-            })))
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputEventLimit {
     WithinLimits,
@@ -429,20 +530,28 @@ enum InputEventLimit {
     InputPayloadTooLarge { size: usize },
 }
 
-fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
+fn pane_input_event_limit(events: &[ClientPaneInputEvent]) -> InputEventLimit {
     let mut expanded_events = 0usize;
     let mut paste_bytes = 0usize;
     let mut input_bytes = 0usize;
     for event in events {
         expanded_events = expanded_events.saturating_add(match event {
-            ClientInputEvent::Key { repeat_count, .. } => usize::from((*repeat_count).max(1)),
-            _ => 1,
+            ClientPaneInputEvent::Key { repeat_count, .. } => usize::from((*repeat_count).max(1)),
+            ClientPaneInputEvent::Mouse {
+                kind:
+                    crate::protocol::ClientMouseKind::ScrollUp
+                    | crate::protocol::ClientMouseKind::ScrollDown,
+                lines,
+                ..
+            } => usize::from((*lines).max(1)),
+            ClientPaneInputEvent::TextCommit(_)
+            | ClientPaneInputEvent::Mouse { .. }
+            | ClientPaneInputEvent::Paste(_) => 1,
         });
         match event {
-            ClientInputEvent::Key {
+            ClientPaneInputEvent::Key {
                 repeat_count,
                 generated_text,
-                source,
                 ..
             } => {
                 if let Some(text) = generated_text {
@@ -451,22 +560,25 @@ fn input_event_limit(events: &[ClientInputEvent]) -> InputEventLimit {
                             .saturating_mul(usize::from((*repeat_count).max(1))),
                     );
                 }
-                if let crate::protocol::ClientKeySource::Vt { bytes } = source {
-                    input_bytes = input_bytes.saturating_add(bytes.len());
-                }
             }
-            ClientInputEvent::TextCommit(text) => {
+            ClientPaneInputEvent::TextCommit(text) => {
                 input_bytes = input_bytes.saturating_add(text.len());
             }
-            ClientInputEvent::Paste { text } => {
+            ClientPaneInputEvent::Mouse { .. } => {}
+            ClientPaneInputEvent::Paste(text) => {
                 paste_bytes = paste_bytes.saturating_add(text.len());
             }
-            ClientInputEvent::Mouse { .. }
-            | ClientInputEvent::FocusGained
-            | ClientInputEvent::FocusLost => {}
         }
     }
 
+    classify_input_event_size(expanded_events, paste_bytes, input_bytes)
+}
+
+fn classify_input_event_size(
+    expanded_events: usize,
+    paste_bytes: usize,
+    input_bytes: usize,
+) -> InputEventLimit {
     if expanded_events > MAX_INPUT_EVENT_BATCH {
         return InputEventLimit::TooManyEvents;
     }
@@ -514,8 +626,8 @@ fn set_client_recv_timeout(
 
 /// Handles the client handshake on a blocking thread.
 ///
-/// Reads the `Hello` message, validates the version, sends `Welcome`,
-/// and then enters a read loop forwarding messages to the server event channel.
+/// Reads the `TerminalHello` or `ClientShellHello` message, validates the version,
+/// sends `Welcome`, and then enters a read loop forwarding messages to the server event channel.
 pub(crate) fn handle_client_handshake(
     mut stream: LocalStream,
     client_id: u64,
@@ -537,7 +649,7 @@ pub(crate) fn handle_client_handshake(
         client_id,
     )?;
 
-    // Read the Hello message.
+    // Read the handshake message.
     let hello: ClientMessage = match protocol::read_message(&mut stream, MAX_FRAME_SIZE) {
         Ok(msg) => msg,
         Err(protocol::FramingError::UnexpectedEof) => {
@@ -559,69 +671,102 @@ pub(crate) fn handle_client_handshake(
         client_rows,
         cell_width_px,
         cell_height_px,
-        render_encoding,
-        keybindings,
-        direct_attach_requested,
-        direct_graphics,
+        terminal_pixel_mouse,
+        shell_options,
     ) = match hello {
-        ClientMessage::Hello {
+        ClientMessage::TerminalHello {
             version,
             cols,
             rows,
             cell_width_px,
             cell_height_px,
-            requested_encoding,
-            keybindings,
-            launch_mode,
+            pixel_mouse,
         } => {
-            // Version check.
-            match protocol::check_client_version(version) {
-                protocol::VersionCheck::Compatible => {}
-                protocol::VersionCheck::Incompatible(reason) => {
-                    // Send rejection Welcome.
-                    let welcome = ServerMessage::Welcome {
-                        version: PROTOCOL_VERSION,
-                        encoding: RenderEncoding::SemanticFrame,
-                        error: Some(reason),
-                    };
-                    let _ = protocol::write_message(&mut stream, &welcome);
-                    return Ok(());
-                }
+            if let protocol::VersionCheck::Incompatible(reason) =
+                protocol::check_client_version(version)
+            {
+                let welcome = ServerMessage::Welcome {
+                    version: PROTOCOL_VERSION,
+                    encoding: RenderEncoding::TerminalAnsi,
+                    error: Some(reason),
+                };
+                let _ = protocol::write_message(&mut stream, &welcome);
+                return Ok(());
             }
-
-            let keybindings = match parse_client_keybindings(keybindings) {
-                Ok(keybindings) => keybindings,
+            let (cols, rows) = clamp_terminal_size(cols, rows);
+            (cols, rows, cell_width_px, cell_height_px, pixel_mouse, None)
+        }
+        ClientMessage::EndpointControl { kind, data } if kind == ENDPOINT_HELLO_KIND => {
+            let hello: EndpointClientHello = match serde_json::from_str(&data) {
+                Ok(hello) => hello,
                 Err(error) => {
-                    let welcome = ServerMessage::Welcome {
-                        version: PROTOCOL_VERSION,
-                        encoding: RenderEncoding::SemanticFrame,
-                        error: Some(error),
-                    };
-                    let _ = protocol::write_message(&mut stream, &welcome);
+                    write_endpoint_rejection(
+                        &mut stream,
+                        "invalid_hello",
+                        format!("invalid endpoint hello: {error}"),
+                    );
                     return Ok(());
                 }
             };
-
-            // Clamp size.
-            let (clamped_cols, clamped_rows) = clamp_terminal_size(cols, rows);
+            let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
+                Some((
+                    "unsupported_generation",
+                    format!(
+                        "endpoint generation {} is unsupported; this server supports generation {ENDPOINT_PROTOCOL_GENERATION}",
+                        hello.generation
+                    ),
+                ))
+            } else if !hello.supports_required_codecs() {
+                Some((
+                    "no_common_core",
+                    "client and server have no compatible endpoint core codecs".to_owned(),
+                ))
+            } else {
+                client_shell_geometry_error(
+                    hello.surface_size,
+                    hello.cell_width_px,
+                    hello.cell_height_px,
+                )
+                .map(|reason| ("invalid_surface", reason.to_owned()))
+            };
+            if let Some((code, reason)) = incompatibility {
+                write_endpoint_rejection(&mut stream, code, reason);
+                return Ok(());
+            }
             (
-                clamped_cols,
-                clamped_rows,
-                cell_width_px,
-                cell_height_px,
-                requested_encoding,
-                keybindings,
-                launch_mode == ClientLaunchMode::TerminalAttach,
-                launch_mode == ClientLaunchMode::AppDirectGraphics,
+                hello.surface_size.cols,
+                hello.surface_size.rows,
+                hello.cell_width_px,
+                hello.cell_height_px,
+                false,
+                Some((
+                    hello.pixel_mouse,
+                    hello.direct_graphics,
+                    hello.endpoint_keybindings,
+                    hello.mouse_capture,
+                )),
             )
         }
-        _ => {
-            // First message must be Hello.
-            debug!(client_id, "first message was not Hello, closing");
+        ClientMessage::ClientShellHello { .. } => {
             let welcome = ServerMessage::Welcome {
                 version: PROTOCOL_VERSION,
                 encoding: RenderEncoding::SemanticFrame,
-                error: Some("expected Hello as first message".to_owned()),
+                error: Some(
+                    "this client predates the stable endpoint protocol; upgrade the Herdr client"
+                        .to_owned(),
+                ),
+            };
+            let _ = protocol::write_message(&mut stream, &welcome);
+            return Ok(());
+        }
+        _ => {
+            debug!(client_id, "first message was not a handshake, closing");
+            let welcome = ServerMessage::Welcome {
+                version: PROTOCOL_VERSION,
+                encoding: RenderEncoding::SemanticFrame,
+                error: Some(
+                    "expected TerminalHello or ClientShellHello as first message".to_owned(),
+                ),
             };
             let _ = protocol::write_message(&mut stream, &welcome);
             return Ok(());
@@ -632,11 +777,30 @@ pub(crate) fn handle_client_handshake(
         return Ok(());
     }
 
-    // Send Welcome.
-    let welcome = ServerMessage::Welcome {
-        version: PROTOCOL_VERSION,
-        encoding: render_encoding,
-        error: None,
+    // Send the negotiated welcome. Endpoint compatibility is independent from
+    // the same-install protocol used by direct terminal clients.
+    let render_encoding = if shell_options.is_some() {
+        RenderEncoding::SemanticFrame
+    } else {
+        RenderEncoding::TerminalAnsi
+    };
+    let welcome = if shell_options.is_some() {
+        let welcome = EndpointServerWelcome::compatible(
+            crate::server::client_commands::supported_client_shell_method_names()
+                .iter()
+                .map(|method| (*method).to_owned())
+                .collect(),
+        );
+        ServerMessage::EndpointControl {
+            kind: ENDPOINT_WELCOME_KIND.into(),
+            data: serde_json::to_string(&welcome).map_err(io::Error::other)?,
+        }
+    } else {
+        ServerMessage::Welcome {
+            version: PROTOCOL_VERSION,
+            encoding: render_encoding,
+            error: None,
+        }
     };
     protocol::write_message(&mut stream, &welcome).map_err(|e| io::Error::other(e.to_string()))?;
 
@@ -667,21 +831,40 @@ pub(crate) fn handle_client_handshake(
     }
 
     // Notify the main loop about the new client.
-    let connected = ServerEvent::ClientConnected {
-        client_id,
-        cols: client_cols,
-        rows: client_rows,
-        cell_width_px,
-        cell_height_px,
-        render_encoding,
-        keybindings,
-        direct_attach_requested,
-        direct_graphics,
-        writer,
-    };
+    let connected =
+        if let Some((pixel_mouse, direct_graphics, endpoint_keybindings, mouse_capture)) =
+            shell_options
+        {
+            ServerEvent::ClientShellConnected {
+                client_id,
+                surface_cols: client_cols,
+                surface_rows: client_rows,
+                cell_width_px,
+                cell_height_px,
+                pixel_mouse,
+                direct_graphics,
+                endpoint_keybindings,
+                mouse_capture,
+                writer,
+            }
+        } else {
+            ServerEvent::ClientConnected {
+                client_id,
+                cols: client_cols,
+                rows: client_rows,
+                cell_width_px,
+                cell_height_px,
+                pixel_mouse: terminal_pixel_mouse,
+                writer,
+            }
+        };
     if let Err(err) = server_event_tx.blocking_send(connected) {
-        if let ServerEvent::ClientConnected { writer, .. } = err.0 {
-            send_shutdown_to_unregistered_client(&writer);
+        match err.0 {
+            ServerEvent::ClientConnected { writer, .. }
+            | ServerEvent::ClientShellConnected { writer, .. } => {
+                send_shutdown_to_unregistered_client(&writer);
+            }
+            _ => {}
         }
     }
 
@@ -804,86 +987,6 @@ fn client_read_loop(
                     ServerEvent::ClientInput { client_id, data }
                 }
             }
-            ClientMessage::InputPixels {
-                data,
-                cols,
-                rows,
-                width_px,
-                height_px,
-            } => {
-                let Some(geometry) =
-                    crate::input::mouse::HostGeometry::new(cols, rows, width_px, height_px)
-                else {
-                    warn!(
-                        client_id,
-                        cols,
-                        rows,
-                        width_px,
-                        height_px,
-                        "invalid pixel mouse geometry from client, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                };
-                if data.len() > MAX_PIXEL_MOUSE_PAYLOAD
-                    || crate::input::mouse::parse_report(&data).is_none()
-                {
-                    warn!(
-                        client_id,
-                        size = data.len(),
-                        max = MAX_PIXEL_MOUSE_PAYLOAD,
-                        "invalid pixel mouse report from client, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-                ServerEvent::ClientInputPixels {
-                    client_id,
-                    data,
-                    geometry,
-                }
-            }
-            ClientMessage::InputEvents { events } => match input_event_limit(&events) {
-                InputEventLimit::WithinLimits => {
-                    ServerEvent::ClientInputEvents { client_id, events }
-                }
-                InputEventLimit::TooManyEvents => {
-                    warn!(
-                        client_id,
-                        count = events.len(),
-                        "oversized input event batch from client, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-                InputEventLimit::PasteTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized structured paste from client, rejecting"
-                    );
-                    ServerEvent::ClientPasteRejected {
-                        client_id,
-                        size,
-                        max: MAX_INPUT_PAYLOAD,
-                    }
-                }
-                InputEventLimit::InputPayloadTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized structured input payload from client, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-            },
             ClientMessage::ObserveTerminal { target } => {
                 ServerEvent::ClientObserveTerminal { client_id, target }
             }
@@ -912,7 +1015,11 @@ fn client_read_loop(
                 transfer_id,
                 image_id,
             },
-            ClientMessage::ClipboardImage { extension, data } => {
+            ClientMessage::ClipboardImage {
+                target,
+                extension,
+                data,
+            } => {
                 if data.len() > MAX_CLIPBOARD_IMAGE_PAYLOAD {
                     warn!(
                         client_id,
@@ -925,6 +1032,7 @@ fn client_read_loop(
                 } else {
                     ServerEvent::ClientClipboardImage {
                         client_id,
+                        target,
                         extension,
                         data,
                     }
@@ -935,6 +1043,7 @@ fn client_read_loop(
                 rows,
                 cell_width_px,
                 cell_height_px,
+                pixel_mouse,
             } => {
                 let (clamped_cols, clamped_rows) = clamp_terminal_size(cols, rows);
                 ServerEvent::ClientResize {
@@ -943,9 +1052,204 @@ fn client_read_loop(
                     rows: clamped_rows,
                     cell_width_px,
                     cell_height_px,
+                    pixel_mouse,
                 }
             }
-            ClientMessage::Detach => ServerEvent::ClientDetach { client_id },
+            ClientMessage::ClientShellResize {
+                cell_width_px,
+                cell_height_px,
+                surface_size,
+                pixel_mouse,
+            } => {
+                if let Some(reason) =
+                    client_shell_geometry_error(surface_size, cell_width_px, cell_height_px)
+                {
+                    warn!(client_id, %reason, "invalid client shell resize, closing");
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                ServerEvent::ClientShellResize {
+                    client_id,
+                    surface_cols: surface_size.cols,
+                    surface_rows: surface_size.rows,
+                    cell_width_px,
+                    cell_height_px,
+                    pixel_mouse,
+                }
+            }
+            ClientMessage::ClientShellHostTheme { update } => {
+                if matches!(
+                    &update,
+                    crate::protocol::ClientHostThemeUpdate::PaletteColors(colors)
+                        if colors.len() > 256
+                ) {
+                    warn!(client_id, "invalid client shell host theme update, closing");
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                ServerEvent::ClientShellHostTheme { client_id, update }
+            }
+            ClientMessage::ClientShellFocus { focused } => {
+                ServerEvent::ClientShellFocus { client_id, focused }
+            }
+            ClientMessage::ClientShellMouseCapture { enabled } => {
+                ServerEvent::ClientShellMouseCapture { client_id, enabled }
+            }
+            ClientMessage::ClientShellPaneInput { pane_id, events } => {
+                match pane_input_event_limit(&events) {
+                    InputEventLimit::WithinLimits => ServerEvent::ClientShellPaneInput {
+                        client_id,
+                        pane_id,
+                        events,
+                    },
+                    InputEventLimit::TooManyEvents => {
+                        warn!(
+                            client_id,
+                            count = events.len(),
+                            "oversized targeted pane input batch, closing"
+                        );
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
+                    InputEventLimit::PasteTooLarge { size } => {
+                        warn!(
+                            client_id,
+                            size,
+                            max = MAX_INPUT_PAYLOAD,
+                            "oversized targeted pane paste, rejecting"
+                        );
+                        ServerEvent::ClientPasteRejected {
+                            client_id,
+                            size,
+                            max: MAX_INPUT_PAYLOAD,
+                        }
+                    }
+                    InputEventLimit::InputPayloadTooLarge { size } => {
+                        warn!(
+                            client_id,
+                            size,
+                            max = MAX_INPUT_PAYLOAD,
+                            "oversized targeted pane input, closing"
+                        );
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
+                }
+            }
+            ClientMessage::ClientShellPopupInput {
+                terminal_id,
+                events,
+            } => match pane_input_event_limit(&events) {
+                InputEventLimit::WithinLimits => ServerEvent::ClientShellPopupInput {
+                    client_id,
+                    terminal_id,
+                    events,
+                },
+                InputEventLimit::TooManyEvents => {
+                    warn!(
+                        client_id,
+                        count = events.len(),
+                        "oversized popup input batch, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                InputEventLimit::PasteTooLarge { size } => {
+                    warn!(
+                        client_id,
+                        size,
+                        max = MAX_INPUT_PAYLOAD,
+                        "oversized popup paste, rejecting"
+                    );
+                    ServerEvent::ClientPasteRejected {
+                        client_id,
+                        size,
+                        max: MAX_INPUT_PAYLOAD,
+                    }
+                }
+                InputEventLimit::InputPayloadTooLarge { size } => {
+                    warn!(
+                        client_id,
+                        size,
+                        max = MAX_INPUT_PAYLOAD,
+                        "oversized popup input, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+            },
+            ClientMessage::ClientShellEndpointRequest { boot_id, request } => {
+                if boot_id.len() > crate::server::client_commands::MAX_ENDPOINT_BOOT_ID_BYTES
+                    || request.len() > crate::server::client_commands::MAX_ENDPOINT_COMMAND_BYTES
+                {
+                    warn!(
+                        client_id,
+                        boot_id_size = boot_id.len(),
+                        request_size = request.len(),
+                        "oversized client shell endpoint command, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                let decoded = match decode_endpoint_request(&request) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        warn!(client_id, %error, "invalid endpoint request envelope, closing");
+                        let _ = server_event_tx
+                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                        break;
+                    }
+                };
+                let request_id = match &decoded {
+                    DecodedEndpointRequest::Dispatch(request) => request.id.as_str(),
+                    DecodedEndpointRequest::Error { request_id, .. } => request_id,
+                };
+                if request_id.len() > crate::server::client_commands::MAX_ENDPOINT_REQUEST_ID_BYTES
+                {
+                    warn!(
+                        client_id,
+                        "oversized client shell endpoint request id, closing"
+                    );
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                match decoded {
+                    DecodedEndpointRequest::Dispatch(request) => {
+                        ServerEvent::ClientShellEndpointRequest {
+                            client_id,
+                            boot_id,
+                            request,
+                        }
+                    }
+                    DecodedEndpointRequest::Error {
+                        request_id,
+                        code,
+                        message,
+                    } => ServerEvent::ClientShellEndpointRequestError {
+                        client_id,
+                        boot_id,
+                        request_id,
+                        code,
+                        message,
+                    },
+                }
+            }
+            ClientMessage::EndpointControl { kind, .. } => {
+                debug!(client_id, %kind, "ignoring unknown endpoint control message");
+                continue;
+            }
+            ClientMessage::Detach => {
+                let _ = server_event_tx.blocking_send(ServerEvent::ClientDetach { client_id });
+                break;
+            }
             ClientMessage::AttachTerminal {
                 terminal_id,
                 takeover,
@@ -970,8 +1274,22 @@ fn client_read_loop(
                 row,
                 modifiers,
             },
-            ClientMessage::Hello { .. } => {
-                // Duplicate Hello — ignore.
+            ClientMessage::AttachMouse {
+                kind,
+                position,
+                geometry,
+                modifiers,
+                lines,
+            } => ServerEvent::ClientAttachMouse {
+                client_id,
+                kind,
+                position,
+                geometry,
+                modifiers,
+                lines,
+            },
+            ClientMessage::TerminalHello { .. } | ClientMessage::ClientShellHello { .. } => {
+                // Duplicate handshake — ignore.
                 continue;
             }
         };
@@ -1023,6 +1341,38 @@ mod tests {
         let client = crate::ipc::connect_local_stream(&path).unwrap();
         let server = listener.accept().unwrap();
         (client, server, TestSocketPath(path))
+    }
+
+    fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
+        let hello = EndpointClientHello {
+            generation: ENDPOINT_PROTOCOL_GENERATION,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            surface_size: crate::protocol::ClientSurfaceSize {
+                cols: surface_cols,
+                rows: surface_rows,
+            },
+            pixel_mouse: true,
+            direct_graphics: true,
+            endpoint_keybindings: true,
+            mouse_capture: true,
+            snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
+            surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
+            input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
+            blob_codecs: vec![crate::protocol::endpoint::BLOB_CODEC_V1.into()],
+        };
+        ClientMessage::EndpointControl {
+            kind: ENDPOINT_HELLO_KIND.into(),
+            data: serde_json::to_string(&hello).unwrap(),
+        }
+    }
+
+    fn endpoint_welcome(message: ServerMessage) -> EndpointServerWelcome {
+        let ServerMessage::EndpointControl { kind, data } = message else {
+            panic!("expected endpoint welcome");
+        };
+        assert_eq!(kind, ENDPOINT_WELCOME_KIND);
+        serde_json::from_str(&data).unwrap()
     }
 
     fn recv_server_event(receiver: &mut mpsc::Receiver<ServerEvent>, context: &str) -> ServerEvent {
@@ -1262,51 +1612,59 @@ mod tests {
     }
 
     #[test]
-    fn parse_client_keybindings_accepts_local_profile() {
-        let keybindings = parse_client_keybindings(ClientKeybindings::Local {
-            keys_toml: r#"
-[keys]
-prefix = "ctrl+a"
-new_tab = "prefix+t"
-
-[[keys.command]]
-key = "prefix+g"
-command = "lazygit"
-"#
-            .to_owned(),
-        })
-        .expect("valid client keybindings")
-        .expect("local profile");
-
-        assert_eq!(keybindings.prefix.0, crossterm::event::KeyCode::Char('a'));
-        assert!(keybindings
-            .keybinds
-            .new_tab
-            .bindings
-            .iter()
-            .any(|binding| binding.label == "prefix+t"));
-        assert!(keybindings.keybinds.custom_commands.is_empty());
+    fn client_shell_geometry_rejects_unsafe_dimensions_and_cell_sizes() {
+        assert!(client_shell_geometry_error(
+            crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
+            8,
+            16,
+        )
+        .is_none());
+        assert!(client_shell_geometry_error(
+            crate::protocol::ClientSurfaceSize {
+                cols: MAX_CLIENT_SHELL_DIMENSION,
+                rows: MAX_CLIENT_SHELL_DIMENSION,
+            },
+            8,
+            16,
+        )
+        .is_some());
+        assert!(client_shell_geometry_error(
+            crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
+            MAX_CLIENT_CELL_SIZE_PX + 1,
+            16,
+        )
+        .is_some());
     }
 
     #[test]
-    fn parse_client_keybindings_tolerates_disabled_bindings() {
-        let keybindings = parse_client_keybindings(ClientKeybindings::Local {
-            keys_toml: r#"
-[keys]
-new_tab = "ctrl+notakey"
-"#
-            .to_owned(),
-        })
-        .expect("diagnostic-only client keybindings should be accepted")
-        .expect("local profile");
+    fn unknown_endpoint_method_returns_correlated_error() {
+        let decoded = decode_endpoint_request(
+            r#"{"id":"req-1","method":"plugin.future","params":{"value":1}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decoded,
+            DecodedEndpointRequest::Error {
+                request_id,
+                code: "unsupported_method",
+                ..
+            } if request_id == "req-1"
+        ));
+    }
 
-        assert!(keybindings.keybinds.new_tab.bindings.is_empty());
-        assert!(keybindings
-            .keybinds
-            .next_tab
-            .bindings
-            .iter()
-            .any(|binding| binding.label == "prefix+n"));
+    #[test]
+    fn malformed_known_endpoint_method_returns_correlated_error() {
+        let decoded =
+            decode_endpoint_request(r#"{"id":"req-2","method":"workspace.focus","params":{}}"#)
+                .unwrap();
+        assert!(matches!(
+            decoded,
+            DecodedEndpointRequest::Error {
+                request_id,
+                code: "invalid_request",
+                ..
+            } if request_id == "req-2"
+        ));
     }
 
     #[test]
@@ -1321,15 +1679,13 @@ new_tab = "ctrl+notakey"
 
         protocol::write_message(
             &mut client_stream,
-            &ClientMessage::Hello {
+            &ClientMessage::TerminalHello {
                 version: PROTOCOL_VERSION,
                 cols: 100,
                 rows: 30,
                 cell_width_px: 8,
                 cell_height_px: 16,
-                requested_encoding: RenderEncoding::TerminalAnsi,
-                keybindings: ClientKeybindings::Server,
-                launch_mode: ClientLaunchMode::App,
+                pixel_mouse: true,
             },
         )
         .expect("write hello");
@@ -1359,19 +1715,13 @@ new_tab = "ctrl+notakey"
                 rows,
                 cell_width_px,
                 cell_height_px,
-                render_encoding,
-                keybindings,
-                direct_attach_requested,
-                direct_graphics,
+                pixel_mouse,
                 writer,
             } => {
                 assert_eq!(client_id, 42);
                 assert_eq!((cols, rows), (100, 30));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));
-                assert_eq!(render_encoding, RenderEncoding::TerminalAnsi);
-                assert!(keybindings.is_none());
-                assert!(!direct_attach_requested);
-                assert!(!direct_graphics);
+                assert!(pixel_mouse);
                 drop(writer);
             }
             other => panic!("expected ClientConnected, got {other:?}"),
@@ -1386,59 +1736,49 @@ new_tab = "ctrl+notakey"
     }
 
     #[test]
-    fn handshake_marks_terminal_attach_launch_mode() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-handshake-terminal-attach");
+    fn dedicated_client_shell_handshake_uses_surface_viewport() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-shell-handshake");
         let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
         let should_quit = Arc::new(AtomicBool::new(false));
         let handshake_quit = should_quit.clone();
         let handle = std::thread::spawn(move || {
-            handle_client_handshake(server_stream, 42, &server_event_tx, &handshake_quit)
+            handle_client_handshake(server_stream, 43, &server_event_tx, &handshake_quit)
         });
 
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::Hello {
-                version: PROTOCOL_VERSION,
-                cols: 100,
-                rows: 30,
-                cell_width_px: 8,
-                cell_height_px: 16,
-                requested_encoding: RenderEncoding::TerminalAnsi,
-                keybindings: ClientKeybindings::Server,
-                launch_mode: ClientLaunchMode::TerminalAttach,
-            },
-        )
-        .expect("write hello");
+        protocol::write_message(&mut client_stream, &endpoint_hello(80, 29))
+            .expect("write shell hello");
 
         let welcome: ServerMessage =
             protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
-        match welcome {
-            ServerMessage::Welcome {
-                version,
-                encoding,
-                error,
-            } => {
-                assert_eq!(version, PROTOCOL_VERSION);
-                assert_eq!(encoding, RenderEncoding::TerminalAnsi);
-                assert_eq!(error, None);
-            }
-            other => panic!("expected Welcome, got {other:?}"),
-        }
-
+        let welcome = endpoint_welcome(welcome);
+        assert_eq!(welcome.generation, ENDPOINT_PROTOCOL_GENERATION);
+        assert!(welcome.error.is_none());
         match server_event_rx
             .blocking_recv()
-            .expect("client connected event")
+            .expect("client shell connected event")
         {
-            ServerEvent::ClientConnected {
-                direct_attach_requested,
+            ServerEvent::ClientShellConnected {
+                client_id,
+                surface_cols,
+                surface_rows,
+                cell_width_px,
+                cell_height_px,
+                pixel_mouse,
+                direct_graphics,
+                endpoint_keybindings,
+                mouse_capture,
                 writer,
-                ..
             } => {
-                assert!(direct_attach_requested);
+                assert_eq!(client_id, 43);
+                assert_eq!((surface_cols, surface_rows), (80, 29));
+                assert_eq!((cell_width_px, cell_height_px), (8, 16));
+                assert!(pixel_mouse);
+                assert!(direct_graphics);
+                assert!(endpoint_keybindings);
+                assert!(mouse_capture);
                 drop(writer);
             }
-            other => panic!("expected ClientConnected, got {other:?}"),
+            other => panic!("expected ClientShellConnected, got {other:?}"),
         }
 
         drop(client_stream);
@@ -1447,6 +1787,135 @@ new_tab = "ctrl+notakey"
             .join()
             .expect("handshake thread join")
             .expect("handshake thread result");
+    }
+
+    #[test]
+    fn dedicated_client_shell_handshake_rejects_empty_surface() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-shell-empty-surface");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handshake_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 43, &server_event_tx, &handshake_quit)
+        });
+
+        protocol::write_message(&mut client_stream, &endpoint_hello(0, 29))
+            .expect("write empty shell hello");
+
+        let welcome: ServerMessage =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
+        let welcome = endpoint_welcome(welcome);
+        assert!(welcome
+            .error
+            .is_some_and(|error| error.message.contains("non-empty pane surface")));
+        handle
+            .join()
+            .expect("handshake thread join")
+            .expect("handshake thread result");
+        assert!(server_event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn client_read_loop_stops_after_detach() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-detach");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        let mut messages = Vec::new();
+        protocol::write_message(&mut messages, &ClientMessage::Detach).unwrap();
+        protocol::write_message(
+            &mut messages,
+            &ClientMessage::ClipboardImage {
+                target: crate::protocol::ClientClipboardImageTarget::DirectTerminal,
+                extension: "png".into(),
+                data: vec![1, 2, 3],
+            },
+        )
+        .unwrap();
+        client_stream
+            .write_all(&messages)
+            .expect("write detach and trailing message");
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach event"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+        assert!(server_event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn client_read_loop_ignores_unknown_endpoint_control() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-future-control");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind: "future.optional.v1".into(),
+                data: "{}".into(),
+            },
+        )
+        .unwrap();
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach after future control"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_closes_on_unsafe_shell_resize() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-unsafe-resize");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::ClientShellResize {
+                cell_width_px: 8,
+                cell_height_px: 16,
+                surface_size: crate::protocol::ClientSurfaceSize {
+                    cols: MAX_CLIENT_SHELL_DIMENSION,
+                    rows: MAX_CLIENT_SHELL_DIMENSION,
+                },
+                pixel_mouse: false,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "unsafe resize disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1556,76 +2025,6 @@ new_tab = "ctrl+notakey"
     }
 
     #[test]
-    fn client_read_loop_disconnects_invalid_pixel_mouse_geometry() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-invalid-pixel-geometry");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputPixels {
-                data: b"\x1b[<35;1;1M".to_vec(),
-                cols: 0,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            },
-        )
-        .expect("write invalid pixel geometry");
-
-        assert!(matches!(
-            recv_server_event(&mut server_event_rx, "invalid pixel geometry disconnect"),
-            ServerEvent::ClientDisconnected { client_id: 7 }
-        ));
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("read thread join")
-            .expect("read thread result");
-    }
-
-    #[test]
-    fn client_read_loop_disconnects_invalid_pixel_mouse_report() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-invalid-pixel-report");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputPixels {
-                data: vec![b'x'; MAX_PIXEL_MOUSE_PAYLOAD + 1],
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            },
-        )
-        .expect("write invalid pixel report");
-
-        assert!(matches!(
-            recv_server_event(&mut server_event_rx, "invalid pixel report disconnect"),
-            ServerEvent::ClientDisconnected { client_id: 7 }
-        ));
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("read thread join")
-            .expect("read thread result");
-    }
-
-    #[test]
     fn client_read_loop_disconnects_marker_wrapped_invalid_utf8() {
         let (mut client_stream, server_stream, _path) =
             local_stream_pair("client-read-invalid-utf8-paste");
@@ -1655,61 +2054,8 @@ new_tab = "ctrl+notakey"
     }
 
     #[test]
-    fn client_read_loop_forwards_input_events() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-events");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
-        let events = vec![
-            ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
-                modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
-
-                repeat_count: 1,
-                generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
-            },
-            ClientInputEvent::FocusGained,
-        ];
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputEvents {
-                events: events.clone(),
-            },
-        )
-        .expect("write input events");
-
-        match server_event_rx
-            .blocking_recv()
-            .expect("client input events event")
-        {
-            ServerEvent::ClientInputEvents {
-                client_id,
-                events: actual,
-            } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(actual, events);
-            }
-            other => panic!("expected ClientInputEvents, got {other:?}"),
-        }
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("read thread join")
-            .expect("read thread result");
-    }
-
-    #[test]
-    fn client_read_loop_rejects_oversized_input_event_batch() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-oversized-events");
+    fn client_read_loop_uses_authoritative_shell_resize_surface() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-resize");
         let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
         let should_quit = Arc::new(AtomicBool::new(false));
         let read_quit = should_quit.clone();
@@ -1719,154 +2065,126 @@ new_tab = "ctrl+notakey"
 
         protocol::write_message(
             &mut client_stream,
-            &ClientMessage::InputEvents {
-                events: vec![ClientInputEvent::FocusGained; MAX_INPUT_EVENT_BATCH + 1],
+            &ClientMessage::ClientShellResize {
+                cell_width_px: 8,
+                cell_height_px: 16,
+                surface_size: crate::protocol::ClientSurfaceSize { cols: 60, rows: 15 },
+                pixel_mouse: true,
             },
         )
-        .expect("write oversized input events");
-
-        match server_event_rx
-            .blocking_recv()
-            .expect("client disconnected event")
-        {
-            ServerEvent::ClientDisconnected { client_id } => assert_eq!(client_id, 7),
-            other => panic!("expected ClientDisconnected, got {other:?}"),
-        }
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("read thread join")
-            .expect("read thread result");
-    }
-
-    #[test]
-    fn client_read_loop_rejects_oversized_input_event_paste() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-oversized-paste");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
-
-        let maximum = vec![
-            ClientInputEvent::Paste {
-                text: "x".repeat(MAX_INPUT_PAYLOAD / 2),
-            },
-            ClientInputEvent::Paste {
-                text: "y".repeat(MAX_INPUT_PAYLOAD - (MAX_INPUT_PAYLOAD / 2)),
-            },
-        ];
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputEvents {
-                events: maximum.clone(),
-            },
-        )
-        .expect("write maximum-size structured paste");
-
-        match recv_server_event(&mut server_event_rx, "maximum-size structured paste") {
-            ServerEvent::ClientInputEvents { client_id, events } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(events, maximum);
-            }
-            other => panic!("expected maximum-size ClientInputEvents, got {other:?}"),
-        }
-
-        let oversized = vec![
-            ClientInputEvent::FocusGained,
-            ClientInputEvent::Paste {
-                text: "x".repeat(MAX_INPUT_PAYLOAD / 2),
-            },
-            ClientInputEvent::Paste {
-                text: "y".repeat(MAX_INPUT_PAYLOAD - (MAX_INPUT_PAYLOAD / 2) + 1),
-            },
-            ClientInputEvent::FocusLost,
-            ClientInputEvent::Paste {
-                text: "tail".to_owned(),
-            },
-        ];
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputEvents { events: oversized },
-        )
-        .expect("write oversized structured paste");
-
-        match recv_server_event(&mut server_event_rx, "oversized structured paste rejection") {
-            ServerEvent::ClientPasteRejected {
-                client_id,
-                size,
-                max,
-            } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(size, MAX_INPUT_PAYLOAD + 5);
-                assert_eq!(max, MAX_INPUT_PAYLOAD);
-            }
-            other => panic!("expected ClientPasteRejected, got {other:?}"),
-        }
-
-        let valid = vec![ClientInputEvent::FocusGained];
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::InputEvents {
-                events: valid.clone(),
-            },
-        )
-        .expect("write valid structured input after rejection");
-
-        match recv_server_event(&mut server_event_rx, "structured input after rejection") {
-            ServerEvent::ClientInputEvents { client_id, events } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(events, valid);
-            }
-            other => panic!("expected ClientInputEvents after rejection, got {other:?}"),
-        }
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("read thread join")
-            .expect("read thread result");
-    }
-
-    #[test]
-    fn structured_input_limits_charge_grouped_repeats_and_text_payloads() {
-        let grouped = ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('x'),
-            modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
-            repeat_count: (MAX_INPUT_EVENT_BATCH + 1) as u16,
-            generated_text: None,
-            source: crate::protocol::ClientKeySource::Synthesized,
-        };
-        assert_eq!(
-            input_event_limit(&[grouped]),
-            InputEventLimit::TooManyEvents
-        );
-
-        let repeated_text = ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('x'),
-            modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
-            repeat_count: MAX_INPUT_EVENT_BATCH as u16,
-            generated_text: Some("x".repeat((MAX_INPUT_PAYLOAD / MAX_INPUT_EVENT_BATCH) + 1)),
-            source: crate::protocol::ClientKeySource::Synthesized,
-        };
+        .expect("write shell resize");
         assert!(matches!(
-            input_event_limit(&[repeated_text]),
-            InputEventLimit::InputPayloadTooLarge { size } if size > MAX_INPUT_PAYLOAD
+            recv_server_event(&mut server_event_rx, "shell resize"),
+            ServerEvent::ClientShellResize {
+                client_id: 7,
+                surface_cols: 60,
+                surface_rows: 15,
+                cell_width_px: 8,
+                cell_height_px: 16,
+                pixel_mouse: true,
+            }
         ));
 
-        let text = ClientInputEvent::TextCommit("x".repeat(MAX_INPUT_PAYLOAD + 1));
-        assert_eq!(
-            input_event_limit(&[text]),
-            InputEventLimit::InputPayloadTooLarge {
-                size: MAX_INPUT_PAYLOAD + 1
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).expect("write detach");
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach event"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-host-theme");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        let colors = (0..=u8::MAX)
+            .map(|index| {
+                (
+                    index,
+                    crate::protocol::ClientHostColor {
+                        r: index,
+                        g: 0,
+                        b: 0,
+                    },
+                )
+            })
+            .collect();
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::ClientShellHostTheme {
+                update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            },
+        )
+        .expect("write bounded palette update");
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::ClientShellHostTheme {
+                update: crate::protocol::ClientHostThemeUpdate::Appearance(
+                    crate::protocol::ClientHostAppearance::Dark,
+                ),
+            },
+        )
+        .expect("write ordered appearance update");
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "bounded palette update"),
+            ServerEvent::ClientShellHostTheme {
+                client_id: 7,
+                update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            } if colors.len() == 256
+        ));
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "ordered appearance update"),
+            ServerEvent::ClientShellHostTheme {
+                client_id: 7,
+                update: crate::protocol::ClientHostThemeUpdate::Appearance(
+                    crate::protocol::ClientHostAppearance::Dark
+                ),
             }
+        ));
+
+        let colors = vec![(0, crate::protocol::ClientHostColor { r: 0, g: 0, b: 0 },); 257];
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::ClientShellHostTheme {
+                update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            },
+        )
+        .expect("write oversized palette update");
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "oversized palette disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
+
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn pane_input_limits_charge_scroll_repeats() {
+        let oversized_scroll = ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::ClientMouseKind::ScrollUp,
+            position: crate::protocol::ClientMousePosition::Cell { column: 0, row: 0 },
+            geometry: None,
+            modifiers: 0,
+            lines: (MAX_INPUT_EVENT_BATCH + 1) as u16,
+        };
+        assert_eq!(
+            pane_input_event_limit(&[oversized_scroll]),
+            InputEventLimit::TooManyEvents
         );
     }
 

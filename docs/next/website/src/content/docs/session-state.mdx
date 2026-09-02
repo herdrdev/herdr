@@ -103,6 +103,6 @@ herdr update --handoff
 herdr --remote workbox --handoff
 ```
 
-Plain `herdr update` and plain `herdr --remote workbox` use the normal restart/stop flow by default.
+Plain `herdr update` installs the new client and keeps endpoint-generation-1 servers running. Plain `herdr --remote workbox` also keeps a compatible remote server running across version differences. A stop is required only for the one-time upgrade from a pre-generation-1 server; use `--handoff` when you explicitly want to replace a supported running server without losing its pane processes.
 
 `herdr update --handoff` only applies to installs managed by Herdr's own updater. Homebrew, mise, and Nix installs are updated through their package managers, so `herdr update` is disabled there and cannot perform live handoff.

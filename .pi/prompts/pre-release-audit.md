@@ -61,27 +61,28 @@ Process:
    - Preserve the existing changelog style and sections: `Added`, `Changed`, `Fixed`, `Removed`, and `Breaking Changes` when applicable.
 
 7. Audit next-release public docs.
-   - Treat root `README.md` and `website/src/content/docs/` as the latest released public docs.
-   - Treat `docs/next/README.md` as the next-release root README, and `docs/next/website/src/content/docs/` as the full next-release mirror of website docs.
+   - Treat root `README.md` and the version selected by `docs/versions/manifest.json` under `docs/versions/<current>/website/src/content/docs/` as the latest released public docs.
+   - Treat `docs/next/README.md` as the next-release root README and `docs/next/website/src/content/docs/` as the complete unpublished website-doc draft.
+   - Treat `docs/preview/website/` as bot-owned output for the active preview release. Never edit it during release review.
    - Compare meaningful user-facing changes in the range against next-release docs first.
    - Flag missing release docs for new or changed features, commands, config keys, protocol behavior, integrations, defaults, and compatibility notes.
-   - Compare `docs/next/README.md` against root `README.md`, and compare the staged website-doc mirror against `website/src/content/docs/`. Flag each difference as intended to ship in this release, stale, or needing user decision.
+   - Compare `docs/next/README.md` and the next website draft against current stable docs. Flag each difference as intended to ship, stale, or needing user decision.
    - Also audit example config snippets for release readiness.
 
 8. Verify finalization state.
-   - Before `just release`, approved `docs/next/README.md` must be copied to root `README.md`, approved staged website docs must be copied from `docs/next/website/src/content/docs/` to `website/src/content/docs/`, and the deleted root doc files must stay deleted.
-   - If the release will change `Cargo.lock` or the package version, check `nix/package.nix` after the release version bump and refresh `cargoHash` before tagging. A stale hash fails both the `Nix` workflow and the release workflow's `flake-check` job with a fixed-output derivation mismatch. Use the `got:` hash printed by `nix flake check --print-build-logs` or CI, then rerun the Nix check when available.
+   - Before `just release`, approved README changes must be finalized in `docs/next/README.md`; release CI promotes that tagged file after publication. Do not copy draft website docs into `docs/preview/` or `docs/versions/`.
+   - `nix/package.nix` imports `Cargo.lock` through `cargoLock.lockFile`; normal version and lockfile updates do not require a separate cargo hash refresh.
    - Run or recommend:
      ```bash
      just release-docs-check
      ```
-   - This check must include root `README.md`, root `CHANGELOG.md`, the removed root doc files, and exact 1:1 sync between `docs/next/website/src/content/docs/` and `website/src/content/docs/`.
+   - The docs check validates the staged draft, the public distribution contract, and published preview and stable snapshot provenance. The private website repository owns rendering checks.
    - Do not run `just release` unless the working tree is clean and the docs check passes.
 
 9. Apply changes only when asked.
    - Do not edit files during the audit unless the user explicitly asks you to apply fixes.
    - When asked to apply audit fixes, update `docs/next/CHANGELOG.md`, `docs/next/README.md`, and any required staged website docs under `docs/next/website/src/content/docs/`.
-   - When asked to finalize release docs, copy approved next-release README and changelog into root, copy approved staged website docs into `website/src/content/docs/`, then run `just release-docs-check`.
+   - When asked to finalize release docs, finalize only the staged files under `docs/next/`, then run `just release-docs-check`. Preview and stable publication remain CI-owned.
 
 Output format:
 

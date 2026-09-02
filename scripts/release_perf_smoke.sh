@@ -37,7 +37,7 @@ trap 'exit 143' TERM
 mkdir -p "$root/results"
 
 if [[ -z "$baseline" ]]; then
-  baseline_version=$(jq -er '.version' "$repo_root/website/latest.json")
+  baseline_version=$(jq -er '.version' "$repo_root/distribution/latest.json")
   baseline="$root/herdr-baseline"
   curl -fL --retry 3 \
     "https://github.com/herdrdev/herdr/releases/download/v${baseline_version}/herdr-${platform}-${arch}" \

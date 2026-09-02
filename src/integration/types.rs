@@ -164,15 +164,6 @@ impl IntegrationRecommendation {
         self.state == IntegrationStatusKind::Outdated
             || (self.available && self.state == IntegrationStatusKind::NotInstalled)
     }
-
-    pub fn status_label(&self) -> &'static str {
-        match (self.available, self.state) {
-            (_, IntegrationStatusKind::Current) => "installed",
-            (_, IntegrationStatusKind::Outdated) => "update available",
-            (true, IntegrationStatusKind::NotInstalled) => "available",
-            (false, IntegrationStatusKind::NotInstalled) => "not found",
-        }
-    }
 }
 
 #[derive(Debug)]

@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationState {
+    NotInstalled,
+    Current,
+    Outdated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IntegrationInfo {
+    pub target: IntegrationTarget,
+    pub label: String,
+    pub command: String,
+    pub available: bool,
+    pub state: IntegrationState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IntegrationInstallParams {
     pub target: IntegrationTarget,

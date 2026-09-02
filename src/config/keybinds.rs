@@ -169,6 +169,18 @@ pub struct ActionKeybinds {
 }
 
 impl ActionKeybinds {
+    pub(crate) fn from_labels(labels: &[String]) -> Result<Self, String> {
+        let mut bindings = Vec::new();
+        for label in labels {
+            match parse_binding_string(label) {
+                Some(ParsedBinding::Single(binding)) => bindings.push(binding),
+                Some(ParsedBinding::Range(range)) => bindings.extend(range),
+                None => return Err(format!("invalid endpoint command binding: {label}")),
+            }
+        }
+        Ok(Self { bindings })
+    }
+
     #[cfg(test)]
     pub fn prefix(label: &str) -> Self {
         let raw = if label.starts_with("prefix+") {

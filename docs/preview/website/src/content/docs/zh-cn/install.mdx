@@ -19,6 +19,12 @@ curl -fsSL https://herdr.dev/install.sh | sh
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
+如果端点安全软件阻止该无文件 PowerShell 命令，请打开命令提示符并运行：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
 安装器会下载适合你平台的发布二进制文件并放到 PATH 上。新的直接安装默认使用稳定更新通道。现有的 Windows 预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。Windows 安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
 
 ## 用 Homebrew 安装

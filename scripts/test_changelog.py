@@ -20,6 +20,7 @@ from scripts.changelog import (
     load_product_announcement,
     manifest_from_release_payload,
     prepare_release,
+    read_endpoint_protocol_generation,
     read_protocol_version,
 )
 
@@ -346,6 +347,7 @@ class ChangelogScriptTests(unittest.TestCase):
             {
                 "version": "0.1.1",
                 "protocol": read_protocol_version(),
+                "endpoint_generation": read_endpoint_protocol_generation(),
                 "notes": "### Fixed\n- One",
                 "assets": {
                     "linux-x86_64": "https://example.com/linux-x86_64",
@@ -436,6 +438,7 @@ class ChangelogScriptTests(unittest.TestCase):
         actual = {
             "version": "v0.1.1",
             "protocol": read_protocol_version(),
+            "endpoint_generation": read_endpoint_protocol_generation(),
             "notes": "\n### Fixed\n- One\n",
             "assets": {
                 "linux-x86_64": " https://example.com/linux-x86_64 ",
@@ -449,6 +452,7 @@ class ChangelogScriptTests(unittest.TestCase):
         expected = {
             "version": "0.1.1",
             "protocol": read_protocol_version(),
+            "endpoint_generation": read_endpoint_protocol_generation(),
             "notes": "### Fixed\n- One",
             "assets": {
                 "linux-x86_64": "https://example.com/linux-x86_64",

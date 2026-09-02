@@ -273,6 +273,23 @@ yellow = "#f9e2af"
 
 颜色值支持十六进制、命名颜色、`rgb(r,g,b)`，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
 
+启用 `auto_switch` 后，可以通过明暗模式子表在共享自定义颜色之上应用不同的覆盖值：
+
+```toml
+[theme.custom]
+accent = "#89b4fa"
+
+[theme.custom.light]
+panel_bg = "#eff1f5"
+text = "#4c4f69"
+
+[theme.custom.dark]
+panel_bg = "#1e1e2e"
+text = "#cdd6f4"
+```
+
+有效调色板按以下顺序应用：内置主题、`[theme.custom]`，然后是 `[theme.custom.light]` 或 `[theme.custom.dark]`。省略模式子表时，会保留现有的共享覆盖行为。
+
 ## UI 与侧边栏
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。

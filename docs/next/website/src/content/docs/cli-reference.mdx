@@ -15,7 +15,6 @@ herdr --session work          # launch or attach to a named session
 herdr --remote workbox        # attach through SSH, using local keybindings
 herdr --remote workbox --remote-keybindings server
 herdr --remote workbox --handoff
-herdr --no-session            # single-process escape hatch
 herdr --default-config        # print default config
 herdr update                  # download and install from the configured channel
 herdr update --handoff        # opt into live handoff for supported running servers
@@ -311,7 +310,7 @@ Agent targets are either a unique live agent name or the pane ID that currently 
 
 A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
 
-`agent prompt` honors live bracketed-paste mode and sends text followed by encoded Enter after a short delay, including while the agent is working. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, an accepted prompt sent from another non-working state must produce an observed lifecycle change within five seconds or Herdr returns `agent_prompt_stalled`; a caller timeout of five seconds or less keeps the normal `timeout` error. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
+`agent prompt` honors live bracketed-paste mode and sends text followed by encoded Enter after a short delay, including while the agent is working. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, an accepted prompt sent from another non-working state must produce an observed `working` or `blocked` state within five seconds or Herdr returns `agent_prompt_stalled`; if the caller timeout expires first, Herdr returns the normal `timeout` error. This prevents unrelated `idle`, `done`, or session changes from completing the wait. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
 
 `idle` means ready for input after its tab has been seen in the focused Herdr UI; `done` is the same underlying idle state after unseen background work completes. Focusing that tab or targeting it with `pane focus` / `agent focus` marks it seen; reading it through the CLI does not. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently, not that its work succeeded.
 
@@ -357,7 +356,7 @@ Use `pane wait-output` for normal commands and servers. Use `agent wait` for cod
 
 `pane wait-output` checks the selected snapshot immediately, including output that already exists, then polls until it matches. The default source name is `recent`; matching treats it as unwrapped recent output from the latest 80 rendered terminal rows. `--lines` changes that row limit. `--match` finds a literal substring on one line, and `--regex` uses Rust regular-expression syntax and also matches one line at a time.
 
-`pane wait-output`, `agent wait`, and `agent prompt --wait` wait indefinitely when `--timeout` is omitted. A timeout or server error is emitted as JSON on stderr with exit status 1. CLI usage errors exit with status 2.
+`pane wait-output` and `agent wait` wait indefinitely when `--timeout` is omitted. For `agent prompt --wait`, the settled-state wait is indefinite after activity is observed or when the prompt starts in `working`; a non-working prompt still returns `agent_prompt_stalled` after five seconds without observed activity. A timeout or server error is emitted as JSON on stderr with exit status 1. CLI usage errors exit with status 2.
 
 ## Integrations
 

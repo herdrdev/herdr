@@ -31,6 +31,7 @@ pub(crate) struct Layer {
 #[derive(Debug)]
 pub(crate) struct DirectGate {
     pub(crate) transfer_id: u64,
+    pub(crate) image_id: u32,
     pub(crate) client_id: u64,
     pub(crate) deadline: std::time::Instant,
     pub(crate) written: bool,

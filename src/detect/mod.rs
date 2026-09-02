@@ -604,24 +604,39 @@ fn agent_name_from_path_token(token: &str) -> Option<String> {
 }
 
 fn agent_name_from_known_package_path(path: &str) -> Option<String> {
-    let components: Vec<String> = path
+    let raw_components: Vec<&str> = path
         .split(['/', '\\'])
         .filter(|component| !component.is_empty())
+        .collect();
+    let ends_with = |suffix: &[&str]| {
+        raw_components.len() >= suffix.len()
+            && raw_components[raw_components.len() - suffix.len()..]
+                .iter()
+                .zip(suffix)
+                .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+    };
+    if ends_with(&[
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "dist",
+        "cli.js",
+    ]) || ends_with(&[
+        "node_modules",
+        "@earendil-works",
+        "pi-coding-agent",
+        "dist",
+        "bundle",
+        "cli.js",
+    ]) {
+        return Some(agent_label(Agent::Pi).to_string());
+    }
+
+    let components: Vec<String> = raw_components
+        .into_iter()
         .map(normalized_agent_lookup_name)
         .collect();
-
     for window in components.windows(5) {
-        if window
-            == [
-                "node_modules",
-                "@earendil-works",
-                "pi-coding-agent",
-                "dist",
-                "cli",
-            ]
-        {
-            return Some(agent_label(Agent::Pi).to_string());
-        }
         if window == ["node_modules", "@qwen-code", "qwen-code", "dist", "index"] {
             return Some(agent_label(Agent::Qwen).to_string());
         }
@@ -1167,6 +1182,26 @@ mod tests {
     }
 
     #[test]
+    fn identify_agent_in_job_detects_node_wrapped_pi_bundled_cli() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    r"C:\Users\herdr\AppData\Local\pi-node\current\node.exe",
+                    r"C:\Users\herdr\AppData\Local\pi-node\current/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Pi, "pi".to_string()))
+        );
+    }
+
+    #[test]
     fn identify_agent_in_job_detects_node_wrapped_mastracode_package_cli() {
         let job = crate::platform::ForegroundJob {
             process_group_id: 123,
@@ -1187,20 +1222,24 @@ mod tests {
     }
 
     #[test]
-    fn identify_agent_in_job_ignores_non_cli_pi_package_script() {
-        let job = crate::platform::ForegroundJob {
-            process_group_id: 123,
-            processes: vec![foreground_process(
-                123,
-                "node.exe",
-                &[
-                    "node.exe",
-                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\scripts\\build.js",
-                ],
-            )],
-        };
+    fn identify_agent_in_job_ignores_non_cli_pi_package_scripts() {
+        for script in [
+            r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\scripts\build.js",
+            r"C:\Users\herdr\AppData\Local\pi-node\current\node_modules\@earendil-works\pi-coding-agent\dist\bundle\update.js",
+            r"C:\workspace\dist\bundle\cli.js",
+            r"C:\workspace\node_modules\other-package\dist\bundle\cli.js",
+            r"C:\workspace\node_modules\@earendil-works\pi-coding-agent\dist\cli.exe",
+            r"C:\workspace\node_modules\@earendil-works\pi-coding-agent\dist\cli.js\other.js",
+            r"C:\workspace\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.exe",
+            r"C:\workspace\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js\other.js",
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "node.exe", &["node.exe", script])],
+            };
 
-        assert_eq!(identify_agent_in_job(&job), None);
+            assert_eq!(identify_agent_in_job(&job), None, "script: {script}");
+        }
     }
 
     #[test]

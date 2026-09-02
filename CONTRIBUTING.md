@@ -121,7 +121,7 @@ The checks must pass. Make sure the tests exercise the reported failure and woul
 
 ### Handle documentation correctly
 
-For normal code changes, do not edit the root `README.md`, root `CHANGELOG.md`, `docs/preview/`, `docs/versions/`, or generated files under `website/src/content/docs/`.
+For normal code changes, do not edit the root `README.md`, root `CHANGELOG.md`, `docs/preview/`, `docs/versions/`, or release payloads under `distribution/`.
 
 When a user-facing change needs documentation, update the unreleased draft under `docs/next/` or explain what documentation will be needed. Maintainers prepare the next changelog during release review.
 

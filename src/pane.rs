@@ -44,8 +44,8 @@ use self::agent_detection::{
 pub use self::terminal::InputState;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{
-    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalTextMatch,
-    TerminalTextPoint, TerminalWordMotion,
+    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalSearchDirection,
+    TerminalSearchWindow, TerminalTextPoint, TerminalWordMotion,
 };
 pub use self::{
     state::PaneState,
@@ -55,21 +55,6 @@ pub use self::{
 const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
-
-#[cfg(test)]
-thread_local! {
-    static AGGREGATE_INPUT_STATE_READS: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_aggregate_input_state_reads() {
-    AGGREGATE_INPUT_STATE_READS.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn aggregate_input_state_reads() -> usize {
-    AGGREGATE_INPUT_STATE_READS.get()
-}
 
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // Each pane is rendered by herdr's own terminal layer, not the outer terminal
@@ -1053,6 +1038,7 @@ pub struct PaneRuntime {
     child_wait_completed: Option<Arc<AtomicBool>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
+    content_write_lock: Arc<Mutex<()>>,
     detection_content_seq: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     detect_reset_notify: Arc<Notify>,
@@ -1175,14 +1161,6 @@ impl PaneRuntimeIo {
         }
     }
 
-    async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
-        match self {
-            PaneRuntimeIo::Actor(actor) => actor.write_user_input(bytes).await,
-            #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, .. } => sender.send(bytes).await,
-        }
-    }
-
     fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.try_write_user_input(bytes),
@@ -1203,24 +1181,29 @@ impl PaneRuntimeIo {
         }
     }
 
-    fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
+    fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
         match self {
-            PaneRuntimeIo::Actor(actor) => {
-                let actor = actor.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    if let Err(err) = actor.write_user_input(bytes).await {
-                        warn!(error = %err, "failed to send delayed PTY input");
-                    }
-                });
-            }
+            PaneRuntimeIo::Actor(actor) => actor.queue_user_input_submission(text, enter, delay),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => {
                 let sender = sender.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    let _ = sender.send(bytes).await;
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = sender
+                        .try_send(text)
+                        .map_err(std::io::Error::other)
+                        .and_then(|()| {
+                            std::thread::sleep(delay);
+                            sender.try_send(enter).map_err(std::io::Error::other)
+                        });
+                    let _ = reply_tx.send(result);
                 });
+                Ok(reply_rx)
             }
         }
     }
@@ -1926,6 +1909,7 @@ impl PaneRuntime {
         let reported_cwd = Arc::new(Mutex::new(None));
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
         let content_seq = Arc::new(AtomicU64::new(0));
+        let content_write_lock = Arc::new(Mutex::new(()));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
 
         let io = {
@@ -1934,6 +1918,7 @@ impl PaneRuntime {
             let render_notify = render_notify.clone();
             let render_dirty = render_dirty.clone();
             let content_seq = content_seq.clone();
+            let content_write_lock = content_write_lock.clone();
             let detection_content_seq = detection_content_seq.clone();
             let child_pid = child_pid.clone();
             let read_events = events.clone();
@@ -1941,11 +1926,16 @@ impl PaneRuntime {
             let rt = tokio::runtime::Handle::current();
             let delay_rt = rt.clone();
             let on_read = Box::new(move |bytes: &[u8]| {
+                let _content_write_guard = match content_write_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 content_seq.fetch_add(1, Ordering::AcqRel);
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
                 content_seq.fetch_add(1, Ordering::Release);
+                drop(_content_write_guard);
                 publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
                 observe_detection_content_change(bytes, &detection_content_seq);
                 let title_requested =
@@ -2014,6 +2004,7 @@ impl PaneRuntime {
             child_wait_completed: None,
             kitty_keyboard_flags,
             content_seq,
+            content_write_lock,
             detection_content_seq,
             full_lifecycle_authority_active,
             detect_reset_notify,
@@ -2061,6 +2052,7 @@ impl PaneRuntime {
         }
         let terminal = Arc::new(PaneTerminal::new(pane_terminal));
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
+        let content_write_lock = Arc::new(Mutex::new(()));
 
         let spawned = crate::pty::backend::spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
@@ -2104,17 +2096,23 @@ impl PaneRuntime {
             let render_notify = render_notify.clone();
             let render_dirty = render_dirty.clone();
             let content_seq = content_seq.clone();
+            let content_write_lock = content_write_lock.clone();
             let detection_content_seq = detection_content_seq.clone();
             let child_pid = child_pid.clone();
             let events = events.clone();
             let reported_cwd = reported_cwd.clone();
             let rt = tokio::runtime::Handle::current();
             let on_read = Box::new(move |bytes: &[u8]| {
+                let _content_write_guard = match content_write_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 content_seq.fetch_add(1, Ordering::AcqRel);
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
                 content_seq.fetch_add(1, Ordering::Release);
+                drop(_content_write_guard);
                 publish_terminal_bells(pane_id, result.terminal_bells, &events);
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
@@ -2570,6 +2568,7 @@ impl PaneRuntime {
             child_wait_completed: Some(child_wait_completed),
             kitty_keyboard_flags,
             content_seq,
+            content_write_lock,
             detection_content_seq,
             full_lifecycle_authority_active,
             detect_reset_notify,
@@ -2596,11 +2595,6 @@ impl PaneRuntime {
     #[cfg(test)]
     pub(crate) fn agent_detection_reset_notify_for_test(&self) -> Arc<Notify> {
         self.detect_reset_notify.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn agent_detection_enabled_for_test(&self) -> bool {
-        self.detect_handle.is_some()
     }
 
     pub fn set_full_lifecycle_authority_active(&self, active: bool) {
@@ -2630,9 +2624,16 @@ impl PaneRuntime {
             return;
         }
         self.current_size.set(size);
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
         let terminal_responses = self
             .terminal
             .resize(rows, cols, cell_width_px, cell_height_px);
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(_content_write_guard);
         mark_detection_content_changed(&self.detection_content_seq);
         self.io.resize(
             rows,
@@ -2674,23 +2675,20 @@ impl PaneRuntime {
         self.terminal.scroll_metrics()
     }
 
-    pub(crate) fn search_text_matches(
+    pub(crate) fn search_text_window(
         &self,
         query: &str,
         case_sensitive: bool,
-    ) -> Vec<crate::pane::TerminalTextMatch> {
-        self.terminal.search_text_matches(query, case_sensitive)
-    }
-
-    pub(crate) fn text_match_is_current(&self, text_match: crate::pane::TerminalTextMatch) -> bool {
-        self.terminal.text_match_is_current(text_match)
-    }
-
-    pub(crate) fn text_matches_are_current(
-        &self,
-        text_matches: &[crate::pane::TerminalTextMatch],
-    ) -> Vec<bool> {
-        self.terminal.text_matches_are_current(text_matches)
+        direction: crate::pane::TerminalSearchDirection,
+        cursor: crate::pane::TerminalTextPoint,
+        previous: Option<(
+            crate::pane::TerminalTextPoint,
+            crate::pane::TerminalTextPoint,
+        )>,
+        limit: usize,
+    ) -> crate::pane::TerminalSearchWindow {
+        self.terminal
+            .search_text_window(query, case_sensitive, direction, cursor, previous, limit)
     }
 
     pub(crate) fn word_motion_target(
@@ -2702,15 +2700,21 @@ impl PaneRuntime {
         self.terminal.word_motion_target(row, col, motion)
     }
 
-    #[cfg(any(unix, test))]
-    pub fn input_state(&self) -> Option<InputState> {
-        #[cfg(test)]
-        AGGREGATE_INPUT_STATE_READS.set(AGGREGATE_INPUT_STATE_READS.get() + 1);
-        self.terminal.input_state()
+    pub(crate) fn terminal_dimensions(&self) -> Option<(u16, u16)> {
+        self.terminal.dimensions()
     }
 
-    pub fn keyboard_report_all_requested(&self) -> bool {
-        self.terminal.keyboard_report_all_requested()
+    pub(crate) fn paragraph_motion_target(
+        &self,
+        row: u32,
+        direction: i8,
+    ) -> Option<crate::pane::TerminalTextPoint> {
+        self.terminal.paragraph_motion_target(row, direction)
+    }
+
+    #[cfg(any(unix, test))]
+    pub fn input_state(&self) -> Option<InputState> {
+        self.terminal.input_state()
     }
 
     pub fn bracketed_paste_enabled(&self) -> bool {
@@ -2844,25 +2848,26 @@ impl PaneRuntime {
         self.terminal.keyboard_protocol(fallback)
     }
 
+    pub fn modify_other_keys_level(&self) -> u8 {
+        self.terminal.modify_other_keys_level()
+    }
+
     pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
         self.terminal
             .encode_terminal_key(key, self.keyboard_protocol())
-    }
-
-    pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.io.send_bytes(bytes).await
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.io.try_send_bytes(bytes)
     }
 
-    pub fn send_bytes_after(&self, bytes: Bytes, delay: std::time::Duration) {
-        self.io.send_bytes_after(bytes, delay);
-    }
-
-    pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.send_bytes(self.paste_payload(text)).await
+    pub fn queue_user_input_submission(
+        &self,
+        text: Bytes,
+        enter: Bytes,
+        delay: std::time::Duration,
+    ) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+        self.io.queue_user_input_submission(text, enter, delay)
     }
 
     pub fn try_send_paste(&self, text: String) -> Result<(), mpsc::error::TrySendError<Bytes>> {
@@ -3047,6 +3052,10 @@ impl PaneRuntime {
     }
 
     pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         self.content_seq.fetch_add(1, Ordering::AcqRel);
         let (tx, _rx) = mpsc::channel(1);
         let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
@@ -3091,6 +3100,7 @@ impl PaneRuntime {
                 child_wait_completed: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
+                content_write_lock: Arc::new(Mutex::new(())),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
                 full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
                 detect_reset_notify: Arc::new(Notify::new()),
@@ -3660,6 +3670,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
+            content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),
@@ -3692,6 +3703,7 @@ mod tests {
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
+            content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
             full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
             detect_reset_notify: Arc::new(Notify::new()),

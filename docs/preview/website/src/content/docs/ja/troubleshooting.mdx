@@ -70,6 +70,23 @@ herdr
 
 サーバーを停止するとペインのプロセスも終了します。名前付きセッションでは `herdr session stop <name>` を使います。更新機能、パッケージマネージャー、ライブハンドオフについては[インストール](/ja/docs/install/#update)を参照してください。
 
+## macOS の Herdr 内で Keychain を使うツールが失敗する
+
+Herdr のペインからサーバーの起動コンテキストを確認します:
+
+```bash
+launchctl managername
+```
+
+`Background` と表示された場合は、サーバーを停止し、通常の GUI ターミナルから Herdr を再起動してください:
+
+```bash
+herdr server stop
+herdr
+```
+
+サーバーを停止するとペインのプロセスも終了します。Herdr のペインは長時間動作するサーバーの macOS 起動コンテキストを継承するため、SSH やバックグラウンドジョブから起動されたサーバーは対話型 Keychain サービスにアクセスできないことがあります。詳細は [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) を参照してください。
+
 ## `herdr` コマンドが見つからない
 
 ターミナルを再起動して環境を読み込み直し、Herdr のインストール先が `PATH` に含まれていることを確認してください。パッケージマネージャー経由のインストールは、そのパッケージマネージャーから更新して公開する必要があります。[インストール](/ja/docs/install/#verify)を参照してください。

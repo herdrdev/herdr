@@ -638,14 +638,6 @@ impl App {
         });
     }
 
-    #[cfg(test)]
-    pub(crate) fn emit_worktree_opened_for_workspace(&mut self, ws_idx: usize, already_open: bool) {
-        let Some(worktree) = self.worktree_info_for_workspace(ws_idx) else {
-            return;
-        };
-        self.emit_worktree_opened_event(ws_idx, worktree, already_open);
-    }
-
     fn emit_worktree_opened_event(
         &mut self,
         ws_idx: usize,
@@ -802,7 +794,13 @@ mod tests {
 
     fn test_app_with_event_hub(event_hub: crate::api::EventHub) -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::new(&Config::default(), true, None, api_rx, event_hub)
+        App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub,
+        )
     }
 
     #[cfg(windows)]
@@ -936,6 +934,7 @@ mod tests {
         assert_eq!(tab.workspace_id, workspace.workspace_id);
         assert_eq!(root_pane.workspace_id, workspace.workspace_id);
         assert_eq!(worktree.branch.as_deref(), Some("worktree/api-create"));
+        assert!(Path::new(&worktree.path).starts_with(&worktree_root));
         assert!(Path::new(&worktree.path).join("README.md").exists());
         assert_eq!(app.state.workspaces.len(), 2);
         assert!(

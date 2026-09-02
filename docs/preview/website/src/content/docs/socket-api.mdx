@@ -118,11 +118,13 @@ Raw socket method names use dot notation:
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
 their own local runtime cache. The response includes version/protocol metadata,
 focused workspace/tab/pane ids, workspace records, tab records, pane records,
-tab layout snapshots, and agent records. It is not a subscription; after reading
-it, subscribe to resource events and update the local cache from those events.
-Call `session.snapshot` again after reconnecting or when the local cache may be
-stale. Attached worktree provenance is included on workspace records. Full repo
-worktree discovery remains `worktree.list`.
+tab layout snapshots, and agent records. It is not a subscription. To avoid a
+bootstrap gap, first open `events.subscribe` on another connection and wait for
+its acknowledgement. Buffer that stream while calling `session.snapshot`,
+install the snapshot, then apply the buffered events in order and continue
+streaming. Call `session.snapshot` again after reconnecting or when the local
+cache may be stale. Attached worktree provenance is included on workspace
+records. Full repo worktree discovery remains `worktree.list`.
 
 From the CLI, `herdr api snapshot` prints the live `session.snapshot` response
 as JSON for clients and agents that want a simple bootstrap command.
@@ -409,6 +411,8 @@ Remove a linked checkout:
 Use at most one of `workspace_id` or `cwd` for `worktree.list`, `worktree.create`, and `worktree.open`; omit both to use the active workspace. Use exactly one of `path` or `branch` for `worktree.open`. Raw socket `cwd` and `path` values must be absolute; the CLI expands relative `--cwd` and `--path` values before sending requests. Workspace responses include optional `worktree` provenance when a workspace belongs to a Herdr worktree group. Worktree commands can emit `workspace.updated` when an existing workspace gains or changes worktree provenance.
 
 Worktree commands also emit lifecycle events. `worktree.create` emits `workspace.created`, `tab.created`, `pane.created`, and `worktree.created`. `worktree.open` emits `worktree.opened`, and it also emits workspace/tab/pane creation events when it opens a new Herdr workspace. `worktree.remove` emits `worktree.removed`; if the linked workspace is still open, it also emits `workspace.closed`.
+
+`workspace.close` rejects closing a primary workspace while linked-worktree workspaces are open unless its params include `"close_group": true`, returning `workspace_group_close_required` when explicit group intent is missing. An explicit group close emits one `workspace.closed` event for each workspace it closes.
 
 ## Agent view queries
 
@@ -805,6 +809,8 @@ Subscribe to events when you need a long-lived stream:
 ```
 
 The first response acknowledges the subscription. Later lines are pushed events.
+Lifecycle subscriptions start when the request is accepted and do not replay
+events retained before that point.
 
 Workspace event subscriptions include `workspace.created`, `workspace.updated`, `workspace.metadata_updated`, `workspace.renamed`, `workspace.moved`, `workspace.reordered`, `workspace.closed`, and `workspace.focused`. `workspace.metadata_updated` reports token changes and TTL expiry without invoking plugin event hooks. Other workspace events describe Herdr UI/runtime lifecycle. `workspace.created` includes optional `workspace.worktree` provenance when the workspace belongs to a worktree group. `workspace.moved` includes the moved `workspace_id`, requested `insert_index`, and updated ordered `workspaces` list. `workspace.reordered` includes the atomically moved `workspace_ids`, optional `before_workspace_id`, and authoritative ordered `workspaces` list. `workspace.closed` includes a final `workspace` snapshot when Herdr can still identify it before removal.
 Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`,

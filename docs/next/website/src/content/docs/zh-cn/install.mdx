@@ -139,7 +139,7 @@ herdr channel set stable
 
 Windows 的常规使用建议选择稳定版。预览版能更早获得修复,但可能出现回归,因此只有在接受这一取舍时才应主动启用。现有的 Windows 预览安装会继续留在预览通道,直到你明确切换。如果旧预览构建拒绝 `herdr channel set stable`,请先在预览通道运行一次 `herdr update`,再重试切换通道。
 
-默认情况下,`herdr update` 安装新二进制文件,并不打扰兼容的运行中会话。如果某次更新改变了 Herdr 的客户端/服务器协议,Herdr 会在安装后询问是否停止旧服务器。要使用新版本,请停止旧服务器。停止会退出窗格进程。对于默认会话,运行 `herdr server stop`,再运行 `herdr`。对于命名会话,运行 `herdr session stop <name>`,再运行 `herdr session attach <name>`。
+默认情况下,`herdr update` 会安装新二进制文件,并让端点第 1 代服务器及其窗格进程继续运行。再次启动 Herdr 即可用更新后的客户端重新连接。纯客户端改动会立即生效。新的服务器端操作会保持不可用,直到对应服务器更新并重启;客户端会显示通知,而不会断开连接。只有早于端点第 1 代的服务器需要在更新时再停止最后一次。
 
 要对受支持的运行中会话启用实验性的实时服务器交接,运行:
 
@@ -147,7 +147,7 @@ Windows 的常规使用建议选择稳定版。预览版能更早获得修复,�
 herdr update --handoff
 ```
 
-实时交接不适用于 Homebrew、mise 或 Nix 的包管理器更新。这些安装先用包管理器更新,然后在准备好使用新服务器时重启那个 Herdr 会话。如果运行中的会话仍在使用旧服务器,用 `herdr server stop` 或 `herdr session stop <name>` 停止它,再重新运行 Herdr。
+实时交接不适用于 Homebrew、mise 或 Nix 的包管理器更新。这些安装先用包管理器更新,再重新运行 Herdr,用更新后的客户端连接。兼容的旧服务器会继续运行。只有需要新版本的服务器端改动时,才稍后用 `herdr server stop` 或 `herdr session stop <name>` 重启它。
 
 ## 系统要求
 

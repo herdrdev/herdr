@@ -1,6 +1,6 @@
 #![cfg(not(target_os = "macos"))]
 
-mod support;
+pub mod support;
 
 #[path = "cli/mod.rs"]
 mod cases;

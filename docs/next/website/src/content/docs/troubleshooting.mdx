@@ -61,7 +61,7 @@ Herdr deliberately does not rewrite modified arrows because terminal application
 
 ## Herdr updated, but the running session is still old
 
-Updating the binary does not always replace a compatible server that is already running. Check `herdr status`. To start the updated server, stop the session and launch Herdr again:
+Updating the binary does not replace a compatible server that is already running. Start Herdr again to use the updated client. If you also need server-side changes from the release, check `herdr status`, then stop the session and launch Herdr again:
 
 ```bash
 herdr server stop

@@ -118,13 +118,3 @@ herdr terminal attach term_abc123
 ```bash
 herdr terminal attach term_abc123 --takeover
 ```
-
-## シングルプロセスの逃げ道
-
-バックグラウンドのサーバー/クライアント分離なしで Herdr を実行するには `--no-session` を使います:
-
-```bash
-herdr --no-session
-```
-
-これは主にデバッグや互換性のための逃げ道です。デフォルトの永続セッションモードが通常の使い方です。

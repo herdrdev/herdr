@@ -1,249 +1,14 @@
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
-use super::scrollbar::{release_notes_scrollbar_rect, render_scrollbar};
-use super::widgets::{
-    action_button_width, modal_stack_areas, panel_contrast_fg, render_action_button,
-    render_modal_header, render_modal_shell,
-};
-use crate::app::{
-    state::{Palette, ProductAnnouncementState, ReleaseNotesState},
-    AppState,
-};
+use crate::app::state::{Palette, ProductAnnouncementState, ReleaseNotesState};
 
 pub(crate) const RELEASE_NOTES_MODAL_SIZE: (u16, u16) = (80, 24);
 pub(crate) const PRODUCT_ANNOUNCEMENT_MODAL_SIZE: (u16, u16) = (88, 24);
-
-pub(super) fn render_release_notes_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
-    let Some(notes) = &app.release_notes else {
-        return;
-    };
-
-    super::dim_background(frame, area);
-
-    let Some(inner) = render_modal_shell(
-        frame,
-        area,
-        RELEASE_NOTES_MODAL_SIZE.0,
-        RELEASE_NOTES_MODAL_SIZE.1,
-        &app.palette,
-    ) else {
-        return;
-    };
-    if inner.height < 8 || inner.width < 20 {
-        return;
-    }
-
-    let stack = modal_stack_areas(inner, 2, 1, 0, 1);
-    let header_rows =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas::<2>(stack.header);
-
-    let header_title_area = Rect::new(
-        header_rows[0].x + 1,
-        header_rows[0].y,
-        header_rows[0].width.saturating_sub(2),
-        header_rows[0].height,
-    );
-    let header_subtitle_area = Rect::new(
-        header_rows[1].x + 1,
-        header_rows[1].y,
-        header_rows[1].width.saturating_sub(2),
-        header_rows[1].height,
-    );
-
-    render_modal_header(
-        frame,
-        header_title_area,
-        &format!("v{}", notes.version),
-        &app.palette,
-    );
-    let subtitle = if notes.preview {
-        "update ready"
-    } else {
-        "what's new in this release"
-    };
-    frame.render_widget(
-        Paragraph::new(subtitle).style(Style::default().fg(app.palette.overlay1)),
-        header_subtitle_area,
-    );
-    render_action_button(
-        frame,
-        release_notes_close_button_rect(header_rows[0]),
-        Some("esc"),
-        "close",
-        Style::default()
-            .fg(panel_contrast_fg(&app.palette))
-            .bg(app.palette.accent)
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let notes_body = stack.content;
-    let display_lines =
-        release_notes_display_lines(notes, &app.update_install_command, &app.palette);
-    let metrics = crate::pane::ScrollMetrics {
-        offset_from_bottom: app.release_notes_max_scroll().saturating_sub(notes.scroll) as usize,
-        max_offset_from_bottom: app.release_notes_max_scroll() as usize,
-        viewport_rows: notes_body.height.max(1) as usize,
-    };
-    let track = release_notes_scrollbar_rect(notes_body, metrics);
-    let notes_text_area = track
-        .map(|_| {
-            Rect::new(
-                notes_body.x,
-                notes_body.y,
-                notes_body.width.saturating_sub(1),
-                notes_body.height,
-            )
-        })
-        .unwrap_or(notes_body);
-
-    let body = Paragraph::new(
-        display_lines
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect::<Vec<_>>(),
-    )
-    .wrap(Wrap { trim: false })
-    .scroll((notes.scroll, 0));
-    frame.render_widget(body, notes_text_area);
-    if let Some(track) = track {
-        render_scrollbar(
-            frame,
-            metrics,
-            track,
-            app.palette.overlay0,
-            app.palette.overlay1,
-            "▐",
-        );
-    }
-
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" scroll ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("wheel ↑↓", Style::default().fg(app.palette.text)),
-            Span::styled("  ·  ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("close", Style::default().fg(app.palette.overlay0)),
-            Span::styled(" esc / enter ", Style::default().fg(app.palette.text)),
-        ])),
-        stack.footer.unwrap_or_default(),
-    );
-}
-
-pub(super) fn render_product_announcement_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
-    let Some(announcement) = &app.product_announcement else {
-        return;
-    };
-
-    super::dim_background(frame, area);
-
-    let Some(inner) = render_modal_shell(
-        frame,
-        area,
-        PRODUCT_ANNOUNCEMENT_MODAL_SIZE.0,
-        PRODUCT_ANNOUNCEMENT_MODAL_SIZE.1,
-        &app.palette,
-    ) else {
-        return;
-    };
-    if inner.height < 8 || inner.width < 20 {
-        return;
-    }
-
-    let stack = modal_stack_areas(inner, 2, 1, 0, 1);
-    let header_rows =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas::<2>(stack.header);
-
-    let header_title_area = Rect::new(
-        header_rows[0].x + 1,
-        header_rows[0].y,
-        header_rows[0].width.saturating_sub(2),
-        header_rows[0].height,
-    );
-    let header_subtitle_area = Rect::new(
-        header_rows[1].x + 1,
-        header_rows[1].y,
-        header_rows[1].width.saturating_sub(2),
-        header_rows[1].height,
-    );
-
-    render_modal_header(frame, header_title_area, &announcement.title, &app.palette);
-    let subtitle = if announcement.preview {
-        "product announcement preview"
-    } else {
-        "product announcement"
-    };
-    frame.render_widget(
-        Paragraph::new(format!("{subtitle} · v{}", announcement.version))
-            .style(Style::default().fg(app.palette.overlay1)),
-        header_subtitle_area,
-    );
-    render_action_button(
-        frame,
-        release_notes_close_button_rect(header_rows[0]),
-        Some("esc"),
-        "close",
-        Style::default()
-            .fg(panel_contrast_fg(&app.palette))
-            .bg(app.palette.accent)
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let body_rect = stack.content;
-    let metrics = crate::pane::ScrollMetrics {
-        offset_from_bottom: app
-            .product_announcement_max_scroll()
-            .saturating_sub(announcement.scroll) as usize,
-        max_offset_from_bottom: app.product_announcement_max_scroll() as usize,
-        viewport_rows: body_rect.height.max(1) as usize,
-    };
-    let track = release_notes_scrollbar_rect(body_rect, metrics);
-    let text_area = track
-        .map(|_| {
-            Rect::new(
-                body_rect.x,
-                body_rect.y,
-                body_rect.width.saturating_sub(1),
-                body_rect.height,
-            )
-        })
-        .unwrap_or(body_rect);
-
-    let body = Paragraph::new(
-        product_announcement_display_lines(announcement, &app.palette)
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect::<Vec<_>>(),
-    )
-    .wrap(Wrap { trim: false })
-    .scroll((announcement.scroll, 0));
-    frame.render_widget(body, text_area);
-    if let Some(track) = track {
-        render_scrollbar(
-            frame,
-            metrics,
-            track,
-            app.palette.overlay0,
-            app.palette.overlay1,
-            "▐",
-        );
-    }
-
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" scroll ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("wheel ↑↓", Style::default().fg(app.palette.text)),
-            Span::styled("  ·  ", Style::default().fg(app.palette.overlay0)),
-            Span::styled("close", Style::default().fg(app.palette.overlay0)),
-            Span::styled(" esc / enter ", Style::default().fg(app.palette.text)),
-        ])),
-        stack.footer.unwrap_or_default(),
-    );
-}
 
 fn release_notes_inline_spans<'a>(
     text: &str,
@@ -428,6 +193,53 @@ pub(crate) fn product_announcement_display_lines<'a>(
     release_notes_lines(announcement.body.as_str(), p)
 }
 
+fn display_lines_scroll_metrics(
+    lines: &[(usize, Line<'_>)],
+    scroll: u16,
+    body: Rect,
+) -> crate::pane::ScrollMetrics {
+    let viewport_rows = body.height.max(1) as usize;
+    let rows_for_width = |width: u16| release_notes_wrapped_line_count(lines, width.max(1));
+    let full_width = body.width.max(1);
+    let initial_rows = rows_for_width(full_width);
+    let wrap_width = if initial_rows > viewport_rows && full_width > 1 {
+        full_width.saturating_sub(1)
+    } else {
+        full_width
+    };
+    let max_offset_from_bottom = rows_for_width(wrap_width).saturating_sub(viewport_rows);
+    crate::pane::ScrollMetrics {
+        offset_from_bottom: max_offset_from_bottom.saturating_sub(usize::from(scroll)),
+        max_offset_from_bottom,
+        viewport_rows,
+    }
+}
+
+pub(crate) fn release_notes_scroll_metrics(
+    notes: &ReleaseNotesState,
+    install_command: &str,
+    body: Rect,
+    p: &Palette,
+) -> crate::pane::ScrollMetrics {
+    display_lines_scroll_metrics(
+        &release_notes_display_lines(notes, install_command, p),
+        notes.scroll,
+        body,
+    )
+}
+
+pub(crate) fn product_announcement_scroll_metrics(
+    announcement: &ProductAnnouncementState,
+    body: Rect,
+    p: &Palette,
+) -> crate::pane::ScrollMetrics {
+    display_lines_scroll_metrics(
+        &product_announcement_display_lines(announcement, p),
+        announcement.scroll,
+        body,
+    )
+}
+
 pub(crate) fn release_notes_wrapped_line_count(lines: &[(usize, Line<'_>)], width: u16) -> usize {
     Paragraph::new(
         lines
@@ -440,8 +252,7 @@ pub(crate) fn release_notes_wrapped_line_count(lines: &[(usize, Line<'_>)], widt
 }
 
 pub(crate) fn release_notes_close_button_rect(area: Rect) -> Rect {
-    let width = action_button_width(Some("esc"), "close");
-    Rect::new(area.x + area.width.saturating_sub(width), area.y, width, 1)
+    super::widgets::close_button_rect(area)
 }
 
 #[cfg(test)]
@@ -496,7 +307,7 @@ mod tests {
         assert_eq!(line_text(&lines[0]), " ● update ready");
         assert_eq!(
             line_text(&lines[1]),
-            " detach, run herdr update, then follow its restart guidance"
+            " detach, run herdr update, then run Herdr again to reconnect"
         );
         assert_eq!(lines[0].spans[1].style.fg, Some(palette.accent));
         assert_eq!(lines[0].spans[2].style.fg, Some(palette.text));
@@ -520,7 +331,7 @@ mod tests {
         assert_eq!(line_text(&lines[0].1), " ● update ready");
         assert_eq!(
             line_text(&lines[1].1),
-            " detach, run herdr update, then follow its restart guidance"
+            " detach, run herdr update, then run Herdr again to reconnect"
         );
         assert_eq!(line_text(&lines[2].1), "");
         assert_eq!(line_text(&lines[3].1), " ADDED");

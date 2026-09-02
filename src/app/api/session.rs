@@ -13,7 +13,7 @@ impl App {
         )
     }
 
-    fn session_snapshot(&self) -> SessionSnapshot {
+    pub(crate) fn session_snapshot(&self) -> SessionSnapshot {
         let focused_workspace_id = self
             .state
             .active
@@ -66,7 +66,7 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = crate::app::App::new(
             &Config::default(),
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),

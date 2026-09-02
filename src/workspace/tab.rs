@@ -205,36 +205,6 @@ impl Tab {
         self.custom_name = Some(name);
     }
 
-    #[cfg(test)]
-    pub fn split_focused(
-        &mut self,
-        direction: Direction,
-        rows: u16,
-        cols: u16,
-        cwd: Option<PathBuf>,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
-        launch_env: &PaneLaunchEnv,
-    ) -> std::io::Result<NewPane> {
-        self.split_pane_with_runtime(
-            self.layout.focused(),
-            true,
-            direction,
-            None,
-            rows,
-            cols,
-            cwd,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            shell_config,
-            launch_env,
-            None,
-        )
-    }
-
     pub fn split_focused_command(
         &mut self,
         direction: Direction,

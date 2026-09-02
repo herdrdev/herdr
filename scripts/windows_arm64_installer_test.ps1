@@ -17,7 +17,7 @@ $env:HERDR_INSTALL_DIR = Join-Path $root "bin"
 $env:HERDR_CHANNEL = "preview"
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $root | Out-Null
-$installer = (Resolve-Path (Join-Path $PSScriptRoot "..\website\install.ps1")).Path
+$installer = (Resolve-Path (Join-Path $PSScriptRoot "..\distribution\install.ps1")).Path
 
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"

@@ -529,7 +529,7 @@ mod tests {
     fn test_app(config: &crate::config::Config) -> super::super::App {
         super::super::App::new(
             config,
-            true,
+            crate::app::AppPolicy::TEST,
             None,
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),

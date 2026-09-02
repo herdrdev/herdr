@@ -254,19 +254,6 @@ pub(crate) fn workspace_renamed(workspace_id: &str) {
     );
 }
 
-#[cfg(test)]
-pub(crate) fn tab_created(workspace_id: &str, tab_id: &str, root_pane_id: u32) {
-    tracing::info!(
-        event = "tab.create",
-        subsystem = "tab",
-        outcome = "ok",
-        workspace_id,
-        tab_id,
-        pane_id = root_pane_id,
-        "tab created"
-    );
-}
-
 pub(crate) fn tab_focused(workspace_id: &str, tab_id: &str) {
     tracing::info!(
         event = "tab.focus",
@@ -380,18 +367,6 @@ pub(crate) fn update_available(version: &str) {
         outcome = "ok",
         version,
         "update available"
-    );
-}
-
-pub(crate) fn config_write_failed(path: &Path, context: &str, err: &str) {
-    tracing::warn!(
-        event = "config.write",
-        subsystem = "config",
-        outcome = "error",
-        path = %path.display(),
-        context,
-        err,
-        "failed to write config"
     );
 }
 

@@ -107,7 +107,13 @@ mod tests {
     fn test_app() -> App {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub);
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub,
+        );
         app.state.workspaces = vec![Workspace::test_new("herd")];
         app.state.active = Some(0);
         app.state.ensure_test_terminals();

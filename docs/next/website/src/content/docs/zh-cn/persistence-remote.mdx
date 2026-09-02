@@ -118,13 +118,3 @@ herdr terminal attach term_abc123
 ```bash
 herdr terminal attach term_abc123 --takeover
 ```
-
-## 单进程逃生舱
-
-用 `--no-session` 在没有后台服务器/客户端分离的情况下运行 Herdr:
-
-```bash
-herdr --no-session
-```
-
-这主要是调试或兼容性的逃生舱。默认的持久会话模式才是常规路径。

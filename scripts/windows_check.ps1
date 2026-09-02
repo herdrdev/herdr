@@ -96,5 +96,7 @@ if ($Mode -eq "lint") {
 
 Invoke-CargoTestFilter "windows_"
 Invoke-CargoTestFilter "server::client_transport::tests"
-Invoke-CargoTestFilter "app::tests::native_repeats_and_releases_follow_the_pressed_pane" -Exact
+Invoke-CargoTestFilter "input::lease::tests::duplicate_physical_press_normalizes_for_forwarded_and_consumed_leases" -Exact
+Invoke-CargoTestFilter "client::shell::tests::input_domain::physical_release_uses_the_leased_press_code_with_current_modifiers" -Exact
+Invoke-CargoTestFilter "client::shell::tests::input_domain::pane_key_release_keeps_the_press_target" -Exact
 Invoke-Checked cargo @("build", "--locked", "--target", "x86_64-pc-windows-msvc")

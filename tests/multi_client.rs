@@ -1,10 +1,9 @@
-//! Integration tests for multi-client server behavior.
+//! Gate B integration tests for the ClientShell protocol.
 
-mod support;
+pub mod support;
 
-use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -12,20 +11,22 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use serde::Deserialize;
 use serde_json::Value;
 use support::{
-    cleanup_test_base, register_runtime_dir, register_spawned_herdr_pid,
-    unregister_spawned_herdr_pid, CURRENT_PROTOCOL,
+    cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
+    register_spawned_herdr_pid, send_client_shell_focus, send_detach, unregister_spawned_herdr_pid,
+    wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
+    SERVER_MESSAGE_PANE_SURFACE_PATCH,
 };
 
 fn unique_test_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .unwrap()
+        .as_nanos();
     PathBuf::from(format!(
-        "/tmp/herdr-multi-client-test-{}-{nanos}",
+        "/tmp/herdr-multi-client-{}-{nanos}",
         std::process::id()
     ))
 }
@@ -39,37 +40,18 @@ impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
-
         if let Some(pid) = pid {
             let deadline = Instant::now() + Duration::from_secs(2);
             while Instant::now() < deadline {
                 let mut status = 0;
-                let result =
-                    unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-                if result == pid as libc::pid_t || result == -1 {
+                let done = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+                if done == pid as libc::pid_t || done == -1 {
                     break;
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-
             unregister_spawned_herdr_pid(Some(pid));
         }
-    }
-}
-
-fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
-    drop(spawned);
-    cleanup_test_base(&base);
-}
-
-fn wait_for_child_exit(child: &mut Box<dyn Child + Send + Sync>) {
-    let _ = child.kill();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -77,7 +59,7 @@ fn test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|p| p.into_inner())
 }
 
 fn wait_for_socket(path: &Path, timeout: Duration) {
@@ -94,24 +76,19 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
 fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if path.exists() && UnixStream::connect(path).is_ok() {
+        if path.exists() {
             return;
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("socket did not accept connections at {}", path.display());
+    panic!("socket did not appear at {}", path.display());
 }
 
-fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
-    fs::create_dir_all(runtime_dir).unwrap();
-    register_runtime_dir(runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
-        "onboarding = false\n",
-    )
-    .unwrap();
-
+fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
+    fs::create_dir_all(config.join("herdr")).unwrap();
+    fs::create_dir_all(runtime).unwrap();
+    register_runtime_dir(runtime);
+    fs::write(config.join("herdr/config.toml"), "onboarding = false\n").unwrap();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -120,32 +97,25 @@ fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) 
             pixel_height: 0,
         })
         .unwrap();
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
     cmd.arg("server");
-    cmd.env("XDG_CONFIG_HOME", config_home);
-    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
+    cmd.env("XDG_CONFIG_HOME", config);
+    cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.env("HERDR_SOCKET_PATH", api);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
-
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
     drop(pair.slave);
-
     SpawnedHerdr {
         _master: pair.master,
         child,
     }
 }
 
-fn spawn_client_process(
-    config_home: &Path,
-    runtime_dir: &Path,
-    api_socket_path: &Path,
-) -> SpawnedHerdr {
-    register_runtime_dir(runtime_dir);
+fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
+    register_runtime_dir(runtime);
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -154,177 +124,86 @@ fn spawn_client_process(
             pixel_height: 0,
         })
         .unwrap();
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
-    cmd.env("XDG_CONFIG_HOME", config_home);
-    cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", api_socket_path);
+    cmd.env("XDG_CONFIG_HOME", config);
+    cmd.env("XDG_RUNTIME_DIR", runtime);
+    cmd.env("HERDR_SOCKET_PATH", api);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
-
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
     drop(pair.slave);
-
     SpawnedHerdr {
         _master: pair.master,
         child,
     }
 }
 
-fn server_log_path(config_home: &Path) -> PathBuf {
-    let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
-        "herdr"
-    };
-    config_home.join(app_dir).join("herdr-server.log")
+fn cleanup(server: SpawnedHerdr, base: PathBuf) {
+    drop(server);
+    cleanup_test_base(&base);
 }
 
-fn count_log_occurrences(path: &Path, needle: &str) -> usize {
-    fs::read_to_string(path)
-        .ok()
-        .map(|text| text.lines().filter(|line| line.contains(needle)).count())
-        .unwrap_or(0)
-}
-
-fn log_tail(path: &Path, lines: usize) -> String {
-    let Ok(text) = fs::read_to_string(path) else {
-        return format!("could not read {}", path.display());
-    };
-    let mut tail = VecDeque::with_capacity(lines);
-    for line in text.lines() {
-        if tail.len() == lines {
-            tail.pop_front();
-        }
-        tail.push_back(line.to_string());
-    }
-    tail.into_iter().collect::<Vec<_>>().join("\n")
-}
-
-fn wait_for_log_occurrence_count(
-    path: &Path,
-    needle: &str,
-    min_count: usize,
-    timeout: Duration,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if count_log_occurrences(path, needle) >= min_count {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(40));
-    }
-    false
-}
-
-fn ping_socket(socket_path: &Path) -> String {
-    let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
-    writeln!(
-        stream,
-        "{{\"id\":\"ping\",\"method\":\"ping\",\"params\":{{}}}}"
-    )
-    .unwrap();
-
-    let mut reader = BufReader::new(stream);
-    let mut response = String::new();
-    reader.read_line(&mut response).unwrap();
-    response.trim().to_string()
-}
-
-fn send_json_request(socket_path: &Path, request: &str) -> Value {
-    let mut stream = UnixStream::connect(socket_path).expect("should connect to API socket");
+fn api_request(socket: &Path, request: &str) -> Value {
+    let mut stream = UnixStream::connect(socket).unwrap();
     writeln!(stream, "{request}").unwrap();
-
-    let mut reader = BufReader::new(stream);
     let mut response = String::new();
-    reader.read_line(&mut response).unwrap();
-
-    serde_json::from_str(&response).expect("response should be valid JSON")
+    BufReader::new(stream).read_line(&mut response).unwrap();
+    serde_json::from_str(&response).unwrap()
 }
 
-fn create_workspace_and_root_pane(socket_path: &Path, label: &str) -> (String, String) {
-    let response = send_json_request(
-        socket_path,
-        &format!(
-            "{{\"id\":\"ws_create\",\"method\":\"workspace.create\",\"params\":{{\"label\":\"{label}\"}}}}"
-        ),
+fn create_pane(socket: &Path, label: &str) -> String {
+    let result = api_request(
+        socket,
+        &format!(r#"{{"id":"create","method":"workspace.create","params":{{"label":"{label}"}}}}"#),
     );
-
-    if response.get("error").is_some() {
-        panic!("workspace.create failed: {response}");
-    }
-
-    let workspace_id = response
-        .pointer("/result/workspace/workspace_id")
-        .and_then(Value::as_str)
-        .expect("workspace.create should return workspace id")
-        .to_string();
-
-    let pane_id = response
+    assert!(
+        result.get("error").is_none(),
+        "workspace.create failed: {result}"
+    );
+    result
         .pointer("/result/root_pane/pane_id")
-        .and_then(Value::as_str)
-        .expect("workspace.create should return root pane id")
-        .to_string();
-
-    (workspace_id, pane_id)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .into()
 }
 
-fn report_idle_agent(socket_path: &Path, pane_id: &str) {
-    let response = send_json_request(
-        socket_path,
+fn pane_input(socket: &Path, pane: &str, text: &str) {
+    let escaped = text.replace('"', "\\\"");
+    let result = api_request(
+        socket,
         &format!(
-            r#"{{"id":"report_agent","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"multi-client-test"}}}}"#
+            r#"{{"id":"input","method":"pane.send_input","params":{{"pane_id":"{pane}","text":"{escaped}","keys":["Enter"]}}}}"#
         ),
     );
     assert!(
-        response.get("error").is_none(),
-        "pane.report_agent should succeed: {response}"
+        result.get("error").is_none(),
+        "pane.send_input failed: {result}"
     );
 }
 
-fn pane_send_input(socket_path: &Path, pane_id: &str, text: &str) {
-    let request = format!(
-        "{{\"id\":\"send_input\",\"method\":\"pane.send_input\",\"params\":{{\"pane_id\":\"{pane_id}\",\"text\":\"{}\",\"keys\":[\"Enter\"]}}}}",
-        text.replace('"', "\\\"")
-    );
-    let response = send_json_request(socket_path, &request);
-    if response.get("error").is_some() {
-        panic!("pane.send_input failed: {response}");
-    }
-}
-
-fn pane_read_recent(socket_path: &Path, pane_id: &str, lines: usize) -> String {
-    let response = send_json_request(
-        socket_path,
+fn pane_text(socket: &Path, pane: &str) -> String {
+    let result = api_request(
+        socket,
         &format!(
-            "{{\"id\":\"pane_read\",\"method\":\"pane.read\",\"params\":{{\"pane_id\":\"{pane_id}\",\"source\":\"recent\",\"lines\":{lines}}}}}"
+            r#"{{"id":"read","method":"pane.read","params":{{"pane_id":"{pane}","source":"recent","lines":200}}}}"#
         ),
     );
-
-    if response.get("error").is_some() {
-        panic!("pane.read failed: {response}");
-    }
-
-    response
+    result
         .pointer("/result/read/text")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .to_string()
+        .into()
 }
 
-fn pane_read_recent_contains(
-    socket_path: &Path,
-    pane_id: &str,
-    needle: &str,
-    timeout: Duration,
-) -> bool {
+fn pane_contains(socket: &Path, pane: &str, needle: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if pane_read_recent(socket_path, pane_id, 200).contains(needle) {
+        if pane_text(socket, pane).contains(needle) {
             return true;
         }
         thread::sleep(Duration::from_millis(50));
@@ -332,844 +211,187 @@ fn pane_read_recent_contains(
     false
 }
 
-fn parse_size_after_marker(text: &str, marker: &str) -> Option<(u16, u16)> {
-    let mut seen_marker = false;
-    for line in text.lines() {
-        if !seen_marker {
-            if line.contains(marker) {
-                seen_marker = true;
-            }
-            continue;
-        }
-
-        let mut parts = line.split_whitespace();
-        let Some(rows_raw) = parts.next() else {
-            continue;
-        };
-        let Some(cols_raw) = parts.next() else {
-            continue;
-        };
-
-        let Ok(rows) = rows_raw.parse::<u16>() else {
-            continue;
-        };
-        let Ok(cols) = cols_raw.parse::<u16>() else {
-            continue;
-        };
-
-        return Some((rows, cols));
-    }
-
-    None
+fn shell(socket: &Path, cols: u16, rows: u16) -> UnixStream {
+    let mut stream = UnixStream::connect(socket).unwrap();
+    let (version, error) =
+        client_shell_handshake(&mut stream, CURRENT_PROTOCOL, cols, rows).unwrap();
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none(), "ClientShell handshake failed: {error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5)).unwrap();
+    stream
 }
 
-fn try_read_pane_tty_size(
-    socket_path: &Path,
-    pane_id: &str,
-    timeout: Duration,
-) -> Option<(u16, u16)> {
+fn tty_size(socket: &Path, pane: &str, timeout: Duration) -> (u16, u16) {
     let marker = format!(
-        "SIZE_MARKER_{}_{}",
-        std::process::id(),
+        "SIZE_{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .unwrap()
+            .as_nanos()
     );
-
-    pane_send_input(socket_path, pane_id, &format!("echo {marker}; stty size"));
-
+    pane_input(socket, pane, &format!("echo {marker}; stty size"));
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        let text = pane_read_recent(socket_path, pane_id, 200);
-        if let Some(size) = parse_size_after_marker(&text, &marker) {
-            return Some(size);
+        let mut found = false;
+        for line in pane_text(socket, pane).lines() {
+            if line.contains(&marker) {
+                found = true;
+                continue;
+            }
+            if found {
+                let mut words = line.split_whitespace();
+                if let (Some(r), Some(c)) = (words.next(), words.next()) {
+                    if let (Ok(r), Ok(c)) = (r.parse(), c.parse()) {
+                        return (r, c);
+                    }
+                }
+            }
         }
         thread::sleep(Duration::from_millis(50));
     }
-
-    None
+    panic!("pane did not report tty size: {}", pane_text(socket, pane));
 }
 
-fn read_pane_tty_size(socket_path: &Path, pane_id: &str, timeout: Duration) -> (u16, u16) {
-    if let Some(size) = try_read_pane_tty_size(socket_path, pane_id, timeout) {
-        return size;
-    }
-
-    let snapshot = pane_read_recent(socket_path, pane_id, 200);
-    panic!(
-        "did not observe tty size after marker. pane output:\n{}",
-        snapshot
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Minimal bincode v2 varint helpers for protocol tests
-// ---------------------------------------------------------------------------
-
-fn encode_varint_u32(v: u32) -> Vec<u8> {
-    if v < 251 {
-        vec![v as u8]
-    } else if v < 65536 {
-        let mut buf = vec![251u8];
-        buf.extend_from_slice(&(v as u16).to_le_bytes());
-        buf
-    } else {
-        let mut buf = vec![252u8];
-        buf.extend_from_slice(&v.to_le_bytes());
-        buf
-    }
-}
-
-fn encode_varint_u16(v: u16) -> Vec<u8> {
-    if v < 251 {
-        vec![v as u8]
-    } else {
-        let mut buf = vec![251u8];
-        buf.extend_from_slice(&v.to_le_bytes());
-        buf
-    }
-}
-
-fn encode_varint_enum(variant_idx: u32, fields: &[&[u8]]) -> Vec<u8> {
-    let mut buf = encode_varint_u32(variant_idx);
-    for field in fields {
-        buf.extend_from_slice(field);
-    }
-    buf
-}
-
-fn frame_message(payload: &[u8]) -> Vec<u8> {
-    let len = payload.len() as u32;
-    let mut framed = len.to_le_bytes().to_vec();
-    framed.extend_from_slice(payload);
-    framed
-}
-
-fn decode_varint_u32(payload: &[u8], offset: usize) -> Result<(u32, usize), String> {
-    if offset >= payload.len() {
-        return Err("payload too short for varint".into());
-    }
-    let first_byte = payload[offset];
-    match first_byte {
-        0..=250 => Ok((first_byte as u32, 1)),
-        251 => {
-            if offset + 3 > payload.len() {
-                return Err("payload too short for u16 varint".into());
-            }
-            let v = u16::from_le_bytes(
-                payload[offset + 1..offset + 3]
-                    .try_into()
-                    .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
-            );
-            Ok((v as u32, 3))
-        }
-        252 => {
-            if offset + 5 > payload.len() {
-                return Err("payload too short for u32 varint".into());
-            }
-            let v = u32::from_le_bytes(
-                payload[offset + 1..offset + 5]
-                    .try_into()
-                    .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
-            );
-            Ok((v, 5))
-        }
-        _ => Err(format!("unsupported varint tag: {first_byte}")),
-    }
-}
-
-fn is_timeout(err: &io::Error) -> bool {
-    matches!(
-        err.kind(),
-        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-    )
-}
-
-fn read_server_variant(stream: &mut UnixStream, timeout: Duration) -> io::Result<u32> {
-    stream.set_read_timeout(Some(timeout))?;
-
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "zero-length payload",
-        ));
-    }
-
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload)?;
-
-    let (variant, _consumed) = decode_varint_u32(&payload, 0)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(variant)
-}
-
-fn client_handshake(
-    stream: &mut UnixStream,
-    version: u32,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .map_err(|e| e.to_string())?;
-
-    // ClientMessage::Hello = variant 0
-    let hello_payload = encode_varint_enum(
-        0,
-        &[
-            &encode_varint_u32(version),
-            &encode_varint_u16(cols),
-            &encode_varint_u16(rows),
-            &encode_varint_u32(8),  // cell_width_px
-            &encode_varint_u32(16), // cell_height_px
-            &encode_varint_u32(0),  // RenderEncoding::SemanticFrame
-            &encode_varint_u32(0),  // ClientKeybindings::Server
-            &encode_varint_u32(0),  // ClientLaunchMode::App
-        ],
-    );
-    stream
-        .write_all(&frame_message(&hello_payload))
-        .map_err(|e| e.to_string())?;
-    stream.flush().map_err(|e| e.to_string())?;
-
-    // Read ServerMessage::Welcome = variant 0
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
-
-    let mut offset = 0;
-    let (variant, consumed) = decode_varint_u32(&payload, offset)?;
-    offset += consumed;
-    if variant != 0 {
-        return Err(format!("expected Welcome variant 0, got {variant}"));
-    }
-
-    let (_server_version, consumed) = decode_varint_u32(&payload, offset)?;
-    offset += consumed;
-
-    let (_encoding, consumed) = decode_varint_u32(&payload, offset)?;
-    offset += consumed;
-
-    if offset >= payload.len() {
-        return Err("payload too short for Welcome.error option tag".into());
-    }
-    let option_tag = payload[offset];
-    offset += 1;
-
-    if option_tag == 1 {
-        let (str_len, consumed) = decode_varint_u32(&payload, offset)?;
-        offset += consumed;
-        let str_len = str_len as usize;
-        if offset + str_len > payload.len() {
-            return Err("payload too short for welcome error string".into());
-        }
-        let err = String::from_utf8(payload[offset..offset + str_len].to_vec())
-            .map_err(|e| e.to_string())?;
-        return Err(format!("handshake rejected: {err}"));
-    }
-
-    Ok(())
-}
-
-fn connect_raw_client(client_socket: &Path, cols: u16, rows: u16) -> UnixStream {
-    let mut stream = UnixStream::connect(client_socket).expect("should connect to client socket");
-    client_handshake(&mut stream, CURRENT_PROTOCOL, cols, rows).expect("handshake should succeed");
-    stream
-}
-
-fn send_client_input(stream: &mut UnixStream, data: &[u8]) {
-    // ClientMessage::Input = variant 1
-    let payload = {
-        let mut buf = encode_varint_u32(1);
-        buf.extend_from_slice(&encode_varint_u32(data.len() as u32));
-        buf.extend_from_slice(data);
-        buf
-    };
-    stream.write_all(&frame_message(&payload)).unwrap();
-    stream.flush().unwrap();
-}
-
-fn send_client_detach(stream: &mut UnixStream) {
-    // ClientMessage::Detach = variant 4
-    let payload = encode_varint_u32(4);
-    stream.write_all(&frame_message(&payload)).unwrap();
-    stream.flush().unwrap();
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct FrameWire {
-    cells: Vec<CellWire>,
-    width: u16,
-    height: u16,
-    cursor: Option<CursorWire>,
-    hyperlinks: Vec<String>,
-    graphics: Vec<u8>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct CellWire {
-    symbol: String,
-    fg: u32,
-    bg: u32,
-    modifier: u16,
-    skip: bool,
-    hyperlink: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CursorWire {
-    x: u16,
-    y: u16,
-    visible: bool,
-    shape: u8,
-}
-
-fn decode_frame_payload(payload: &[u8]) -> io::Result<FrameWire> {
-    bincode::serde::decode_from_slice(payload, bincode::config::standard())
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
-        .and_then(|(frame, consumed): (FrameWire, usize)| {
-            if consumed != payload.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "frame payload had trailing bytes: consumed={}, len={}",
-                        consumed,
-                        payload.len()
-                    ),
-                ));
-            }
-            Ok(frame)
-        })
-}
-
-fn read_server_message_payload(
-    stream: &mut UnixStream,
+fn wait_for_tty_size(
+    socket: &Path,
+    pane: &str,
     timeout: Duration,
-) -> io::Result<(u32, Vec<u8>)> {
-    stream.set_read_timeout(Some(timeout))?;
-
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "zero-length payload",
-        ));
-    }
-
-    let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload)?;
-
-    let (variant, consumed) = decode_varint_u32(&payload, 0)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    Ok((variant, payload[consumed..].to_vec()))
-}
-
-fn drain_server_messages(stream: &mut UnixStream, max_drain: Duration) {
-    let deadline = Instant::now() + max_drain;
-    while Instant::now() < deadline {
-        match read_server_variant(stream, Duration::from_millis(50)) {
-            Ok(_) => {}
-            Err(err) if is_timeout(&err) => break,
-            Err(_) => break,
-        }
-    }
-}
-
-fn wait_for_frame(stream: &mut UnixStream, timeout: Duration) -> bool {
+    expected: impl Fn((u16, u16)) -> bool,
+) -> (u16, u16) {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let slice = remaining.min(Duration::from_millis(75));
-        match read_server_variant(stream, slice) {
-            Ok(1) => return true, // ServerMessage::Frame
-            Ok(_) => {}
-            Err(err) if is_timeout(&err) => {}
-            Err(_) => return false,
+    loop {
+        let size = tty_size(
+            socket,
+            pane,
+            deadline.saturating_duration_since(Instant::now()),
+        );
+        if expected(size) {
+            return size;
         }
+        assert!(Instant::now() < deadline, "unexpected tty size: {size:?}");
+        thread::sleep(Duration::from_millis(50));
     }
-    false
-}
-
-fn wait_for_frame_matching_with_snapshots(
-    stream: &mut UnixStream,
-    timeout: Duration,
-    predicate: impl Fn(&FrameWire) -> bool,
-) -> io::Result<(bool, Vec<String>)> {
-    let deadline = Instant::now() + timeout;
-    let mut snapshots = VecDeque::with_capacity(5);
-    while Instant::now() < deadline {
-        let slice = deadline
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(80));
-        match read_server_message_payload(stream, slice) {
-            Ok((1, frame_payload)) => {
-                let frame = decode_frame_payload(&frame_payload)?;
-                if snapshots.len() == 5 {
-                    snapshots.pop_front();
-                }
-                snapshots.push_back(frame_text(&frame));
-                if predicate(&frame) {
-                    return Ok((true, snapshots.into_iter().collect()));
-                }
-            }
-            Ok((_variant, _payload)) => {}
-            Err(err) if is_timeout(&err) => {}
-            Err(err) => return Err(err),
-        }
-    }
-
-    Ok((false, snapshots.into_iter().collect()))
-}
-
-fn frame_text(frame: &FrameWire) -> String {
-    if frame.cells.is_empty() {
-        return String::new();
-    }
-
-    let row_width = frame.width.max(1) as usize;
-    let mut full_text = String::new();
-
-    for row in frame.cells.chunks(row_width) {
-        for cell in row {
-            let _ = (cell.fg, cell.bg, cell.modifier, cell.skip);
-            full_text.push_str(&cell.symbol);
-        }
-        full_text.push('\n');
-    }
-
-    let _ = (frame.height, frame.graphics.len());
-    if let Some(cursor) = frame.cursor.as_ref() {
-        let _ = (cursor.x, cursor.y, cursor.visible, cursor.shape);
-    }
-
-    full_text
-}
-
-fn frame_contains_text(frame: &FrameWire, needle: &str) -> bool {
-    frame_text(frame).contains(needle)
-}
-
-fn agent_panel_starts_with(frame: &FrameWire, agent_label: &str) -> bool {
-    frame_text(frame)
-        .lines()
-        .skip_while(|line| !line.contains("agents"))
-        .skip(1)
-        .find(|line| line.contains("agent-"))
-        .is_some_and(|line| line.contains(agent_label))
 }
 
 #[test]
-fn multi_client_allows_multiple_simultaneous_connections() {
+fn same_tab_geometry_follows_meaningful_client_activity() {
     let _lock = test_lock();
     let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let mut client_a = connect_raw_client(&client_socket, 120, 40);
-    let mut client_b = connect_raw_client(&client_socket, 100, 30);
-
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&api, Duration::from_secs(10));
+    wait_for_file(&clients, Duration::from_secs(10));
+    let pane = create_pane(&api, "effective-size");
+    let _large = shell(&clients, 120, 40);
+    let mut small = shell(&clients, 80, 24);
+    let initial = tty_size(&api, &pane, Duration::from_secs(5));
     assert!(
-        wait_for_frame(&mut client_a, Duration::from_secs(2)),
-        "client A should receive frames"
-    );
-    assert!(
-        wait_for_frame(&mut client_b, Duration::from_secs(2)),
-        "client B should receive frames"
+        initial.0 > 24 && initial.1 > 80,
+        "a passive second connection must not steal geometry: {initial:?}"
     );
 
-    let ping = ping_socket(&api_socket);
-    assert!(
-        ping.contains("pong"),
-        "server should remain responsive: {ping}"
-    );
+    send_client_shell_focus(&mut small, true).unwrap();
+    let reduced = wait_for_tty_size(&api, &pane, Duration::from_secs(5), |(rows, cols)| {
+        rows <= 24 && cols <= 80
+    });
 
-    cleanup_spawned_herdr(server, base);
+    send_detach(&mut small).unwrap();
+    drop(small);
+    wait_for_tty_size(&api, &pane, Duration::from_secs(5), |(rows, cols)| {
+        rows > reduced.0 && cols > reduced.1
+    });
+    cleanup(server, base);
 }
 
 #[test]
-fn multi_client_effective_size_shrinks_when_smaller_client_joins() {
+fn api_pane_output_is_fanned_out_as_pane_surface_updates() {
     let _lock = test_lock();
     let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let (_workspace_id, pane_id) = create_workspace_and_root_pane(&api_socket, "size-shrink");
-
-    let mut large = connect_raw_client(&client_socket, 120, 40);
-    assert!(wait_for_frame(&mut large, Duration::from_secs(2)));
-    let large_only_size = read_pane_tty_size(&api_socket, &pane_id, Duration::from_secs(5));
-
-    let mut small = connect_raw_client(&client_socket, 80, 24);
-    assert!(wait_for_frame(&mut small, Duration::from_secs(2)));
-
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let mut last_seen_size = None;
-    let mut size_with_small_client = None;
-    while Instant::now() < deadline {
-        if let Some(size) =
-            try_read_pane_tty_size(&api_socket, &pane_id, Duration::from_millis(400))
-        {
-            last_seen_size = Some(size);
-            if size.0 < large_only_size.0 && size.1 < large_only_size.1 {
-                size_with_small_client = Some(size);
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(60));
-    }
-
-    assert!(
-        size_with_small_client.is_some(),
-        "effective pane size should shrink when smaller client joins: before={large_only_size:?}, last_seen={last_seen_size:?}"
-    );
-
-    cleanup_spawned_herdr(server, base);
-}
-
-#[test]
-fn non_foreground_client_render_preserves_agent_panel_scroll() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    for index in 1..=23 {
-        let (_, pane_id) =
-            create_workspace_and_root_pane(&api_socket, &format!("agent-{index:02}"));
-        report_idle_agent(&api_socket, &pane_id);
-    }
-
-    let mut setup_client = connect_raw_client(&client_socket, 106, 40);
-    assert!(wait_for_frame(&mut setup_client, Duration::from_secs(2)));
-    drain_server_messages(&mut setup_client, Duration::from_millis(250));
-
-    let wheel_down = b"\x1b[<65;10;30M";
-    send_client_input(&mut setup_client, &wheel_down.repeat(20));
-    let (reached_bottom, setup_frames) = wait_for_frame_matching_with_snapshots(
-        &mut setup_client,
-        Duration::from_secs(3),
-        |frame| agent_panel_starts_with(frame, "agent-16"),
-    )
-    .expect("setup frame decoding should succeed");
-    assert!(
-        reached_bottom,
-        "40-row client should scroll the agent panel to its final page; frames:\n{}",
-        setup_frames.join("\n--- frame ---\n")
-    );
-    send_client_detach(&mut setup_client);
-    drop(setup_client);
-
-    let mut tall_background = connect_raw_client(&client_socket, 106, 64);
-    assert!(wait_for_frame(&mut tall_background, Duration::from_secs(2)));
-    let mut probe = connect_raw_client(&client_socket, 106, 40);
-    let (started_at_tall_limit, initial_frames) =
-        wait_for_frame_matching_with_snapshots(&mut probe, Duration::from_secs(3), |frame| {
-            agent_panel_starts_with(frame, "agent-10")
-        })
-        .expect("initial probe frame decoding should succeed");
-    assert!(
-        started_at_tall_limit,
-        "tall client should normalize the shared scroll before the probe attaches; frames:\n{}",
-        initial_frames.join("\n--- frame ---\n")
-    );
-    drain_server_messages(&mut probe, Duration::from_millis(250));
-
-    send_client_input(&mut probe, wheel_down);
-    let (scrolled, probe_frames) =
-        wait_for_frame_matching_with_snapshots(&mut probe, Duration::from_secs(3), |frame| {
-            agent_panel_starts_with(frame, "agent-11")
-        })
-        .expect("probe frame decoding should succeed");
-    assert!(
-        scrolled,
-        "background client projection must not undo the foreground wheel event; frames:\n{}",
-        probe_frames.join("\n--- frame ---\n")
-    );
-
-    cleanup_spawned_herdr(server, base);
-}
-
-#[test]
-fn multi_client_broadcasts_frame_updates_to_all_clients() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let mut client_a = connect_raw_client(&client_socket, 100, 30);
-    let mut client_b = connect_raw_client(&client_socket, 100, 30);
-
-    // Ensure we have an active pane that can reflect input changes.
-    let (_workspace_id, pane_id) =
-        create_workspace_and_root_pane(&api_socket, "broadcast-client-a-to-b");
-
-    // Drain initial frames so we measure the frame caused by new input.
-    drain_server_messages(&mut client_a, Duration::from_millis(300));
-    drain_server_messages(&mut client_b, Duration::from_millis(300));
-
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&api, Duration::from_secs(10));
+    wait_for_file(&clients, Duration::from_secs(10));
+    let pane = create_pane(&api, "fanout");
+    let mut a = shell(&clients, 100, 30);
+    let mut b = shell(&clients, 100, 30);
+    drain_messages(&mut a);
+    drain_messages(&mut b);
     let marker = format!(
-        "MB{}",
+        "FANOUT_{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
+            .unwrap()
+            .as_millis()
     );
+    pane_input(&api, &pane, &format!("printf '{marker}\\n'"));
+    assert!(pane_contains(&api, &pane, &marker, Duration::from_secs(5)));
+    let surface_updates = [
+        SERVER_MESSAGE_PANE_SURFACE,
+        SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    ];
+    assert!(wait_for_message_variants(&mut a, Duration::from_secs(5), &surface_updates).unwrap());
+    assert!(wait_for_message_variants(&mut b, Duration::from_secs(5), &surface_updates).unwrap());
+    cleanup(server, base);
+}
 
-    send_client_input(&mut client_a, format!("echo {marker}\n").as_bytes());
-    if !pane_read_recent_contains(&api_socket, &pane_id, &marker, Duration::from_secs(5)) {
-        panic!(
-            "pane output should include client A marker so broadcast reflects a real state change. pane output:\n{}\nserver log tail:\n{}",
-            pane_read_recent(&api_socket, &pane_id, 200),
-            log_tail(&server_log_path(&config_home), 80)
-        );
+#[test]
+fn crashed_client_shell_does_not_affect_survivor() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&api, Duration::from_secs(10));
+    wait_for_file(&clients, Duration::from_secs(10));
+    let mut survivor = shell(&clients, 100, 30);
+    let crashed = spawn_client(&config, &runtime, &api);
+    // Give the supported client process time to complete its ClientShell hello;
+    // the point of this test is a connected peer dying, not a failed launch.
+    thread::sleep(Duration::from_secs(1));
+    let pid = crashed.child.process_id().unwrap();
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
     }
-    let (received, client_b_frames) =
-        wait_for_frame_matching_with_snapshots(&mut client_b, Duration::from_secs(10), |frame| {
-            frame_contains_text(frame, &marker)
-        })
-        .expect("frame decoding should succeed");
-
-    assert!(
-        received,
-        "client B should receive a broadcast frame containing client A marker. pane output:\n{}\nclient B frame snapshots:\n{}\nserver log tail:\n{}",
-        pane_read_recent(&api_socket, &pane_id, 200),
-        client_b_frames.join("\n--- frame ---\n"),
-        log_tail(&server_log_path(&config_home), 80)
-    );
-
-    cleanup_spawned_herdr(server, base);
+    drop(crashed);
+    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
+    assert!(response.to_string().contains("pong"));
+    pane_input(&api, &create_pane(&api, "survivor"), "printf 'survivor\\n'");
+    assert!(wait_for_message_variant(
+        &mut survivor,
+        Duration::from_secs(5),
+        SERVER_MESSAGE_PANE_SURFACE
+    )
+    .unwrap());
+    cleanup(server, base);
 }
 
 #[test]
-fn multi_client_disconnect_recalculates_to_next_smallest() {
+fn rapid_client_shell_connect_disconnect_remains_healthy() {
     let _lock = test_lock();
     let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let (_workspace_id, pane_id) =
-        create_workspace_and_root_pane(&api_socket, "size-next-smallest");
-
-    let mut c120 = connect_raw_client(&client_socket, 120, 40);
-    let mut c100 = connect_raw_client(&client_socket, 100, 30);
-    let mut c80 = connect_raw_client(&client_socket, 80, 24);
-
-    assert!(wait_for_frame(&mut c120, Duration::from_secs(2)));
-    assert!(wait_for_frame(&mut c100, Duration::from_secs(2)));
-    assert!(wait_for_frame(&mut c80, Duration::from_secs(2)));
-
-    let size_with_three = read_pane_tty_size(&api_socket, &pane_id, Duration::from_secs(5));
-
-    drain_server_messages(&mut c100, Duration::from_millis(250));
-
-    // Smallest client disconnects; effective size should increase to the next-smallest.
-    send_client_detach(&mut c80);
-    drop(c80);
-
-    assert!(
-        wait_for_frame(&mut c100, Duration::from_secs(2)),
-        "next-smallest client should receive resized-up frame"
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let mut size_after_smallest_disconnect = None;
-    while Instant::now() < deadline {
-        let maybe_size = try_read_pane_tty_size(&api_socket, &pane_id, Duration::from_millis(400));
-        if let Some(size) = maybe_size {
-            if size.0 > size_with_three.0 && size.1 > size_with_three.1 {
-                size_after_smallest_disconnect = Some(size);
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(60));
-    }
-
-    assert!(
-        size_after_smallest_disconnect.is_some(),
-        "effective pane size should increase after smallest disconnects: before={:?}, last_seen={:?}",
-        size_with_three,
-        try_read_pane_tty_size(&api_socket, &pane_id, Duration::from_millis(300))
-    );
-
-    cleanup_spawned_herdr(server, base);
-}
-
-#[test]
-fn multi_client_smallest_leaving_resizes_up_for_remaining_clients() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let (_workspace_id, pane_id) = create_workspace_and_root_pane(&api_socket, "size-resize-up");
-
-    let mut large = connect_raw_client(&client_socket, 120, 40);
-    let mut small = connect_raw_client(&client_socket, 80, 24);
-
-    assert!(wait_for_frame(&mut large, Duration::from_secs(2)));
-    assert!(wait_for_frame(&mut small, Duration::from_secs(2)));
-
-    let size_with_small_client = read_pane_tty_size(&api_socket, &pane_id, Duration::from_secs(5));
-
-    drain_server_messages(&mut large, Duration::from_millis(250));
-
-    send_client_detach(&mut small);
-    drop(small);
-
-    // Remaining client should receive a new (larger) frame.
-    assert!(
-        wait_for_frame(&mut large, Duration::from_secs(2)),
-        "remaining client should receive resized-up frame"
-    );
-
-    let size_after_small_leaves = read_pane_tty_size(&api_socket, &pane_id, Duration::from_secs(5));
-
-    assert!(
-        size_after_small_leaves.0 > size_with_small_client.0
-            && size_after_small_leaves.1 > size_with_small_client.1,
-        "remaining clients should get larger effective pane size after smallest leaves: before={:?}, after={:?}",
-        size_with_small_client,
-        size_after_small_leaves
-    );
-
-    cleanup_spawned_herdr(server, base);
-}
-
-#[test]
-fn multi_client_client_crash_sigkill_does_not_affect_server() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    let mut survivor = connect_raw_client(&client_socket, 100, 30);
-    assert!(wait_for_frame(&mut survivor, Duration::from_secs(2)));
-
-    let log_path = server_log_path(&config_home);
-    let connected_before = count_log_occurrences(&log_path, "client connected");
-
-    let crashing_client = spawn_client_process(&config_home, &runtime_dir, &api_socket);
-
-    let attached_before_kill = wait_for_log_occurrence_count(
-        &log_path,
-        "client connected",
-        connected_before + 1,
-        Duration::from_secs(8),
-    );
-    assert!(
-        attached_before_kill,
-        "thin client must complete handshake/attachment before SIGKILL"
-    );
-
-    if let Some(pid) = crashing_client.child.process_id() {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
-        }
-    }
-    let mut crashing_client = crashing_client;
-    wait_for_child_exit(&mut crashing_client.child);
-
-    let ping = ping_socket(&api_socket);
-    assert!(
-        ping.contains("pong"),
-        "server should stay healthy after SIGKILLed client: {ping}"
-    );
-
-    drain_server_messages(&mut survivor, Duration::from_millis(250));
-    send_client_input(&mut survivor, b"echo survivor-still-works\n");
-    assert!(
-        wait_for_frame(&mut survivor, Duration::from_secs(2)),
-        "remaining client should continue receiving frames"
-    );
-
-    cleanup_spawned_herdr(server, base);
-}
-
-#[test]
-fn multi_client_rapid_connect_disconnect_stress_10_cycles() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-
-    let server = spawn_server(&config_home, &runtime_dir, &api_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_file(&client_socket, Duration::from_secs(10));
-
-    for i in 0..10u16 {
-        let mut client = connect_raw_client(&client_socket, 80 + i, 24 + (i % 4));
-        let _ = wait_for_frame(&mut client, Duration::from_millis(500));
-        send_client_detach(&mut client);
+    let config = base.join("config");
+    let runtime = base.join("runtime");
+    let api = runtime.join("herdr.sock");
+    let clients = runtime.join("herdr-client.sock");
+    let server = spawn_server(&config, &runtime, &api);
+    wait_for_socket(&api, Duration::from_secs(10));
+    wait_for_file(&clients, Duration::from_secs(10));
+    for i in 0..10 {
+        let mut client = shell(&clients, 80 + i, 24);
+        send_detach(&mut client).unwrap();
         drop(client);
-        thread::sleep(Duration::from_millis(40));
     }
-
-    let ping = ping_socket(&api_socket);
-    assert!(
-        ping.contains("pong"),
-        "server should remain healthy after rapid connect/disconnect: {ping}"
-    );
-
-    let mut final_client = connect_raw_client(&client_socket, 100, 30);
-    assert!(
-        wait_for_frame(&mut final_client, Duration::from_secs(2)),
-        "new client should still connect and receive frames after stress"
-    );
-
-    cleanup_spawned_herdr(server, base);
+    let final_client = shell(&clients, 100, 30);
+    drop(final_client);
+    let response = api_request(&api, r#"{"id":"ping","method":"ping","params":{}}"#);
+    assert!(response.to_string().contains("pong"));
+    cleanup(server, base);
 }

@@ -13,6 +13,12 @@ Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不�
 powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 ```
 
+如果端点安全软件阻止该无文件 PowerShell 命令，请打开命令提示符并运行：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
 Windows 构建同时通过稳定版和预览版更新通道提供。新安装默认使用稳定版,常规使用也建议选择稳定版。现有预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。如果旧预览构建拒绝该命令,请先在预览通道运行一次 `herdr update`,再重试。预览版会提供来自 `master` 的更新、测试较少的修复,也可能出现回归;只有在接受这一取舍时,才应通过 `herdr channel set preview` 主动启用。
 
 安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。

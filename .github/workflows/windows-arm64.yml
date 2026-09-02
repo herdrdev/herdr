@@ -6,13 +6,13 @@ on:
     paths:
       - ".github/workflows/windows-arm64.yml"
       - "scripts/windows_arm64_installer_test.ps1"
-      - "website/install.ps1"
+      - "distribution/install.ps1"
   push:
     branches: [master]
     paths:
       - ".github/workflows/windows-arm64.yml"
       - "scripts/windows_arm64_installer_test.ps1"
-      - "website/install.ps1"
+      - "distribution/install.ps1"
 
 permissions:
   contents: read

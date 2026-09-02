@@ -41,7 +41,7 @@ review_pane=$(printf '%s\n' "$split" | jq -r '.result.pane.pane_id')
 
 可用的 shell 窗格必须停在交互式 shell 提示符,由 shell 自身占用前台,没有正在前台运行的命令、编辑器或智能体。调用 `agent start` 前先让窗格回到提示符。
 
-`--kind` 选择受支持的智能体及其标准可执行文件。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen` 和 `maki`。`--` 后的参数会原样传给该可执行文件。
+`--kind` 选择受支持的智能体及其标准可执行文件。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` 和 `muse`。`--` 后的参数会原样传给该可执行文件。
 
 成功的 `agent start` 只有在 Herdr 于同一终端检测到预期智能体,并确认它可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认等待启动 30 秒;`--timeout` 必须大于 3000 且不超过 300000 毫秒。
 
