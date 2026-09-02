@@ -665,6 +665,10 @@ async fn client_shell_direct_graphics_uploads_without_server_authored_coordinate
         &[],
         &[],
         None,
+        Some(crate::ui::TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        }),
         crate::kitty_graphics::HostCellSize {
             width_px: 10,
             height_px: 20,
@@ -700,6 +704,10 @@ async fn client_shell_direct_graphics_uploads_without_server_authored_coordinate
         &[],
         &[],
         None,
+        Some(crate::ui::TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        }),
         crate::kitty_graphics::HostCellSize {
             width_px: 10,
             height_px: 20,

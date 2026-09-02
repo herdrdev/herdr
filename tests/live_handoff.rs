@@ -14,7 +14,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use support::{
     cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_herdr_pid,
     send_client_shell_shift_enter, unregister_spawned_herdr_pid, wait_for_client_shell_bootstrap,
-    wait_for_message_variant, wait_for_socket, SERVER_MESSAGE_CLIENT_SHELL_SNAPSHOT,
+    wait_for_message_variant, wait_for_socket, SERVER_MESSAGE_ENDPOINT_CONTROL,
     SERVER_MESSAGE_SERVER_SHUTDOWN,
 };
 
@@ -863,22 +863,17 @@ fn live_handoff_preserves_pane_process_io() {
     assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, 0) }, 0);
     assert_eq!(unsafe { libc::kill(second_child_pid as libc::pid_t, 0) }, 0);
 
-    let protocol = request(
-        &api_socket,
-        serde_json::json!({"id":"test:protocol","method":"ping","params":{}}),
-    )["result"]["protocol"]
-        .as_u64()
-        .unwrap() as u32;
+    let endpoint_generation = support::CURRENT_ENDPOINT_PROTOCOL_GENERATION;
     let mut client_stream = UnixStream::connect(&client_socket).unwrap();
-    let (server_protocol, error) =
-        client_shell_handshake(&mut client_stream, protocol, 54, 23).unwrap();
-    assert_eq!(server_protocol, protocol);
+    let (server_generation, error) =
+        client_shell_handshake(&mut client_stream, endpoint_generation, 54, 23).unwrap();
+    assert_eq!(server_generation, endpoint_generation);
     assert!(error.is_none(), "client shell handshake failed: {error:?}");
     assert!(
         wait_for_message_variant(
             &mut client_stream,
             Duration::from_secs(5),
-            SERVER_MESSAGE_CLIENT_SHELL_SNAPSHOT,
+            SERVER_MESSAGE_ENDPOINT_CONTROL,
         )
         .unwrap(),
         "client shell should receive a complete snapshot before handoff"
@@ -953,9 +948,17 @@ fn live_handoff_preserves_pane_process_io() {
     wait_for_output(&api_socket, &second_pane_id, "second:after-handoff-sec");
 
     let mut reattached_shell = UnixStream::connect(&client_socket).unwrap();
-    let (server_protocol, error) =
-        client_shell_handshake(&mut reattached_shell, protocol, 54, 23).unwrap();
-    assert_eq!(server_protocol, protocol);
+    let (server_generation, error) = client_shell_handshake(
+        &mut reattached_shell,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION,
+        54,
+        23,
+    )
+    .unwrap();
+    assert_eq!(
+        server_generation,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION
+    );
     assert!(error.is_none(), "reattached client shell failed: {error:?}");
     wait_for_client_shell_bootstrap(&mut reattached_shell, Duration::from_secs(5))
         .expect("fresh client shell should receive restored snapshot before pane content");
@@ -1030,12 +1033,6 @@ pathlib.Path({received:?}).write_text(data.hex())
     ));
     support::wait_for_file(&ready_marker, Duration::from_secs(5));
 
-    let protocol = request(
-        &api_socket,
-        serde_json::json!({"id":"test:protocol","method":"ping","params":{}}),
-    )["result"]["protocol"]
-        .as_u64()
-        .unwrap() as u32;
     assert_ok(request(
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
@@ -1045,9 +1042,17 @@ pathlib.Path({received:?}).write_text(data.hex())
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
     let mut client_stream = UnixStream::connect(&client_socket).unwrap();
-    let (server_protocol, error) =
-        client_shell_handshake(&mut client_stream, protocol, 54, 23).unwrap();
-    assert_eq!(server_protocol, protocol);
+    let (server_generation, error) = client_shell_handshake(
+        &mut client_stream,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION,
+        54,
+        23,
+    )
+    .unwrap();
+    assert_eq!(
+        server_generation,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION
+    );
     assert!(error.is_none(), "client shell handshake failed: {error:?}");
     wait_for_client_shell_bootstrap(&mut client_stream, Duration::from_secs(5))
         .expect("client shell should receive restored state before sending input");
@@ -1124,12 +1129,6 @@ pathlib.Path({received:?}).write_text(data.hex())
     ));
     support::wait_for_file(&ready_marker, Duration::from_secs(5));
 
-    let protocol = request(
-        &api_socket,
-        serde_json::json!({"id":"test:protocol","method":"ping","params":{}}),
-    )["result"]["protocol"]
-        .as_u64()
-        .unwrap() as u32;
     assert_ok(request(
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
@@ -1139,9 +1138,17 @@ pathlib.Path({received:?}).write_text(data.hex())
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
     let mut client_stream = UnixStream::connect(&client_socket).unwrap();
-    let (server_protocol, error) =
-        client_shell_handshake(&mut client_stream, protocol, 54, 23).unwrap();
-    assert_eq!(server_protocol, protocol);
+    let (server_generation, error) = client_shell_handshake(
+        &mut client_stream,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION,
+        54,
+        23,
+    )
+    .unwrap();
+    assert_eq!(
+        server_generation,
+        support::CURRENT_ENDPOINT_PROTOCOL_GENERATION
+    );
     assert!(error.is_none(), "client shell handshake failed: {error:?}");
     wait_for_client_shell_bootstrap(&mut client_stream, Duration::from_secs(5))
         .expect("client shell should receive restored state before sending input");

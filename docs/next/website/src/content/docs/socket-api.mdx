@@ -934,7 +934,15 @@ Errors look like this:
 
 ## Protocol stability
 
-Herdr has a protocol version for client/server compatibility. Protocol changes
-are reviewed for release compatibility.
+The client-rendered Herdr UI uses a stable endpoint generation for local and SSH
+servers. Client and server builds do not need to match. During connection setup,
+they agree on the core snapshot, screen, input, and blob codecs, and the server advertises
+the API methods it supports. A missing method disables only that action on that
+server and shows a client-local notice; it does not disconnect the UI. Rejected
+or timed-out actions are also reported without ending the connection. Servers
+from before endpoint generation 1 need one final update.
 
-Check the server protocol with `ping` or `herdr status` before depending on new behavior. Handle unknown fields gracefully.
+The numbered binary protocol remains for same-install and internal operations,
+including direct terminal attach and live handoff. Check `ping` or `herdr status`
+before using those operations across different builds. JSON API clients should
+ignore unknown fields and handle unsupported methods as normal errors.

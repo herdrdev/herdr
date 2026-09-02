@@ -56,11 +56,16 @@ fn ensure_remote_server_running() -> io::Result<()> {
             Duration::from_millis(500),
         )?
         .ok_or_else(|| io::Error::other("remote server status API is unavailable"))?;
-        if status.protocol == Some(crate::protocol::PROTOCOL_VERSION) {
+        if status
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.endpoint_protocol_generation)
+            == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+        {
             return Ok(());
         }
         return Err(io::Error::other(
-            "remote herdr server must restart before this bridge can attach; rerun `herdr --remote` from an interactive terminal to approve stopping it",
+            "remote herdr server needs one final update before this bridge can attach; rerun `herdr --remote` from an interactive terminal to approve it",
         ));
     }
 

@@ -60,6 +60,75 @@ pub(crate) enum DeferredRender {
     Full,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClientShellLocation {
+    pub(crate) focused_workspace_id: Option<String>,
+    pub(crate) active_tab_ids: HashMap<String, String>,
+}
+
+pub(crate) struct ClientShellTopology {
+    pub(crate) focused_workspace_id: Option<String>,
+    pub(crate) fallback_workspace_id: Option<String>,
+    pub(crate) active_tab_ids: HashMap<String, String>,
+    pub(crate) tab_workspace_ids: HashMap<String, String>,
+}
+
+impl ClientShellLocation {
+    pub(crate) fn from_snapshot(snapshot: &crate::protocol::ClientShellSnapshot) -> Self {
+        Self {
+            focused_workspace_id: snapshot.focused_workspace_id.clone(),
+            active_tab_ids: snapshot
+                .workspaces
+                .iter()
+                .map(|workspace| {
+                    (
+                        workspace.workspace_id.clone(),
+                        workspace.active_tab_id.clone(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn focused_tab_id(&self) -> Option<&str> {
+        self.focused_workspace_id
+            .as_deref()
+            .and_then(|workspace_id| self.active_tab_ids.get(workspace_id))
+            .map(String::as_str)
+    }
+
+    pub(crate) fn focus_workspace(&mut self, workspace_id: String) {
+        self.focused_workspace_id = Some(workspace_id);
+    }
+
+    pub(crate) fn focus_tab(&mut self, workspace_id: String, tab_id: String) {
+        self.focused_workspace_id = Some(workspace_id.clone());
+        self.active_tab_ids.insert(workspace_id, tab_id);
+    }
+
+    pub(crate) fn reconcile(&mut self, topology: &ClientShellTopology) {
+        self.active_tab_ids.retain(|workspace_id, tab_id| {
+            topology.active_tab_ids.contains_key(workspace_id)
+                && topology.tab_workspace_ids.get(tab_id) == Some(workspace_id)
+        });
+        for (workspace_id, tab_id) in &topology.active_tab_ids {
+            self.active_tab_ids
+                .entry(workspace_id.clone())
+                .or_insert_with(|| tab_id.clone());
+        }
+        if self
+            .focused_workspace_id
+            .as_ref()
+            .is_none_or(|workspace_id| !topology.active_tab_ids.contains_key(workspace_id))
+        {
+            self.focused_workspace_id = topology
+                .focused_workspace_id
+                .clone()
+                .or_else(|| topology.fallback_workspace_id.clone());
+        }
+    }
+}
+
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
     /// Whether this connection owns the Herdr shell or one direct terminal stream.
@@ -102,12 +171,17 @@ pub(crate) struct ClientConnection {
     shell_held_inputs: HashMap<ClientShellPressId, ClientShellHeldInput>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
+    /// Connection-local workspace and tab projection for a client-owned shell.
+    pub(crate) shell_location: Option<ClientShellLocation>,
     /// Last coherent shell replacement sent to this client.
     pub(crate) shell_snapshot: Option<crate::protocol::ClientShellSnapshot>,
     /// Monotonic shell replacement revision for this connection.
     pub(crate) shell_projection_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
     pub(crate) shell_endpoint_command_in_flight: bool,
+    /// Request id and buffered response for a deferred worktree-created navigation.
+    pub(crate) shell_deferred_navigation_request_id: Option<String>,
+    pub(crate) shell_deferred_navigation_response: Option<Vec<u8>>,
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Channels for sending framed ServerMessage data to the client writer thread.
@@ -162,9 +236,12 @@ impl ClientConnection {
             host_keyboard_protocol_active: None,
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
+            shell_location: None,
             shell_snapshot: None,
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
+            shell_deferred_navigation_request_id: None,
+            shell_deferred_navigation_response: None,
             shell_uses_endpoint_keybindings: false,
             writer,
         }

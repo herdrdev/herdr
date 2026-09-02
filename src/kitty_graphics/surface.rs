@@ -273,7 +273,7 @@ pub(crate) fn collect_scene(
     if !cell_size.is_known() {
         return (SurfaceGraphicsScene::default(), DeliveryCache::default());
     }
-    let workspace_index = app.state.active;
+    let workspace_index = surface.target.map(|target| target.workspace_index);
     let mut targets = HashMap::new();
     let mut public_panes = HashMap::new();
     if let Some(workspace_index) = workspace_index {

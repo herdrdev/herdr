@@ -412,7 +412,7 @@ fn run_client_with_mode(
         .is_some_and(shell::ClientShellConfig::uses_endpoint_keybindings);
 
     // Perform handshake while the stream is still in blocking mode.
-    let negotiated_encoding = match do_handshake(
+    let handshake = match do_handshake(
         &mut stream,
         cols,
         rows,
@@ -489,7 +489,8 @@ fn run_client_with_mode(
             exact_cell_size,
             should_quit,
             loop_config,
-            negotiated_encoding,
+            handshake.encoding,
+            handshake.endpoint_methods,
             attach_escape,
         )
         .await
@@ -613,6 +614,45 @@ fn apply_client_shell_input_source_changes(
     }
 }
 
+fn install_client_shell_snapshot(
+    state: &mut ClientState,
+    snapshot: Box<crate::protocol::ClientShellSnapshot>,
+    write_stream: &mut LocalStream,
+    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
+) -> Result<(), ClientError> {
+    let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
+        let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
+        shell.set_snapshot(snapshot);
+        let graphics_cleanup = shell.take_pending_graphics_cleanup();
+        let next_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
+        (
+            shell.compose(state.reported_size.0, state.reported_size.1),
+            (previous_size != next_size).then(|| {
+                client_shell_resize_message(
+                    shell,
+                    state.reported_size.0,
+                    state.reported_size.1,
+                    state.reported_cell_size.0,
+                    state.reported_cell_size.1,
+                    state.pixel_geometry_exact,
+                )
+            }),
+            graphics_cleanup,
+        )
+    } else {
+        (None, None, Vec::new())
+    };
+    apply_client_shell_input_source_changes(state, prefix_input_source);
+    state.present_graphics(&graphics_cleanup);
+    if let Some(resize) = resize {
+        write_to_server(write_stream, &resize).map_err(ClientError::ConnectionLost)?;
+    }
+    if let Some(frame) = composed {
+        state.present_frame(frame);
+    }
+    Ok(())
+}
+
 fn finish_client_shell_input(
     state: &mut ClientState,
     outcome: shell::ClientShellInput,
@@ -682,6 +722,7 @@ async fn run_client_loop(
     should_quit: Arc<AtomicBool>,
     config: ClientLoopConfig,
     negotiated_encoding: RenderEncoding,
+    endpoint_methods: Option<Vec<String>>,
     attach_escape: Option<AttachEscapeState>,
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
@@ -723,6 +764,7 @@ async fn run_client_loop(
     };
     if let Some(shell) = state.shell.as_mut() {
         shell.set_graphics_cell_size(initial_cell_width_px, initial_cell_height_px);
+        shell.set_endpoint_methods(endpoint_methods);
     }
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
@@ -731,8 +773,13 @@ async fn run_client_loop(
     let reported_cell_size = Arc::new(AtomicU64::new(0));
     let host_sgr_pixels_active = Arc::new(AtomicBool::new(false));
 
-    // Channel for events from the stdin, resize, and server reader threads.
+    // Channel for events from the resize and server reader threads.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    // Keep Windows console draining independent of server-frame backpressure.
+    #[cfg(windows)]
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<ClientLoopEvent>(256);
+    #[cfg(unix)]
+    let stdin_tx = event_tx.clone();
 
     let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
 
@@ -744,7 +791,6 @@ async fn run_client_loop(
     let will_query_host_cell_size = state.attach_escape.is_none()
         && host_cell_size_query_required(state.kitty_graphics_enabled);
     let stdin_quit = should_quit.clone();
-    let stdin_tx = event_tx.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
     #[cfg(unix)]
@@ -835,6 +881,8 @@ async fn run_client_loop(
 
     // Main event loop.
     let mut client_timer = timer::ClientLoopTimer::new();
+    #[cfg(windows)]
+    let mut stdin_open = true;
     while !should_quit.load(Ordering::Acquire) {
         let timer_delay = state
             .shell
@@ -843,6 +891,19 @@ async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        #[cfg(windows)]
+        let event = tokio::select! {
+            _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
+            ev = stdin_rx.recv(), if stdin_open => match ev {
+                Some(event) => event,
+                None => {
+                    stdin_open = false;
+                    ClientLoopEvent::Timer
+                }
+            },
+            ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
+        };
+        #[cfg(unix)]
         let event = tokio::select! {
             biased;
             _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
@@ -1199,42 +1260,13 @@ async fn run_client_loop(
                 }
             }
             ClientLoopEvent::ServerMessage(msg) => match *msg {
-                ServerMessage::ClientShellSnapshot(snapshot) => {
-                    let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell
-                    {
-                        let previous_size =
-                            shell.surface_size(state.reported_size.0, state.reported_size.1);
-                        shell.set_snapshot(snapshot);
-                        let graphics_cleanup = shell.take_pending_graphics_cleanup();
-                        let next_size =
-                            shell.surface_size(state.reported_size.0, state.reported_size.1);
-                        (
-                            shell.compose(state.reported_size.0, state.reported_size.1),
-                            (previous_size != next_size).then(|| {
-                                client_shell_resize_message(
-                                    shell,
-                                    state.reported_size.0,
-                                    state.reported_size.1,
-                                    state.reported_cell_size.0,
-                                    state.reported_cell_size.1,
-                                    state.pixel_geometry_exact,
-                                )
-                            }),
-                            graphics_cleanup,
-                        )
-                    } else {
-                        (None, None, Vec::new())
-                    };
-                    apply_client_shell_input_source_changes(&mut state, &mut prefix_input_source);
-                    state.present_graphics(&graphics_cleanup);
-                    if let Some(resize) = resize {
-                        if let Err(err) = write_to_server(&mut write_stream, &resize) {
-                            return Err(ClientError::ConnectionLost(err));
-                        }
-                    }
-                    if let Some(frame) = composed {
-                        state.present_frame(frame);
-                    }
+                ServerMessage::ClientShellSnapshot(_) => {
+                    return Err(ClientError::Protocol(protocol::FramingError::Io(
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "server sent an unnegotiated binary endpoint snapshot",
+                        ),
+                    )));
                 }
                 ServerMessage::PaneSurface(surface) => {
                     let composed = if let Some(shell) = &mut state.shell {
@@ -1680,6 +1712,35 @@ async fn run_client_loop(
                         sync_client_shell_keyboard_report_all(&mut state)?;
                     }
                 }
+                ServerMessage::EndpointControl { kind, data } => {
+                    if kind != crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
+                        if kind.starts_with("shell.snapshot.") {
+                            return Err(ClientError::Protocol(protocol::FramingError::Io(
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "unsupported mandatory endpoint snapshot codec {kind:?}"
+                                    ),
+                                ),
+                            )));
+                        }
+                        debug!(%kind, "ignoring unknown endpoint control message");
+                        continue;
+                    }
+                    let snapshot: crate::protocol::ClientShellSnapshot =
+                        serde_json::from_str(&data).map_err(|error| {
+                            ClientError::Protocol(protocol::FramingError::Io(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("invalid endpoint snapshot: {error}"),
+                            )))
+                        })?;
+                    install_client_shell_snapshot(
+                        &mut state,
+                        Box::new(snapshot),
+                        &mut write_stream,
+                        &mut prefix_input_source,
+                    )?;
+                }
                 ServerMessage::Welcome { .. } => {
                     debug!("received unexpected Welcome in main loop");
                 }
@@ -1700,10 +1761,20 @@ async fn run_client_loop(
                     .detached_process_children
                     .retain_mut(|child| child.try_wait().ok().flatten().is_none());
                 if state.shell.is_some() {
+                    let expired_endpoint = endpoint_commands.expire(now);
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
-                        let (effects, notification_repaint) = shell.tick_notifications(now);
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        if let Some(expired) = expired_endpoint {
+                            let (repaint, actions) = shell.handle_endpoint_result(
+                                &expired.boot_id,
+                                &expired.request_id,
+                                expired.result,
+                            );
+                            outcome.repaint |= repaint;
+                            outcome.actions.extend(actions);
+                        }
+                        let (effects, notification_repaint) = shell.tick_notifications(now);
                         outcome.repaint |= notification_repaint | shell.tick_copy_feedback(now);
                         let frame = outcome
                             .repaint

@@ -227,11 +227,13 @@ impl ClientShellState {
                 if action == crate::protocol::ClientShellCommandAction::Popup {
                     self.popup_pending = true;
                     self.popup_pending_deadline = None;
-                    self.push_endpoint_method_with_kind(
+                    if !self.push_endpoint_method_with_kind(
                         crate::api::schema::Method::CommandInvoke(params),
                         PendingEndpointKind::PopupCommand,
                         outcome,
-                    );
+                    ) {
+                        self.popup_pending = false;
+                    }
                 } else {
                     self.push_endpoint_method(
                         crate::api::schema::Method::CommandInvoke(params),
@@ -323,7 +325,7 @@ impl ClientShellState {
         self.word_selection_generation = self.word_selection_generation.saturating_add(1);
         let generation = self.word_selection_generation;
         self.pending_word_selection = Some(generation);
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneSelectionRead(
                 crate::api::schema::PaneSelectionReadParams {
                     pane_id: hit.pane_id.clone(),
@@ -345,7 +347,9 @@ impl ClientShellState {
                 generation,
             },
             outcome,
-        );
+        ) {
+            self.pending_word_selection = None;
+        }
     }
 
     pub(super) fn push_endpoint_method(
@@ -356,15 +360,70 @@ impl ClientShellState {
         self.push_endpoint_method_with_kind(method, PendingEndpointKind::Generic, outcome);
     }
 
+    fn push_endpoint_notice(
+        &mut self,
+        kind: ClientEndpointNoticeKind,
+        code: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> bool {
+        let key = ClientEndpointNoticeKey {
+            boot_id: self
+                .snapshot
+                .as_deref()
+                .map(|snapshot| snapshot.boot_id.clone())
+                .unwrap_or_else(|| "disconnected".to_owned()),
+            kind,
+            code: code.into(),
+        };
+        let body = body.into();
+        if kind == ClientEndpointNoticeKind::Rejected {
+            if self
+                .visible_endpoint_notice
+                .as_ref()
+                .is_some_and(|notice| notice.key == key && notice.body == body)
+            {
+                return false;
+            }
+        } else if !self.endpoint_notice_seen.insert(key.clone()) {
+            return false;
+        }
+        let duration_seconds = if kind == ClientEndpointNoticeKind::Rejected {
+            3
+        } else {
+            8
+        };
+        self.visible_endpoint_notice = Some(ClientVisibleEndpointNotice {
+            key,
+            title: title.into(),
+            body,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(duration_seconds),
+        });
+        true
+    }
+
     pub(super) fn push_endpoint_method_with_kind(
         &mut self,
         method: crate::api::schema::Method,
         kind: PendingEndpointKind,
         outcome: &mut ClientShellInput,
-    ) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return;
-        };
+    ) -> bool {
+        if self.snapshot.is_none() {
+            return false;
+        }
+        let method_name = crate::api::api_method_name(&method).to_owned();
+        if !self.supports_endpoint_method(&method) {
+            outcome.repaint |= self.push_endpoint_notice(
+                ClientEndpointNoticeKind::Unsupported,
+                method_name.clone(),
+                "Action unavailable",
+                format!(
+                    "This server does not support {method_name} yet. Update and restart it to enable this action."
+                ),
+            );
+            return false;
+        }
+        let snapshot = self.snapshot.as_deref().expect("checked snapshot");
         let confirmation_workspace_id = match &method {
             crate::api::schema::Method::TabClose(target) => snapshot
                 .tabs
@@ -385,6 +444,7 @@ impl ClientShellState {
             request_id.clone(),
             PendingEndpointRequest {
                 boot_id: snapshot.boot_id.clone(),
+                method_name,
                 confirmation_workspace_id,
                 kind,
             },
@@ -396,14 +456,16 @@ impl ClientShellState {
                 method,
             }),
         });
+        true
     }
 
     pub(crate) fn receive_endpoint_error(&mut self, message: String) -> bool {
-        if self.endpoint_error.as_deref() == Some(message.as_str()) {
-            return false;
-        }
-        self.endpoint_error = Some(message);
-        true
+        self.push_endpoint_notice(
+            ClientEndpointNoticeKind::Rejected,
+            "paste_rejected",
+            "Paste rejected",
+            message,
+        )
     }
 
     pub(crate) fn handle_endpoint_result(
@@ -423,12 +485,49 @@ impl ClientShellState {
         {
             return (false, Vec::new());
         }
+        if result.is_ok() {
+            let timeout_key = ClientEndpointNoticeKey {
+                boot_id: boot_id.to_owned(),
+                kind: ClientEndpointNoticeKind::Timeout,
+                code: pending.method_name.clone(),
+            };
+            self.endpoint_notice_seen.remove(&timeout_key);
+        }
+        if let Err(error) = &result {
+            let code = error.code.as_deref().unwrap_or("invalid_response");
+            if !matches!(
+                code,
+                "confirmation_required" | "stale_content" | "stale_target"
+            ) {
+                let (kind, notice_code, title, body) = match code {
+                    "endpoint_timeout" => (
+                        ClientEndpointNoticeKind::Timeout,
+                        pending.method_name.clone(),
+                        "Server timed out",
+                        format!("This server did not respond to {}.", pending.method_name),
+                    ),
+                    "server_unavailable" => (
+                        ClientEndpointNoticeKind::Unavailable,
+                        "server".to_owned(),
+                        "Server unavailable",
+                        error.message.clone(),
+                    ),
+                    _ => (
+                        ClientEndpointNoticeKind::Rejected,
+                        format!("{}:{code}", pending.method_name),
+                        "Action rejected",
+                        error.message.clone(),
+                    ),
+                };
+                self.push_endpoint_notice(kind, notice_code, title, body);
+            }
+        }
         match pending.kind {
             PendingEndpointKind::Generic => {}
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
                     Ok(_) => (false, Vec::new()),
-                    Err(error) => {
+                    Err(_) => {
                         let key = (version.clone(), id.clone());
                         if self.dismissed_product_announcement.as_ref() == Some(&key) {
                             self.dismissed_product_announcement = None;
@@ -447,7 +546,6 @@ impl ClientShellState {
                                 ));
                             }
                         }
-                        self.endpoint_error = Some(error.message);
                         (true, Vec::new())
                     }
                 };
@@ -455,7 +553,7 @@ impl ClientShellState {
             PendingEndpointKind::ReleaseNotesDismiss => {
                 return match result {
                     Ok(_) => (false, Vec::new()),
-                    Err(error) => {
+                    Err(_) => {
                         if self.overlay.is_none() {
                             if let Some(notes) = self
                                 .snapshot
@@ -467,7 +565,6 @@ impl ClientShellState {
                                 ));
                             }
                         }
-                        self.endpoint_error = Some(error.message);
                         (true, Vec::new())
                     }
                 };
@@ -479,10 +576,9 @@ impl ClientShellState {
                             Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
                         (false, Vec::new())
                     }
-                    Err(error) => {
+                    Err(_) => {
                         self.popup_pending = false;
                         self.popup_pending_deadline = None;
-                        self.endpoint_error = Some(error.message);
                         (true, Vec::new())
                     }
                 };
@@ -517,10 +613,7 @@ impl ClientShellState {
                             Some("endpoint returned an unexpected selection result".to_owned());
                         (true, fallback())
                     }
-                    Err(error) => {
-                        self.endpoint_error = Some(error.message);
-                        (true, fallback())
-                    }
+                    Err(_) => (true, fallback()),
                 };
             }
             PendingEndpointKind::WordSelection {
@@ -551,10 +644,7 @@ impl ClientShellState {
                         );
                         return (true, Vec::new());
                     }
-                    Err(error) => {
-                        self.endpoint_error = Some(error.message);
-                        return (true, Vec::new());
-                    }
+                    Err(_) => return (true, Vec::new()),
                 };
                 let Some((start_col, end_col)) =
                     crate::app::actions::word_bounds_at_column(&row_text, col)
@@ -640,10 +730,7 @@ impl ClientShellState {
                         self.url_click_consumes_until_up = completed_before_release;
                         (false, Vec::new())
                     }
-                    Err(error) => {
-                        self.endpoint_error = Some(error.message);
-                        (true, replay_action(replay))
-                    }
+                    Err(_) => (true, replay_action(replay)),
                 };
             }
             PendingEndpointKind::CopyMotion {
@@ -673,10 +760,7 @@ impl ClientShellState {
                             Some("endpoint returned an unexpected copy-motion result".to_owned());
                         (true, false)
                     }
-                    Err(error) => {
-                        self.endpoint_error = Some(error.message);
-                        (true, false)
-                    }
+                    Err(_) => (true, false),
                 };
                 self.complete_copy_operation(session_generation, continue_queue, &mut outcome);
                 return (repaint || outcome.repaint, outcome.actions);
@@ -731,9 +815,8 @@ impl ClientShellState {
                             Some("endpoint returned an unexpected copy-search result".to_owned());
                         (true, false)
                     }
-                    Err(error) => {
+                    Err(_) => {
                         self.cancel_deferred_copy_after_search(generation);
-                        self.endpoint_error = Some(error.message);
                         (true, false)
                     }
                 };
@@ -748,10 +831,7 @@ impl ClientShellState {
                             Some("endpoint returned an unexpected config reload result".to_owned());
                         true
                     }
-                    Err(error) => {
-                        self.endpoint_error = Some(error.message);
-                        true
-                    }
+                    Err(_) => true,
                 };
                 return (repaint, Vec::new());
             }
@@ -778,10 +858,7 @@ impl ClientShellState {
                 }
                 true
             }
-            Err(error) => {
-                self.endpoint_error = Some(error.message);
-                true
-            }
+            Err(_) => true,
         };
         (repaint, Vec::new())
     }

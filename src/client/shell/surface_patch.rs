@@ -66,6 +66,8 @@ fn fast_path_blocker(
         Some("client_surface_patch.fallback.endpoint_error")
     } else if state.config_diagnostic.is_some() {
         Some("client_surface_patch.fallback.config_diagnostic")
+    } else if state.visible_endpoint_notice.is_some() {
+        Some("client_surface_patch.fallback.endpoint_notice")
     } else if state.visible_notification.is_some() {
         Some("client_surface_patch.fallback.notification")
     } else if state.copy_feedback.is_some() {

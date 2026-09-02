@@ -503,20 +503,22 @@ fn collect_visible_placements(
     uploaded_images: &HashMap<u32, ImageSignature>,
     oversized_images: &HashMap<HostSourceKey, ImageSignature>,
 ) -> Vec<HostPlacement> {
-    let ws_idx = match app.active {
-        Some(idx) => idx,
-        None => {
-            tracing::debug!("collect_visible_placements: no active workspace");
-            return Vec::new();
-        }
+    let Some(target) = surface.target else {
+        tracing::debug!("collect_visible_placements: no tab surface target");
+        return Vec::new();
     };
+    let ws_idx = target.workspace_index;
     if app
         .workspaces
         .get(ws_idx)
-        .and_then(crate::workspace::Workspace::active_tab)
+        .and_then(|workspace| workspace.tabs.get(target.tab_index))
         .is_none()
     {
-        tracing::debug!(ws_idx, "collect_visible_placements: no active tab");
+        tracing::debug!(
+            ws_idx,
+            tab_idx = target.tab_index,
+            "collect_visible_placements: no target tab"
+        );
         return Vec::new();
     }
 

@@ -885,17 +885,6 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn test_env_case_insensitive_override() {
-        let mut cmd = CommandBuilder::new("dummy");
-        cmd.env("Cargo_Pkg_Authors", "Not Wez");
-        assert!(cmd.get_env("cargo_pkg_authors") == Some(OsStr::new("Not Wez")));
-
-        cmd.env_remove("cARGO_pKG_aUTHORS");
-        assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
     fn raw_arg_appends_unescaped_windows_command_tail() {
         use std::os::windows::ffi::OsStringExt;
 
@@ -915,6 +904,17 @@ mod tests {
 
         assert!(command.ends_with(r#"/d /c echo "hi""#), "{}", command);
         assert!(!command.contains(r#"\"hi\""#), "{}", command);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_env_case_insensitive_override() {
+        let mut cmd = CommandBuilder::new("dummy");
+        cmd.env("Cargo_Pkg_Authors", "Not Wez");
+        assert!(cmd.get_env("cargo_pkg_authors") == Some(OsStr::new("Not Wez")));
+
+        cmd.env_remove("cARGO_pKG_aUTHORS");
+        assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
     }
 
     #[cfg(windows)]

@@ -68,6 +68,8 @@ By default, Herdr runs as a background server plus one or more attached clients.
 
 The server owns panes and process state. The client is the terminal UI attached to that server.
 
+With one attached client, all tabs follow its size as before. With multiple clients, each can view its own workspace and tab. Different viewed tabs follow their respective clients; when clients view the same tab, the last one to focus, select, or interact with it controls that tab's pane sizes.
+
 Detach the client with `ctrl+b q`. The server and agents continue running.
 
 If you want to end the session and stop its panes, stop the server:

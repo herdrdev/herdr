@@ -103,6 +103,6 @@ herdr update --handoff
 herdr --remote workbox --handoff
 ```
 
-普通的 `herdr update` 和普通的 `herdr --remote workbox` 默认使用常规的重启/停止流程。
+普通的 `herdr update` 会安装新客户端,并让端点第 1 代服务器继续运行。普通的 `herdr --remote workbox` 也会在版本不同时保留兼容的远程服务器。只有从早于第 1 代的服务器做一次性升级时才需要停止;如果要在不结束窗格进程的情况下明确替换受支持的运行中服务器,请使用 `--handoff`。
 
 `herdr update --handoff` 只适用于由 Herdr 自带更新器管理的安装。Homebrew、mise 和 Nix 安装通过各自的包管理器更新,因此那些安装中 `herdr update` 被禁用,无法执行实时交接。

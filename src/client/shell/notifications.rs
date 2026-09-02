@@ -1,13 +1,16 @@
 use super::*;
 use ratatui::{
+    style::Color,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-pub(super) fn render_mobile_notification_banner(
+fn render_mobile_notice_banner(
     buffer: &mut Buffer,
     area: Rect,
-    notification: &ClientVisibleNotification,
+    title: &str,
+    body: Option<&str>,
+    dot_color: Color,
     offset_for_warning: bool,
     palette: &Palette,
 ) -> Rect {
@@ -23,6 +26,49 @@ pub(super) fn render_mobile_notification_banner(
     let background = palette.surface0;
     Clear.render(rect, buffer);
     buffer.set_style(rect, Style::default().bg(background));
+    let mut x = rect.x;
+    for (text, style) in [
+        (" ", Style::default().bg(background)),
+        ("●", Style::default().fg(dot_color).bg(background)),
+        (" ", Style::default().bg(background)),
+        (
+            title,
+            Style::default()
+                .fg(palette.text)
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ] {
+        x = super::render::put_segment(buffer, x, rect.y, rect.right(), text, style);
+    }
+    if let Some(body) = body.filter(|body| !body.is_empty()) {
+        x = super::render::put_segment(
+            buffer,
+            x,
+            rect.y,
+            rect.right(),
+            " · ",
+            Style::default().fg(palette.overlay0).bg(background),
+        );
+        super::render::put_text(
+            buffer,
+            x,
+            rect.y,
+            rect.right().saturating_sub(x),
+            body,
+            Style::default().fg(palette.overlay0).bg(background),
+        );
+    }
+    rect
+}
+
+pub(super) fn render_mobile_notification_banner(
+    buffer: &mut Buffer,
+    area: Rect,
+    notification: &ClientVisibleNotification,
+    offset_for_warning: bool,
+    palette: &Palette,
+) -> Rect {
     let event = &notification.event;
     let title = match event.kind {
         SemanticNotificationKind::NeedsAttention => event
@@ -45,84 +91,55 @@ pub(super) fn render_mobile_notification_banner(
             palette.accent
         }
     };
-    let mut x = rect.x;
-    x = super::render::put_segment(
+    render_mobile_notice_banner(
         buffer,
-        x,
-        rect.y,
-        rect.right(),
-        " ",
-        Style::default().bg(background),
-    );
-    x = super::render::put_segment(
-        buffer,
-        x,
-        rect.y,
-        rect.right(),
-        "●",
-        Style::default().fg(dot_color).bg(background),
-    );
-    x = super::render::put_segment(
-        buffer,
-        x,
-        rect.y,
-        rect.right(),
-        " ",
-        Style::default().bg(background),
-    );
-    x = super::render::put_segment(
-        buffer,
-        x,
-        rect.y,
-        rect.right(),
+        area,
         &title,
-        Style::default()
-            .fg(palette.text)
-            .bg(background)
-            .add_modifier(Modifier::BOLD),
-    );
-    if let Some(body) = event.body.as_deref().filter(|body| !body.is_empty()) {
-        x = super::render::put_segment(
-            buffer,
-            x,
-            rect.y,
-            rect.right(),
-            " · ",
-            Style::default().fg(palette.overlay0).bg(background),
-        );
-        super::render::put_text(
-            buffer,
-            x,
-            rect.y,
-            rect.right().saturating_sub(x),
-            body,
-            Style::default().fg(palette.overlay0).bg(background),
-        );
-    }
-    rect
+        event.body.as_deref(),
+        dot_color,
+        offset_for_warning,
+        palette,
+    )
 }
 
-pub(super) fn render_visible_notification(
+pub(super) fn render_mobile_endpoint_notice_banner(
     buffer: &mut Buffer,
     area: Rect,
-    notification: &ClientVisibleNotification,
-    default_position: crate::config::ToastHerdrPosition,
+    notice: &ClientVisibleEndpointNotice,
+    offset_for_warning: bool,
+    palette: &Palette,
+) -> Rect {
+    render_mobile_notice_banner(
+        buffer,
+        area,
+        &notice.title,
+        Some(&notice.body),
+        palette.red,
+        offset_for_warning,
+        palette,
+    )
+}
+
+fn render_notification_card(
+    buffer: &mut Buffer,
+    area: Rect,
+    title: &str,
+    body: &str,
+    position: crate::config::ToastHerdrPosition,
     top_offset: u16,
+    dot_color: Color,
     palette: &Palette,
 ) -> Rect {
     if area.is_empty() {
         return Rect::default();
     }
-    let event = &notification.event;
-    let body = event.body.as_deref().unwrap_or_default();
-    let content_width = unicode_width::UnicodeWidthStr::width(event.title.as_str())
+    let content_width = unicode_width::UnicodeWidthStr::width(title)
         .max(unicode_width::UnicodeWidthStr::width(body))
         .saturating_add(6);
     let width = u16::try_from(content_width)
         .unwrap_or(u16::MAX)
         .min(area.width);
     let height: u16 = if body.is_empty() { 3 } else { 4 }.min(area.height);
-    let position = event.position.unwrap_or(default_position);
     let x = match position {
         crate::config::ToastHerdrPosition::TopLeft
         | crate::config::ToastHerdrPosition::BottomLeft => area.x,
@@ -148,19 +165,10 @@ pub(super) fn render_visible_notification(
     let inner = block.inner(rect);
     block.render(rect, buffer);
     Paragraph::new(Line::from(vec![
-        Span::styled(
-            "●",
-            Style::default().fg(match event.kind {
-                SemanticNotificationKind::NeedsAttention => palette.red,
-                SemanticNotificationKind::Finished => palette.blue,
-                SemanticNotificationKind::UpdateInstalled | SemanticNotificationKind::Custom => {
-                    palette.accent
-                }
-            }),
-        ),
+        Span::styled("●", Style::default().fg(dot_color)),
         Span::raw(" "),
         Span::styled(
-            event.title.as_str(),
+            title,
             Style::default()
                 .fg(palette.text)
                 .add_modifier(Modifier::BOLD),
@@ -183,6 +191,60 @@ pub(super) fn render_visible_notification(
         );
     }
     rect
+}
+
+pub(super) fn render_visible_notification(
+    buffer: &mut Buffer,
+    area: Rect,
+    notification: &ClientVisibleNotification,
+    default_position: crate::config::ToastHerdrPosition,
+    top_offset: u16,
+    palette: &Palette,
+) -> Rect {
+    let event = &notification.event;
+    let dot_color = match event.kind {
+        SemanticNotificationKind::NeedsAttention => palette.red,
+        SemanticNotificationKind::Finished => palette.blue,
+        SemanticNotificationKind::UpdateInstalled | SemanticNotificationKind::Custom => {
+            palette.accent
+        }
+    };
+    render_notification_card(
+        buffer,
+        area,
+        &event.title,
+        event.body.as_deref().unwrap_or_default(),
+        event.position.unwrap_or(default_position),
+        top_offset,
+        dot_color,
+        palette,
+    )
+}
+
+pub(super) fn render_endpoint_notice(
+    buffer: &mut Buffer,
+    area: Rect,
+    notice: &ClientVisibleEndpointNotice,
+    top_offset: u16,
+    palette: &Palette,
+) -> Rect {
+    render_notification_card(
+        buffer,
+        area,
+        &notice.title,
+        &notice.body,
+        crate::config::ToastHerdrPosition::TopRight,
+        top_offset,
+        match notice.key.kind {
+            ClientEndpointNoticeKind::Unsupported | ClientEndpointNoticeKind::Rejected => {
+                palette.red
+            }
+            ClientEndpointNoticeKind::Timeout | ClientEndpointNoticeKind::Unavailable => {
+                palette.yellow
+            }
+        },
+        palette,
+    )
 }
 
 impl ClientShellState {
@@ -244,6 +306,14 @@ impl ClientShellState {
             .is_some_and(|visible| now >= visible.deadline)
         {
             self.visible_notification = None;
+            repaint = true;
+        }
+        if self
+            .visible_endpoint_notice
+            .as_ref()
+            .is_some_and(|visible| now >= visible.deadline)
+        {
+            self.visible_endpoint_notice = None;
             repaint = true;
         }
 

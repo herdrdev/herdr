@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
+use std::time::{Duration, Instant};
 
 use crate::api::client::ApiClientError;
 use crate::api::schema::{Request, ResponseResult};
@@ -8,10 +9,14 @@ use crate::protocol::ClientMessage;
 
 use super::shell::ClientShellEndpointError;
 
+const ENDPOINT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+
 struct InFlightCommand {
     boot_id: String,
     request_id: String,
     response: Vec<u8>,
+    sent_at: Instant,
+    timed_out: bool,
 }
 
 pub(super) struct EndpointCommandResult {
@@ -52,8 +57,28 @@ impl EndpointCommands {
             boot_id,
             request_id,
             response: Vec::new(),
+            sent_at: Instant::now(),
+            timed_out: false,
         });
         Ok(())
+    }
+
+    pub(super) fn expire(&mut self, now: Instant) -> Option<EndpointCommandResult> {
+        let command = self.in_flight.as_mut()?;
+        if command.timed_out
+            || now.saturating_duration_since(command.sent_at) < ENDPOINT_COMMAND_TIMEOUT
+        {
+            return None;
+        }
+        command.timed_out = true;
+        Some(EndpointCommandResult {
+            boot_id: command.boot_id.clone(),
+            request_id: command.request_id.clone(),
+            result: Err(ClientShellEndpointError {
+                code: Some("endpoint_timeout".into()),
+                message: "this server did not respond to the action".into(),
+            }),
+        })
     }
 
     pub(super) fn receive_chunk(
@@ -140,6 +165,8 @@ mod tests {
                 boot_id: "boot-a".into(),
                 request_id: "request-a".into(),
                 response: Vec::new(),
+                sent_at: Instant::now(),
+                timed_out: false,
             }),
             ..EndpointCommands::default()
         }
@@ -209,6 +236,38 @@ mod tests {
             completed.expect("final selection response").result,
             Ok(ResponseResult::PaneSelection { text, .. }) if text == selection
         ));
+    }
+
+    #[test]
+    fn in_flight_endpoint_command_expires_and_releases_the_lane() {
+        let mut commands = commands_with_in_flight();
+        let expired = commands
+            .expire(std::time::Instant::now() + ENDPOINT_COMMAND_TIMEOUT)
+            .expect("expired endpoint command");
+
+        assert_eq!(expired.boot_id, "boot-a");
+        assert_eq!(expired.request_id, "request-a");
+        assert!(matches!(
+            expired.result,
+            Err(ClientShellEndpointError {
+                code: Some(code),
+                ..
+            }) if code == "endpoint_timeout"
+        ));
+        assert!(commands.in_flight.is_some());
+        assert!(commands
+            .expire(std::time::Instant::now() + ENDPOINT_COMMAND_TIMEOUT)
+            .is_none());
+        let late_response = serde_json::to_vec(&SuccessResponse {
+            id: "request-a".into(),
+            result: ResponseResult::Ok {},
+        })
+        .unwrap();
+        assert!(commands
+            .receive_chunk("boot-a", "request-a", true, late_response)
+            .expect("late response releases the synchronized lane")
+            .is_some());
+        assert!(commands.in_flight.is_none());
     }
 
     #[test]

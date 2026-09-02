@@ -921,35 +921,6 @@ impl AppState {
             })
     }
 
-    pub(crate) fn app_surface_pane_ids(&self) -> std::collections::HashSet<PaneId> {
-        let mut pane_ids = std::collections::HashSet::new();
-        if let Some(popup) = &self.popup_pane {
-            pane_ids.insert(popup.pane_id);
-        }
-        let Some(tab) = self
-            .active
-            .and_then(|ws_idx| self.workspaces.get(ws_idx))
-            .and_then(crate::workspace::Workspace::active_tab)
-        else {
-            return pane_ids;
-        };
-        if tab.zoomed {
-            pane_ids.insert(tab.layout.focused());
-        } else {
-            pane_ids.extend(tab.panes.keys().copied());
-        }
-        pane_ids
-    }
-
-    pub(crate) fn focused_pane_requests_mouse_capture_from(
-        &self,
-        terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
-    ) -> bool {
-        self.active
-            .and_then(|idx| self.focused_runtime_in_workspace(terminal_runtimes, idx))
-            .is_some_and(crate::terminal::TerminalRuntime::mouse_reporting_enabled)
-    }
-
     pub fn estimate_pane_size(&self) -> (u16, u16) {
         if let Some(info) = self.view.pane_infos.first() {
             (info.rect.height, info.rect.width)
@@ -982,16 +953,6 @@ impl AppState {
         }
         let terminal_id = self.workspaces.get(ws_idx)?.terminal_id(pane_id)?;
         terminal_runtimes.get(terminal_id)
-    }
-
-    pub(crate) fn focused_runtime_in_workspace<'a>(
-        &'a self,
-        terminal_runtimes: &'a crate::terminal::TerminalRuntimeRegistry,
-        ws_idx: usize,
-    ) -> Option<&'a crate::terminal::TerminalRuntime> {
-        let ws = self.workspaces.get(ws_idx)?;
-        let pane_id = ws.focused_pane_id()?;
-        self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)
     }
 
     pub(crate) fn pane_visible_on_active_surface(

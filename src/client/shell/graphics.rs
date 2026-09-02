@@ -39,6 +39,7 @@ impl ClientShellState {
             || self.mode != ClientShellMode::Terminal
             || self.endpoint_error.is_some()
             || self.config_diagnostic.is_some()
+            || self.visible_endpoint_notice.is_some()
             || self.visible_notification.is_some()
             || self.copy_feedback.is_some()
             || self

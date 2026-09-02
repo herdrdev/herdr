@@ -233,11 +233,15 @@ impl ClientShellState {
                 settings.integration_messages.clear();
             }
         }
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::IntegrationList(crate::api::schema::EmptyParams::default()),
             PendingEndpointKind::IntegrationList,
             outcome,
-        );
+        ) {
+            if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                settings.loading_integrations = false;
+            }
+        }
     }
 
     fn install_recommended_integrations(&mut self, outcome: &mut ClientShellInput) {
@@ -260,15 +264,22 @@ impl ClientShellState {
             settings.installing_integrations = true;
             settings.integration_messages.clear();
         }
-        self.pending_integration_installs = targets.len();
+        self.pending_integration_installs = 0;
         for target in targets {
-            self.push_endpoint_method_with_kind(
+            if self.push_endpoint_method_with_kind(
                 crate::api::schema::Method::IntegrationInstall(
                     crate::api::schema::IntegrationInstallParams { target },
                 ),
                 PendingEndpointKind::IntegrationInstall,
                 outcome,
-            );
+            ) {
+                self.pending_integration_installs += 1;
+            }
+        }
+        if self.pending_integration_installs == 0 {
+            if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                settings.installing_integrations = false;
+            }
         }
         outcome.repaint = true;
     }
@@ -296,7 +307,7 @@ impl ClientShellState {
                                 "endpoint returned an unexpected integration list result".into(),
                             );
                         }
-                        Err(error) => self.endpoint_error = Some(error.message),
+                        Err(_) => {}
                     }
                 }
                 (true, Vec::new())

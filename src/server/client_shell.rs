@@ -8,8 +8,30 @@ pub(super) fn snapshot(
     boot_id: &str,
     revision: u64,
     config_diagnostic: Option<&str>,
+    location: Option<&crate::server::clients::ClientShellLocation>,
 ) -> protocol::ClientShellSnapshot {
     let snapshot = app.session_snapshot();
+    let focused_workspace_id = location
+        .and_then(|location| location.focused_workspace_id.clone())
+        .or_else(|| snapshot.focused_workspace_id.clone());
+    let focused_tab_id = location
+        .and_then(|location| location.focused_tab_id().map(str::to_owned))
+        .or_else(|| snapshot.focused_tab_id.clone());
+    let focused_pane_id = focused_tab_id
+        .as_deref()
+        .and_then(|tab_id| app.parse_tab_id(tab_id))
+        .and_then(|(workspace_index, tab_index)| {
+            let pane_id = app
+                .state
+                .workspaces
+                .get(workspace_index)?
+                .tabs
+                .get(tab_index)?
+                .layout
+                .focused();
+            app.public_pane_id(workspace_index, pane_id)
+        })
+        .or_else(|| snapshot.focused_pane_id.clone());
     let workspaces = snapshot
         .workspaces
         .into_iter()
@@ -18,11 +40,22 @@ pub(super) fn snapshot(
         .map(|(workspace_index, (workspace, state))| {
             let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
             tokens.sort_by(|left, right| left.0.cmp(&right.0));
+            let workspace_id = workspace.workspace_id;
+            let active_tab_id = location
+                .and_then(|location| location.active_tab_ids.get(&workspace_id))
+                .cloned()
+                .unwrap_or(workspace.active_tab_id);
+            let active_tab_index =
+                app.parse_tab_id(&active_tab_id)
+                    .and_then(|(tab_workspace_index, tab_index)| {
+                        (tab_workspace_index == workspace_index).then_some(tab_index)
+                    });
             protocol::ClientShellWorkspace {
-                workspace_id: workspace.workspace_id,
-                active_tab_id: workspace.active_tab_id,
+                focused: focused_workspace_id.as_deref() == Some(workspace_id.as_str()),
+                workspace_id,
+                active_tab_id,
                 new_workspace_cwd: app
-                    .resolved_new_workspace_cwd_from(workspace_index)
+                    .resolved_new_workspace_cwd_from_tab(workspace_index, active_tab_index)
                     .display()
                     .to_string(),
                 number: workspace.number,
@@ -38,7 +71,6 @@ pub(super) fn snapshot(
                         label: worktree.repo_name,
                         is_linked_worktree: worktree.is_linked_worktree,
                     }),
-                focused: workspace.focused,
                 agent_status: workspace.agent_status,
             }
         })
@@ -52,23 +84,28 @@ pub(super) fn snapshot(
                 .iter()
                 .flat_map(|workspace| workspace.tabs.iter()),
         )
-        .map(|(tab, state)| protocol::ClientShellTab {
-            tab_id: tab.tab_id,
-            workspace_id: tab.workspace_id,
-            number: tab.number,
-            label: tab.label,
-            custom_label: !state.is_auto_named(),
-            zoomed: state.zoomed,
-            focused: tab.focused,
-            agent_status: tab.agent_status,
+        .map(|(tab, state)| {
+            let tab_id = tab.tab_id;
+            protocol::ClientShellTab {
+                focused: focused_tab_id.as_deref() == Some(tab_id.as_str()),
+                tab_id,
+                workspace_id: tab.workspace_id,
+                number: tab.number,
+                label: tab.label,
+                custom_label: !state.is_auto_named(),
+                zoomed: state.zoomed,
+                agent_status: tab.agent_status,
+            }
         })
         .collect();
     let panes = snapshot
         .panes
         .into_iter()
         .map(|pane| {
+            let pane_id = pane.pane_id;
+            let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
             let right_click_passthrough = app
-                .parse_pane_id(&pane.pane_id)
+                .parse_pane_id(&pane_id)
                 .and_then(|(workspace_index, pane_id)| {
                     app.state
                         .workspaces
@@ -77,13 +114,13 @@ pub(super) fn snapshot(
                 })
                 .is_some_and(|pane| pane.right_click_passthrough);
             protocol::ClientShellPane {
-                pane_id: pane.pane_id,
+                pane_id,
                 workspace_id: pane.workspace_id,
                 tab_id: pane.tab_id,
                 label: pane.label,
                 cwd: pane.cwd,
                 foreground_cwd: pane.foreground_cwd,
-                focused: pane.focused,
+                focused,
                 right_click_passthrough,
             }
         })
@@ -92,12 +129,14 @@ pub(super) fn snapshot(
         .agents
         .into_iter()
         .map(|agent| {
+            let pane_id = agent.pane_id;
+            let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
             let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
             state_labels.sort_by(|left, right| left.0.cmp(&right.0));
             let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
             tokens.sort_by(|left, right| left.0.cmp(&right.0));
             protocol::ClientShellAgent {
-                pane_id: agent.pane_id,
+                pane_id,
                 workspace_id: agent.workspace_id,
                 tab_id: agent.tab_id,
                 name: agent.name,
@@ -110,7 +149,7 @@ pub(super) fn snapshot(
                 state_change_seq: agent.state_change_seq,
                 state_labels,
                 tokens,
-                focused: agent.focused,
+                focused,
             }
         })
         .collect();
@@ -125,11 +164,17 @@ pub(super) fn snapshot(
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
 
-    let zoomed = app
-        .state
-        .active
-        .and_then(|index| app.state.workspaces.get(index))
-        .is_some_and(|workspace| workspace.zoomed);
+    let zoomed = focused_tab_id
+        .as_deref()
+        .and_then(|tab_id| app.parse_tab_id(tab_id))
+        .and_then(|(workspace_index, tab_index)| {
+            app.state
+                .workspaces
+                .get(workspace_index)?
+                .tabs
+                .get(tab_index)
+        })
+        .is_some_and(|tab| tab.zoomed);
     let tab_bar_right = app
         .state
         .tab_bar_right
@@ -183,9 +228,9 @@ pub(super) fn snapshot(
         integration_updates_available: app.state.integration_updates_available(),
         worktree_directory: app.state.worktree_directory.to_string_lossy().into_owned(),
         release_notes,
-        focused_workspace_id: snapshot.focused_workspace_id,
-        focused_tab_id: snapshot.focused_tab_id,
-        focused_pane_id: snapshot.focused_pane_id,
+        focused_workspace_id,
+        focused_tab_id,
+        focused_pane_id,
         tab_bar_right,
         tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
         agent_view_label,
@@ -209,18 +254,18 @@ pub(super) struct RenderedPaneSurface {
 
 pub(super) fn render_pane_surface(
     app: &mut app::App,
+    target: Option<crate::ui::TabSurfaceTarget>,
     area: Rect,
-    is_foreground: bool,
+    resize_panes: bool,
+    show_popup: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
     client_id: u64,
 ) -> RenderedPaneSurface {
-    let content_revisions_before = app
-        .state
-        .active
-        .and_then(|workspace_index| {
-            let workspace = app.state.workspaces.get(workspace_index)?;
-            let tab = workspace.tabs.get(workspace.active_tab)?;
+    let content_revisions_before = target
+        .and_then(|target| {
+            let workspace = app.state.workspaces.get(target.workspace_index)?;
+            let tab = workspace.tabs.get(target.tab_index)?;
             Some(
                 tab.layout
                     .pane_ids()
@@ -229,7 +274,7 @@ pub(super) fn render_pane_surface(
                         app.state
                             .runtime_for_pane_in_workspace(
                                 &app.terminal_runtimes,
-                                workspace_index,
+                                target.workspace_index,
                                 pane_id,
                             )
                             .map(|runtime| (pane_id, runtime.content_seq()))
@@ -242,14 +287,14 @@ pub(super) fn render_pane_surface(
         crate::server::render_stream::render_tab_surface_virtual(
             &app.state,
             &app.terminal_runtimes,
+            target,
             area,
-            is_foreground,
+            resize_panes,
             cell_size,
         );
-    let panes = app
-        .state
-        .active
-        .map(|workspace_index| {
+    let panes = target
+        .map(|target| {
+            let workspace_index = target.workspace_index;
             layout
                 .pane_infos
                 .iter()
@@ -340,12 +385,15 @@ pub(super) fn render_pane_surface(
             })
         })
         .collect();
-    let popup = render_popup_surface(app, area, is_foreground, cell_size);
+    let popup = show_popup
+        .then(|| render_popup_surface(app, area, resize_panes, cell_size))
+        .flatten();
     let (graphics, next_graphics_delivery) = crate::server::client_shell_graphics::collect(
         app,
         &layout.pane_infos,
         &layout.split_borders,
         popup.as_deref(),
+        target,
         cell_size,
         graphics_delivery,
         client_id,
@@ -363,22 +411,19 @@ pub(super) fn render_pane_surface(
 fn render_popup_surface(
     app: &app::App,
     area: Rect,
-    is_foreground: bool,
+    resize_runtime: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> Option<Box<protocol::ClientShellPopupSurface>> {
     let popup = app.state.popup_pane.as_ref()?;
-    let geometry = if is_foreground {
+    let geometry = if resize_runtime {
         resize_popup_runtime(app, area, cell_size)?
     } else {
         crate::popup_size::resolve_popup_geometry(popup.width, popup.height, area)?
     };
     let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
     let content_area = Rect::new(0, 0, geometry.inner.width, geometry.inner.height);
-    let (buffer, mut cursor) =
+    let (buffer, cursor) =
         crate::server::render_stream::render_terminal_virtual(runtime, content_area);
-    if !is_foreground {
-        cursor = None;
-    }
     let hyperlinks = runtime.visible_hyperlinks(content_area);
     let title = app
         .state
@@ -518,7 +563,7 @@ mod tests {
             preview: true,
         });
 
-        let snapshot = snapshot(&app, "boot", 7, None);
+        let snapshot = snapshot(&app, "boot", 7, None, None);
 
         assert_eq!(snapshot.update_available.as_deref(), Some("0.8.3"));
         assert_eq!(snapshot.update_install_command, "herdr update");
@@ -554,11 +599,11 @@ mod tests {
                 state: crate::integration::IntegrationStatusKind::NotInstalled,
             }];
 
-        assert!(!snapshot(&app, "boot", 1, None).integration_updates_available);
+        assert!(!snapshot(&app, "boot", 1, None, None).integration_updates_available);
 
         app.state.integration_recommendations[0].state =
             crate::integration::IntegrationStatusKind::Outdated;
-        assert!(snapshot(&app, "boot", 2, None).integration_updates_available);
+        assert!(snapshot(&app, "boot", 2, None, None).integration_updates_available);
     }
 
     #[test]

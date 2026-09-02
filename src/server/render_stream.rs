@@ -350,13 +350,21 @@ pub(crate) type RenderedTabSurface = (
 pub(crate) fn render_tab_surface_virtual(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
+    target: Option<crate::ui::TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> RenderedTabSurface {
-    let layout =
-        crate::ui::compute_tab_surface(app_state, terminal_runtimes, area, resize_panes, cell_size);
+    let layout = crate::ui::compute_tab_surface_for(
+        app_state,
+        terminal_runtimes,
+        target,
+        area,
+        resize_panes,
+        cell_size,
+    );
     let surface = crate::ui::TabSurfaceView {
+        target: layout.target,
         pane_infos: &layout.pane_infos,
         split_borders: &layout.split_borders,
     };

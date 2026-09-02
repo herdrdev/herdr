@@ -3,6 +3,14 @@ use super::*;
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
 
+fn client_shell_snapshot(message: ServerMessage) -> Box<crate::protocol::ClientShellSnapshot> {
+    let ServerMessage::EndpointControl { kind, data } = message else {
+        panic!("expected client shell snapshot");
+    };
+    assert_eq!(kind, crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND);
+    Box::new(serde_json::from_str(&data).expect("decode client shell snapshot"))
+}
+
 fn test_headless_server() -> HeadlessServer {
     test_headless_server_with_event_hub(api::EventHub::default())
 }
@@ -56,6 +64,8 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         #[cfg(unix)]
         next_client_id: 1,
         foreground_client_id: None,
+        tab_geometry_controllers: HashMap::new(),
+        popup_owner_tab_id: None,
         client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
         api_window_title: None,
@@ -671,6 +681,33 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     shutdown_test_runtimes(&mut server);
 }
 
+#[test]
+fn terminal_client_endpoint_request_error_removes_client() {
+    let mut server = test_headless_server();
+    let (writer, _control_rx, _render_rx) = test_client_writer();
+    let client_id = 42;
+    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
+        client_id,
+        cols: 80,
+        rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+        writer,
+    }));
+
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellEndpointRequestError {
+            client_id,
+            boot_id: "boot".into(),
+            request_id: "request".into(),
+            code: "unsupported_method",
+            message: "unsupported".into(),
+        })
+    );
+    assert!(!server.clients.contains_key(&client_id));
+}
+
 #[tokio::test]
 async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     let mut server = test_headless_server();
@@ -713,25 +750,23 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             writer,
         })
     );
-    match read_server_message(control_rx.recv().expect("shell snapshot")) {
-        ServerMessage::ClientShellSnapshot(snapshot) => {
-            assert_eq!(snapshot.workspaces.len(), 1);
-            assert_eq!(snapshot.workspaces[0].label, "shell-only-label");
-            assert_eq!(
-                snapshot.config_diagnostic.as_deref(),
-                Some("endpoint config warning")
-            );
-            assert_eq!(
-                snapshot.product_announcement.as_ref().map(|announcement| (
-                    announcement.version.as_str(),
-                    announcement.id.as_str(),
-                    announcement.preview,
-                )),
-                Some(("0.8.2", "client-shell", true))
-            );
-        }
-        other => panic!("expected client shell snapshot, got {other:?}"),
-    }
+    let snapshot = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("shell snapshot"),
+    ));
+    assert_eq!(snapshot.workspaces.len(), 1);
+    assert_eq!(snapshot.workspaces[0].label, "shell-only-label");
+    assert_eq!(
+        snapshot.config_diagnostic.as_deref(),
+        Some("endpoint config warning")
+    );
+    assert_eq!(
+        snapshot.product_announcement.as_ref().map(|announcement| (
+            announcement.version.as_str(),
+            announcement.id.as_str(),
+            announcement.preview,
+        )),
+        Some(("0.8.2", "client-shell", true))
+    );
 
     server.render_and_stream();
     let initial_surface = match read_server_message(render_rx.recv().expect("pane surface")) {
@@ -1019,6 +1054,57 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
 }
 
 #[tokio::test]
+async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("divergent-retained");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    workspace.insert_test_runtime(
+        first_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
+    );
+    workspace.insert_test_runtime(
+        second_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"SECOND"),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+
+    let (first_control, first_render) = connect_matching_test_shell(&mut server, 7);
+    let (second_control, second_render) = connect_matching_test_shell(&mut server, 8);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(8, &second_tab_id));
+    assert!(server.claim_shell_tab_geometry(8, false));
+    assert!(
+        server.pty_sources_visible_to_any_render_target(&HashSet::from([first_pane, second_pane,]))
+    );
+    server.render_and_stream();
+    let _ = recv_pane_surface(&first_render, "first baseline");
+    let _ = recv_pane_surface(&second_render, "second baseline");
+
+    server.app.state.workspaces[0].test_runtimes[&first_pane]
+        .test_process_pty_bytes(b"\rFIRST_PATCH");
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([first_pane])));
+    let first_patch = recv_pane_surface_patch(&first_render, "first patch");
+    assert_eq!(first_patch.panes.len(), 1);
+    assert!(second_render.try_recv().is_err());
+
+    server.app.state.workspaces[0].test_runtimes[&second_pane]
+        .test_process_pty_bytes(b"\rSECOND_PATCH");
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([second_pane])));
+    let second_patch = recv_pane_surface_patch(&second_render, "second patch");
+    assert_eq!(second_patch.panes.len(), 1);
+    assert!(first_render.try_recv().is_err());
+
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_peer() {
     let mut server = test_headless_server();
     let pane_id = install_shared_view_test_runtime(&mut server);
@@ -1132,11 +1218,9 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             writer: local_writer,
         })
     );
-    let ServerMessage::ClientShellSnapshot(local_snapshot) =
-        read_server_message(local_control.recv().expect("local shell snapshot"))
-    else {
-        panic!("expected local shell snapshot");
-    };
+    let local_snapshot = client_shell_snapshot(read_server_message(
+        local_control.recv().expect("local shell snapshot"),
+    ));
     assert_eq!(
         local_snapshot.config_diagnostic.as_deref(),
         Some("theme warning")
@@ -1157,11 +1241,9 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             writer: endpoint_writer,
         })
     );
-    let ServerMessage::ClientShellSnapshot(endpoint_snapshot) =
-        read_server_message(endpoint_control.recv().expect("endpoint shell snapshot"))
-    else {
-        panic!("expected endpoint shell snapshot");
-    };
+    let endpoint_snapshot = client_shell_snapshot(read_server_message(
+        endpoint_control.recv().expect("endpoint shell snapshot"),
+    ));
     assert_eq!(
         endpoint_snapshot.config_diagnostic.as_deref(),
         Some("server keybinding warning\ntheme warning")
@@ -1171,7 +1253,542 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
 }
 
 #[tokio::test]
-async fn client_shell_replaces_projection_and_focuses_stable_ids() {
+async fn client_shell_tab_focus_changes_only_the_source_connection() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("independent-tabs");
+    let second_tab = workspace.test_add_tab(Some("second"));
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let tab_ids = server
+        .app
+        .session_snapshot()
+        .tabs
+        .into_iter()
+        .map(|tab| tab.tab_id)
+        .collect::<Vec<_>>();
+    let first_tab_id = tab_ids[0].clone();
+    let second_tab_id = tab_ids[second_tab].clone();
+
+    let (first_control, _first_render) = connect_test_shell(&mut server, 7, 100, 30);
+    let (second_control, _second_render) = connect_test_shell(&mut server, 8, 80, 24);
+    let first_initial = client_shell_snapshot(read_server_message(
+        first_control.recv().expect("first snapshot"),
+    ));
+    let second_initial = client_shell_snapshot(read_server_message(
+        second_control.recv().expect("second snapshot"),
+    ));
+    assert_eq!(
+        first_initial.focused_tab_id.as_deref(),
+        Some(first_tab_id.as_str())
+    );
+    assert_eq!(
+        second_initial.focused_tab_id.as_deref(),
+        Some(first_tab_id.as_str())
+    );
+
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
+            client_id: 8,
+            boot_id: server.client_shell_boot_id.clone(),
+            request: Box::new(api::schema::Request {
+                id: "focus-second".into(),
+                method: api::schema::Method::TabFocus(api::schema::TabTarget {
+                    tab_id: second_tab_id.clone(),
+                }),
+            }),
+        })
+    );
+    let response_ready = server
+        .server_event_rx
+        .recv()
+        .await
+        .expect("focus response ready");
+    assert!(!server.handle_server_event(response_ready));
+    let _ = second_control.recv().expect("focus response");
+
+    server.render_and_stream();
+
+    assert!(
+        first_control.try_recv().is_err(),
+        "another shell must not receive a navigation replacement"
+    );
+    let second_replacement = client_shell_snapshot(read_server_message(
+        second_control.recv().expect("second replacement snapshot"),
+    ));
+    assert_eq!(
+        second_replacement.focused_tab_id.as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn deferred_worktree_response_moves_only_its_source_client() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("deferred-worktree");
+    let created_tab = workspace.test_add_tab(Some("created"));
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let created_tab_id = server.app.public_tab_id(0, created_tab).unwrap();
+
+    let (source_control, _) = connect_matching_test_shell(&mut server, 51);
+    let (other_control, _) = connect_matching_test_shell(&mut server, 52);
+    let _ = source_control.recv().expect("source snapshot");
+    let _ = other_control.recv().expect("other snapshot");
+    let original_tab_id = server.shell_tab_id_for_client(51).unwrap();
+    server
+        .clients
+        .get_mut(&51)
+        .unwrap()
+        .shell_endpoint_command_in_flight = true;
+    server
+        .clients
+        .get_mut(&51)
+        .unwrap()
+        .shell_deferred_navigation_response = Some(Vec::new());
+    let response = serde_json::json!({
+        "id": "create-worktree",
+        "result": {
+            "type": "worktree_created",
+            "tab": { "tab_id": created_tab_id }
+        }
+    });
+
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellEndpointResponseChunkReady {
+            client_id: 51,
+            boot_id: server.client_shell_boot_id.clone(),
+            request_id: "create-worktree".into(),
+            final_chunk: true,
+            data: serde_json::to_vec(&response).unwrap(),
+        })
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(51).as_deref(),
+        response
+            .pointer("/result/tab/tab_id")
+            .and_then(serde_json::Value::as_str)
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(52).as_deref(),
+        Some(original_tab_id.as_str())
+    );
+
+    assert!(server.focus_shell_client_on_tab(51, &original_tab_id));
+    server
+        .clients
+        .get_mut(&51)
+        .unwrap()
+        .shell_endpoint_command_in_flight = true;
+    server
+        .clients
+        .get_mut(&51)
+        .unwrap()
+        .shell_deferred_navigation_request_id = Some("background-worktree".into());
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellEndpointResponseChunkReady {
+            client_id: 51,
+            boot_id: server.client_shell_boot_id.clone(),
+            request_id: "background-worktree".into(),
+            final_chunk: true,
+            data: serde_json::to_vec(&response).unwrap(),
+        })
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(51).as_deref(),
+        Some(original_tab_id.as_str())
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_local_navigation_does_not_emit_global_focus_transitions() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("independent-focus");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (first_runtime, mut first_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[?1004h",
+            4,
+        );
+    let (second_runtime, mut second_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[?1004h",
+            4,
+        );
+    workspace.insert_test_runtime(first_pane, first_runtime);
+    workspace.insert_test_runtime(second_pane, second_runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 61);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 62);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(62, &second_tab_id));
+    server.clients.get_mut(&61).unwrap().outer_terminal_focus = Some(true);
+    server.clients.get_mut(&62).unwrap().outer_terminal_focus = Some(true);
+
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    server.handle_client_shell_api_request(
+        62,
+        crate::api::ApiRequestMessage {
+            request: crate::api::schema::Request {
+                id: "focus-own-tab".into(),
+                method: crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                    tab_id: second_tab_id,
+                }),
+            },
+            respond_to,
+            response_write_complete: None,
+            stream_active: None,
+        },
+    );
+    server.app.sync_focus_events();
+    assert!(first_input.try_recv().is_err());
+    assert!(second_input.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn public_focus_moves_shell_focus_between_tabs() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("public-focus-events");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (first_runtime, mut first_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[?1004h",
+            4,
+        );
+    let (second_runtime, mut second_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[?1004h",
+            4,
+        );
+    workspace.insert_test_runtime(first_pane, first_runtime);
+    workspace.insert_test_runtime(second_pane, second_runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server
+        .app
+        .public_tab_id(0, second_tab)
+        .expect("second tab id");
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 63);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 64);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(64, &second_tab_id));
+    server.clients.get_mut(&63).unwrap().outer_terminal_focus = Some(true);
+    server.clients.get_mut(&64).unwrap().outer_terminal_focus = Some(true);
+    assert!(server.app.state.switch_workspace_tab(0, second_tab));
+
+    server.focus_all_shell_clients_on_default_target();
+
+    assert_eq!(
+        server.shell_tab_id_for_client(63).as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    assert_eq!(
+        first_input.try_recv().expect("previous tab focus lost"),
+        Bytes::from_static(b"\x1b[O")
+    );
+    assert!(
+        second_input.try_recv().is_err(),
+        "focus gain was duplicated"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn repeated_layout_action_reapplies_controller_geometry() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("layout-geometry");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+    workspace.insert_test_runtime(
+        first_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+    );
+    workspace.insert_test_runtime(
+        second_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let tab_id = server.app.public_tab_id(0, 0).expect("tab id");
+
+    let (control, _) = connect_test_shell(&mut server, 65, 100, 30);
+    let _ = control.recv().expect("snapshot");
+    let before = server.app.state.workspaces[0].test_runtimes[&first_pane].current_size();
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+
+    assert!(server.handle_client_shell_api_request(
+        65,
+        crate::api::ApiRequestMessage {
+            request: crate::api::schema::Request {
+                id: "resize-layout".into(),
+                method: crate::api::schema::Method::LayoutSetSplitRatio(
+                    crate::api::schema::LayoutSetSplitRatioParams {
+                        tab_id: Some(tab_id),
+                        pane_id: None,
+                        path: Vec::new(),
+                        ratio: 0.8,
+                    },
+                ),
+            },
+            respond_to,
+            response_write_complete: None,
+            stream_active: None,
+        },
+    ));
+
+    let after = server.app.state.workspaces[0].test_runtimes[&first_pane].current_size();
+    assert_ne!(after, before);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_shell_tabs_render_accept_input_and_resize_independently() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("independent-geometry");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    workspace.insert_test_runtime(
+        first_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"FIRST_TAB"),
+    );
+    let (second_runtime, mut second_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"SECOND_TAB",
+            4,
+        );
+    workspace.insert_test_runtime(second_pane, second_runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+    let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
+    let initial_second_size =
+        server.app.state.workspaces[0].test_runtimes[&second_pane].current_size();
+
+    let (first_control, first_render) = connect_test_shell(&mut server, 21, 100, 30);
+    let _ = first_control.recv().expect("first snapshot");
+    let first_size = server.app.state.workspaces[0].test_runtimes[&first_pane].current_size();
+    let singleton_second_size =
+        server.app.state.workspaces[0].test_runtimes[&second_pane].current_size();
+    assert_ne!(singleton_second_size, initial_second_size);
+    assert_eq!(singleton_second_size, first_size);
+
+    let (second_control, second_render) = connect_test_shell(&mut server, 22, 70, 20);
+    let _ = second_control.recv().expect("second snapshot");
+
+    assert!(server.focus_shell_client_on_tab(22, &second_tab_id));
+    assert!(server.claim_shell_tab_geometry(22, false));
+    let second_size = server.app.state.workspaces[0].test_runtimes[&second_pane].current_size();
+    assert_ne!(first_size, second_size);
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&first_pane].current_size(),
+        first_size
+    );
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 22,
+        pane_id: second_pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "typed".into(),
+        )],
+    });
+    assert_eq!(
+        second_input.try_recv().expect("second tab input"),
+        Bytes::from_static(b"typed")
+    );
+
+    server.render_and_stream();
+    let first_surface = match read_server_message(first_render.recv().expect("first surface")) {
+        ServerMessage::PaneSurface(surface) => surface,
+        other => panic!("expected first pane surface, got {other:?}"),
+    };
+    let second_surface = match read_server_message(second_render.recv().expect("second surface")) {
+        ServerMessage::PaneSurface(surface) => surface,
+        other => panic!("expected second pane surface, got {other:?}"),
+    };
+    assert!(frame_text(&first_surface.frame).contains("FIRST_TAB"));
+    assert!(frame_text(&second_surface.frame).contains("SECOND_TAB"));
+
+    assert!(server.handle_server_event(ServerEvent::ClientShellResize {
+        client_id: 22,
+        surface_cols: 60,
+        surface_rows: 16,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+    }));
+    let resized_second = server.app.state.workspaces[0].test_runtimes[&second_pane].current_size();
+    assert_ne!(resized_second, second_size);
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&first_pane].current_size(),
+        first_size
+    );
+
+    assert!(server.focus_shell_client_on_tab(21, &second_tab_id));
+    assert!(server.claim_shell_tab_geometry(21, false));
+    assert_ne!(
+        server.app.state.workspaces[0].test_runtimes[&second_pane].current_size(),
+        resized_second
+    );
+
+    server.remove_client_and_resize_if_needed(21);
+    let singleton_first = server.app.state.workspaces[0].test_runtimes[&first_pane].current_size();
+    let singleton_second =
+        server.app.state.workspaces[0].test_runtimes[&second_pane].current_size();
+    assert_ne!(singleton_first, first_size);
+    assert_eq!(singleton_first, singleton_second);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn public_background_tab_create_preserves_client_locations() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("background-create");
+    let second_tab = workspace.test_add_tab(Some("second"));
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let workspace_id = server.app.public_workspace_id(0);
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 71);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 72);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(71, &second_tab_id));
+
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        request: crate::api::schema::Request {
+            id: "create-background-tab".into(),
+            method: crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
+                workspace_id: Some(workspace_id),
+                cwd: None,
+                focus: false,
+                label: Some("background".into()),
+                env: std::collections::HashMap::new(),
+            }),
+        },
+        respond_to,
+        response_write_complete: None,
+        stream_active: None,
+    });
+
+    assert_eq!(
+        server.shell_tab_id_for_client(71).as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(72).as_deref(),
+        Some(first_tab_id.as_str())
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
+    let mut server = test_headless_server();
+    let mut first = crate::workspace::Workspace::test_new("first");
+    let second_tab = first.test_add_tab(Some("second"));
+    let second = crate::workspace::Workspace::test_new("second");
+    server.app.state.workspaces = vec![first, second];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let first_workspace_id = server.app.public_workspace_id(0);
+    let second_workspace_id = server.app.public_workspace_id(1);
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+
+    let (first_control, _) = connect_test_shell(&mut server, 41, 100, 30);
+    let (second_control, _) = connect_test_shell(&mut server, 42, 80, 24);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(41, &second_tab_id));
+
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        request: crate::api::schema::Request {
+            id: "focus-second-workspace".into(),
+            method: crate::api::schema::Method::WorkspaceFocus(
+                crate::api::schema::WorkspaceTarget {
+                    workspace_id: second_workspace_id.clone(),
+                },
+            ),
+        },
+        respond_to,
+        response_write_complete: None,
+        stream_active: None,
+    });
+
+    let first_location = server.clients[&41].shell_location.as_ref().unwrap();
+    let second_location = server.clients[&42].shell_location.as_ref().unwrap();
+    assert_eq!(
+        first_location.focused_workspace_id.as_deref(),
+        Some(second_workspace_id.as_str())
+    );
+    assert_eq!(
+        second_location.focused_workspace_id.as_deref(),
+        Some(second_workspace_id.as_str())
+    );
+    assert_eq!(
+        first_location.active_tab_ids[&first_workspace_id],
+        second_tab_id
+    );
+    assert_eq!(
+        second_location.active_tab_ids[&first_workspace_id],
+        first_tab_id
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn public_api_focus_replaces_every_client_shell_projection() {
     let mut server = test_headless_server();
     let first = crate::workspace::Workspace::test_new("first");
     let second = crate::workspace::Workspace::test_new("second");
@@ -1199,24 +1816,31 @@ async fn client_shell_replaces_projection_and_focuses_stable_ids() {
             writer,
         })
     );
-    let initial_revision = match read_server_message(control_rx.recv().expect("initial snapshot")) {
-        ServerMessage::ClientShellSnapshot(snapshot) => snapshot.revision,
-        other => panic!("expected initial shell snapshot, got {other:?}"),
-    };
+    let initial_revision = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("initial snapshot"),
+    ))
+    .revision;
 
-    let _ = server.app.handle_api_request(crate::api::schema::Request {
-        id: "test.client.shell.workspace.focus".into(),
-        method: crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: second_id.clone(),
-        }),
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        request: crate::api::schema::Request {
+            id: "test.client.shell.workspace.focus".into(),
+            method: crate::api::schema::Method::WorkspaceFocus(
+                crate::api::schema::WorkspaceTarget {
+                    workspace_id: second_id.clone(),
+                },
+            ),
+        },
+        respond_to,
+        response_write_complete: None,
+        stream_active: None,
     });
     assert_eq!(server.app.state.active, Some(1));
     server.render_and_stream();
 
-    let replacement = match read_server_message(control_rx.recv().expect("replacement snapshot")) {
-        ServerMessage::ClientShellSnapshot(snapshot) => snapshot,
-        other => panic!("expected replacement shell snapshot, got {other:?}"),
-    };
+    let replacement = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("replacement snapshot"),
+    ));
     assert!(replacement.revision > initial_revision);
     assert_eq!(
         replacement.focused_workspace_id.as_deref(),
@@ -1441,9 +2065,8 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             writer,
         })
     );
-    assert!(matches!(
-        read_server_message(control_rx.recv().expect("shell snapshot")),
-        ServerMessage::ClientShellSnapshot(_)
+    let _snapshot = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("shell snapshot"),
     ));
 
     server.render_and_stream();
@@ -1456,6 +2079,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
     assert_eq!(popup.terminal_id, popup_terminal_id.as_str());
     assert!(frame_text(&popup.frame).contains("POPUP_SHELL_LIVE"));
     assert_eq!((popup.frame.width, popup.frame.height), (37, 9));
+    assert!(popup.frame.cursor.is_some());
     assert_eq!(surface.graphics.assets.len(), 1);
     assert_eq!(surface.graphics.placements.len(), 1);
     assert!(matches!(
@@ -1543,6 +2167,152 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
         panic!("expected pane surface after popup close");
     };
     assert!(surface.popup.is_none());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("tab-popup");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    workspace.insert_test_runtime(
+        first_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
+    );
+    let (second_runtime, mut second_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80, 23, 0, b"SECOND", 4,
+        );
+    workspace.insert_test_runtime(second_pane, second_runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+    let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
+
+    let (first_control, first_render) = connect_matching_test_shell(&mut server, 31);
+    let (second_control, second_render) = connect_matching_test_shell(&mut server, 32);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(32, &second_tab_id));
+    assert!(server.claim_shell_tab_geometry(32, false));
+
+    let (popup_runtime, mut popup_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            40,
+            12,
+            0,
+            b"POPUP\x1b[>3u",
+            4,
+        );
+    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
+    server.popup_owner_tab_id = Some(first_tab_id);
+    assert!(server.apply_shell_tab_geometry(31, false));
+    let popup_size = server
+        .app
+        .terminal_runtimes
+        .get(&popup_terminal_id)
+        .unwrap()
+        .current_size();
+    connect_pending_terminal_client(&mut server, 33);
+    assert!(
+        server.handle_server_event(ServerEvent::ClientAttachTerminal {
+            client_id: 33,
+            terminal_id: popup_terminal_id.to_string(),
+            takeover: false,
+        })
+    );
+    assert_ne!(
+        server
+            .app
+            .terminal_runtimes
+            .get(&popup_terminal_id)
+            .unwrap()
+            .current_size(),
+        popup_size
+    );
+    assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 33 }));
+    assert_eq!(
+        server
+            .app
+            .terminal_runtimes
+            .get(&popup_terminal_id)
+            .unwrap()
+            .current_size(),
+        popup_size
+    );
+    server.render_and_stream();
+    assert!(recv_pane_surface(&first_render, "popup owner surface")
+        .popup
+        .is_some());
+    assert!(recv_pane_surface(&second_render, "other tab surface")
+        .popup
+        .is_none());
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 32,
+        pane_id: second_pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "typed".into(),
+        )],
+    });
+    assert_eq!(
+        second_input.try_recv().expect("other tab input"),
+        Bytes::from_static(b"typed")
+    );
+
+    let popup_key = |kind| crate::protocol::ClientPaneInputEvent::Key {
+        code: crate::protocol::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".into()),
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    };
+    server.handle_server_event(ServerEvent::ClientShellPopupInput {
+        client_id: 31,
+        terminal_id: popup_terminal_id.to_string(),
+        events: vec![popup_key(crate::protocol::ClientKeyKind::Press)],
+    });
+    assert!(
+        !tokio::time::timeout(Duration::from_secs(1), popup_input.recv())
+            .await
+            .expect("popup press timed out")
+            .expect("popup press")
+            .is_empty()
+    );
+    assert!(server.focus_shell_client_on_tab(31, &second_tab_id));
+    server.handle_server_event(ServerEvent::ClientShellPopupInput {
+        client_id: 31,
+        terminal_id: popup_terminal_id.to_string(),
+        events: vec![popup_key(crate::protocol::ClientKeyKind::Release)],
+    });
+    assert!(
+        !tokio::time::timeout(Duration::from_secs(1), popup_input.recv())
+            .await
+            .expect("popup release timed out")
+            .expect("popup release after navigation")
+            .is_empty()
+    );
+
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellPopupInput {
+            client_id: 32,
+            terminal_id: popup_terminal_id.to_string(),
+            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+                "wrong".into()
+            )],
+        })
+    );
+    assert!(popup_input.try_recv().is_err());
+
     shutdown_test_runtimes(&mut server);
 }
 
@@ -1697,6 +2467,7 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
         ),
     );
     server.foreground_client_id = Some(11);
+    assert!(server.claim_unowned_shell_tab_geometry(11, false));
 
     let render_impact =
         server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
@@ -1812,7 +2583,7 @@ fn retained_test_server(
     );
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
-    server.resize_shared_runtime_to_effective_size();
+    assert!(server.claim_unowned_shell_tab_geometry(1, true));
 
     (server, client_rx, pane_id)
 }
@@ -2123,7 +2894,8 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
         .expect("test runtime");
     let _runtime_guard = rt.enter();
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("test");
+    let mut workspace = crate::workspace::Workspace::test_new("test");
+    let second_tab = workspace.test_add_tab(Some("second"));
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).expect("terminal id").clone();
     let terminal_id_string = terminal_id.to_string();
@@ -2131,6 +2903,10 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
+    let second_tab_id = server
+        .app
+        .public_tab_id(0, second_tab)
+        .expect("second tab id");
     server.app.terminal_runtimes.insert(
         terminal_id.clone(),
         crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
@@ -2147,7 +2923,8 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
     );
     server.foreground_client_id = Some(1);
     server.sync_foreground_client_state();
-    server.resize_shared_runtime_to_effective_size();
+    server.reconcile_client_shell_locations();
+    assert!(server.claim_unowned_shell_tab_geometry(1, true));
     let expected_shell_size = server
         .app
         .terminal_runtimes
@@ -2179,6 +2956,7 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
         (30, 100)
     );
 
+    assert!(server.focus_shell_client_on_tab(1, &second_tab_id));
     assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 2 }));
     assert!(!server
         .app
@@ -2630,6 +3408,63 @@ fn changed_git_refresh_requests_headless_render() {
     });
 
     assert!(changed);
+}
+
+#[tokio::test]
+async fn pane_death_reconciles_each_client_view_and_focus() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("pane-death-views");
+    let dead_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    let (second_runtime, mut second_input) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[?1004h",
+            4,
+        );
+    workspace.insert_test_runtime(second_pane, second_runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let second_tab_id = server
+        .app
+        .public_tab_id(0, second_tab)
+        .expect("second tab id");
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 71);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 72);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert!(server.focus_shell_client_on_tab(72, &second_tab_id));
+    server.clients.get_mut(&71).unwrap().outer_terminal_focus = Some(true);
+    server.clients.get_mut(&72).unwrap().outer_terminal_focus = Some(false);
+
+    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id: dead_pane }));
+
+    assert_eq!(
+        server.shell_tab_id_for_client(71).as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    assert_eq!(
+        server.shell_tab_id_for_client(72).as_deref(),
+        Some(second_tab_id.as_str())
+    );
+    assert_eq!(
+        second_input
+            .try_recv()
+            .expect("fallback focus gained input"),
+        Bytes::from_static(b"\x1b[I")
+    );
+    assert!(
+        second_input.try_recv().is_err(),
+        "focus gain was duplicated"
+    );
+    shutdown_test_runtimes(&mut server);
 }
 
 #[test]
@@ -3488,7 +4323,7 @@ fn pending_terminal_resize_does_not_take_shell_foreground_or_geometry() {
         ),
     );
     server.foreground_client_id = Some(1);
-    server.resize_shared_runtime_to_effective_size();
+    server.sync_foreground_client_state();
     let shell_size = server.effective_size;
 
     assert!(server.handle_server_event(ServerEvent::ClientResize {
@@ -3685,7 +4520,7 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
         );
         server.foreground_client_id = Some(2);
         server.sync_foreground_client_state();
-        server.resize_shared_runtime_to_effective_size();
+        assert!(server.claim_unowned_shell_tab_geometry(2, true));
         assert_eq!(
             server
                 .app
@@ -3717,12 +4552,28 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
         );
 
         assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
+            client_id: 2,
+            focused: true,
+        }));
+        assert!(
+            input_rx.try_recv().is_err(),
+            "second viewer duplicated focus gain"
+        );
+        assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
             client_id: 1,
+            focused: false,
+        }));
+        assert!(
+            input_rx.try_recv().is_err(),
+            "remaining viewer lost tab focus"
+        );
+        assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
+            client_id: 2,
             focused: false,
         }));
         assert_eq!(server.app.state.outer_terminal_focus, Some(false));
         assert_eq!(
-            input_rx.try_recv().expect("focus lost input"),
+            input_rx.try_recv().expect("last viewer focus lost input"),
             Bytes::from_static(b"\x1b[O")
         );
     });
@@ -4553,7 +5404,7 @@ fn update_notification_is_semantic_for_system_delivery() {
             assert_eq!(notification.title, "Herdr v9.9.9 available");
             assert_eq!(
                 notification.body.as_deref(),
-                Some("detach, run `herdr update`, then follow its restart guidance")
+                Some("detach, run `herdr update`, then run Herdr again to reconnect")
             );
         }
         other => panic!("expected semantic update notification, got {other:?}"),

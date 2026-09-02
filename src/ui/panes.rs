@@ -158,13 +158,21 @@ pub(crate) fn apply_pane_chrome(
 }
 
 fn runtime_for_tab_pane<'a>(
+    _app: &'a AppState,
     terminal_runtimes: &'a TerminalRuntimeRegistry,
+    _workspace_index: usize,
     tab: &'a crate::workspace::Tab,
     pane_id: crate::layout::PaneId,
 ) -> Option<(&'a crate::terminal::TerminalId, &'a TerminalRuntime)> {
     let terminal_id = tab.terminal_id(pane_id)?;
     #[cfg(test)]
-    if let Some(runtime) = tab.runtimes.get(&pane_id) {
+    if let Some(runtime) = _app
+        .workspaces
+        .get(_workspace_index)?
+        .test_runtimes
+        .get(&pane_id)
+        .or_else(|| tab.runtimes.get(&pane_id))
+    {
         return Some((terminal_id, runtime));
     }
     terminal_runtimes
@@ -199,6 +207,7 @@ fn stable_scrollbar_gutter(
 pub(super) fn resize_tab_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
+    workspace_index: usize,
     tab: &crate::workspace::Tab,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
@@ -207,7 +216,9 @@ pub(super) fn resize_tab_panes(
 
     if tab.zoomed {
         let focused_id = tab.layout.focused();
-        if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, focused_id) {
+        if let Some((terminal_id, rt)) =
+            runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
+        {
             let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
                 Borders::ALL
             } else {
@@ -235,7 +246,9 @@ pub(super) fn resize_tab_panes(
     ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
-        if let Some((terminal_id, rt)) = runtime_for_tab_pane(terminal_runtimes, tab, info.id) {
+        if let Some((terminal_id, rt)) =
+            runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, info.id)
+        {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
                 rt.resize(
@@ -250,24 +263,27 @@ pub(super) fn resize_tab_panes(
 }
 
 /// Compute pane layout info and optionally resize pane runtimes to match.
-pub(super) fn compute_pane_infos(
+pub(super) fn compute_pane_infos_for_tab(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
+    ws_idx: usize,
+    tab_idx: usize,
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> Vec<PaneInfo> {
-    let Some(ws_idx) = app.active else {
-        return Vec::new();
-    };
-    let Some(ws) = app.workspaces.get(ws_idx) else {
+    let Some(tab) = app
+        .workspaces
+        .get(ws_idx)
+        .and_then(|workspace| workspace.tabs.get(tab_idx))
+    else {
         return Vec::new();
     };
 
-    let multi_pane = ws.layout.pane_count() > 1;
+    let multi_pane = tab.layout.pane_count() > 1;
 
-    if ws.zoomed {
-        let focused_id = ws.layout.focused();
+    if tab.zoomed {
+        let focused_id = tab.layout.focused();
         let borders = if multi_pane && app.pane_borders && app.pane_outer_borders {
             Borders::ALL
         } else {
@@ -280,7 +296,7 @@ pub(super) fn compute_pane_infos(
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
             if resize_panes
-                && ws.terminal_id(focused_id).is_some_and(|terminal_id| {
+                && tab.terminal_id(focused_id).is_some_and(|terminal_id| {
                     !app.direct_attach_resize_locks.contains(terminal_id)
                 })
             {
@@ -303,7 +319,7 @@ pub(super) fn compute_pane_infos(
     }
 
     let mut pane_infos = apply_pane_chrome(
-        ws.layout.panes(area),
+        tab.layout.panes(area),
         app.pane_borders,
         app.pane_gaps,
         app.pane_outer_borders,
@@ -318,7 +334,7 @@ pub(super) fn compute_pane_infos(
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
             if resize_panes
-                && ws.terminal_id(info.id).is_some_and(|terminal_id| {
+                && tab.terminal_id(info.id).is_some_and(|terminal_id| {
                     !app.direct_attach_resize_locks.contains(terminal_id)
                 })
             {
@@ -338,14 +354,44 @@ pub(super) fn compute_pane_infos(
     pane_infos
 }
 
+#[cfg(test)]
+fn compute_pane_infos(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+    resize_panes: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+) -> Vec<PaneInfo> {
+    let Some(workspace_index) = app.active else {
+        return Vec::new();
+    };
+    let Some(tab_index) = app
+        .workspaces
+        .get(workspace_index)
+        .map(crate::workspace::Workspace::active_tab_index)
+    else {
+        return Vec::new();
+    };
+    compute_pane_infos_for_tab(
+        app,
+        terminal_runtimes,
+        workspace_index,
+        tab_index,
+        area,
+        resize_panes,
+        cell_size,
+    )
+}
+
 pub(super) fn render_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
     frame: &mut Frame,
+    target: Option<super::tab_surface::TabSurfaceTarget>,
     pane_infos: &[PaneInfo],
     split_borders: &[crate::layout::SplitBorder],
 ) {
-    let Some(ws_idx) = app.active else {
+    let Some(ws_idx) = target.map(|target| target.workspace_index) else {
         return;
     };
     let Some(ws) = app.workspaces.get(ws_idx) else {

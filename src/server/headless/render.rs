@@ -1,55 +1,58 @@
 use super::*;
 
 impl HeadlessServer {
-    fn focused_pane_graphics_demand(&self) -> bool {
+    fn shell_focused_runtime(
+        &self,
+        client_id: u64,
+    ) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
+        if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
+            if let Some(popup) = &self.app.state.popup_pane {
+                return self
+                    .app
+                    .terminal_runtimes
+                    .get(&popup.terminal_id)
+                    .map(|runtime| (runtime, popup.pane_id));
+            }
+        }
+        let target = self.shell_target_for_client(client_id)?;
+        let tab = self
+            .app
+            .state
+            .workspaces
+            .get(target.workspace_index)?
+            .tabs
+            .get(target.tab_index)?;
+        let pane_id = tab.layout.focused();
         self.app
             .state
-            .active
-            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-            .and_then(crate::workspace::Workspace::focused_pane_id)
-            .is_some_and(|pane_id| self.app.pane_graphics.active_for_pane(pane_id))
+            .runtime_for_pane_in_workspace(
+                &self.app.terminal_runtimes,
+                target.workspace_index,
+                pane_id,
+            )
+            .map(|runtime| (runtime, pane_id))
     }
 
     pub(super) fn stream_host_mouse_capture_mode(&mut self) {
-        let endpoint_shell_mouse = self.app.state.popup_pane.is_some()
-            || self
-                .app
-                .state
-                .focused_pane_requests_mouse_capture_from(&self.app.terminal_runtimes);
-        let pixel_mouse_requested = self
-            .clients
-            .values()
-            .any(|client| client.is_shell_client() && client.pixel_mouse);
-        let shell_sgr_pixels = pixel_mouse_requested
-            && self.focused_pane_graphics_demand()
-            && self
-                .app
-                .state
-                .active
-                .and_then(|ws_idx| {
-                    self.app
-                        .state
-                        .workspaces
-                        .get(ws_idx)
-                        .and_then(crate::workspace::Workspace::focused_pane_id)
-                        .and_then(|pane_id| {
-                            self.app.state.runtime_for_pane_in_workspace(
-                                &self.app.terminal_runtimes,
-                                ws_idx,
-                                pane_id,
-                            )
-                        })
-                })
-                .is_some_and(crate::terminal::TerminalRuntime::sgr_pixel_mouse_enabled);
         let requested = self
             .clients
             .iter()
             .filter_map(|(&client_id, client)| match &client.mode {
-                ClientConnectionMode::ClientShell => Some((
-                    client_id,
-                    client.shell_mouse_capture || endpoint_shell_mouse,
-                    shell_sgr_pixels && client.pixel_mouse,
-                )),
+                ClientConnectionMode::ClientShell => {
+                    let focused = self.shell_focused_runtime(client_id);
+                    let child_requests_mouse =
+                        focused.is_some_and(|(runtime, _)| runtime.mouse_reporting_enabled());
+                    let sgr_pixels = client.pixel_mouse
+                        && focused.is_some_and(|(runtime, pane_id)| {
+                            self.app.pane_graphics.active_for_pane(pane_id)
+                                && runtime.sgr_pixel_mouse_enabled()
+                        });
+                    Some((
+                        client_id,
+                        client.shell_mouse_capture || child_requests_mouse,
+                        sgr_pixels,
+                    ))
+                }
                 ClientConnectionMode::TerminalAttach { terminal_id } => {
                     let runtime = self.runtime_for_terminal_id_string(terminal_id);
                     let child_requests_mouse = runtime
@@ -106,45 +109,49 @@ impl HeadlessServer {
     }
 
     pub(super) fn stream_direct_terminal_keyboard_mode(&mut self) {
-        let shell_report_all = {
-            let runtime = if self.app.state.popup_pane.is_some() {
-                self.app.popup_runtime()
-            } else {
-                self.app.state.active.and_then(|workspace_index| {
-                    self.app
-                        .state
-                        .focused_runtime_in_workspace(&self.app.terminal_runtimes, workspace_index)
-                })
-            };
-            runtime.is_some_and(|runtime| {
-                let protocol = runtime.keyboard_protocol();
-                protocol.reports_all_keys()
-                    || (protocol.reports_event_types() && runtime.modify_other_keys_level() > 0)
+        let shell_modes = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.is_shell_client())
+            .map(|(&client_id, _)| {
+                let report_all =
+                    self.shell_focused_runtime(client_id)
+                        .is_some_and(|(runtime, _)| {
+                            let protocol = runtime.keyboard_protocol();
+                            protocol.reports_all_keys()
+                                || (protocol.reports_event_types()
+                                    && runtime.modify_other_keys_level() > 0)
+                        });
+                (client_id, report_all)
             })
-        };
-        let serialized_shell =
-            Self::frame_server_message(&ServerMessage::ClientShellKeyboardReportAll {
-                enabled: shell_report_all,
-            });
+            .collect::<Vec<_>>();
         let mut broken_clients = Vec::new();
-        for (&client_id, client) in &mut self.clients {
-            if !client.is_shell_client()
-                || client.host_keyboard_report_all_active == Some(shell_report_all)
-            {
+        for (client_id, report_all) in shell_modes {
+            let Some(client) = self.clients.get_mut(&client_id) else {
+                continue;
+            };
+            if client.host_keyboard_report_all_active == Some(report_all) {
                 continue;
             }
             let Some(writer) = &client.writer else {
                 continue;
             };
-            let Ok(serialized) = serialized_shell.as_ref() else {
-                warn!("failed to serialize client shell keyboard report-all mode");
-                break;
+            let serialized = match Self::frame_server_message(
+                &ServerMessage::ClientShellKeyboardReportAll {
+                    enabled: report_all,
+                },
+            ) {
+                Ok(serialized) => serialized,
+                Err(err) => {
+                    warn!(err = %err, "failed to serialize client shell keyboard report-all mode");
+                    continue;
+                }
             };
-            if writer.control.send(serialized.clone()).is_err() {
+            if writer.control.send(serialized).is_err() {
                 broken_clients.push(client_id);
                 continue;
             }
-            client.host_keyboard_report_all_active = Some(shell_report_all);
+            client.host_keyboard_report_all_active = Some(report_all);
         }
 
         let requested = self
@@ -214,11 +221,36 @@ impl HeadlessServer {
 
     pub(super) fn sync_immediate_pty_sources(&self) {
         let (has_app_target, direct_terminal_targets) = self.pty_render_targets();
-        let mut pane_ids = if has_app_target {
-            self.app.state.app_surface_pane_ids()
-        } else {
-            HashSet::new()
-        };
+        let mut pane_ids = HashSet::new();
+        if has_app_target {
+            for (&client_id, client) in &self.clients {
+                if !client.is_shell_client() || client.writer.is_none() {
+                    continue;
+                }
+                let Some(target) = self.shell_target_for_client(client_id) else {
+                    continue;
+                };
+                let Some(tab) = self
+                    .app
+                    .state
+                    .workspaces
+                    .get(target.workspace_index)
+                    .and_then(|workspace| workspace.tabs.get(target.tab_index))
+                else {
+                    continue;
+                };
+                if tab.zoomed {
+                    pane_ids.insert(tab.layout.focused());
+                } else {
+                    pane_ids.extend(tab.layout.pane_ids());
+                }
+                if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
+                    if let Some(popup) = &self.app.state.popup_pane {
+                        pane_ids.insert(popup.pane_id);
+                    }
+                }
+            }
+        }
         if !direct_terminal_targets.is_empty() {
             for workspace in &self.app.state.workspaces {
                 for tab in &workspace.tabs {
@@ -265,7 +297,7 @@ impl HeadlessServer {
         direct_terminal_targets: &HashSet<&str>,
     ) -> bool {
         let terminal_id = self.terminal_id_for_pane(pane_id);
-        (has_app_target && (terminal_id.is_none() || self.app_surface_contains_pane(pane_id)))
+        (has_app_target && (terminal_id.is_none() || self.any_shell_surface_contains_pane(pane_id)))
             || terminal_id.is_none_or(|source| direct_terminal_targets.contains(source.as_str()))
     }
 
@@ -305,31 +337,34 @@ impl HeadlessServer {
             .map(|(_, pane)| &pane.attached_terminal_id)
     }
 
-    fn app_surface_contains_pane(&self, pane_id: crate::layout::PaneId) -> bool {
-        if self
-            .app
-            .state
-            .popup_pane
-            .as_ref()
-            .is_some_and(|popup| popup.pane_id == pane_id)
-        {
-            return true;
-        }
-        let Some(workspace) = self
-            .app
-            .state
-            .active
-            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-        else {
-            return false;
-        };
-        let Some(tab) = workspace.active_tab() else {
-            return false;
-        };
-        if !tab.panes.contains_key(&pane_id) {
-            return false;
-        }
-        !tab.zoomed || tab.layout.focused() == pane_id
+    fn any_shell_surface_contains_pane(&self, pane_id: crate::layout::PaneId) -> bool {
+        self.clients.iter().any(|(&client_id, client)| {
+            if !client.is_shell_client() || client.writer.is_none() {
+                return false;
+            }
+            if self
+                .app
+                .state
+                .popup_pane
+                .as_ref()
+                .is_some_and(|popup| popup.pane_id == pane_id)
+            {
+                return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+            }
+            let Some(target) = self.shell_target_for_client(client_id) else {
+                return false;
+            };
+            let Some(tab) = self
+                .app
+                .state
+                .workspaces
+                .get(target.workspace_index)
+                .and_then(|workspace| workspace.tabs.get(target.tab_index))
+            else {
+                return false;
+            };
+            tab.panes.contains_key(&pane_id) && (!tab.zoomed || tab.layout.focused() == pane_id)
+        })
     }
 
     pub(super) fn render_and_stream(&mut self) {
@@ -362,21 +397,28 @@ impl HeadlessServer {
             return;
         }
 
-        let shell_snapshot_template = render_targets
-            .iter()
-            .any(|(_, _, _, _, mode)| matches!(mode, ClientConnectionMode::ClientShell))
-            .then(|| client_shell_snapshot(&self.app, &self.client_shell_boot_id, 0, None));
         let mut broken_clients: Vec<u64> = Vec::new();
-        for (client_id, (cols, rows), cell_size, is_foreground, mode) in render_targets {
+        for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
             let area = Rect::new(0, 0, cols, rows);
+            let shell_target = self.shell_target_for_client(client_id);
+            let shell_tab_id = self.shell_tab_id_for_client(client_id);
+            let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id.as_deref();
             let mut shell_projection_revision = 0;
             if matches!(mode, ClientConnectionMode::ClientShell) {
+                let location = self
+                    .clients
+                    .get(&client_id)
+                    .and_then(|client| client.shell_location.clone());
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     continue;
                 };
-                let Some(mut candidate) = shell_snapshot_template.clone() else {
-                    continue;
-                };
+                let mut candidate = client_shell_snapshot(
+                    &self.app,
+                    &self.client_shell_boot_id,
+                    client.shell_projection_revision,
+                    None,
+                    location.as_ref(),
+                );
                 candidate.config_diagnostic = if client.shell_uses_endpoint_keybindings {
                     self.server_config_diagnostic.clone()
                 } else {
@@ -387,11 +429,18 @@ impl HeadlessServer {
                     client.shell_projection_revision =
                         client.shell_projection_revision.saturating_add(1);
                     candidate.revision = client.shell_projection_revision;
-                    let message = ServerMessage::ClientShellSnapshot(Box::new(candidate.clone()));
+                    let message = match crate::protocol::endpoint::snapshot_message(&candidate) {
+                        Ok(message) => message,
+                        Err(err) => {
+                            warn!(client_id, err = %err, "failed to encode endpoint snapshot");
+                            broken_clients.push(client_id);
+                            continue;
+                        }
+                    };
                     let framed = match Self::frame_server_message(&message) {
                         Ok(framed) => framed,
                         Err(err) => {
-                            warn!(client_id, err = %err, "failed to frame client shell replacement");
+                            warn!(client_id, err = %err, "failed to frame endpoint snapshot");
                             broken_clients.push(client_id);
                             continue;
                         }
@@ -431,8 +480,10 @@ impl HeadlessServer {
                         graphics_delivery: next_graphics_delivery,
                     } = render_client_shell_pane_surface(
                         &mut self.app,
+                        shell_target,
                         area,
-                        is_foreground,
+                        false,
+                        shell_shows_popup,
                         render_cell_size,
                         &shell_graphics_delivery,
                         client_id,

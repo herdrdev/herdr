@@ -150,19 +150,22 @@ fn validate_running_server_compatibility() -> io::Result<()> {
         )));
     };
 
-    if status.protocol == Some(crate::protocol::PROTOCOL_VERSION) {
+    let endpoint_generation = status
+        .capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.endpoint_protocol_generation);
+    if endpoint_generation == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION) {
         return Ok(());
     }
 
     Err(io::Error::other(format!(
-        "Herdr was updated, but this session is still running the old server.\n\nserver: v{} protocol {}\nclient: v{} protocol {}\n\n{}",
+        "This session predates Herdr's stable endpoint protocol and needs one final server update.\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
         status.version.as_deref().unwrap_or("unknown"),
-        status
-            .protocol
+        endpoint_generation
             .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .unwrap_or_else(|| "unavailable".to_string()),
         crate::build_info::version(),
-        crate::protocol::PROTOCOL_VERSION,
+        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
         crate::session::active_restart_after_update_guidance()
     )))
 }

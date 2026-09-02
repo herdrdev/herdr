@@ -10478,6 +10478,15 @@
               "default": false,
               "type": "boolean"
             },
+            "endpoint_protocol_generation": {
+              "description": "Stable client-owned endpoint generation supported by this server.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "live_handoff": {
               "type": "boolean"
             }

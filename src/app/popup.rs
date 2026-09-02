@@ -13,11 +13,6 @@ pub(crate) struct PopupGeometry {
 }
 
 impl App {
-    pub(crate) fn popup_runtime(&self) -> Option<&TerminalRuntime> {
-        let terminal_id = &self.state.popup_pane.as_ref()?.terminal_id;
-        self.terminal_runtimes.get(terminal_id)
-    }
-
     pub(crate) fn close_popup_pane(&mut self) -> bool {
         let Some(popup) = self.state.popup_pane.take() else {
             return false;

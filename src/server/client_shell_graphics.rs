@@ -6,6 +6,7 @@ pub(crate) fn collect(
     pane_infos: &[crate::layout::PaneInfo],
     split_borders: &[crate::layout::SplitBorder],
     popup: Option<&ClientShellPopupSurface>,
+    target: Option<crate::ui::TabSurfaceTarget>,
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
     client_id: u64,
@@ -14,6 +15,7 @@ pub(crate) fn collect(
     crate::kitty_graphics::surface::collect_scene(
         app,
         crate::ui::TabSurfaceView {
+            target,
             pane_infos,
             split_borders,
         },

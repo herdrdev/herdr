@@ -9,6 +9,11 @@ use tracing::debug;
 use tracing::info;
 
 use crate::ipc::LocalStream;
+use crate::protocol::endpoint::{
+    EndpointClientHello, EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND,
+    ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
+    SURFACE_CODEC_V1,
+};
 use crate::protocol::{
     self, ClientMessage, RenderEncoding, ServerMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
 };
@@ -112,10 +117,17 @@ fn set_handshake_recv_timeout(
         .map_err(ClientError::ConnectionFailed)
 }
 
+#[derive(Debug)]
+pub(super) struct HandshakeResult {
+    pub(super) encoding: RenderEncoding,
+    pub(super) endpoint_methods: Option<Vec<String>>,
+}
+
 /// Performs the client→server handshake.
 ///
-/// Sends TerminalHello (or ClientShellHello) with the terminal size and protocol
-/// version, then reads the Welcome response.
+/// Direct terminal clients retain the same-install private protocol. Client-owned
+/// shells use the stable endpoint generation and negotiate whole codecs without
+/// comparing Herdr build versions.
 pub(super) fn do_handshake(
     stream: &mut LocalStream,
     cols: u16,
@@ -126,14 +138,15 @@ pub(super) fn do_handshake(
     shell_surface_size: Option<crate::protocol::ClientSurfaceSize>,
     endpoint_keybindings: bool,
     mouse_capture: bool,
-) -> Result<RenderEncoding, ClientError> {
+) -> Result<HandshakeResult, ClientError> {
     stream
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
 
+    let endpoint_shell = shell_surface_size.is_some();
     let hello = if let Some(surface_size) = shell_surface_size {
-        ClientMessage::ClientShellHello {
-            version: PROTOCOL_VERSION,
+        let hello = EndpointClientHello {
+            generation: ENDPOINT_PROTOCOL_GENERATION,
             cell_width_px,
             cell_height_px,
             surface_size,
@@ -144,6 +157,16 @@ pub(super) fn do_handshake(
                 && direct_graphics_profile_allowed(),
             endpoint_keybindings,
             mouse_capture,
+            snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
+            surface_codecs: vec![SURFACE_CODEC_V1.into()],
+            input_codecs: vec![INPUT_CODEC_V1.into()],
+            blob_codecs: vec![BLOB_CODEC_V1.into()],
+        };
+        ClientMessage::EndpointControl {
+            kind: ENDPOINT_HELLO_KIND.into(),
+            data: serde_json::to_string(&hello).map_err(|error| {
+                ClientError::ConnectionFailed(io::Error::new(io::ErrorKind::InvalidData, error))
+            })?,
         }
     } else {
         ClientMessage::TerminalHello {
@@ -170,6 +193,54 @@ pub(super) fn do_handshake(
         "failed to clear client handshake read timeout",
     )?;
 
+    if endpoint_shell {
+        let ServerMessage::EndpointControl { kind, data } = welcome else {
+            return Err(ClientError::Protocol(protocol::FramingError::Io(
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "server does not support the stable Herdr endpoint protocol; update this machine",
+                ),
+            )));
+        };
+        if kind != ENDPOINT_WELCOME_KIND {
+            return Err(ClientError::Protocol(protocol::FramingError::Io(
+                io::Error::new(io::ErrorKind::InvalidData, "expected endpoint welcome"),
+            )));
+        }
+        let welcome: EndpointServerWelcome = serde_json::from_str(&data).map_err(|error| {
+            ClientError::Protocol(protocol::FramingError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid endpoint welcome: {error}"),
+            )))
+        })?;
+        if let Some(error) = welcome.error {
+            return Err(ClientError::HandshakeRejected {
+                version: welcome.generation,
+                error: error.message,
+            });
+        }
+        if welcome.generation != ENDPOINT_PROTOCOL_GENERATION
+            || welcome.snapshot_codec != SNAPSHOT_CODEC_V1
+            || welcome.surface_codec != SURFACE_CODEC_V1
+            || welcome.input_codec != INPUT_CODEC_V1
+            || welcome.blob_codec != BLOB_CODEC_V1
+        {
+            return Err(ClientError::HandshakeRejected {
+                version: welcome.generation,
+                error: "server has no compatible endpoint core; update this machine".into(),
+            });
+        }
+        info!(
+            generation = welcome.generation,
+            server_version = %welcome.server_version,
+            "endpoint handshake succeeded"
+        );
+        return Ok(HandshakeResult {
+            encoding: RenderEncoding::SemanticFrame,
+            endpoint_methods: Some(welcome.methods),
+        });
+    }
+
     match welcome {
         ServerMessage::Welcome {
             version,
@@ -180,7 +251,10 @@ pub(super) fn do_handshake(
                 return Err(ClientError::HandshakeRejected { version, error });
             }
             info!(version, ?encoding, "handshake succeeded");
-            Ok(encoding)
+            Ok(HandshakeResult {
+                encoding,
+                endpoint_methods: None,
+            })
         }
         _ => Err(ClientError::Protocol(protocol::FramingError::Io(
             io::Error::new(io::ErrorKind::InvalidData, "expected Welcome message"),

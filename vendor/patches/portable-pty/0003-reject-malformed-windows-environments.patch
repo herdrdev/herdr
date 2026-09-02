@@ -153,8 +153,8 @@ index 385fe81c..b214bb6d 100644
  
          block
 @@ -869,4 +916,65 @@ mod tests {
-         assert!(command.ends_with(r#"/d /c echo "hi""#), "{}", command);
-         assert!(!command.contains(r#"\"hi\""#), "{}", command);
+         cmd.env_remove("cARGO_pKG_aUTHORS");
+         assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
      }
 +
 +    #[cfg(windows)]

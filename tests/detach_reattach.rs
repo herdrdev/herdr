@@ -16,7 +16,7 @@ use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
     register_spawned_herdr_pid, send_detach, unregister_spawned_herdr_pid, wait_for_disconnect,
-    wait_for_socket, wait_until, CURRENT_PROTOCOL,
+    wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
 };
 
 const CUSTOM_HEADLESS_SIZE_CONFIG: &str = r#"onboarding = false

@@ -79,8 +79,23 @@ impl App {
     }
 
     pub(crate) fn resolved_new_workspace_cwd_from(&self, ws_idx: usize) -> PathBuf {
-        let follow_cwd = self
-            .focused_pane_cwd_in_workspace(ws_idx)
+        let tab_idx = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .map(crate::workspace::Workspace::active_tab_index);
+        self.resolved_new_workspace_cwd_from_tab(ws_idx, tab_idx)
+    }
+
+    pub(crate) fn resolved_new_workspace_cwd_from_tab(
+        &self,
+        ws_idx: usize,
+        tab_idx: Option<usize>,
+    ) -> PathBuf {
+        let follow_cwd = tab_idx
+            .and_then(|tab_idx| self.state.workspaces.get(ws_idx)?.tabs.get(tab_idx))
+            .map(|tab| tab.layout.focused())
+            .and_then(|pane_id| self.launch_cwd_for_pane_in_workspace(ws_idx, pane_id))
             .or_else(|| self.seed_cwd_from_workspace(ws_idx));
         self.resolve_new_terminal_cwd(follow_cwd)
     }

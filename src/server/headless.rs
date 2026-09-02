@@ -51,8 +51,7 @@ use crate::server::client_accept::{
     accept_pending_client_connections, reject_pending_client_connections,
 };
 use crate::server::client_shell::{
-    render_pane_surface as render_client_shell_pane_surface,
-    resize_popup_runtime as resize_client_shell_popup_runtime, snapshot as client_shell_snapshot,
+    render_pane_surface as render_client_shell_pane_surface, snapshot as client_shell_snapshot,
 };
 use crate::server::client_transport::ServerEvent;
 use crate::server::clients::{
@@ -73,6 +72,7 @@ use crate::server::socket_paths::{
 use crate::server::terminal_attach::paste_payload_for_runtime;
 
 mod bootstrap;
+mod client_views;
 mod lifecycle;
 mod notifications;
 mod pane_graphics;
@@ -204,8 +204,12 @@ pub struct HeadlessServer {
     clients: HashMap<u64, ClientConnection>,
     #[cfg(unix)]
     next_client_id: u64,
-    /// The client currently driving the shared pane runtime size, theme, and input keybindings.
+    /// The client currently driving session-wide host presentation and side effects.
     foreground_client_id: Option<u64>,
+    /// Ephemeral shell connection controlling PTY geometry for each stable tab id.
+    tab_geometry_controllers: HashMap<String, u64>,
+    /// Stable tab id whose viewers may see and interact with the one terminal popup.
+    popup_owner_tab_id: Option<String>,
     /// Process-local identity used to reject shell replacements from an earlier server boot.
     client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
@@ -345,6 +349,8 @@ impl HeadlessServer {
             #[cfg(unix)]
             next_client_id: 1,
             foreground_client_id: None,
+            tab_geometry_controllers: HashMap::new(),
+            popup_owner_tab_id: None,
             client_shell_boot_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -726,6 +732,7 @@ impl HeadlessServer {
         stamp
     }
 
+    #[cfg(unix)]
     fn resize_shared_runtime_to_effective_size(&mut self) {
         self.resize_shared_runtime_to_effective_size_with_pending_agent_resumes(true);
     }
@@ -738,35 +745,20 @@ impl HeadlessServer {
         &mut self,
         start_pending_agent_resumes: bool,
     ) {
-        if self.foreground_client_id.is_none() {
-            return;
-        }
         let Some(client_id) = self.foreground_client_id else {
             return;
         };
         let Some(client) = self.clients.get(&client_id) else {
             return;
         };
-        let client_shell = matches!(client.mode, ClientConnectionMode::ClientShell);
+        if matches!(client.mode, ClientConnectionMode::ClientShell) {
+            self.resize_shell_tab_if_controller(client_id, start_pending_agent_resumes);
+            return;
+        }
         let cell_size = client.cell_size;
         let (cols, rows) = self.effective_size;
         let area = Rect::new(0, 0, cols, rows);
-        if client_shell {
-            let cell_size = if cell_size.is_known() {
-                cell_size
-            } else {
-                Default::default()
-            };
-            self.app.state.view.terminal_area = area;
-            let _ = resize_client_shell_popup_runtime(&self.app, area, cell_size);
-            crate::ui::compute_tab_surface(
-                &self.app.state,
-                &self.app.terminal_runtimes,
-                area,
-                true,
-                cell_size,
-            );
-        } else if self.app.state.kitty_graphics_enabled && cell_size.is_known() {
+        if self.app.state.kitty_graphics_enabled && cell_size.is_known() {
             crate::ui::compute_view_with_cell_size(
                 &mut self.app.state,
                 &self.app.terminal_runtimes,
@@ -959,8 +951,24 @@ impl HeadlessServer {
 
     fn remove_client(&mut self, client_id: u64) -> bool {
         self.retire_direct_graphics_for_client(client_id);
+        let disconnected_focus = self
+            .clients
+            .get(&client_id)
+            .filter(|client| client.is_shell_client() && client.outer_terminal_focus == Some(true))
+            .and_then(|_| self.shell_focus_target(client_id));
+        let should_release_focus = disconnected_focus.as_ref().is_some_and(|target| {
+            !self.clients.iter().any(|(&other_id, client)| {
+                other_id != client_id
+                    && client.is_shell_client()
+                    && client.outer_terminal_focus == Some(true)
+                    && self.shell_tab_id_for_client(other_id).as_deref()
+                        == Some(target.tab_id.as_str())
+            })
+        });
         let was_foreground = self.foreground_client_id == Some(client_id);
         let removed = self.clients.remove(&client_id);
+        self.tab_geometry_controllers
+            .retain(|_, controller_id| *controller_id != client_id);
         if let Some(mut removed) = removed {
             self.release_client_shell_inputs(client_id, &mut removed);
             crate::server::clipboard_image::remove_files(removed.staged_clipboard_files);
@@ -972,6 +980,11 @@ impl HeadlessServer {
                         .direct_attach_resize_locks
                         .remove(&terminal_id);
                 }
+            }
+        }
+        if should_release_focus {
+            if let Some(target) = disconnected_focus.as_ref() {
+                self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Lost);
             }
         }
         if was_foreground {
@@ -1011,24 +1024,18 @@ impl HeadlessServer {
         }
     }
 
-    fn client_removal_needs_shared_resize(&self, client_id: u64) -> bool {
-        if self.foreground_client_id == Some(client_id) {
-            return true;
-        }
-        matches!(
-            self.clients.get(&client_id).map(|client| &client.mode),
-            Some(
-                ClientConnectionMode::TerminalAttach { .. }
-                    | ClientConnectionMode::TerminalObserve { .. }
-            )
-        ) && self.foreground_client_id.is_some()
-    }
-
     fn remove_client_and_resize_if_needed(&mut self, client_id: u64) {
-        let needs_shared_resize = self.client_removal_needs_shared_resize(client_id);
-        let foreground_changed = self.remove_client(client_id);
-        if needs_shared_resize || foreground_changed {
-            self.resize_shared_runtime_to_effective_size();
+        let restore_shell_controller = self.clients.get(&client_id).and_then(|client| {
+            let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
+                return None;
+            };
+            self.shell_geometry_controller_for_terminal(terminal_id)
+        });
+        self.remove_client(client_id);
+        if let Some((controller_id, target)) = restore_shell_controller {
+            self.restore_shell_tab_geometry(controller_id, target);
+        } else {
+            self.resize_tabs_for_only_shell_client(true);
         }
     }
 
@@ -1191,7 +1198,6 @@ impl HeadlessServer {
             }
             protocol::ClientClipboardImageTarget::Pane(pane_id) => {
                 if self.handoff_in_progress
-                    || self.app.state.popup_pane.is_some()
                     || !self.clients.get(&client_id).is_some_and(|client| {
                         matches!(client.mode, ClientConnectionMode::ClientShell)
                     })
@@ -1202,16 +1208,21 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                let foreground_changed = self.promote_client_to_foreground(client_id);
-                if foreground_changed {
-                    self.resize_shared_runtime_to_effective_size_before_input();
+                let popup_blocks_input = self.app.state.popup_pane.is_some()
+                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                if popup_blocks_input
+                    || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
+                {
+                    return false;
                 }
+                let foreground_changed = self.promote_client_to_foreground(client_id);
+                let geometry_changed = self.claim_shell_tab_geometry(client_id, false);
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                     &self.app.terminal_runtimes,
                     workspace_index,
                     runtime_pane_id,
                 ) else {
-                    return foreground_changed;
+                    return foreground_changed | geometry_changed;
                 };
                 if let Err(err) = apply_client_pane_input_events(
                     runtime,
@@ -1238,15 +1249,15 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                if popup_terminal_id.as_str() != terminal_id {
+                if popup_terminal_id.as_str() != terminal_id
+                    || self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id)
+                {
                     return false;
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
-                if foreground_changed {
-                    self.resize_shared_runtime_to_effective_size_before_input();
-                }
+                let geometry_changed = self.claim_shell_tab_geometry(client_id, false);
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return foreground_changed;
+                    return foreground_changed | geometry_changed;
                 };
                 if let Err(err) = apply_client_popup_input_events(
                     runtime,
@@ -1928,24 +1939,36 @@ impl HeadlessServer {
                 } else {
                     self.server_config_diagnostic_without_keybindings.as_deref()
                 };
-                let snapshot = client_shell_snapshot(
+                let seed_snapshot = client_shell_snapshot(
                     &self.app,
                     &self.client_shell_boot_id,
                     connection.shell_projection_revision,
                     config_diagnostic,
+                    None,
                 );
-                connection.shell_snapshot = Some(snapshot.clone());
+                let location =
+                    crate::server::clients::ClientShellLocation::from_snapshot(&seed_snapshot);
+                let snapshot_message =
+                    match crate::protocol::endpoint::snapshot_message(&seed_snapshot) {
+                        Ok(message) => message,
+                        Err(err) => {
+                            warn!(client_id, err = %err, "failed to encode endpoint snapshot");
+                            return false;
+                        }
+                    };
+                connection.shell_location = Some(location);
+                connection.shell_snapshot = Some(seed_snapshot);
                 self.clients.insert(client_id, connection);
-                self.send_to_client(
-                    client_id,
-                    ServerMessage::ClientShellSnapshot(Box::new(snapshot)),
-                );
+                if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
+                    self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
+                }
+                self.send_to_client(client_id, snapshot_message);
                 self.foreground_client_id = Some(client_id);
                 if first_app_client {
                     self.app.mark_git_status_refresh_due(Instant::now());
                 }
                 self.sync_foreground_client_state();
-                self.resize_shared_runtime_to_effective_size();
+                self.claim_unowned_shell_tab_geometry(client_id, true);
                 self.nudge_handoff_panes_on_first_client_attach();
                 true
             }
@@ -2164,7 +2187,7 @@ impl HeadlessServer {
                 client.pixel_mouse = pixel_mouse && observed.is_known();
                 client.request_repaint();
                 self.promote_client_to_foreground(client_id);
-                self.resize_shared_runtime_to_effective_size();
+                self.resize_shell_tab_if_controller(client_id, true);
                 true
             }
             ServerEvent::ClientShellHostTheme { client_id, update } => {
@@ -2191,7 +2214,7 @@ impl HeadlessServer {
                 changed
             }
             ServerEvent::ClientShellFocus { client_id, focused } => {
-                let Some(client) = self.clients.get_mut(&client_id) else {
+                let Some(client) = self.clients.get(&client_id) else {
                     return false;
                 };
                 if !matches!(client.mode, ClientConnectionMode::ClientShell)
@@ -2199,20 +2222,38 @@ impl HeadlessServer {
                 {
                     return false;
                 }
-                client.outer_terminal_focus = Some(focused);
+                let tab_id = self.shell_tab_id_for_client(client_id);
+                let another_focused_viewer = self.clients.iter().any(|(&other_id, client)| {
+                    other_id != client_id
+                        && client.is_shell_client()
+                        && client.outer_terminal_focus == Some(true)
+                        && self.shell_tab_id_for_client(other_id) == tab_id
+                });
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.outer_terminal_focus = Some(focused);
+                }
                 if focused {
                     self.promote_client_to_foreground(client_id);
-                    self.resize_shared_runtime_to_effective_size_before_input();
-                    self.app
-                        .send_outer_focus_event(crate::ghostty::FocusEvent::Gained);
-                    true
-                } else if self.foreground_client_id == Some(client_id) {
-                    self.app.state.outer_terminal_focus = Some(false);
-                    self.app
-                        .send_outer_focus_event(crate::ghostty::FocusEvent::Lost);
+                    self.claim_shell_tab_geometry(client_id, false);
+                    if !another_focused_viewer {
+                        if let Some(target) = self.shell_focus_target(client_id) {
+                            self.send_shell_focus_target(
+                                &target,
+                                crate::ghostty::FocusEvent::Gained,
+                            );
+                        }
+                    }
                     true
                 } else {
-                    false
+                    if self.foreground_client_id == Some(client_id) {
+                        self.app.state.outer_terminal_focus = Some(false);
+                    }
+                    if !another_focused_viewer {
+                        if let Some(target) = self.shell_focus_target(client_id) {
+                            self.send_shell_focus_target(&target, crate::ghostty::FocusEvent::Lost);
+                        }
+                    }
+                    true
                 }
             }
             ServerEvent::ClientShellMouseCapture { client_id, enabled } => {
@@ -2261,11 +2302,10 @@ impl HeadlessServer {
                     runtime.current_size(),
                     runtime.pixel_size(),
                 );
-                if self.app.state.popup_pane.is_some()
-                    || !self
-                        .app
-                        .state
-                        .pane_visible_on_active_surface(workspace_index, runtime_pane_id)
+                let popup_blocks_input = self.app.state.popup_pane.is_some()
+                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                if popup_blocks_input
+                    || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
                 {
                     let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                         &self.app.terminal_runtimes,
@@ -2300,21 +2340,20 @@ impl HeadlessServer {
                 }
                 let foreground_changed =
                     interaction && self.promote_client_to_foreground(client_id);
-                if foreground_changed {
-                    self.resize_shared_runtime_to_effective_size_before_input();
-                }
+                let geometry_changed =
+                    interaction && self.claim_shell_tab_geometry(client_id, false);
                 let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                     &self.app.terminal_runtimes,
                     workspace_index,
                     runtime_pane_id,
                 ) else {
-                    return foreground_changed;
+                    return foreground_changed | geometry_changed;
                 };
                 let scroll_before = runtime.scroll_metrics();
                 if let Err(err) = apply_client_pane_input_events(runtime, &events) {
                     warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
                 }
-                foreground_changed || runtime.scroll_metrics() != scroll_before
+                foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
             }
             ServerEvent::ClientShellPopupInput {
                 client_id,
@@ -2353,6 +2392,26 @@ impl HeadlessServer {
                     runtime.current_size(),
                     runtime.pixel_size(),
                 );
+                if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
+                    let releases = events
+                        .into_iter()
+                        .filter(client_pane_input_releases_press)
+                        .collect::<Vec<_>>();
+                    if releases.is_empty() {
+                        return false;
+                    }
+                    if let Some(client) = self.clients.get_mut(&client_id) {
+                        client.track_shell_input(
+                            ClientShellInputTarget::Popup(terminal_id.clone()),
+                            &releases,
+                        );
+                    }
+                    let scroll_before = runtime.scroll_metrics();
+                    if let Err(err) = apply_client_popup_input_events(runtime, &releases) {
+                        warn!(client_id, terminal_id, err = %err, "targeted client popup release failed");
+                    }
+                    return runtime.scroll_metrics() != scroll_before;
+                }
                 let interaction = client_pane_input_has_interaction(&events);
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.track_shell_input(
@@ -2362,22 +2421,41 @@ impl HeadlessServer {
                 }
                 let foreground_changed =
                     interaction && self.promote_client_to_foreground(client_id);
-                if foreground_changed {
-                    self.resize_shared_runtime_to_effective_size_before_input();
-                }
+                let geometry_changed =
+                    interaction && self.claim_shell_tab_geometry(client_id, false);
                 let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return foreground_changed;
+                    return foreground_changed | geometry_changed;
                 };
                 let scroll_before = runtime.scroll_metrics();
                 if let Err(err) = apply_client_popup_input_events(runtime, &events) {
                     warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
                 }
-                foreground_changed || runtime.scroll_metrics() != scroll_before
+                foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
+            }
+            ServerEvent::ClientShellEndpointRequestError {
+                client_id,
+                boot_id,
+                request_id,
+                code,
+                message,
+            } => {
+                let Some(client) = self.clients.get(&client_id) else {
+                    return false;
+                };
+                if !matches!(client.mode, ClientConnectionMode::ClientShell) {
+                    self.remove_client_and_resize_if_needed(client_id);
+                    return true;
+                }
+                let message = crate::server::client_commands::error_message(
+                    boot_id, request_id, code, message,
+                );
+                self.send_to_client(client_id, message);
+                false
             }
             ServerEvent::ClientShellEndpointRequest {
                 client_id,
                 boot_id,
-                request,
+                mut request,
             } => {
                 let Some(client) = self.clients.get(&client_id) else {
                     return false;
@@ -2418,6 +2496,11 @@ impl HeadlessServer {
                     return true;
                 }
 
+                let api_request_id = format!(
+                    "endpoint:{}:{client_id}:{request_id}",
+                    self.client_shell_boot_id
+                );
+                request.id = api_request_id.clone();
                 let (respond_to, response_rx) = std::sync::mpsc::channel();
                 if let Err(err) = crate::server::client_commands::spawn_response_waiter(
                     client_id,
@@ -2437,18 +2520,30 @@ impl HeadlessServer {
                 }
                 if let Some(client) = self.clients.get_mut(&client_id) {
                     client.shell_endpoint_command_in_flight = true;
+                    let deferred_worktree = matches!(
+                        &request.method,
+                        api::schema::Method::WorktreeCreate(_)
+                            | api::schema::Method::WorktreeRemove(_)
+                    );
+                    let deferred_navigation = matches!(
+                        &request.method,
+                        api::schema::Method::WorktreeCreate(params) if params.focus
+                    );
+                    client.shell_deferred_navigation_request_id =
+                        deferred_worktree.then(|| api_request_id.clone());
+                    client.shell_deferred_navigation_response = deferred_navigation.then(Vec::new);
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
-                if foreground_changed {
-                    self.resize_shared_runtime_to_effective_size_before_input();
-                }
                 foreground_changed
-                    | self.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-                        request: *request,
-                        respond_to,
-                        response_write_complete: None,
-                        stream_active: None,
-                    })
+                    | self.handle_client_shell_api_request(
+                        client_id,
+                        api::ApiRequestMessage {
+                            request: *request,
+                            respond_to,
+                            response_write_complete: None,
+                            stream_active: None,
+                        },
+                    )
             }
             ServerEvent::ClientShellEndpointResponseChunkReady {
                 client_id,
@@ -2465,10 +2560,41 @@ impl HeadlessServer {
                 if !valid {
                     return false;
                 }
+                let completed_deferred_response =
+                    self.clients.get_mut(&client_id).and_then(|client| {
+                        let response = client.shell_deferred_navigation_response.as_mut()?;
+                        response.extend_from_slice(&data);
+                        final_chunk
+                            .then(|| client.shell_deferred_navigation_response.take())
+                            .flatten()
+                    });
                 if final_chunk {
                     if let Some(client) = self.clients.get_mut(&client_id) {
                         client.shell_endpoint_command_in_flight = false;
+                        client.shell_deferred_navigation_request_id = None;
                     }
+                }
+                let deferred_tab_id = completed_deferred_response
+                    .as_deref()
+                    .and_then(Self::deferred_endpoint_navigation_tab_id);
+                let focus_before = self.shell_focus_target(client_id);
+                let focused_tabs_before = self.focused_shell_tabs();
+                let navigation_changed = deferred_tab_id
+                    .as_deref()
+                    .is_some_and(|tab_id| self.focus_shell_client_on_tab(client_id, tab_id));
+                let geometry_changed =
+                    navigation_changed && self.claim_shell_tab_geometry(client_id, false);
+                if navigation_changed {
+                    self.reconcile_client_shell_locations();
+                    let focus_after = self.shell_focus_target(client_id);
+                    let focused_tabs_after = self.focused_shell_tabs();
+                    self.app.accept_current_focus_without_events();
+                    self.send_shell_navigation_focus_events(
+                        focus_before.as_ref(),
+                        focus_after.as_ref(),
+                        &focused_tabs_before,
+                        &focused_tabs_after,
+                    );
                 }
                 self.send_to_client(
                     client_id,
@@ -2479,7 +2605,7 @@ impl HeadlessServer {
                         data,
                     },
                 );
-                false
+                navigation_changed | geometry_changed
             }
             ServerEvent::ClientDetach { client_id } => {
                 info!(client_id, "client detached");
@@ -2743,16 +2869,6 @@ impl HeadlessServer {
         impact
     }
 
-    /// Handles a single API request with shutdown awareness.
-    ///
-    /// Also forwards any toast/sound notifications that result from the API
-    /// request to connected clients. API methods like `pane.report_agent`
-    /// trigger internal events that may set toast state or would normally
-    /// play sounds — in headless mode we forward these to clients instead.
-    fn handle_api_request_with_shutdown_check(&mut self, msg: api::ApiRequestMessage) -> bool {
-        self.handle_api_request_with_shutdown_check_inner(msg, false)
-    }
-
     fn handle_api_request_with_render_impact(
         &mut self,
         msg: api::ApiRequestMessage,
@@ -2764,7 +2880,7 @@ impl HeadlessServer {
         ) {
             return self.handle_pane_graphics_stream_frame(msg);
         }
-        if self.handle_api_request_with_shutdown_check_inner(msg, false) {
+        if self.handle_api_request_with_shutdown_check(msg) {
             RenderImpact::Full
         } else {
             RenderImpact::None

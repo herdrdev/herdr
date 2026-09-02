@@ -1,0 +1,25 @@
+{
+  "generation": 1,
+  "cell_width_px": 8,
+  "cell_height_px": 16,
+  "surface_size": {
+    "cols": 80,
+    "rows": 24
+  },
+  "pixel_mouse": true,
+  "direct_graphics": false,
+  "endpoint_keybindings": false,
+  "mouse_capture": true,
+  "snapshot_codecs": [
+    "shell.snapshot.v1"
+  ],
+  "surface_codecs": [
+    "shell.surface.v1"
+  ],
+  "input_codecs": [
+    "shell.input.semantic.v1"
+  ],
+  "blob_codecs": [
+    "shell.blob.v1"
+  ]
+}

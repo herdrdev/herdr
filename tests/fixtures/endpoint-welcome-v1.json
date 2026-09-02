@@ -1,0 +1,11 @@
+{
+  "generation": 1,
+  "server_version": "0.8.2",
+  "snapshot_codec": "shell.snapshot.v1",
+  "surface_codec": "shell.surface.v1",
+  "input_codec": "shell.input.semantic.v1",
+  "blob_codec": "shell.blob.v1",
+  "methods": [
+    "pane.focus"
+  ]
+}

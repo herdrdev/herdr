@@ -78,14 +78,20 @@ impl ClientShellState {
         self.pane_scroll_targets
             .insert(pane_id.clone(), offset_from_bottom);
         self.pane_scroll_in_flight.insert(pane_id.clone(), serial);
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneScroll(crate::api::schema::PaneScrollParams {
                 pane_id: pane_id.clone(),
                 offset_from_bottom: offset_from_bottom as u64,
             }),
-            PendingEndpointKind::PaneScroll { pane_id, serial },
+            PendingEndpointKind::PaneScroll {
+                pane_id: pane_id.clone(),
+                serial,
+            },
             outcome,
-        );
+        ) {
+            self.pane_scroll_targets.remove(&pane_id);
+            self.pane_scroll_in_flight.remove(&pane_id);
+        }
     }
 
     pub(super) fn complete_pane_scroll(
@@ -120,10 +126,9 @@ impl ClientShellState {
                     Some("endpoint returned an unexpected pane-scroll result".to_owned());
                 true
             }
-            Err(error) => {
+            Err(_) => {
                 self.pane_scroll_queued.remove(&pane_id);
                 self.pane_scroll_targets.remove(&pane_id);
-                self.endpoint_error = Some(error.message);
                 true
             }
         };
@@ -892,6 +897,14 @@ impl ClientShellState {
                 );
                 return;
             }
+        }
+        if self.visible_endpoint_notice.is_some()
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && super::contains(self.hits.notification_toast, point)
+        {
+            self.visible_endpoint_notice = None;
+            outcome.repaint = true;
+            return;
         }
         if self.overlay.is_none()
             && self.mode == ClientShellMode::Terminal

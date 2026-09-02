@@ -14,9 +14,10 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_herdr_pid, send_detach, unregister_spawned_herdr_pid,
+    register_spawned_herdr_pid, send_client_shell_focus, send_detach, unregister_spawned_herdr_pid,
     wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
-    CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
+    SERVER_MESSAGE_PANE_SURFACE_PATCH,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -251,8 +252,29 @@ fn tty_size(socket: &Path, pane: &str, timeout: Duration) -> (u16, u16) {
     panic!("pane did not report tty size: {}", pane_text(socket, pane));
 }
 
+fn wait_for_tty_size(
+    socket: &Path,
+    pane: &str,
+    timeout: Duration,
+    expected: impl Fn((u16, u16)) -> bool,
+) -> (u16, u16) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let size = tty_size(
+            socket,
+            pane,
+            deadline.saturating_duration_since(Instant::now()),
+        );
+        if expected(size) {
+            return size;
+        }
+        assert!(Instant::now() < deadline, "unexpected tty size: {size:?}");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
-fn effective_size_uses_smallest_foreground_client_and_recovers_on_disconnect() {
+fn same_tab_geometry_follows_meaningful_client_activity() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config = base.join("config");
@@ -263,26 +285,24 @@ fn effective_size_uses_smallest_foreground_client_and_recovers_on_disconnect() {
     wait_for_socket(&api, Duration::from_secs(10));
     wait_for_file(&clients, Duration::from_secs(10));
     let pane = create_pane(&api, "effective-size");
-    let mut large = shell(&clients, 120, 40);
+    let _large = shell(&clients, 120, 40);
     let mut small = shell(&clients, 80, 24);
-    let reduced = tty_size(&api, &pane, Duration::from_secs(5));
+    let initial = tty_size(&api, &pane, Duration::from_secs(5));
     assert!(
-        reduced.0 <= 24 && reduced.1 <= 80,
-        "small ClientShell should determine effective size: {reduced:?}"
+        initial.0 > 24 && initial.1 > 80,
+        "a passive second connection must not steal geometry: {initial:?}"
     );
+
+    send_client_shell_focus(&mut small, true).unwrap();
+    let reduced = wait_for_tty_size(&api, &pane, Duration::from_secs(5), |(rows, cols)| {
+        rows <= 24 && cols <= 80
+    });
+
     send_detach(&mut small).unwrap();
     drop(small);
-    assert!(wait_for_message_variant(
-        &mut large,
-        Duration::from_secs(3),
-        SERVER_MESSAGE_PANE_SURFACE
-    )
-    .unwrap());
-    let restored = tty_size(&api, &pane, Duration::from_secs(5));
-    assert!(
-        restored.0 > reduced.0 && restored.1 > reduced.1,
-        "size should recover: {reduced:?} -> {restored:?}"
-    );
+    wait_for_tty_size(&api, &pane, Duration::from_secs(5), |(rows, cols)| {
+        rows > reduced.0 && cols > reduced.1
+    });
     cleanup(server, base);
 }
 

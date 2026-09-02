@@ -708,6 +708,12 @@ fn scroll_changed_subscription_event_round_trips() {
 }
 
 #[test]
+fn agent_status_request_values_remain_strict() {
+    assert!(serde_json::from_str::<AgentStatus>(r#""working""#).is_ok());
+    assert!(serde_json::from_str::<AgentStatus>(r#""future_status""#).is_err());
+}
+
+#[test]
 fn success_response_round_trips() {
     let response = SuccessResponse {
         id: "req_1".into(),
@@ -717,6 +723,7 @@ fn success_response_round_trips() {
             capabilities: Some(ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                endpoint_protocol_generation: Some(1),
             }),
         },
     };

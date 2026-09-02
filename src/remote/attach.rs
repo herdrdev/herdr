@@ -182,7 +182,6 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     ensure_remote_server_ready(
         &remote_ssh,
         &prepared_remote.remote_herdr,
-        prepared_remote.installed_or_replaced,
         prepared_remote.stop_after_install_approved,
         remote.live_handoff,
     )?;
@@ -395,7 +394,6 @@ struct RemoteReleaseAsset {
 
 struct PreparedRemoteHerdr {
     remote_herdr: RemoteHerdr,
-    installed_or_replaced: bool,
     stop_after_install_approved: bool,
 }
 
@@ -653,18 +651,16 @@ fn prepare_remote_herdr(
 
     if override_binary.is_none() {
         for candidate in &remote_binary_candidates {
-            if remote_binary_matches(ssh, candidate).unwrap_or(false) {
+            if remote_binary_supports_endpoint(ssh, candidate).unwrap_or(false) {
                 return Ok(PreparedRemoteHerdr {
                     remote_herdr: candidate.clone(),
-                    installed_or_replaced: false,
                     stop_after_install_approved: false,
                 });
             }
         }
-        if remote_binary_matches(ssh, &remote_herdr)? {
+        if remote_binary_supports_endpoint(ssh, &remote_herdr)? {
             return Ok(PreparedRemoteHerdr {
                 remote_herdr,
-                installed_or_replaced: false,
                 stop_after_install_approved: false,
             });
         }
@@ -692,18 +688,17 @@ fn prepare_remote_herdr(
     source.cleanup();
     install_result?;
 
-    if !remote_binary_matches(ssh, &remote_herdr)? {
+    if !remote_binary_supports_endpoint(ssh, &remote_herdr)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it did not report version {}",
+            "installed remote herdr at {}, but it does not support endpoint generation {}",
             remote_herdr.shell_path,
-            current_version()
+            crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION
         )));
     }
     warn_if_remote_bin_not_on_path(ssh)?;
 
     Ok(PreparedRemoteHerdr {
         remote_herdr,
-        installed_or_replaced: true,
         stop_after_install_approved,
     })
 }
@@ -864,24 +859,30 @@ fn is_mise_shim_path(path: &str) -> bool {
     path.ends_with("/mise/shims/herdr")
 }
 
-fn remote_binary_matches(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
+fn remote_client_status(
+    ssh: &RemoteSsh,
+    remote_herdr: &RemoteHerdr,
+) -> io::Result<Option<RemoteClientStatusJson>> {
     let command = format!(
-        "test -x {0} && {0} --version && {0} status client --json",
+        "test -x {0} && {0} status client --json",
         remote_herdr.shell_path
     );
     let output = ssh.sh_output(&command)?;
     if !output.status.success() {
-        return Ok(false);
+        return Ok(None);
     }
+    Ok(parse_client_status_json(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let version = lines.next().unwrap_or_default().trim();
-    let status = lines.next().unwrap_or_default();
-    Ok(version == format!("herdr {}", current_version())
-        && parse_client_status_json(status)
-            .map(|status| status.protocol == CURRENT_PROTOCOL)
-            .unwrap_or(false))
+fn remote_binary_supports_endpoint(
+    ssh: &RemoteSsh,
+    remote_herdr: &RemoteHerdr,
+) -> io::Result<bool> {
+    Ok(remote_client_status(ssh, remote_herdr)?
+        .and_then(|status| status.endpoint_protocol_generation)
+        == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION))
 }
 
 fn remote_binary_exists(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
@@ -984,7 +985,7 @@ fn local_binary_can_seed_remote(platform: &RemotePlatform) -> bool {
 enum RemoteServerStatus {
     Running {
         version: Option<String>,
-        protocol: Option<u32>,
+        endpoint_protocol_generation: Option<u32>,
         live_handoff: bool,
         detached_server_daemon: bool,
     },
@@ -993,10 +994,8 @@ enum RemoteServerStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemoteServerRestartReason {
-    ProtocolMismatch,
+    EndpointProtocolMissing,
     DaemonDetachMissing,
-    BinaryUpdated,
-    VersionMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1009,14 +1008,13 @@ enum RemoteInstallRunningServerPlan {
 fn ensure_remote_server_ready(
     ssh: &RemoteSsh,
     remote_herdr: &RemoteHerdr,
-    remote_binary_changed: bool,
     stop_after_install_approved: bool,
     live_handoff_enabled: bool,
 ) -> io::Result<()> {
     let status = remote_server_status(ssh, remote_herdr)?;
     let RemoteServerStatus::Running {
         version,
-        protocol,
+        endpoint_protocol_generation,
         live_handoff,
         detached_server_daemon,
     } = status
@@ -1024,12 +1022,9 @@ fn ensure_remote_server_ready(
         return Ok(());
     };
 
-    let Some(reason) = remote_server_restart_reason(
-        version.as_deref(),
-        protocol,
-        detached_server_daemon,
-        remote_binary_changed,
-    ) else {
+    let Some(reason) =
+        remote_server_restart_reason(endpoint_protocol_generation, detached_server_daemon)
+    else {
         return Ok(());
     };
 
@@ -1048,29 +1043,22 @@ fn ensure_remote_server_ready(
         return Ok(());
     }
 
-    if confirm_remote_server_stop(ssh.target(), version.as_deref(), protocol, reason)? {
+    if confirm_remote_server_stop(ssh.target(), version.as_deref(), reason)? {
         stop_remote_server(ssh, remote_herdr)?;
     }
     Ok(())
 }
 
 fn remote_server_restart_reason(
-    version: Option<&str>,
-    protocol: Option<u32>,
+    endpoint_protocol_generation: Option<u32>,
     detached_server_daemon: bool,
-    remote_binary_changed: bool,
 ) -> Option<RemoteServerRestartReason> {
-    if protocol != Some(CURRENT_PROTOCOL) {
-        return Some(RemoteServerRestartReason::ProtocolMismatch);
+    if endpoint_protocol_generation != Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+    {
+        return Some(RemoteServerRestartReason::EndpointProtocolMissing);
     }
     if !detached_server_daemon {
         return Some(RemoteServerRestartReason::DaemonDetachMissing);
-    }
-    if version != Some(current_version().as_str()) {
-        return Some(RemoteServerRestartReason::VersionMismatch);
-    }
-    if remote_binary_changed {
-        return Some(RemoteServerRestartReason::BinaryUpdated);
     }
     None
 }
@@ -1109,7 +1097,7 @@ fn confirm_remote_install_with_running_server(
     };
     let RemoteServerStatus::Running {
         version,
-        protocol,
+        endpoint_protocol_generation,
         live_handoff,
         detached_server_daemon,
     } = &status
@@ -1117,10 +1105,8 @@ fn confirm_remote_install_with_running_server(
         return Ok(false);
     };
     let plan = remote_install_running_server_plan(
-        version.as_deref(),
-        *protocol,
+        *endpoint_protocol_generation,
         *detached_server_daemon,
-        true,
         *live_handoff,
         live_handoff_enabled,
     );
@@ -1187,19 +1173,14 @@ fn confirm_remote_install_with_running_server(
 }
 
 fn remote_install_running_server_plan(
-    version: Option<&str>,
-    protocol: Option<u32>,
+    endpoint_protocol_generation: Option<u32>,
     detached_server_daemon: bool,
-    remote_binary_changed: bool,
     live_handoff: bool,
     live_handoff_enabled: bool,
 ) -> RemoteInstallRunningServerPlan {
-    let Some(reason) = remote_server_restart_reason(
-        version,
-        protocol,
-        detached_server_daemon,
-        remote_binary_changed,
-    ) else {
+    let Some(reason) =
+        remote_server_restart_reason(endpoint_protocol_generation, detached_server_daemon)
+    else {
         return RemoteInstallRunningServerPlan::KeepRunning;
     };
 
@@ -1226,14 +1207,18 @@ fn remote_server_status(
 
 #[derive(Debug, Deserialize)]
 struct RemoteClientStatusJson {
-    protocol: u32,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    protocol: Option<u32>,
+    #[serde(default)]
+    endpoint_protocol_generation: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RemoteServerStatusJson {
     running: bool,
     version: Option<String>,
-    protocol: Option<u32>,
     capabilities: Option<RemoteServerCapabilitiesJson>,
 }
 
@@ -1242,10 +1227,21 @@ struct RemoteServerCapabilitiesJson {
     live_handoff: bool,
     #[serde(default)]
     detached_server_daemon: bool,
+    #[serde(default)]
+    endpoint_protocol_generation: Option<u32>,
 }
 
 fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
-    serde_json::from_str(status).ok()
+    status
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<RemoteClientStatusJson>(line).ok())
+        .find(|status| {
+            status.version.is_some()
+                || status.protocol.is_some()
+                || status.endpoint_protocol_generation.is_some()
+        })
 }
 
 fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatus> {
@@ -1262,7 +1258,9 @@ fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatu
 
     Ok(RemoteServerStatus::Running {
         version: parsed.version,
-        protocol: parsed.protocol,
+        endpoint_protocol_generation: capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.endpoint_protocol_generation),
         live_handoff: capabilities
             .as_ref()
             .is_some_and(|capabilities| capabilities.live_handoff),
@@ -1275,13 +1273,12 @@ fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatu
 fn confirm_remote_server_stop(
     target: &str,
     version: Option<&str>,
-    _protocol: Option<u32>,
     reason: RemoteServerRestartReason,
 ) -> io::Result<bool> {
     if !io::stdin().is_terminal() {
-        if reason == RemoteServerRestartReason::ProtocolMismatch {
+        if reason == RemoteServerRestartReason::EndpointProtocolMissing {
             return Err(io::Error::other(format!(
-                "remote herdr server on {target} must stop before this client can attach; run from an interactive terminal to approve stopping it"
+                "remote herdr server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
             )));
         }
 
@@ -1299,28 +1296,20 @@ fn confirm_remote_server_stop(
     eprintln!();
 
     match reason {
-        RemoteServerRestartReason::ProtocolMismatch => {
-            eprintln!("the remote server must stop before this client can attach.");
+        RemoteServerRestartReason::EndpointProtocolMissing => {
+            eprintln!(
+                "the remote server predates Herdr's stable endpoint protocol and must update before this client can attach."
+            );
         }
         RemoteServerRestartReason::DaemonDetachMissing => {
             eprintln!(
                 "the remote server was started by a herdr build that may not survive SSH connection loss. restart it so network drops disconnect only this client."
             );
         }
-        RemoteServerRestartReason::BinaryUpdated => {
-            eprintln!(
-                "the remote herdr binary was installed or replaced. restart the remote server so it uses the prepared binary."
-            );
-        }
-        RemoteServerRestartReason::VersionMismatch => {
-            eprintln!(
-                "the remote server is still running a different herdr version. restart it so it uses the prepared binary."
-            );
-        }
     }
 
-    let prompt = if reason == RemoteServerRestartReason::ProtocolMismatch {
-        "stop the remote server and continue attaching? [Y/n] "
+    let prompt = if reason == RemoteServerRestartReason::EndpointProtocolMissing {
+        "update the remote server and continue attaching? [Y/n] "
     } else {
         "restart the remote server now? [y/N] "
     };
@@ -1333,10 +1322,10 @@ fn confirm_remote_server_stop(
     if answer == "y" || answer == "yes" {
         return Ok(true);
     }
-    if answer.is_empty() && reason == RemoteServerRestartReason::ProtocolMismatch {
+    if answer.is_empty() && reason == RemoteServerRestartReason::EndpointProtocolMissing {
         return Ok(true);
     }
-    if reason == RemoteServerRestartReason::ProtocolMismatch {
+    if reason == RemoteServerRestartReason::EndpointProtocolMissing {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "remote herdr server stop cancelled",
@@ -1346,14 +1335,25 @@ fn confirm_remote_server_stop(
     Ok(false)
 }
 
-fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
-    let command = format!(
+fn remote_live_handoff_command(remote_herdr: &RemoteHerdr, protocol: u32, version: &str) -> String {
+    format!(
         "{} server live-handoff --import-exe {} --expected-protocol {} --expected-version {}",
-        remote_herdr.shell_path,
-        remote_herdr.shell_path,
-        CURRENT_PROTOCOL,
-        current_version()
-    );
+        remote_herdr.shell_path, remote_herdr.shell_path, protocol, version
+    )
+}
+
+fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
+    let status = remote_client_status(ssh, remote_herdr)?.ok_or_else(|| {
+        io::Error::other("could not inspect the prepared remote herdr binary before live handoff")
+    })?;
+    let protocol = status.protocol.ok_or_else(|| {
+        io::Error::other("prepared remote herdr did not report its private protocol")
+    })?;
+    let version = status
+        .version
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| io::Error::other("prepared remote herdr did not report its version"))?;
+    let command = remote_live_handoff_command(remote_herdr, protocol, &version);
     let output = ssh.sh_output(&command)?;
     if !output.status.success() {
         return Err(command_failed("remote server live handoff failed", &output));
@@ -2896,25 +2896,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_client_status_json_reads_protocol() {
-        assert_eq!(
-            parse_client_status_json(r#"{"version":"x","protocol":8,"binary":"/bin/herdr"}"#)
-                .map(|status| status.protocol),
-            Some(8)
+    fn parse_client_status_json_reads_last_json_record() {
+        let status = parse_client_status_json(
+            "wrapper output\n{\"version\":\"0.8.0\",\"protocol\":20,\"endpoint_protocol_generation\":1}\n{\"wrapper\":true}\n",
+        )
+        .unwrap();
+        assert_eq!(status.version.as_deref(), Some("0.8.0"));
+        assert_eq!(status.protocol, Some(20));
+        assert_eq!(status.endpoint_protocol_generation, Some(1));
+        assert!(
+            parse_client_status_json(r#"{"endpoint_protocol_generation":"unknown"}"#).is_none()
         );
-        assert!(parse_client_status_json(r#"{"protocol":"unknown"}"#).is_none());
     }
 
     #[test]
     fn parse_remote_server_status_json_reads_running_server() {
         assert_eq!(
             parse_remote_server_status_json(
-                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true}}"#
+                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1}}"#
             )
             .unwrap(),
             RemoteServerStatus::Running {
                 version: Some("0.6.0".into()),
-                protocol: Some(8),
+                endpoint_protocol_generation: Some(1),
                 live_handoff: true,
                 detached_server_daemon: true
             }
@@ -2930,7 +2934,7 @@ mod tests {
             .unwrap(),
             RemoteServerStatus::Running {
                 version: Some("0.6.0".into()),
-                protocol: Some(8),
+                endpoint_protocol_generation: None,
                 live_handoff: false,
                 detached_server_daemon: false
             }
@@ -3105,21 +3109,19 @@ mod tests {
     }
 
     #[test]
-    fn remote_server_restart_reason_requires_stop_for_protocol_mismatch() {
+    fn remote_server_restart_reason_requires_one_update_for_pre_floor_server() {
         assert_eq!(
-            remote_server_restart_reason(Some(&current_version()), Some(0), true, false),
-            Some(RemoteServerRestartReason::ProtocolMismatch)
+            remote_server_restart_reason(None, true),
+            Some(RemoteServerRestartReason::EndpointProtocolMissing)
         );
     }
 
     #[test]
-    fn remote_server_restart_reason_allows_unchanged_compatible_server() {
+    fn remote_server_restart_reason_allows_compatible_server() {
         assert_eq!(
             remote_server_restart_reason(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
-                true,
-                false
+                Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
+                true
             ),
             None
         );
@@ -3129,9 +3131,7 @@ mod tests {
     fn remote_server_restart_reason_requires_restart_for_old_daemon() {
         assert_eq!(
             remote_server_restart_reason(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
-                false,
+                Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
                 false
             ),
             Some(RemoteServerRestartReason::DaemonDetachMissing)
@@ -3139,51 +3139,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_server_restart_reason_requires_restart_after_helper_update() {
-        assert_eq!(
-            remote_server_restart_reason(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
-                true,
-                true
-            ),
-            Some(RemoteServerRestartReason::BinaryUpdated)
-        );
-    }
-
-    #[test]
-    fn remote_server_restart_reason_offers_restart_for_version_mismatch() {
-        assert_eq!(
-            remote_server_restart_reason(Some("0.0.0"), Some(CURRENT_PROTOCOL), true, false),
-            Some(RemoteServerRestartReason::VersionMismatch)
-        );
-        assert_eq!(
-            remote_server_restart_reason(None, Some(CURRENT_PROTOCOL), true, false),
-            Some(RemoteServerRestartReason::VersionMismatch)
-        );
-    }
-
-    #[test]
-    fn remote_server_restart_reason_allows_current_server() {
-        assert_eq!(
-            remote_server_restart_reason(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
-                true,
-                false
-            ),
-            None
-        );
-    }
-
-    #[test]
     fn remote_install_plan_keeps_compatible_running_server() {
         assert_eq!(
             remote_install_running_server_plan(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
+                Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
                 true,
-                false,
                 false,
                 false
             ),
@@ -3195,10 +3155,8 @@ mod tests {
     fn remote_install_plan_requires_stop_for_old_daemon() {
         assert_eq!(
             remote_install_running_server_plan(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
+                Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
                 false,
-                true,
                 false,
                 false
             ),
@@ -3209,50 +3167,36 @@ mod tests {
     }
 
     #[test]
-    fn remote_install_plan_requires_stop_after_helper_update() {
+    fn remote_install_plan_requires_stop_for_pre_floor_server() {
         assert_eq!(
-            remote_install_running_server_plan(
-                Some(&current_version()),
-                Some(CURRENT_PROTOCOL),
-                true,
-                true,
-                false,
-                false
-            ),
-            RemoteInstallRunningServerPlan::StopRequired(RemoteServerRestartReason::BinaryUpdated)
-        );
-    }
-
-    #[test]
-    fn remote_install_plan_requires_stop_for_incompatible_running_server() {
-        assert_eq!(
-            remote_install_running_server_plan(
-                Some("0.0.0"),
-                Some(CURRENT_PROTOCOL),
-                true,
-                true,
-                false,
-                false
-            ),
+            remote_install_running_server_plan(None, true, false, false),
             RemoteInstallRunningServerPlan::StopRequired(
-                RemoteServerRestartReason::VersionMismatch
+                RemoteServerRestartReason::EndpointProtocolMissing
             )
         );
     }
 
     #[test]
-    fn remote_install_plan_uses_live_handoff_for_incompatible_running_server() {
+    fn remote_install_plan_uses_live_handoff_for_pre_floor_server() {
         assert_eq!(
-            remote_install_running_server_plan(
-                Some("0.0.0"),
-                Some(CURRENT_PROTOCOL),
-                true,
-                true,
-                true,
-                true
-            ),
+            remote_install_running_server_plan(None, true, true, true),
             RemoteInstallRunningServerPlan::LiveHandoff
         );
+    }
+
+    #[test]
+    fn remote_live_handoff_uses_prepared_binary_identity() {
+        let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
+            os: "linux",
+            arch: "x86_64",
+        });
+        let command = remote_live_handoff_command(&remote_herdr, 19, "0.7.9");
+        assert!(command.contains("--expected-protocol 19"));
+        assert!(command.contains("--expected-version 0.7.9"));
+        assert!(!command.contains(&format!(
+            "--expected-protocol {CURRENT_PROTOCOL} --expected-version {}",
+            current_version()
+        )));
     }
 
     #[test]

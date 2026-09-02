@@ -657,8 +657,56 @@ impl App {
         self.sync_focus_events_with_outer_event(None);
     }
 
-    pub(crate) fn send_outer_focus_event(&mut self, event: crate::ghostty::FocusEvent) {
-        self.sync_focus_events_with_outer_event(Some(event));
+    pub(crate) fn accept_current_focus_without_events(&mut self) {
+        self.last_focus = self.state.active.and_then(|idx| {
+            self.state
+                .workspaces
+                .get(idx)
+                .and_then(|workspace| workspace.focused_pane_id().map(|pane_id| (idx, pane_id)))
+        });
+    }
+
+    pub(crate) fn accept_current_focus_with_api_events(&mut self) {
+        let current_focus = self.state.active.and_then(|idx| {
+            self.state
+                .workspaces
+                .get(idx)
+                .and_then(|workspace| workspace.focused_pane_id().map(|pane_id| (idx, pane_id)))
+        });
+        if current_focus == self.last_focus {
+            return;
+        }
+        self.last_focus = current_focus;
+        if let Some((ws_idx, pane_id)) = current_focus {
+            self.emit_focus_api_events(ws_idx, pane_id);
+        }
+    }
+
+    fn emit_focus_api_events(&mut self, ws_idx: usize, pane_id: crate::layout::PaneId) {
+        self.emit_event(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::WorkspaceFocused,
+            data: crate::api::schema::EventData::WorkspaceFocused {
+                workspace_id: self.public_workspace_id(ws_idx),
+            },
+        });
+        if let Some(tab_id) = self.public_tab_id(ws_idx, self.state.workspaces[ws_idx].active_tab) {
+            self.emit_event(crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::TabFocused,
+                data: crate::api::schema::EventData::TabFocused {
+                    tab_id,
+                    workspace_id: self.public_workspace_id(ws_idx),
+                },
+            });
+        }
+        if let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) {
+            self.emit_event(crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::PaneFocused,
+                data: crate::api::schema::EventData::PaneFocused {
+                    pane_id: public_pane_id,
+                    workspace_id: self.public_workspace_id(ws_idx),
+                },
+            });
+        }
     }
 
     fn sync_focus_events_with_outer_event(
@@ -690,38 +738,13 @@ impl App {
                 }
             });
             self.send_pane_focus_event(ws_idx, pane_id, event);
-            self.emit_event(crate::api::schema::EventEnvelope {
-                event: crate::api::schema::EventKind::WorkspaceFocused,
-                data: crate::api::schema::EventData::WorkspaceFocused {
-                    workspace_id: self.public_workspace_id(ws_idx),
-                },
-            });
-            if let Some(tab_id) =
-                self.public_tab_id(ws_idx, self.state.workspaces[ws_idx].active_tab)
-            {
-                self.emit_event(crate::api::schema::EventEnvelope {
-                    event: crate::api::schema::EventKind::TabFocused,
-                    data: crate::api::schema::EventData::TabFocused {
-                        tab_id,
-                        workspace_id: self.public_workspace_id(ws_idx),
-                    },
-                });
-            }
-            if let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) {
-                self.emit_event(crate::api::schema::EventEnvelope {
-                    event: crate::api::schema::EventKind::PaneFocused,
-                    data: crate::api::schema::EventData::PaneFocused {
-                        pane_id: public_pane_id,
-                        workspace_id: self.public_workspace_id(ws_idx),
-                    },
-                });
-            }
+            self.emit_focus_api_events(ws_idx, pane_id);
         }
 
         self.last_focus = current_focus;
     }
 
-    fn send_pane_focus_event(
+    pub(crate) fn send_pane_focus_event(
         &self,
         ws_idx: usize,
         pane_id: crate::layout::PaneId,

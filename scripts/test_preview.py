@@ -49,6 +49,10 @@ class PreviewNotesTests(unittest.TestCase):
             self.assertEqual(data["channel"], "preview")
             self.assertEqual(data["build_id"], "2026-06-02-abcdef123456")
             self.assertEqual(
+                data["endpoint_generation"],
+                preview.read_endpoint_protocol_generation(),
+            )
+            self.assertEqual(
                 data["assets"]["linux-x86_64"]["sha256"],
                 "deadbeef",
             )
@@ -62,6 +66,10 @@ class PreviewNotesTests(unittest.TestCase):
             )
             self.assertEqual(data["assets"]["windows-x86_64"]["format"], "zip")
             self.assertIn("2026-06-02-abcdef123456", data["builds"])
+            self.assertEqual(
+                data["builds"]["2026-06-02-abcdef123456"]["endpoint_generation"],
+                preview.read_endpoint_protocol_generation(),
+            )
 
     def test_windows_preview_asset_requires_sha256(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -983,6 +983,36 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
 }
 
 #[test]
+fn unavailable_worktree_create_does_not_wedge_the_overlay() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut prepare = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
+        &mut prepare,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
+        panic!("new worktree should prepare through worktree.list");
+    };
+    state.handle_endpoint_result("boot-1", &request.id, Ok(worktree_list_result(None)));
+    state.set_endpoint_methods(Some(vec!["worktree.list".into()]));
+    state.handle_input_bytes(b"feature/unavailable");
+
+    let submit = state.handle_input_bytes(b"\r");
+
+    assert!(submit.actions.is_empty());
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::WorktreeCreate(create)) if !create.creating
+    ));
+    assert!(state
+        .visible_endpoint_notice
+        .as_ref()
+        .is_some_and(|notice| notice.key.code == "worktree.create"));
+}
+
+#[test]
 fn worktree_open_filters_and_clicks_a_stable_public_entry() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));

@@ -797,7 +797,9 @@ impl ClientShellState {
                 }
             };
             self.copy_operation_in_flight = true;
-            self.push_endpoint_method_with_kind(method, kind, outcome);
+            if !self.push_endpoint_method_with_kind(method, kind, outcome) {
+                self.copy_operation_in_flight = false;
+            }
             return;
         }
     }

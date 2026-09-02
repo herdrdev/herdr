@@ -18,8 +18,9 @@ use support::{
     cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
     register_spawned_herdr_pid, unregister_spawned_herdr_pid, wait_for_client_shell_bootstrap,
     wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
-    CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
-    SERVER_MESSAGE_SEMANTIC_NOTIFICATION, SERVER_MESSAGE_SERVER_SHUTDOWN,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
+    SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
+    SERVER_MESSAGE_SERVER_SHUTDOWN,
 };
 
 fn unique_test_dir() -> PathBuf {

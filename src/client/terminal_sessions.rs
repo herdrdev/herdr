@@ -90,10 +90,11 @@ fn connect_terminal_session_stream(
     };
 
     match do_handshake(&mut stream, cols, rows, 0, 0, false, None, false, false) {
-        Ok(RenderEncoding::TerminalAnsi) => {}
-        Ok(encoding) => {
+        Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
+        Ok(handshake) => {
             eprintln!(
-                "herdr: terminal session observe negotiated unsupported encoding {encoding:?}"
+                "herdr: terminal session observe negotiated unsupported encoding {:?}",
+                handshake.encoding
             );
             std::process::exit(1);
         }

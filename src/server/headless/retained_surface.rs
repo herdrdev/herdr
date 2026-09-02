@@ -292,14 +292,14 @@ impl HeadlessServer {
                         .parse_pane_id(&pane.pane_id)
                         .is_some_and(|(_, pane_id)| pane_id == *source)
                 }) else {
-                    fallback!("source_not_visible");
+                    continue;
                 };
                 public_pane_id.get_or_insert_with(|| pane.pane_id.clone());
                 width = width.max(pane.inner_rect.width);
                 height = height.max(pane.inner_rect.height);
             }
             let Some(public_pane_id) = public_pane_id else {
-                fallback!("pane_missing");
+                continue;
             };
             let Some((workspace_index, pane_id)) = self.app.parse_pane_id(&public_pane_id) else {
                 fallback!("pane_missing");
@@ -355,7 +355,7 @@ impl HeadlessServer {
                     .iter_mut()
                     .find(|pane| pane.pane_id == collected_pane.pane_id)
                 else {
-                    fallback!("pane_missing");
+                    continue;
                 };
                 // Alternate-screen transitions change whether the pane reserves
                 // a scrollbar gutter. Recompute layout and resize the runtime

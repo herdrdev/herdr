@@ -276,7 +276,7 @@ impl ClientShellState {
         create.creating = true;
         create.error = None;
         let workspace_id = create.source_workspace_id.clone();
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::WorktreeCreate(crate::api::schema::WorktreeCreateParams {
                 workspace_id: Some(workspace_id),
                 cwd: None,
@@ -289,7 +289,11 @@ impl ClientShellState {
             }),
             PendingEndpointKind::WorktreeCreate,
             outcome,
-        );
+        ) {
+            if let Some(ClientShellOverlay::WorktreeCreate(create)) = self.overlay.as_mut() {
+                create.creating = false;
+            }
+        }
         outcome.repaint = true;
     }
 
@@ -328,7 +332,7 @@ impl ClientShellState {
         open.selected = index;
         open.opening = true;
         open.error = None;
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::WorktreeOpen(crate::api::schema::WorktreeOpenParams {
                 workspace_id: Some(workspace_id),
                 cwd: None,
@@ -340,7 +344,11 @@ impl ClientShellState {
             }),
             PendingEndpointKind::WorktreeOpen,
             outcome,
-        );
+        ) {
+            if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut() {
+                open.opening = false;
+            }
+        }
         outcome.repaint = true;
     }
 
@@ -355,7 +363,7 @@ impl ClientShellState {
         let forced = remove.force_confirmation;
         remove.removing = true;
         remove.error = None;
-        self.push_endpoint_method_with_kind(
+        if !self.push_endpoint_method_with_kind(
             crate::api::schema::Method::WorktreeRemove(crate::api::schema::WorktreeRemoveParams {
                 workspace_id,
                 force: forced,
@@ -363,7 +371,11 @@ impl ClientShellState {
             }),
             PendingEndpointKind::WorktreeRemove { forced },
             outcome,
-        );
+        ) {
+            if let Some(ClientShellOverlay::WorktreeRemove(remove)) = self.overlay.as_mut() {
+                remove.removing = false;
+            }
+        }
         outcome.repaint = true;
     }
 
@@ -511,11 +523,8 @@ impl ClientShellState {
                 PendingEndpointKind::PrepareWorktreeCreate { .. }
                 | PendingEndpointKind::PrepareWorktreeOpen { .. }
                 | PendingEndpointKind::PrepareWorktreeRemove { .. },
-                Err(error),
-            ) => {
-                self.endpoint_error = Some(error.message);
-                true
-            }
+                Err(_),
+            ) => true,
             (_, Ok(_)) => {
                 self.endpoint_error =
                     Some("endpoint returned an unexpected worktree result".to_owned());
@@ -535,11 +544,8 @@ impl ClientShellState {
                 | PendingEndpointKind::PaneLinkActivate { .. }
                 | PendingEndpointKind::CopyMotion { .. }
                 | PendingEndpointKind::CopySearch { .. },
-                Err(error),
-            ) => {
-                self.endpoint_error = Some(error.message);
-                true
-            }
+                Err(_),
+            ) => true,
         }
     }
 }
