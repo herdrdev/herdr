@@ -316,6 +316,80 @@ fn client_double_click_selects_and_copies_endpoint_row_word() {
 }
 
 #[test]
+fn pane_content_updates_preserve_active_selection_only_when_selected_cells_stay_stable() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let surface_at = |surface_revision, content_revision, alternate_screen_active| {
+        let mut pane_surface = surface();
+        pane_surface.surface_revision = surface_revision;
+        pane_surface.panes[0].content_revision = content_revision;
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 11,
+            viewport_rows: 2,
+        });
+        pane_surface.panes[0].alternate_screen_active = alternate_screen_active;
+        pane_surface
+    };
+    state.set_pane_surface(surface_at(1, 0, true));
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    let mouse = |kind, column, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+
+    state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        pane.inner_rect.x,
+        pane.inner_rect.y + 1,
+    )]);
+    let mut updated_surface = surface_at(2, 2, true);
+    updated_surface.frame.cells[0].symbol = "W".into();
+    state.set_pane_surface(updated_surface);
+    state.compose(106, 20).expect("updated frame");
+
+    let drag = state.handle_raw_events(vec![mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        pane.inner_rect.x + 1,
+        pane.inner_rect.y + 1,
+    )]);
+
+    assert!(drag.repaint);
+    let selection = state.selection.as_ref().expect("visible selection");
+    assert!(selection.is_visible());
+    assert_eq!(selection.ordered_cells(), ((12, 0), (12, 1)));
+
+    state.selection = Some(crate::selection::Selection::absolute_anchor(
+        "pane_1".to_owned(),
+        (12, 0),
+    ));
+    let mut replaced_surface = surface_at(3, 4, true);
+    replaced_surface.frame.cells[4].symbol = "X".into();
+    state.set_pane_surface(replaced_surface);
+    assert!(state.selection.is_none());
+
+    for (surface_revision, content_revision, width, alternate_screen_active) in
+        [(4, 6, 4, false), (5, 8, 3, false), (6, 9, 3, false)]
+    {
+        state.selection = Some(crate::selection::Selection::absolute_anchor(
+            "pane_1".to_owned(),
+            (12, 0),
+        ));
+        let mut changed_surface =
+            surface_at(surface_revision, content_revision, alternate_screen_active);
+        changed_surface.panes[0].inner_rect.width = width;
+        changed_surface.panes[0].alternate_screen_active = alternate_screen_active;
+        state.set_pane_surface(changed_surface);
+        assert!(state.selection.is_none());
+    }
+}
+
+#[test]
 fn pane_mouse_input_keeps_stable_target_and_endpoint_encoding() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));

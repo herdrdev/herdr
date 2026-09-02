@@ -4,6 +4,63 @@ pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 
+fn pane_surface_row<'a>(
+    surface: &'a PaneSurfaceFrame,
+    pane: &crate::protocol::PaneSurfacePane,
+    absolute_row: u32,
+) -> Option<&'a [crate::protocol::CellData]> {
+    let viewport_top = pane
+        .scroll
+        .map(|scroll| {
+            scroll
+                .max_offset_from_bottom
+                .saturating_sub(scroll.offset_from_bottom) as u32
+        })
+        .unwrap_or(0);
+    let viewport_row = u16::try_from(absolute_row.checked_sub(viewport_top)?).ok()?;
+    if viewport_row >= pane.inner_rect.height {
+        return None;
+    }
+    let start = (usize::from(pane.inner_rect.y) + usize::from(viewport_row))
+        * usize::from(surface.frame.width)
+        + usize::from(pane.inner_rect.x);
+    surface
+        .frame
+        .cells
+        .get(start..start + usize::from(pane.inner_rect.width))
+}
+
+fn selection_cells_unchanged(
+    selection: &crate::selection::Selection<String>,
+    previous_surface: &PaneSurfaceFrame,
+    previous_pane: &crate::protocol::PaneSurfacePane,
+    next_surface: &PaneSurfaceFrame,
+    next_pane: &crate::protocol::PaneSurfacePane,
+) -> bool {
+    let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
+    (start_row..=end_row).all(|row| {
+        let first_col = if row == start_row { start_col } else { 0 };
+        let last_col = if row == end_row {
+            end_col
+        } else {
+            previous_pane.inner_rect.width.saturating_sub(1)
+        };
+        pane_surface_row(previous_surface, previous_pane, row)
+            .zip(pane_surface_row(next_surface, next_pane, row))
+            .and_then(|(previous, next)| {
+                previous
+                    .get(usize::from(first_col)..=usize::from(last_col))
+                    .zip(next.get(usize::from(first_col)..=usize::from(last_col)))
+            })
+            .is_some_and(|(previous, next)| {
+                previous
+                    .iter()
+                    .zip(next)
+                    .all(|(previous, next)| previous.symbol == next.symbol)
+            })
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientShellKeybindingSource {
     Local,
@@ -1481,21 +1538,34 @@ impl ClientShellState {
             self.popup_pending_deadline = None;
         }
         let selection_content_changed = self.selection.as_ref().is_some_and(|selection| {
-            let previous_revision = self.pane_surface.as_ref().and_then(|previous| {
-                previous
-                    .panes
-                    .iter()
-                    .find(|pane| pane.pane_id == selection.pane_id)
-                    .map(|pane| pane.content_revision)
-            });
-            let next_revision = surface
+            let Some(previous_surface) = self.pane_surface.as_ref() else {
+                return false;
+            };
+            let previous = previous_surface
                 .panes
                 .iter()
-                .find(|pane| pane.pane_id == selection.pane_id)
-                .map(|pane| pane.content_revision);
-            previous_revision.is_some()
-                && next_revision.is_some()
-                && previous_revision != next_revision
+                .find(|pane| pane.pane_id == selection.pane_id);
+            let next = surface
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == selection.pane_id);
+            let (Some(previous), Some(next)) = (previous, next) else {
+                return false;
+            };
+            previous.content_revision != next.content_revision
+                && (!selection.is_in_progress()
+                    || !previous.content_revision.is_multiple_of(2)
+                    || !next.content_revision.is_multiple_of(2)
+                    || previous.inner_rect.width != next.inner_rect.width
+                    || previous.inner_rect.height != next.inner_rect.height
+                    || previous.alternate_screen_active != next.alternate_screen_active
+                    || !selection_cells_unchanged(
+                        selection,
+                        previous_surface,
+                        previous,
+                        &surface,
+                        next,
+                    ))
         });
         if selection_content_changed {
             self.selection = None;
