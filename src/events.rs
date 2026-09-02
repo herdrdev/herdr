@@ -37,6 +37,7 @@ pub struct ApiWorktreeRemoveRequest {
     pub id: String,
     pub operation_id: u64,
     pub checkout_key: std::path::PathBuf,
+    pub shutdown_panes: Vec<crate::layout::PaneId>,
     pub respond_to: std::sync::mpsc::Sender<String>,
 }
 

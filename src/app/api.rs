@@ -151,6 +151,22 @@ impl App {
         }
 
         if let AppEvent::PaneDied { pane_id } = &ev {
+            let expected_exit = self
+                .pending_worktree_remove_runtime_exits
+                .get_mut(pane_id)
+                .map(|remaining| {
+                    *remaining -= 1;
+                    *remaining == 0
+                });
+            if let Some(remove_entry) = expected_exit {
+                if remove_entry {
+                    self.pending_worktree_remove_runtime_exits.remove(pane_id);
+                }
+                return Vec::new();
+            }
+        }
+
+        if let AppEvent::PaneDied { pane_id } = &ev {
             if self
                 .state
                 .popup_pane

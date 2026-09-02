@@ -2232,6 +2232,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(repo);
     }
 
+    #[tokio::test]
+    async fn failed_worktree_remove_preserves_and_restores_shutdown_pane() {
+        let checkout = unique_temp_path("api-worktree-remove-failure-checkout");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let mut app = test_app();
+        app.state.default_shell = test_shell().into();
+        let mut workspace = Workspace::test_new("worktree");
+        workspace.identity_cwd = checkout.clone();
+        workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "repo".into(),
+            repo_root: checkout.clone(),
+            checkout_path: checkout.clone(),
+            is_linked_worktree: true,
+        });
+        let workspace_id = workspace.id.clone();
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let (runtime, _input_rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+
+        let shutdown_panes = app.shutdown_workspace_terminal_runtimes_for_worktree_remove(0);
+        assert_eq!(shutdown_panes, vec![pane_id]);
+        app.handle_internal_event(AppEvent::PaneDied { pane_id });
+        assert!(app.find_pane(pane_id).is_some());
+        assert!(app.pending_worktree_remove_runtime_exits.is_empty());
+
+        let checkout_key = crate::worktree::canonical_or_original(&checkout);
+        app.pending_api_worktree_removes
+            .insert(workspace_id.clone(), 7);
+        app.pending_api_worktree_remove_paths
+            .insert(checkout_key.clone(), 7);
+        let workspace_snapshot = app.workspace_info(0);
+        let worktree_snapshot = app
+            .worktree_info_for_membership(app.state.workspaces[0].worktree_space().unwrap(), None);
+        let (respond_to, response_rx) = response_channel();
+        app.handle_api_worktree_remove_finished(WorktreeRemoveResult {
+            workspace_id,
+            path: checkout.clone(),
+            workspace: Some(Box::new(workspace_snapshot)),
+            worktree: Some(Box::new(worktree_snapshot)),
+            forced: false,
+            api_request: Some(ApiWorktreeRemoveRequest {
+                id: "req".into(),
+                operation_id: 7,
+                checkout_key,
+                shutdown_panes,
+                respond_to,
+            }),
+            result: Err("simulated remove failure".into()),
+        });
+
+        let response = response_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "worktree_remove_failed");
+        assert!(app.find_pane(pane_id).is_some());
+        assert!(app.terminal_runtimes.get(&terminal_id).is_some());
+
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+        let _ = std::fs::remove_dir_all(checkout);
+    }
+
     #[test]
     fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
         let mut app = test_app();
@@ -2274,6 +2340,7 @@ mod tests {
                 id: "req".into(),
                 operation_id: 7,
                 checkout_key: crate::worktree::canonical_or_original(&checkout),
+                shutdown_panes: Vec::new(),
                 respond_to,
             }),
             result: Ok(()),
@@ -2335,6 +2402,7 @@ mod tests {
                 id: "req".into(),
                 operation_id: 7,
                 checkout_key: crate::worktree::canonical_or_original(&checkout),
+                shutdown_panes: Vec::new(),
                 respond_to,
             }),
             result: Ok(()),

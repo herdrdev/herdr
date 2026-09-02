@@ -301,9 +301,12 @@ impl App {
             return;
         }
 
-        if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force) {
-            self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx);
-        }
+        let shutdown_panes =
+            if Self::should_shutdown_workspace_terminal_runtimes_for_worktree_remove(params.force) {
+                self.shutdown_workspace_terminal_runtimes_for_worktree_remove(ws_idx)
+            } else {
+                Vec::new()
+            };
 
         let operation_id = self.next_api_worktree_operation_id();
         self.pending_api_worktree_removes
@@ -322,6 +325,7 @@ impl App {
             id,
             operation_id,
             checkout_key,
+            shutdown_panes,
             respond_to,
         };
         let repo_root = space.repo_root;
@@ -497,6 +501,7 @@ impl App {
             .remove(&api.checkout_key);
 
         if let Err(message) = result.result {
+            self.restore_shutdown_worktree_panes(&api.shutdown_panes);
             let code =
                 if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
                     "dirty_worktree_requires_force"
@@ -540,8 +545,11 @@ impl App {
                         workspace: workspace_snapshot.clone(),
                     },
                 });
-            } else if let Some(snapshot) = workspace_snapshot.as_ref() {
-                workspace_id = snapshot.workspace_id.clone();
+            } else {
+                self.restore_shutdown_worktree_panes(&api.shutdown_panes);
+                if let Some(snapshot) = workspace_snapshot.as_ref() {
+                    workspace_id = snapshot.workspace_id.clone();
+                }
             }
         } else if let Some(snapshot) = workspace_snapshot.as_ref() {
             workspace_id = snapshot.workspace_id.clone();
@@ -573,5 +581,18 @@ impl App {
             },
         );
         Self::send_api_response(api.respond_to, response);
+    }
+
+    fn restore_shutdown_worktree_panes(&mut self, shutdown_panes: &[crate::layout::PaneId]) {
+        for &pane_id in shutdown_panes {
+            let runtime_missing = self.find_pane(pane_id).is_some_and(|(_, pane)| {
+                self.terminal_runtimes
+                    .get(&pane.attached_terminal_id)
+                    .is_none()
+            });
+            if runtime_missing {
+                self.respawn_shell_for_launch_pane(pane_id);
+            }
+        }
     }
 }
