@@ -899,7 +899,7 @@ impl HeadlessServer {
     }
 
     fn active_tab_suppresses_notifications(&self, is_active_tab: bool) -> bool {
-        crate::app::actions::active_tab_suppresses_notifications(
+        crate::app::notifications::active_tab_suppresses_notifications(
             is_active_tab,
             self.foreground_client_outer_focus(),
         )
@@ -3208,7 +3208,7 @@ impl HeadlessServer {
                 && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
             {
                 if let Some(kind) =
-                    crate::app::actions::notification_toast_for_state_change_with_agent_labels(
+                    crate::app::notifications::notification_toast_for_state_change_with_agent_labels(
                         suppress_active_tab_notifications,
                         *prev_state,
                         new_state,
@@ -3232,7 +3232,7 @@ impl HeadlessServer {
                             &self.app.state.terminals,
                             &self.app.terminal_runtimes,
                         );
-                        let context = crate::app::actions::notification_context(
+                        let context = crate::app::notifications::notification_context(
                             &self.app.state.workspaces[*ws_idx],
                             &workspace_label,
                             *ws_idx,
@@ -3253,7 +3253,7 @@ impl HeadlessServer {
             if self.app.state.toast_config.delay_seconds == 0 && self.app.state.sound.allows(agent)
             {
                 if let Some(sound) =
-                    crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                    crate::app::notifications::notification_sound_for_state_change_with_agent_labels(
                         suppress_active_tab_notifications,
                         *prev_state,
                         new_state,

@@ -543,7 +543,7 @@ fn dispatch_client_shell_actions(
                 write_to_server(write_stream, &request).map_err(ClientError::ConnectionLost)?;
             }
             shell::ClientShellAction::OpenSafeWebUrl(url) => {
-                if crate::app::actions::safe_web_url(&url).is_some() {
+                if crate::ui::safe_web_url(&url).is_some() {
                     match crate::platform::open_url(&url) {
                         Ok(Some(child)) => detached_process_children.push(child),
                         Ok(None) => {}

@@ -646,8 +646,7 @@ impl ClientShellState {
                     }
                     Err(_) => return (true, Vec::new()),
                 };
-                let Some((start_col, end_col)) =
-                    crate::app::actions::word_bounds_at_column(&row_text, col)
+                let Some((start_col, end_col)) = crate::ui::word_bounds_at_column(&row_text, col)
                 else {
                     self.selection = None;
                     return (true, Vec::new());
@@ -709,7 +708,7 @@ impl ClientShellState {
                     Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
                         url: Some(url),
                         handled: false,
-                    }) if crate::app::actions::safe_web_url(&url).is_some() => {
+                    }) if crate::ui::safe_web_url(&url).is_some() => {
                         self.url_click_consumes_until_up = completed_before_release;
                         (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
                     }

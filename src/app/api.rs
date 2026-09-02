@@ -358,7 +358,7 @@ impl App {
         }
 
         let workspace_label = ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
-        let context = crate::app::actions::notification_context(
+        let context = crate::app::notifications::notification_context(
             ws,
             &workspace_label,
             update.ws_idx,
@@ -605,7 +605,7 @@ impl App {
             let ws = &self.state.workspaces[ws_idx];
             let workspace_label =
                 ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
-            let context = crate::app::actions::notification_context(
+            let context = crate::app::notifications::notification_context(
                 ws,
                 &workspace_label,
                 ws_idx,

@@ -61,13 +61,15 @@ impl HeadlessServer {
         agent_label: Option<&str>,
         known_agent: Option<crate::detect::Agent>,
     ) -> bool {
-        let Some(kind) = crate::app::actions::notification_toast_for_state_change_with_agent_labels(
-            false,
-            previous_state,
-            state,
-            previous_agent_label,
-            agent_label,
-        ) else {
+        let Some(kind) =
+            crate::app::notifications::notification_toast_for_state_change_with_agent_labels(
+                false,
+                previous_state,
+                state,
+                previous_agent_label,
+                agent_label,
+            )
+        else {
             return false;
         };
         let Some(workspace) = self.app.state.workspaces.get(ws_idx) else {
@@ -106,8 +108,12 @@ impl HeadlessServer {
         let tab_id = crate::workspace::public_tab_id_for_number(&workspace_id, tab_number);
         let workspace_label =
             workspace.display_name_from(&self.app.state.terminals, &self.app.terminal_runtimes);
-        let context =
-            crate::app::actions::notification_context(workspace, &workspace_label, ws_idx, pane_id);
+        let context = crate::app::notifications::notification_context(
+            workspace,
+            &workspace_label,
+            ws_idx,
+            pane_id,
+        );
         let agent = known_agent
             .map(crate::detect::agent_label)
             .map(str::to_owned);
@@ -143,7 +149,7 @@ impl HeadlessServer {
 
         if !update.suppress_completion && self.app.state.sound.allows(update.known_agent) {
             if let Some(sound) =
-                crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                crate::app::notifications::notification_sound_for_state_change_with_agent_labels(
                     suppress_active_tab_notifications,
                     update.previous_state,
                     update.state,
@@ -162,9 +168,13 @@ impl HeadlessServer {
         if !should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
             return;
         }
-        let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
+        let Some(kind) = crate::app::notifications::notification_toast_for_pane_state_update(
             suppress_active_tab_notifications,
-            update,
+            update.suppress_completion,
+            update.previous_state,
+            update.state,
+            update.previous_agent_label.as_deref(),
+            update.agent_label.as_deref(),
         ) else {
             return;
         };
@@ -181,7 +191,7 @@ impl HeadlessServer {
         };
         let workspace_label =
             ws.display_name_from(&self.app.state.terminals, &self.app.terminal_runtimes);
-        let context = crate::app::actions::notification_context(
+        let context = crate::app::notifications::notification_context(
             ws,
             &workspace_label,
             update.ws_idx,
@@ -400,7 +410,7 @@ impl HeadlessServer {
                     && self.app.state.sound.allows(agent_val)
                 {
                     if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                        crate::app::notifications::notification_sound_for_state_change_with_agent_labels(
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,
@@ -503,7 +513,7 @@ impl HeadlessServer {
                     && self.app.state.sound.allows(agent_val)
                 {
                     if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
+                        crate::app::notifications::notification_sound_for_state_change_with_agent_labels(
                             suppress_active_tab_notifications,
                             prev_state,
                             next_state,

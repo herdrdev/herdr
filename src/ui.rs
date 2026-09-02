@@ -8,6 +8,7 @@ mod sidebar;
 mod status;
 mod tab_surface;
 mod text;
+mod text_hit;
 mod widgets;
 
 pub(crate) use self::onboarding::{
@@ -43,6 +44,9 @@ pub(crate) use self::tab_surface::{
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
 };
 pub(crate) use self::text::truncate_end;
+pub(crate) use self::text_hit::{
+    logical_cell_for_visible_cell, safe_web_url, url_at_column, word_bounds_at_column,
+};
 pub(crate) use self::widgets::{centered_popup_rect, modal_stack_areas};
 
 use crate::app::AppState;

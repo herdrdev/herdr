@@ -2,11 +2,13 @@
 //!
 //! - `state.rs` — AppState, Mode, and pure data structs
 //! - `actions.rs` — state mutations (testable without PTYs/async)
+//! - `notifications.rs` — derived toast/sound policy for agent state changes
 
 pub(crate) mod actions;
 mod agent_resume;
 pub(crate) mod agent_view;
 mod agents;
+pub(crate) mod notifications;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 mod api_helpers;
