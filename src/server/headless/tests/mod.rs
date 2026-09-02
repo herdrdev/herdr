@@ -3468,7 +3468,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
 }
 
 #[test]
-fn terminal_attach_client_exits_when_attached_pane_dies() {
+fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("attached");
     let pane_id = workspace.tabs[0].root_pane;
@@ -3478,7 +3478,18 @@ fn terminal_attach_client_exits_when_attached_pane_dies() {
         .pane_state(pane_id)
         .expect("pane")
         .attached_terminal_id
-        .to_string();
+        .clone();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Working,
+        );
+    let terminal_id = terminal_id.to_string();
     let (writer, control_rx, _render_rx) = test_client_writer();
 
     assert!(!server.handle_server_event(ServerEvent::ClientConnected {
@@ -3498,13 +3509,138 @@ fn terminal_attach_client_exits_when_attached_pane_dies() {
         })
     );
     assert_eq!(server.terminal_attach_owners.get(&terminal_id), Some(&7));
+    server
+        .app
+        .pending_worktree_remove_runtime_exits
+        .insert(pane_id, 1);
+    server
+        .app
+        .pending_worktree_remove_runtime_restores
+        .insert(pane_id, 7);
 
-    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id }));
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::WorktreeRuntimeRestoreFailed {
+            pane_id,
+            operation_id: 7,
+        })
+    );
 
     assert!(!server.clients.contains_key(&7));
     assert!(!server.terminal_attach_owners.contains_key(&terminal_id));
     let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
     assert_eq!(reason, Some(format!("terminal {terminal_id} exited")));
+}
+
+#[test]
+fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
+    let mut server = test_headless_server();
+    let checkout = PathBuf::from("/repo/herdr-issue");
+    let parent = crate::workspace::Workspace::test_new("parent");
+    let mut workspace = crate::workspace::Workspace::test_new("worktree");
+    workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+        key: "repo-key".into(),
+        label: "herdr".into(),
+        repo_root: "/repo/herdr".into(),
+        checkout_path: checkout.clone(),
+        is_linked_worktree: true,
+    });
+    let workspace_id = workspace.id.clone();
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    server.app.state.workspaces = vec![parent, workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(1);
+    server.app.state.selected = 1;
+    let checkout_key = crate::worktree::canonical_or_original(&checkout);
+    server
+        .app
+        .pending_api_worktree_removes
+        .insert(workspace_id.clone(), 7);
+    server
+        .app
+        .pending_api_worktree_remove_paths
+        .insert(checkout_key.clone(), 7);
+    server
+        .app
+        .pending_worktree_remove_runtime_exits
+        .insert(pane_id, 1);
+    let terminal_id = terminal_id.to_string();
+    let (writer, control_rx, _render_rx) = test_client_writer();
+
+    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
+        client_id: 7,
+        cols: 80,
+        rows: 24,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+        writer,
+    }));
+    assert!(
+        server.handle_server_event(ServerEvent::ClientAttachTerminal {
+            client_id: 7,
+            terminal_id: terminal_id.clone(),
+            takeover: false,
+        })
+    );
+    let (respond_to, _response_rx) = std::sync::mpsc::channel();
+
+    assert!(
+        server.handle_internal_event_with_forwarding(AppEvent::WorktreeRemoveFinished(Box::new(
+            crate::events::WorktreeRemoveResult {
+                workspace_id,
+                path: checkout,
+                workspace: None,
+                worktree: None,
+                forced: true,
+                api_request: Some(crate::events::ApiWorktreeRemoveRequest {
+                    id: "req".into(),
+                    operation_id: 7,
+                    checkout_key,
+                    shutdown_panes: vec![pane_id],
+                    respond_to,
+                }),
+                result: Ok(()),
+            }
+        )))
+    );
+
+    assert!(!server.clients.contains_key(&7));
+    assert!(!server.terminal_attach_owners.contains_key(&terminal_id));
+    let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
+    assert_eq!(reason, Some(format!("terminal {terminal_id} exited")));
+}
+
+#[test]
+fn expected_worktree_runtime_exit_does_not_release_agent() {
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("worktree");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Working,
+        );
+    server
+        .app
+        .pending_worktree_remove_runtime_exits
+        .insert(pane_id, 1);
+
+    assert!(server.handle_internal_event_with_forwarding(AppEvent::PaneDied { pane_id }));
+
+    assert_eq!(
+        server.app.state.terminals[&terminal_id].state,
+        crate::detect::AgentState::Working
+    );
+    assert!(server.app.find_pane(pane_id).is_some());
 }
 
 #[test]

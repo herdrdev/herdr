@@ -627,15 +627,43 @@ impl HeadlessServer {
                 }
                 changed
             }
-            AppEvent::WorktreeRemoveFinished(_) => {
+            AppEvent::WorktreeRemoveFinished(result) => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
-                let changed = self.app.handle_internal_event_with_render_impact(ev);
+                let shutdown_terminals = result
+                    .api_request
+                    .as_ref()
+                    .map(|request| {
+                        request
+                            .shutdown_panes
+                            .iter()
+                            .filter_map(|pane_id| {
+                                self.app.find_pane(*pane_id).map(|(_, pane)| {
+                                    (*pane_id, pane.attached_terminal_id.to_string())
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                for update in &pane_updates {
+                    self.forward_semantic_agent_notification(update);
+                    self.forward_pane_state_update_notifications_to_clients(update);
+                }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
-                changed
+                for (pane_id, terminal_id) in shutdown_terminals {
+                    if self.app.find_pane(pane_id).is_none() {
+                        self.shutdown_terminal_stream_clients(
+                            &terminal_id,
+                            format!("terminal {terminal_id} exited"),
+                        );
+                    }
+                }
+                true
             }
-            AppEvent::PaneDied { pane_id } => {
+            AppEvent::PaneDied { pane_id }
+            | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
                 let pane_id_val = *pane_id;
@@ -646,17 +674,28 @@ impl HeadlessServer {
                             .map(|pane| pane.attached_terminal_id.to_string())
                     })
                 });
-                if let Some(update) = self
-                    .app
-                    .state
-                    .publish_pane_process_exit_if_agent(pane_id_val)
+                if matches!(&ev, AppEvent::PaneDied { .. })
+                    && !self
+                        .app
+                        .pending_worktree_remove_runtime_exits
+                        .contains_key(&pane_id_val)
                 {
-                    self.app.emit_pane_state_update(&update);
-                    self.forward_semantic_agent_notification(&update);
-                    self.forward_pane_state_update_notifications_to_clients(&update);
+                    if let Some(update) = self
+                        .app
+                        .state
+                        .publish_pane_process_exit_if_agent(pane_id_val, false)
+                    {
+                        self.app.emit_pane_state_update(&update);
+                        self.forward_semantic_agent_notification(&update);
+                        self.forward_pane_state_update_notifications_to_clients(&update);
+                    }
                 }
 
-                self.app.handle_internal_event(ev);
+                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                for update in &pane_updates {
+                    self.forward_semantic_agent_notification(update);
+                    self.forward_pane_state_update_notifications_to_clients(update);
+                }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
 

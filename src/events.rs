@@ -57,6 +57,8 @@ pub struct WorktreeRemoveResult {
 pub enum AppEvent {
     /// A pane's child process exited.
     PaneDied { pane_id: PaneId },
+    /// A worktree-removal runtime could not be restored normally.
+    WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,

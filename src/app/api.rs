@@ -83,6 +83,20 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let mut worktree_restore_failed = false;
+        let ev = match ev {
+            AppEvent::WorktreeRuntimeRestoreFailed {
+                pane_id,
+                operation_id,
+            } => {
+                if !self.claim_worktree_runtime_restore_failure(pane_id, operation_id) {
+                    return Vec::new();
+                }
+                worktree_restore_failed = true;
+                AppEvent::PaneDied { pane_id }
+            }
+            ev => ev,
+        };
         if matches!(
             &ev,
             AppEvent::TerminalBell { .. } | AppEvent::ClipboardWrite { .. }
@@ -146,26 +160,10 @@ impl App {
         }
 
         if let AppEvent::WorktreeRemoveFinished(result) = ev {
-            self.handle_api_worktree_remove_finished(*result);
-            return Vec::new();
+            return self.handle_api_worktree_remove_finished(*result);
         }
 
-        if let AppEvent::PaneDied { pane_id } = &ev {
-            let expected_exit = self
-                .pending_worktree_remove_runtime_exits
-                .get_mut(pane_id)
-                .map(|remaining| {
-                    *remaining -= 1;
-                    *remaining == 0
-                });
-            if let Some(remove_entry) = expected_exit {
-                if remove_entry {
-                    self.pending_worktree_remove_runtime_exits.remove(pane_id);
-                }
-                return Vec::new();
-            }
-        }
-
+        let mut worktree_restore_updates = Vec::new();
         if let AppEvent::PaneDied { pane_id } = &ev {
             if self
                 .state
@@ -176,19 +174,53 @@ impl App {
                 self.close_popup_pane();
                 return Vec::new();
             }
-            let previous_toast = self.state.toast.clone();
-            if let Some(update) = self.state.publish_pane_process_exit_if_agent(*pane_id) {
-                self.sync_full_lifecycle_authority_detection_pauses();
-                self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
-                self.emit_pane_state_update(&update);
-            }
-            if self.runtime_exit_action(*pane_id) == RuntimeExitAction::RespawnShell
-                && self.respawn_shell_for_launch_pane(*pane_id)
-            {
-                self.overlay_panes.remove(pane_id);
-                self.render_dirty.request_generic();
-                self.render_notify.notify_one();
-                return Vec::new();
+            if worktree_restore_failed {
+                worktree_restore_updates
+                    .extend(self.publish_worktree_runtime_agent_release(*pane_id));
+            } else {
+                let expected_exit = self
+                    .pending_worktree_remove_runtime_exits
+                    .get_mut(pane_id)
+                    .map(|remaining| {
+                        *remaining -= 1;
+                        *remaining == 0
+                    });
+                if let Some(remove_entry) = expected_exit {
+                    let restore_failed = if remove_entry {
+                        self.pending_worktree_remove_runtime_exits.remove(pane_id);
+                        let restore_requested = self
+                            .pending_worktree_remove_runtime_restores
+                            .remove(pane_id)
+                            .is_some();
+                        if restore_requested {
+                            worktree_restore_updates
+                                .extend(self.publish_worktree_runtime_agent_release(*pane_id));
+                        }
+                        restore_requested && !self.respawn_shell_for_launch_pane(*pane_id, false)
+                    } else {
+                        false
+                    };
+                    if !restore_failed {
+                        return worktree_restore_updates;
+                    }
+                }
+                let previous_toast = self.state.toast.clone();
+                if let Some(update) = self
+                    .state
+                    .publish_pane_process_exit_if_agent(*pane_id, false)
+                {
+                    self.sync_full_lifecycle_authority_detection_pauses();
+                    self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+                    self.emit_pane_state_update(&update);
+                }
+                if self.runtime_exit_action(*pane_id) == RuntimeExitAction::RespawnShell
+                    && self.respawn_shell_for_launch_pane(*pane_id, true)
+                {
+                    self.overlay_panes.remove(pane_id);
+                    self.render_dirty.request_generic();
+                    self.render_notify.notify_one();
+                    return worktree_restore_updates;
+                }
             }
         }
 
@@ -265,7 +297,7 @@ impl App {
             };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
-        let pane_updates = self.state.handle_app_event(ev);
+        let mut pane_updates = self.state.handle_app_event(ev);
         if update_ready.is_some() {
             self.state.latest_release_notes = crate::release_notes::load_latest();
         }
@@ -316,6 +348,7 @@ impl App {
 
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
+        pane_updates.extend(worktree_restore_updates);
         pane_updates
     }
 
@@ -485,7 +518,11 @@ impl App {
         }
     }
 
-    fn respawn_shell_for_launch_pane(&mut self, pane_id: crate::layout::PaneId) -> bool {
+    fn respawn_shell_for_launch_pane(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        focus_pane: bool,
+    ) -> bool {
         let Some((ws_idx, pane_state)) = self.find_pane(pane_id) else {
             return false;
         };
@@ -533,9 +570,56 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.clear_agent_runtime_identity_after_respawn();
         }
-        self.state.focus_pane_in_workspace(ws_idx, pane_id);
+        if focus_pane {
+            self.state.focus_pane_in_workspace(ws_idx, pane_id);
+        }
         self.schedule_session_save();
         true
+    }
+
+    pub(crate) fn claim_worktree_runtime_restore_failure(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        operation_id: u64,
+    ) -> bool {
+        if self.pending_worktree_remove_runtime_restores.get(&pane_id) != Some(&operation_id) {
+            return false;
+        }
+        self.pending_worktree_remove_runtime_restores
+            .remove(&pane_id);
+        self.pending_worktree_remove_runtime_exits.remove(&pane_id);
+        true
+    }
+
+    pub(crate) fn publish_worktree_runtime_agent_release(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<crate::app::actions::PaneStateUpdate> {
+        self.state.pending_agent_notifications.remove(&pane_id);
+        let previous_toast = self.state.toast.clone();
+        let update = self
+            .state
+            .publish_pane_process_exit_if_agent(pane_id, true)?;
+        self.sync_full_lifecycle_authority_detection_pauses();
+        self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+        self.emit_pane_state_update(&update);
+        Some(update)
+    }
+
+    fn queue_worktree_runtime_restore_failed(
+        &self,
+        pane_id: crate::layout::PaneId,
+        operation_id: u64,
+    ) {
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let _ = event_tx
+                .send(AppEvent::WorktreeRuntimeRestoreFailed {
+                    pane_id,
+                    operation_id,
+                })
+                .await;
+        });
     }
 
     pub(crate) fn emit_pane_state_update(&mut self, update: &crate::app::actions::PaneStateUpdate) {
@@ -2217,6 +2301,66 @@ mod tests {
             app.runtime_exit_action(pane_id),
             RuntimeExitAction::ClosePane
         );
+    }
+
+    #[test]
+    fn stalled_worktree_runtime_exit_closes_pane() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("worktree");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        #[cfg(windows)]
+        {
+            app.state.default_shell = "powershell.exe".into();
+            app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+            let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+            terminal.set_detected_state_with_screen_signals_at(
+                Some(Agent::Codex),
+                AgentState::Idle,
+                false,
+                false,
+                false,
+                true,
+                std::time::Instant::now(),
+            );
+            assert_eq!(
+                app.runtime_exit_action(pane_id),
+                RuntimeExitAction::RespawnShell
+            );
+        }
+        app.pending_worktree_remove_runtime_exits.insert(pane_id, 1);
+        app.pending_worktree_remove_runtime_restores
+            .insert(pane_id, 8);
+
+        app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
+            pane_id,
+            operation_id: 7,
+        });
+        assert_eq!(
+            app.pending_worktree_remove_runtime_restores.get(&pane_id),
+            Some(&8)
+        );
+        assert!(app.event_rx.try_recv().is_err());
+
+        app.handle_internal_event(AppEvent::WorktreeRuntimeRestoreFailed {
+            pane_id,
+            operation_id: 8,
+        });
+
+        assert!(app.find_pane(pane_id).is_none());
+        assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+        assert!(app.pending_worktree_remove_runtime_exits.is_empty());
+        assert!(app.pending_worktree_remove_runtime_restores.is_empty());
     }
 
     #[test]
