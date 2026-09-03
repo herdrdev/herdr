@@ -51,7 +51,7 @@ Windows ビルドは安定版とプレビューの両方のアップデートチ
 
 Windows のエージェントプロセス検出は、ペインのシェルの子孫プロセスをスキャンし、npm/Node や Git Bash のプロセスチェーンを含む直接のエージェントと一般的なコマンドラッパーを認識します。Git Bash から起動したエージェントはエミュレートされた `exec` 境界を越えて追跡されますが、Unix のフォアグラウンドプロセスグループ検出と同じものではありません。
 
-Windows でインテグレーションをインストールできるのは、現在 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI、Antigravity CLI です。利用可能な対象は Unix より少なく、インストール形式が Windows で未対応のインテグレーションは表示されないか拒否されます。Devin CLI のプロセス検出とスクリーン検出は Windows でも動作しますが、オプションのセッション識別フックは現在インストールできません。
+Windows でインテグレーションをインストールできるのは、現在 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI、Antigravity CLI です。利用可能な対象は Unix より少なく、インストール形式が Windows で未対応のインテグレーションは表示されないか拒否されます。
 
 プラグインは、プレビューとしてマニフェストのプラットフォームに `windows` をサポートします。GitHub インストール、ローカルリンク、ビルドコマンド、アクション、イベント、プラグインペインは Windows ではベストエフォートです。コマンドは argv 形式で Windows 互換である必要があります。`npm`、`bun`、`node` のような Node パッケージの shim は `PATH` にあれば動作するはずですが、`sh` や Bash を使う Unix 専用の例には Windows 向けの代替が必要です。プラットフォームフィルターは、未サポートのビルドコマンドをスキップし、未サポートのアクションやペインには `platform_unsupported` を返します。
 

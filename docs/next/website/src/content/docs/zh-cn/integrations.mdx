@@ -177,9 +177,7 @@ herdr integration install devin
 
 该钩子从 Devin 的会话、提示、工具使用、权限和停止事件中上报原生会话身份。Devin 的状态仍来自 Herdr 的屏幕清单和 OSC 检测,因为 Devin 钩子不会在每次权限取消或用户中断后都发出可靠的状态转换。
 
-在 Linux 和 macOS 上,Herdr 默认使用 `~/.config/devin`,设置了 `XDG_CONFIG_HOME` 时使用 `$XDG_CONFIG_HOME/devin`。Devin 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`,并向 `config.json` 添加 Herdr 钩子条目。钩子在 Devin 运行期间刷新会话引用。卸载会从 `config.json` 中移除 Herdr 条目并删除钩子脚本。
-
-Devin 集成目前不支持在 Windows 上安装。Devin 的 Windows 配置存放在 `%APPDATA%\devin`,Herdr 尚不能解析该位置。即使没有钩子,原生进程检测和屏幕检测仍然可用。
+设置了 `XDG_CONFIG_HOME` 时,Herdr 使用 `$XDG_CONFIG_HOME/devin`。否则,在 Linux 和 macOS 上使用 `~/.config/devin`,在 Windows 上使用 `%APPDATA%\devin`。Devin 配置目录必须已经存在。安装在 Unix 上写入 `herdr-agent-state.sh`,在 Windows 上写入 `herdr-agent-state.ps1`,并向 `config.json` 添加 Herdr 钩子条目。钩子在 Devin 运行期间刷新会话引用。卸载会从 `config.json` 中移除 Herdr 条目并删除钩子脚本。
 
 Herdr 用 `devin --resume <id>` 恢复保存的 Devin 会话。无论钩子是否安装,屏幕清单检测始终是状态权威。
 

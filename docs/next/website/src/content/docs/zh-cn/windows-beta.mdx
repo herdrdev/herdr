@@ -51,7 +51,7 @@ Windows 构建同时通过稳定版和预览版更新通道提供。新安装默
 
 Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器,包括 npm/Node 和 Git Bash 进程链。它会跨越模拟的 `exec` 边界跟踪从 Git Bash 启动的智能体,但这和 Unix 前台进程组检测不是一回事。
 
-Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。Devin CLI 的进程检测和屏幕检测可在 Windows 上工作,但目前无法安装其可选的会话身份钩子。
+Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。
 
 插件以预览状态支持在清单中声明 `windows` 平台。GitHub 安装、本地链接、构建命令、动作、事件和插件窗格在 Windows 上尽力而为。命令是 argv 命令,必须兼容 Windows;`npm`、`bun`、`node` 之类的 Node 包 shim 只要在 `PATH` 上就应该能用,而使用 `sh` 或 Bash 的 Unix 专用示例需要 Windows 专用的替代方案。平台过滤器会跳过不支持的构建命令,并对不支持的动作或窗格返回 `platform_unsupported`。
 

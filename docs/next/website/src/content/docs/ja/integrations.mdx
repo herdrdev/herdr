@@ -177,9 +177,7 @@ herdr integration install devin
 
 このフックは、Devin のセッション、プロンプト、ツール使用、許可、停止の各イベントからネイティブセッション識別を報告します。Devin のフックはすべての許可キャンセルやユーザー割り込みの後に信頼できる状態遷移を発行しないため、Devin の状態は引き続き Herdr のスクリーンマニフェストと OSC 検出から得られます。
 
-Linux と macOS では、Herdr はデフォルトで `~/.config/devin` を使い、`XDG_CONFIG_HOME` が設定されていれば `$XDG_CONFIG_HOME/devin` を使います。Devin の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh` を書き込み、`config.json` に Herdr のフックエントリを追加します。フックは Devin の実行中にセッション参照を更新します。アンインストールは `config.json` から Herdr のエントリを削除し、フックスクリプトを削除します。
-
-Devin インテグレーションのインストールは、現在 Windows ではサポートされていません。Devin の Windows 設定は `%APPDATA%\devin` に保存されますが、Herdr はまだその場所を解決できません。フックがなくても、ネイティブプロセス検出とスクリーン検出は動作します。
+`XDG_CONFIG_HOME` が設定されていれば、Herdr は `$XDG_CONFIG_HOME/devin` を使います。それ以外では、Linux と macOS では `~/.config/devin`、Windows では `%APPDATA%\devin` を使います。Devin の設定ディレクトリはあらかじめ存在している必要があります。インストールは Unix では `herdr-agent-state.sh`、Windows では `herdr-agent-state.ps1` を書き込み、`config.json` に Herdr のフックエントリを追加します。フックは Devin の実行中にセッション参照を更新します。アンインストールは `config.json` から Herdr のエントリを削除し、フックスクリプトを削除します。
 
 Herdr は保存された Devin セッションを `devin --resume <id>` で resume します。フックのインストール有無にかかわらず、スクリーンマニフェスト検出が状態の権威のままです。
 
