@@ -77,6 +77,34 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
 }
 
 #[test]
+fn full_host_palette_response_is_sent_as_one_theme_update() {
+    use std::fmt::Write as _;
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut responses = String::new();
+    for index in 0..=u8::MAX {
+        let _ = write!(responses, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
+    }
+
+    let outcome = state.handle_input_bytes(responses.as_bytes());
+
+    let [ClientMessage::ClientShellHostTheme {
+        update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+    }] = outcome.requests.as_slice()
+    else {
+        panic!(
+            "expected one batched palette update, got {} requests",
+            outcome.requests.len()
+        );
+    };
+    assert_eq!(colors.len(), 256);
+    assert_eq!(
+        colors.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        (0..=u8::MAX).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn modal_paste_shortcut_modifiers_are_platform_specific() {
     let key = |code, modifiers| crate::input::TerminalKey::new(code, modifiers);
 

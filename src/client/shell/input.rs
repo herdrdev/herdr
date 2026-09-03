@@ -58,6 +58,24 @@ fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHos
     }
 }
 
+fn push_host_theme_update(
+    requests: &mut Vec<ClientMessage>,
+    update: crate::protocol::ClientHostThemeUpdate,
+) {
+    if let crate::protocol::ClientHostThemeUpdate::PaletteColors(colors) = &update {
+        if let Some(ClientMessage::ClientShellHostTheme {
+            update: crate::protocol::ClientHostThemeUpdate::PaletteColors(pending),
+        }) = requests.last_mut()
+        {
+            if pending.len() + colors.len() <= 256 {
+                pending.extend_from_slice(colors);
+                return;
+            }
+        }
+    }
+    requests.push(ClientMessage::ClientShellHostTheme { update });
+}
+
 impl ClientShellState {
     pub(crate) fn host_keyboard_report_all_requested(&self) -> bool {
         matches!(
@@ -142,9 +160,7 @@ impl ClientShellState {
         }
         for event in events {
             if let Some(update) = host_theme_update(&event) {
-                outcome
-                    .requests
-                    .push(ClientMessage::ClientShellHostTheme { update });
+                push_host_theme_update(&mut outcome.requests, update);
             }
             match event {
                 RawInputEvent::Key(key) => self.handle_key(key, &mut outcome),
