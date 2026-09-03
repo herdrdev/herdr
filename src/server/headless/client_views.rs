@@ -281,6 +281,33 @@ impl HeadlessServer {
         )
     }
 
+    fn public_request_may_change_geometry(method: &api::schema::Method) -> bool {
+        use api::schema::Method;
+
+        matches!(
+            method,
+            Method::CommandInvoke(_)
+                | Method::LayoutSetSplitRatio(_)
+                | Method::PaneClose(_)
+                | Method::PaneEditScrollback(_)
+                | Method::PaneFocus(_)
+                | Method::PaneFocusDirection(_)
+                | Method::PaneResize(_)
+                | Method::PaneSplit(_)
+                | Method::PaneSwap(_)
+                | Method::PaneZoom(_)
+                | Method::TabClose(_)
+                | Method::TabCreate(_)
+                | Method::TabFocus(_)
+                | Method::WorkspaceClose(_)
+                | Method::WorkspaceCreate(_)
+                | Method::WorkspaceFocus(_)
+                | Method::WorktreeCreate(_)
+                | Method::WorktreeOpen(_)
+                | Method::WorktreeRemove(_)
+        )
+    }
+
     pub(super) fn deferred_endpoint_navigation_tab_id(response: &[u8]) -> Option<String> {
         let response = serde_json::from_slice::<serde_json::Value>(response).ok()?;
         if response.pointer("/result/type")?.as_str()? != "worktree_created" {
@@ -522,6 +549,18 @@ impl HeadlessServer {
         target: crate::ui::TabSurfaceTarget,
         start_pending_agent_resumes: bool,
     ) -> bool {
+        if !self.resize_shell_tab_geometry_to_target(client_id, target) {
+            return false;
+        }
+        self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
+        true
+    }
+
+    fn resize_shell_tab_geometry_to_target(
+        &mut self,
+        client_id: u64,
+        target: crate::ui::TabSurfaceTarget,
+    ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
         };
@@ -562,7 +601,6 @@ impl HeadlessServer {
         {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
         }
-        self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
         true
     }
 
@@ -579,6 +617,66 @@ impl HeadlessServer {
             return false;
         };
         self.apply_shell_tab_geometry(client_id, start_pending_agent_resumes)
+    }
+
+    pub(super) fn reapply_controlled_shell_tab_geometry(
+        &mut self,
+        start_pending_agent_resumes: bool,
+    ) -> bool {
+        let mut viewed_tabs = HashMap::<String, Vec<u64>>::new();
+        for (&client_id, client) in &self.clients {
+            if !client.is_shell_client() || client.writer.is_none() {
+                continue;
+            }
+            let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {
+                continue;
+            };
+            viewed_tabs.entry(tab_id).or_default().push(client_id);
+        }
+        for viewers in viewed_tabs.values_mut() {
+            viewers.sort_unstable();
+        }
+        for (tab_id, viewers) in viewed_tabs {
+            let controller_is_viewing = self
+                .tab_geometry_controllers
+                .get(&tab_id)
+                .is_some_and(|controller| viewers.contains(controller));
+            if !controller_is_viewing {
+                self.tab_geometry_controllers.insert(tab_id, viewers[0]);
+            }
+        }
+
+        if self.resize_tabs_for_only_shell_client(start_pending_agent_resumes) {
+            return true;
+        }
+
+        let mut controlled_tabs = self
+            .tab_geometry_controllers
+            .iter()
+            .filter_map(|(tab_id, &client_id)| {
+                self.app
+                    .parse_tab_id(tab_id)
+                    .map(|(workspace_index, tab_index)| {
+                        (
+                            tab_id.clone(),
+                            client_id,
+                            crate::ui::TabSurfaceTarget {
+                                workspace_index,
+                                tab_index,
+                            },
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        controlled_tabs.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let mut reapplied = false;
+        for (_, client_id, target) in controlled_tabs {
+            reapplied |= self.resize_shell_tab_geometry_to_target(client_id, target);
+        }
+        if reapplied {
+            self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
+        }
+        reapplied
     }
 
     pub(super) fn claim_shell_tab_geometry(
@@ -683,6 +781,7 @@ impl HeadlessServer {
     ) -> bool {
         let target_before = self.default_shell_target();
         let popup_before = self.app.state.popup_pane.is_some();
+        let method_claims_geometry = Self::public_request_may_change_geometry(&msg.request.method);
         let explicit_public_focus_target = match &msg.request.method {
             api::schema::Method::WorkspaceFocus(params) => self
                 .app
@@ -742,7 +841,9 @@ impl HeadlessServer {
         if reconcile || target_changed || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }
-        changed
+        let geometry_changed =
+            method_claims_geometry && self.reapply_controlled_shell_tab_geometry(false);
+        changed | geometry_changed
     }
 
     pub(super) fn handle_client_shell_api_request(
@@ -782,8 +883,12 @@ impl HeadlessServer {
             );
         }
         let geometry_changed = method_claims_geometry
-            && (self.claim_shell_tab_geometry(client_id, false)
-                || self.resize_shell_tab_if_controller(client_id, false));
+            && if reconcile {
+                self.reapply_controlled_shell_tab_geometry(false)
+            } else {
+                self.claim_shell_tab_geometry(client_id, false)
+                    || self.resize_shell_tab_if_controller(client_id, false)
+            };
         changed | navigation_changed | geometry_changed
     }
 }

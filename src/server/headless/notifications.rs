@@ -652,6 +652,7 @@ impl HeadlessServer {
                 }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
+                self.reapply_controlled_shell_tab_geometry(false);
                 for (pane_id, terminal_id) in shutdown_terminals {
                     if self.app.find_pane(pane_id).is_none() {
                         self.shutdown_terminal_stream_clients(
@@ -698,6 +699,7 @@ impl HeadlessServer {
                 }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
+                self.reapply_controlled_shell_tab_geometry(false);
 
                 if self.app.find_pane(pane_id_val).is_none() {
                     if let Some(terminal_id) = terminal_id {
