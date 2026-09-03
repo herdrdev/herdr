@@ -134,6 +134,10 @@ pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)
 }
 
+pub(crate) fn prepare_paste_text_for_pty_platform(text: String) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
 /// Resolves against the current foreground layout because asynchronous console
 /// records do not retain the layout that was active when the key was pressed.
 pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
@@ -2597,6 +2601,14 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn paste_text_uses_windows_line_endings() {
+        assert_eq!(
+            super::prepare_paste_text_for_pty_platform("one\ntwo\r\nthree\rfour".to_owned()),
+            "one\r\ntwo\r\nthree\rfour"
+        );
+    }
 
     #[test]
     fn private_remote_directory_supports_long_paths() {

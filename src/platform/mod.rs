@@ -39,6 +39,15 @@ pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuild
     apply_pane_runtime_marker_platform(command);
 }
 
+pub(crate) fn prepare_paste_text_for_pty(text: String) -> String {
+    prepare_paste_text_for_pty_platform(text)
+}
+
+#[cfg(not(windows))]
+fn prepare_paste_text_for_pty_platform(text: String) -> String {
+    text
+}
+
 #[cfg(not(windows))]
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title

@@ -4276,7 +4276,11 @@ fn terminal_attach_paste_uses_plain_text_when_runtime_did_not_enable_brackets() 
 
         assert_eq!(
             input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(b"line one\nline two")
+            Bytes::from_static(if cfg!(windows) {
+                b"line one\r\nline two"
+            } else {
+                b"line one\nline two"
+            })
         );
     });
 }
@@ -4289,7 +4293,11 @@ fn terminal_attach_paste_preserves_brackets_when_runtime_enabled_them() {
 
         assert_eq!(
             input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(b"\x1b[200~line one\nline two\x1b[201~")
+            Bytes::from_static(if cfg!(windows) {
+                b"\x1b[200~line one\r\nline two\x1b[201~"
+            } else {
+                b"\x1b[200~line one\nline two\x1b[201~"
+            })
         );
     });
 }
