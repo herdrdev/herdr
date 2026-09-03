@@ -478,6 +478,13 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
+    if running_inside_wsl() {
+        if let Some(image) = read_wsl_clipboard_image_with_command(|program| Command::new(program))
+        {
+            return Some(image);
+        }
+    }
+
     for (mime, extension) in [
         ("image/png", "png"),
         ("image/jpeg", "jpg"),
@@ -506,6 +513,24 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     }
 
     None
+}
+
+fn read_wsl_clipboard_image_with_command(
+    mut command: impl FnMut(&str) -> Command,
+) -> Option<ClipboardImage> {
+    let mut command = command("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-STA",
+        "-Command",
+        "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image=[System.Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; $stream=[System.IO.MemoryStream]::new(); try { $image.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::OpenStandardOutput().Write($stream.GetBuffer(), 0, [int]$stream.Length) } finally { $stream.Dispose(); $image.Dispose() }",
+    ]);
+    let bytes = read_clipboard_image_with_spawned_command(command)?;
+    bytes_match_image_signature("png", &bytes).then_some(ClipboardImage {
+        bytes,
+        extension: "png",
+    })
 }
 
 fn read_validated_clipboard_image(
@@ -1487,6 +1512,24 @@ mod tests {
                 &["-c", "printf '\\211PNG\\r\\n\\032\\nrest-of-image'"],
                 "png"
             ),
+            Some(ClipboardImage {
+                bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
+                extension: "png",
+            })
+        );
+    }
+
+    #[test]
+    fn read_wsl_clipboard_image_accepts_png_from_windows_command() {
+        assert_eq!(
+            read_wsl_clipboard_image_with_command(|program| {
+                assert_eq!(program, "powershell.exe");
+                let mut command = Command::new("sh");
+                command
+                    .arg("-c")
+                    .arg("printf '\\211PNG\\r\\n\\032\\nrest-of-image'");
+                command
+            }),
             Some(ClipboardImage {
                 bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
                 extension: "png",
