@@ -631,6 +631,15 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
     ]) {
         return Some(agent_label(Agent::Pi).to_string());
     }
+    if ends_with(&[
+        "node_modules",
+        "@moonshot-ai",
+        "kimi-code",
+        "dist",
+        "main.mjs",
+    ]) {
+        return Some(agent_label(Agent::Kimi).to_string());
+    }
 
     let components: Vec<String> = raw_components
         .into_iter()
@@ -1218,6 +1227,26 @@ mod tests {
         assert_eq!(
             identify_agent_in_job(&job),
             Some((Agent::Mastracode, "mastracode".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_wrapped_kimi_package_cli() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "node.exe",
+                &[
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\repro-3317-kimi-prefix\node_modules\@moonshot-ai\kimi-code\dist\main.mjs",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Kimi, "kimi".to_string()))
         );
     }
 
