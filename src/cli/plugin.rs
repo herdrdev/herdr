@@ -152,38 +152,13 @@ fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn plugin_install(args: &[String]) -> std::io::Result<i32> {
-    let Some(source_arg) = args.first() else {
-        eprintln!("usage: herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
-        return Ok(2);
-    };
-    let source = match GithubPluginSource::parse(source_arg) {
-        Ok(source) => source,
+    let (source, requested_ref, yes) = match parse_plugin_install_args(args) {
+        Ok(parsed) => parsed,
         Err(err) => {
             eprintln!("{err}");
             return Ok(2);
         }
     };
-    let mut requested_ref = None;
-    let mut yes = false;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--ref" => {
-                let Some(value) = required_value(args, &mut index, "--ref") else {
-                    return Ok(2);
-                };
-                requested_ref = Some(value);
-            }
-            "--yes" | "-y" => {
-                yes = true;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
 
     if !yes && !io::stdin().is_terminal() {
         eprintln!("remote plugin install requires --yes when stdin is not interactive");
@@ -258,6 +233,41 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
     })();
     let _ = std::fs::remove_dir_all(&temp_root);
     install_result
+}
+
+fn parse_plugin_install_args(
+    args: &[String],
+) -> Result<(GithubPluginSource, Option<String>, bool), String> {
+    let args = super::expand_equals_args(args, &["--ref"]);
+    let mut source = None;
+    let mut requested_ref = None;
+    let mut yes = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--ref" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --ref".into());
+                };
+                requested_ref = Some(value.clone());
+                index += 2;
+            }
+            "--yes" | "-y" => {
+                yes = true;
+                index += 1;
+            }
+            option if option.starts_with('-') => return Err(format!("unknown option: {option}")),
+            value if source.is_none() => {
+                source = Some(GithubPluginSource::parse(value)?);
+                index += 1;
+            }
+            other => return Err(format!("unexpected argument: {other}")),
+        }
+    }
+    let source = source.ok_or_else(|| {
+        "usage: herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]".to_string()
+    })?;
+    Ok((source, requested_ref, yes))
 }
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
@@ -1714,6 +1724,18 @@ mod tests {
             },
             warnings: vec![],
         }
+    }
+
+    #[test]
+    fn plugin_install_options_can_precede_source() {
+        let args = ["--yes", "--ref=abc123", "owner/repo"].map(str::to_string);
+        let (source, requested_ref, yes) = parse_plugin_install_args(&args).unwrap();
+        assert_eq!(source.display(), "owner/repo");
+        assert_eq!(requested_ref.as_deref(), Some("abc123"));
+        assert!(yes);
+
+        let source_first = ["owner/repo", "--ref", "abc123", "--yes"].map(str::to_string);
+        assert!(parse_plugin_install_args(&source_first).is_ok());
     }
 
     #[test]
