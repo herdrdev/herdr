@@ -1436,7 +1436,7 @@ fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        eprintln!("usage: herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--group TEXT] [--role TEXT] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
 
@@ -1446,6 +1446,8 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let mut applies_to_source = None;
     let mut title = None;
     let mut display_agent = None;
+    let mut group = None;
+    let mut role = None;
     let mut state_labels = std::collections::HashMap::new();
     let mut tokens = std::collections::HashMap::new();
     let mut clear_title = false;
@@ -1504,6 +1506,22 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
             "--clear-display-agent" => {
                 clear_display_agent = true;
                 index += 1;
+            }
+            "--group" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("missing value for --group");
+                    return Ok(2);
+                };
+                group = Some(value.clone());
+                index += 2;
+            }
+            "--role" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("missing value for --role");
+                    return Ok(2);
+                };
+                role = Some(value.clone());
+                index += 2;
             }
             "--state-label" => {
                 let Some(value) = args.get(index + 1) else {
@@ -1596,6 +1614,18 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
         eprintln!("cannot set and clear the same metadata field");
         return Ok(2);
     }
+    if let Some(group) = group.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    }) {
+        tokens.insert("group".to_string(), Some(group));
+    }
+    if let Some(role) = role.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    }) {
+        tokens.insert("role".to_string(), Some(role));
+    }
     if title.is_none()
         && display_agent.is_none()
         && state_labels.is_empty()
@@ -1657,7 +1687,7 @@ fn print_pane_help() {
     eprintln!("  herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
     eprintln!("  herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
     eprintln!("  herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
-    eprintln!("  herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+    eprintln!("  herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--group TEXT] [--role TEXT] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
     eprintln!("  herdr pane run <pane_id> <command>");
 }
 

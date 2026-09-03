@@ -114,7 +114,7 @@ pub(crate) fn agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
 }
 
 pub(crate) fn all_agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
-    collect_agent_panel_entries_with_runtimes(app, None)
+    collapse_grouped_agent_panel_entries(collect_agent_panel_entries_with_runtimes(app, None))
 }
 
 pub(crate) fn agent_panel_entries_from(
@@ -130,7 +130,7 @@ fn agent_panel_entries_with_runtimes(
 ) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
     crate::app::agent_view::apply_agent_view(app, &mut entries);
-    entries
+    collapse_grouped_agent_panel_entries(entries)
 }
 
 fn collect_agent_panel_entries_with_runtimes(
@@ -181,6 +181,141 @@ fn collect_agent_panel_entries_with_runtimes(
                 })
         })
         .collect()
+}
+
+fn agent_group_key(entry: &AgentPanelEntry) -> Option<&str> {
+    ["group", "team"].iter().find_map(|key| {
+        entry
+            .tokens
+            .get(*key)
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn group_status_rank(state: AgentState, seen: bool) -> u8 {
+    match state {
+        AgentState::Working => 4,
+        AgentState::Blocked => 3,
+        AgentState::Unknown => 2,
+        AgentState::Idle if !seen => 1,
+        AgentState::Idle => 0,
+    }
+}
+
+fn role_abbrev(role: &str) -> String {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "implementer" | "impl" => "impl".into(),
+        "reviewer" | "review" | "rev" => "rev".into(),
+        "" => "seat".into(),
+        other => other.to_string(),
+    }
+}
+
+fn role_status_word(state: AgentState, _seen: bool) -> &'static str {
+    match state {
+        AgentState::Working => "working",
+        AgentState::Blocked => "blocked",
+        AgentState::Unknown => "unknown",
+        AgentState::Idle => "standby",
+    }
+}
+
+fn member_role(entry: &AgentPanelEntry) -> String {
+    if let Some(role) = entry
+        .tokens
+        .get("role")
+        .map(String::as_str)
+        .filter(|role| !role.is_empty())
+    {
+        return role_abbrev(role);
+    }
+    let label = entry.agent_label.as_deref().unwrap_or("");
+    if label.starts_with("implementer") || label.starts_with("impl") {
+        "impl".into()
+    } else if label.starts_with("reviewer") || label.starts_with("review") {
+        "rev".into()
+    } else {
+        role_abbrev(label)
+    }
+}
+
+fn is_implementer_member(entry: &AgentPanelEntry) -> bool {
+    member_role(entry) == "impl"
+}
+
+fn format_roles_line(members: &[(String, AgentState, bool)]) -> String {
+    let mut ordered = members.to_vec();
+    ordered.sort_by(|left, right| {
+        let rank = |role: &str| match role {
+            "impl" => 0,
+            "rev" => 1,
+            _ => 2,
+        };
+        rank(left.0.as_str())
+            .cmp(&rank(right.0.as_str()))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut seen_roles = std::collections::HashSet::new();
+    ordered.retain(|(role, _, _)| seen_roles.insert(role.clone()));
+    ordered
+        .into_iter()
+        .map(|(role, state, seen)| format!("{role}: {}", role_status_word(state, seen)))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn apply_group_tile(
+    entry: &mut AgentPanelEntry,
+    group: &str,
+    members: &[(String, AgentState, bool)],
+) {
+    entry.agent_label = Some(group.to_string());
+    entry
+        .tokens
+        .insert("roles".into(), format_roles_line(members));
+}
+
+fn collapse_grouped_agent_panel_entries(entries: Vec<AgentPanelEntry>) -> Vec<AgentPanelEntry> {
+    let mut out = Vec::new();
+    let mut groups = std::collections::HashMap::<String, usize>::new();
+    let mut members = std::collections::HashMap::<String, Vec<(String, AgentState, bool)>>::new();
+    for entry in entries {
+        let Some(group) = agent_group_key(&entry).map(str::to_string) else {
+            out.push(entry);
+            continue;
+        };
+        let member = (member_role(&entry), entry.state, entry.seen);
+        if let Some(&idx) = groups.get(&group) {
+            let list = members.entry(group.clone()).or_default();
+            list.push(member);
+            let steal_focus = is_implementer_member(&entry) && !is_implementer_member(&out[idx]);
+            let promote = group_status_rank(entry.state, entry.seen)
+                > group_status_rank(out[idx].state, out[idx].seen);
+            let pane_id = entry.pane_id;
+            let tab_idx = entry.tab_idx;
+            let state = entry.state;
+            let seen = entry.seen;
+            let rep = &mut out[idx];
+            if promote {
+                rep.state = state;
+                rep.seen = seen;
+            }
+            if steal_focus {
+                rep.pane_id = pane_id;
+                rep.tab_idx = tab_idx;
+            }
+            apply_group_tile(rep, &group, list);
+        } else {
+            let mut grouped = entry;
+            let list = vec![member];
+            apply_group_tile(&mut grouped, &group, &list);
+            groups.insert(group.clone(), out.len());
+            members.insert(group, list);
+            out.push(grouped);
+        }
+    }
+    out
 }
 
 pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static str {
@@ -548,7 +683,14 @@ fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<Resol
         .get(agent_panel_status_key(entry.state, entry.seen))
         .map(String::as_str)
         .unwrap_or_else(|| state_label(entry.state, entry.seen));
-    tokens::agent_rows(&app.sidebar_agents, entry, label)
+    let mut rows = tokens::agent_rows(&app.sidebar_agents, entry, label);
+    if let Some(roles) = entry.tokens.get("roles").filter(|value| !value.is_empty()) {
+        rows.push(vec![ResolvedToken {
+            kind: ResolvedTokenKind::Custom(roles.clone()),
+            style: crate::config::SidebarTokenStyle::default(),
+        }]);
+    }
+    rows
 }
 
 pub(crate) fn agent_entry_height_in_body(
@@ -3174,5 +3316,83 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 },
             ]
         );
+    }
+
+    fn stamp_group(
+        app: &mut crate::app::state::AppState,
+        pane_id: PaneId,
+        role: &str,
+        state: AgentState,
+        name: &str,
+    ) {
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Pi);
+        terminal.state = state;
+        terminal.set_agent_name(name.into());
+        terminal.metadata_tokens.patch(
+            std::collections::HashMap::from([
+                ("group".into(), Some("team · f9f844a9 · fecode".into())),
+                ("role".into(), Some(role.into())),
+            ]),
+            None,
+            std::time::Instant::now(),
+        );
+    }
+
+    #[test]
+    fn grouped_agents_collapse_to_one_team_tile() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut workspace = Workspace::test_new("f9f844a9");
+        let reviewer_pane = workspace.test_split(Direction::Horizontal);
+        let implementer_pane = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        stamp_group(
+            &mut app,
+            implementer_pane,
+            "implementer",
+            AgentState::Working,
+            "implementer-f9f844a9",
+        );
+        stamp_group(
+            &mut app,
+            reviewer_pane,
+            "reviewer",
+            AgentState::Idle,
+            "reviewer-f9f844a9",
+        );
+
+        let entries = agent_panel_entries(&app);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].agent_label.as_deref(),
+            Some("team · f9f844a9 · fecode")
+        );
+        assert_eq!(entries[0].state, AgentState::Working);
+        assert_eq!(
+            entries[0].tokens.get("roles").map(String::as_str),
+            Some("impl: working · rev: standby")
+        );
+        assert_eq!(entries[0].pane_id, implementer_pane);
+    }
+
+    #[test]
+    fn ungrouped_agents_stay_one_tile_each() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut workspace = Workspace::test_new("pair");
+        let second = workspace.test_split(Direction::Horizontal);
+        let first = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        for pane in [first, second] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
+        }
+        assert_eq!(agent_panel_entries(&app).len(), 2);
     }
 }

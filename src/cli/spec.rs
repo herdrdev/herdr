@@ -685,6 +685,8 @@ fn report_metadata_command() -> Command {
         .arg(flag("clear-title"))
         .arg(option("display-agent", "TEXT"))
         .arg(flag("clear-display-agent"))
+        .arg(option("group", "TEXT"))
+        .arg(option("role", "TEXT"))
         .arg(option("state-label", "STATUS=TEXT"))
         .arg(flag("clear-state-labels"))
         .arg(repeatable_option("token", "NAME=VALUE"))
