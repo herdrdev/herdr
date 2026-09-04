@@ -133,6 +133,7 @@ pub struct TerminalState {
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
     managed_agent: Option<ManagedAgent>,
+    managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
     hook_report_sequences: HashMap<String, u64>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
     stale_full_lifecycle_hook_sessions: HashMap<String, Vec<StaleFullLifecycleHookSession>>,
@@ -167,6 +168,7 @@ impl TerminalState {
             agent_name: None,
             agent_name_owner: None,
             managed_agent: None,
+            managed_agent_launch_session: None,
             hook_report_sequences: HashMap::new(),
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
             stale_full_lifecycle_hook_sessions: HashMap::new(),
@@ -1367,6 +1369,14 @@ impl TerminalState {
         self.persisted_agent_session = Some(session);
     }
 
+    pub fn set_managed_agent_launch_session(
+        &mut self,
+        session: crate::agent_resume::PersistedAgentSession,
+    ) {
+        self.persisted_agent_session = Some(session.clone());
+        self.managed_agent_launch_session = Some(session);
+    }
+
     pub fn set_agent_session_ref(
         &mut self,
         source: String,
@@ -1587,11 +1597,15 @@ impl TerminalState {
             self.hook_authority = None;
         }
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
-        self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
+        let persisted_session = crate::agent_resume::PersistedAgentSession {
             source,
             agent: agent_label,
             session_ref,
-        });
+        };
+        if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
+            self.managed_agent_launch_session = None;
+        }
+        self.persisted_agent_session = Some(persisted_session);
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -1972,6 +1986,7 @@ impl TerminalState {
                     kind: managed.kind,
                     phase: ManagedAgentPhase::Active,
                 });
+                self.managed_agent_launch_session = None;
                 return true;
             }
             return false;
@@ -1999,6 +2014,7 @@ impl TerminalState {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
                     });
+                    self.managed_agent_launch_session = None;
                     return true;
                 }
                 if ready_after.is_some() {
@@ -2041,6 +2057,14 @@ impl TerminalState {
     }
 
     pub fn clear_agent_name(&mut self) {
+        if self
+            .managed_agent_launch_session
+            .take()
+            .as_ref()
+            .is_some_and(|session| self.persisted_agent_session.as_ref() == Some(session))
+        {
+            self.persisted_agent_session = None;
+        }
         self.agent_name = None;
         self.agent_name_owner = None;
         self.managed_agent = None;
@@ -2269,9 +2293,15 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(20),
         );
+        timed_out.set_managed_agent_launch_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("codex-session").unwrap(),
+        });
         assert!(timed_out.reconcile_managed_agent_at(now + Duration::from_millis(20), false));
         assert_eq!(timed_out.agent_name, None);
         assert_eq!(timed_out.managed_agent_kind(), None);
+        assert!(timed_out.persisted_agent_session.is_none());
     }
 
     #[test]

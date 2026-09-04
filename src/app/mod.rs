@@ -2782,9 +2782,9 @@ mod tests {
             id: "req_agent_start_input".into(),
             method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
                 name: "worker".into(),
-                kind: "pi".into(),
+                kind: "codex".into(),
                 pane_id: pane_id.clone(),
-                args: Vec::new(),
+                args: vec!["resume".into(), "codex-session".into()],
                 timeout_ms: Some(4_000),
             }),
         };
@@ -2792,6 +2792,9 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(response["error"]["code"], "agent_start_input_failed");
         assert_eq!(app.state.terminals[&terminal_id].agent_name, None);
+        assert!(app.state.terminals[&terminal_id]
+            .persisted_agent_session
+            .is_none());
         assert_eq!(
             app.state.terminals[&terminal_id].manual_label.as_deref(),
             Some("shell")
@@ -2804,6 +2807,15 @@ mod tests {
         let retry = app.handle_api_request(request());
         let retry: serde_json::Value = serde_json::from_str(&retry).unwrap();
         assert_eq!(retry["result"]["type"], "agent_started");
+        assert_eq!(
+            retry["result"]["agent"]["agent_session"],
+            serde_json::json!({
+                "source": "herdr:codex",
+                "agent": "codex",
+                "kind": "id",
+                "value": "codex-session",
+            })
+        );
         assert_eq!(
             app.state.terminals[&terminal_id].agent_name.as_deref(),
             Some("worker")

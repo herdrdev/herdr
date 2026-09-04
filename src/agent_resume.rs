@@ -69,6 +69,24 @@ pub fn session_ref_from_report(
     agent_session_id.and_then(AgentSessionRef::id)
 }
 
+pub fn persisted_session_from_launch_args(
+    agent: crate::detect::Agent,
+    args: &[String],
+) -> Option<PersistedAgentSession> {
+    let [command, session_id] = args else {
+        return None;
+    };
+    if agent != crate::detect::Agent::Codex || command != "resume" || session_id.starts_with('-') {
+        return None;
+    }
+
+    Some(PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: AgentSessionRef::id(session_id.clone())?,
+    })
+}
+
 pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
     match value.as_deref().map(str::trim) {
         Some(
@@ -280,6 +298,40 @@ mod tests {
             "herdr:opencode",
             "opencode"
         ));
+    }
+
+    #[test]
+    fn codex_noncanonical_resume_launch_has_no_explicit_session() {
+        assert_eq!(
+            persisted_session_from_launch_args(
+                crate::detect::Agent::Codex,
+                &["resume".into(), "codex-session".into()]
+            )
+            .unwrap()
+            .session_ref
+            .value,
+            "codex-session"
+        );
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &["resume".into(), "--last".into()]
+        )
+        .is_none());
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &["resume".into(), "not-a-session".into(), "--last".into()]
+        )
+        .is_none());
+        assert!(persisted_session_from_launch_args(
+            crate::detect::Agent::Codex,
+            &[
+                "--remote".into(),
+                "ws://example.test".into(),
+                "resume".into(),
+                "remote-session".into(),
+            ]
+        )
+        .is_none());
     }
 
     #[test]
