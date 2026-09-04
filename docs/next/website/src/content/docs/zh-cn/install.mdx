@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
 ```
 
-安装器会下载适合你平台的发布二进制文件并放到 PATH 上。新的直接安装默认使用稳定更新通道。现有的 Windows 预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。Windows 安装器使用带版本号的安装文件夹,并更新一个 `current` 联接点,因此更新时不需要覆盖正在运行的 `herdr.exe`。
+安装器会下载适合你平台的发布二进制文件并放到 PATH 上。新的直接安装默认使用稳定更新通道。现有的 Windows 预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。在 Windows 上,PATH 指向当前带版本号的发布目录;安装器还会更新 `current` 和稳定的 `bin` 兼容别名,因此更新时不需要覆盖正在运行的 `herdr.exe`。
 
 ## 用 Homebrew 安装
 

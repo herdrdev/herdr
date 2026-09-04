@@ -21,7 +21,7 @@ curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del 
 
 Windows 构建同时通过稳定版和预览版更新通道提供。新安装默认使用稳定版,常规使用也建议选择稳定版。现有预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。如果旧预览构建拒绝该命令,请先在预览通道运行一次 `herdr update`,再重试。预览版会提供来自 `master` 的更新、测试较少的修复,也可能出现回归;只有在接受这一取舍时,才应通过 `herdr channel set preview` 主动启用。
 
-安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,让 `%LOCALAPPDATA%\Programs\Herdr\bin` 指向当前版本,并保留少量旧版本,以免运行中的进程阻塞更新。
+安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,把当前带版本号的发布目录加入 PATH,将 `%LOCALAPPDATA%\Programs\Herdr\bin` 保留为稳定的兼容别名,并保留少量旧版本,以免运行中的进程阻塞更新。
 
 对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。使用自定义预览清单时还应设置 `HERDR_CHANNEL=preview`。
 
@@ -133,7 +133,7 @@ herdr --remote workbox
 
 目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
 
-Windows 更新通过 Windows 安装器进行,并更新带版本号的安装联接点。再次启动 Herdr 即可使用更新后的客户端;兼容的运行中服务器会让窗格继续运行。只有需要新版本的服务器端改动时,才稍后重启服务器。实时交接仅限 Unix。
+Windows 更新通过 Windows 安装器进行,并更新当前带版本号的发布路径。新终端和重新连接的 SSH 会话会获得该路径;在其中启动 Herdr 即可使用更新后的客户端。兼容的运行中服务器会让窗格继续运行。只有需要新版本的服务器端改动时,才稍后重启服务器。实时交接仅限 Unix。
 
 ## 报告 Windows 问题
 

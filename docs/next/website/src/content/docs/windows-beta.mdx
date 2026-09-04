@@ -21,7 +21,7 @@ curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del 
 
 Windows builds are available through both stable and preview update channels. New installs use stable by default, and stable is recommended for normal use. Existing preview installs stay on preview until you run `herdr channel set stable`. If an older preview build rejects that command, run `herdr update` once on preview and retry. Preview provides newer, less-tested fixes from `master` and may regress; opt in with `herdr channel set preview` only when you want that tradeoff.
 
-The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
+The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, puts the active versioned release directory on PATH, keeps `%LOCALAPPDATA%\Programs\Herdr\bin` as a stable compatibility alias, and retains a small number of older releases so running processes do not block updates.
 
 For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest. Set `HERDR_CHANNEL=preview` with a custom preview manifest.
 
@@ -133,7 +133,7 @@ herdr --remote workbox
 
 The target host must run Linux or macOS. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
 
-Windows updates run through the Windows installer and update the versioned install junction. Start Herdr again to use the updated client; compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
+Windows updates run through the Windows installer and update the active versioned release path. New terminals and reconnected SSH sessions receive that path; start Herdr there to use the updated client. Compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
 
 ## Reporting Windows issues
 

@@ -25,7 +25,7 @@ If endpoint security blocks that fileless PowerShell command, open Command Promp
 curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
 ```
 
-The installer downloads the release binary for your platform and places it on your PATH. New direct installs use the stable update channel. Existing Windows preview installs stay on preview until you switch them with `herdr channel set stable`. The Windows installer uses versioned install folders and updates a `current` junction, so updates do not need to overwrite a running `herdr.exe`.
+The installer downloads the release binary for your platform and places it on your PATH. New direct installs use the stable update channel. Existing Windows preview installs stay on preview until you switch them with `herdr channel set stable`. On Windows, PATH points to the active versioned release directory; the installer also updates the `current` and stable `bin` compatibility aliases, so updates do not need to overwrite a running `herdr.exe`.
 
 ## Install with Homebrew
 

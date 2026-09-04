@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
 curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
 ```
 
-インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows インストーラーはバージョン付きインストールフォルダーを使い、`current` ジャンクションを更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
+インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows では PATH が有効なバージョン付きリリースディレクトリを指し、インストーラーは互換性のため `current` と安定した `bin` エイリアスも更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
 
 ## Homebrew でインストール
 
