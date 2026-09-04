@@ -760,6 +760,9 @@ if ($useLocalPackage) {
     }
 } else {
     if (-not $channelWasExplicit) {
+        if (-not [string]::IsNullOrWhiteSpace($channelHerdr) -and $null -eq $existingHerdrKind) {
+            throw "Refusing to run unrecognized Herdr command at $channelHerdr to detect its update channel. Rerun with -Channel stable or -Channel preview."
+        }
         if (-not [string]::IsNullOrWhiteSpace($channelHerdr)) {
             $detectedChannel = [string](& $channelHerdr channel show 2>$null | Select-Object -Last 1)
             $detectedChannel = $detectedChannel.Trim()

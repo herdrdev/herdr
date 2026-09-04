@@ -570,29 +570,39 @@ try {
     }
 
     $fakeBin = Join-Path $root "fake-existing"
+    $fakeInvocationMarker = Join-Path $root "fake-existing-invoked"
     New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
-    @'
+    @"
 @echo off
+echo invoked>"$fakeInvocationMarker"
 if "%1"=="channel" if "%2"=="show" (
   echo preview
   exit /b 0
 )
 exit /b 1
-'@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
+"@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
 
     $preserveHome = Join-Path $root "preserve-home"
     $preserveBin = Join-Path $root "preserve-bin"
     $env:HERDR_HOME = $preserveHome
     $env:Path = "$fakeBin;$oldProcessPath"
-    & "$PSScriptRoot\..\distribution\install.ps1" `
-        -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
-        -InstallDir $preserveBin `
-        -ExpectedBuildId "installer-test"
-    $preservedPreview = Get-ChildItem -LiteralPath (Join-Path $preserveHome "packages\standalone\releases") -Directory |
-        Where-Object { $_.Name.StartsWith("0.0.0-preview.installer-test-") } |
-        Select-Object -First 1
-    if ($null -eq $preservedPreview) {
-        throw "installer did not preserve the existing preview channel"
+    $unrecognizedCommandRejected = $false
+    try {
+        & "$PSScriptRoot\..\distribution\install.ps1" `
+            -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
+            -InstallDir $preserveBin `
+            -ExpectedBuildId "installer-test"
+    } catch {
+        if ($_.Exception.Message -notlike "Refusing to run unrecognized Herdr command*") {
+            throw
+        }
+        $unrecognizedCommandRejected = $true
+    }
+    if (-not $unrecognizedCommandRejected) {
+        throw "installer accepted implicit channel detection through an unrecognized command"
+    }
+    if (Test-Path -LiteralPath $fakeInvocationMarker) {
+        throw "installer invoked an unrecognized command during implicit channel detection"
     }
 
     & "$PSScriptRoot\..\distribution\install.ps1" `
@@ -603,7 +613,10 @@ exit /b 1
         Where-Object { $_.Name.StartsWith("0.0.1-") } |
         Select-Object -First 1
     if ($null -eq $explicitStable) {
-        throw "explicit stable channel did not override the existing preview channel"
+        throw "explicit stable channel did not install past the unrecognized command"
+    }
+    if (Test-Path -LiteralPath $fakeInvocationMarker) {
+        throw "installer invoked an unrecognized command despite an explicit channel"
     }
 } finally {
     $env:HERDR_HOME = $oldHerdrHome
