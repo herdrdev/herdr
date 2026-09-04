@@ -73,9 +73,7 @@ impl App {
             self.execute_tui_navigate_action(action, context);
         } else if copy_mode_survives_command_action(action) {
             self.execute_tui_navigate_action(action, context);
-            if self.state.copy_mode.is_some() {
-                self.state.sync_copy_mode_with_focus();
-            }
+            self.sync_copy_mode_keeping_navigate_mode();
         } else {
             self.cancel_copy_mode_if_active();
             self.execute_tui_navigate_action(action, context);
@@ -104,10 +102,22 @@ impl App {
 
     /// Applies the focus bookkeeping every navigate-mode movement key needs.
     fn settle_navigate_mode_movement(&mut self) {
-        if self.state.copy_mode.is_some() {
-            self.state.sync_copy_mode_with_focus();
-        }
+        self.sync_copy_mode_keeping_navigate_mode();
         self.selection_autoscroll_deadline = None;
+    }
+
+    /// Reconciles copy mode with the focused pane without leaving navigation
+    /// mode. Navigation mode is exited explicitly with the prefix key, enter,
+    /// or esc, and `leave_navigate_mode` settles copy mode at that point.
+    fn sync_copy_mode_keeping_navigate_mode(&mut self) {
+        if self.state.copy_mode.is_none() {
+            return;
+        }
+        let in_navigate_mode = self.state.mode == Mode::Navigate;
+        self.state.sync_copy_mode_with_focus();
+        if in_navigate_mode {
+            self.state.mode = Mode::Navigate;
+        }
     }
 
     pub(crate) fn handle_navigate_key(&mut self, raw_key: TerminalKey) {
@@ -130,7 +140,15 @@ impl App {
             return;
         }
 
+        // Esc cancels the walk and restores the pre-navigation focus; enter
+        // commits wherever the walk ended up.
         if key.code == KeyCode::Esc {
+            self.cancel_navigate_mode();
+            return;
+        }
+
+        if key.code == KeyCode::Enter {
+            self.state.navigate_entry_focus = None;
             leave_navigate_mode(&mut self.state);
             return;
         }
@@ -350,11 +368,17 @@ impl App {
                     super::modal::open_rename_pane(&mut self.state, pane_id);
                 }
             }
-            NavigateAction::FocusPaneLeft => self.focus_pane_direction_via_api(NavDirection::Left),
-            NavigateAction::FocusPaneDown => self.focus_pane_direction_via_api(NavDirection::Down),
-            NavigateAction::FocusPaneUp => self.focus_pane_direction_via_api(NavDirection::Up),
+            NavigateAction::FocusPaneLeft => {
+                self.focus_pane_direction_in_context(NavDirection::Left, context)
+            }
+            NavigateAction::FocusPaneDown => {
+                self.focus_pane_direction_in_context(NavDirection::Down, context)
+            }
+            NavigateAction::FocusPaneUp => {
+                self.focus_pane_direction_in_context(NavDirection::Up, context)
+            }
             NavigateAction::FocusPaneRight => {
-                self.focus_pane_direction_via_api(NavDirection::Right)
+                self.focus_pane_direction_in_context(NavDirection::Right, context)
             }
             NavigateAction::SwapPaneLeft => {
                 self.swap_pane_direction_via_api(NavDirection::Left);
@@ -535,6 +559,32 @@ impl App {
                 direction: api_pane_direction(direction),
             },
         );
+    }
+
+    /// Leaves navigation mode and puts focus back on the workspace, tab, and
+    /// pane that were focused when it was entered. Focusing a pane by id pulls
+    /// its workspace and tab along, so one call restores all three.
+    pub(crate) fn cancel_navigate_mode(&mut self) {
+        let entry_focus = self.state.navigate_entry_focus.take();
+        if let Some(target) = entry_focus {
+            if self.state.current_pane_focus_target().as_ref() != Some(&target) {
+                if let Some((ws_idx, _tab_idx)) = self.state.pane_focus_target_indices(&target) {
+                    self.focus_pane_internal_via_api(ws_idx, target.pane_id);
+                }
+            }
+        }
+        leave_navigate_mode(&mut self.state);
+    }
+
+    /// Focuses a neighbouring pane, keeping navigation mode open when the key
+    /// came from navigation mode so panes can be walked without re-entering.
+    fn focus_pane_direction_in_context(&mut self, direction: NavDirection, context: ActionContext) {
+        let preserve_navigate_mode =
+            context == ActionContext::Navigate && self.state.mode == Mode::Navigate;
+        self.focus_pane_direction_via_api(direction);
+        if preserve_navigate_mode {
+            self.state.mode = Mode::Navigate;
+        }
     }
 
     pub(crate) fn swap_pane_direction_via_api(&mut self, direction: NavDirection) {
@@ -1189,13 +1239,6 @@ pub(super) fn handle_navigate_reserved_key(state: &mut AppState, key: TerminalKe
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
-            KeyCode::Enter => {
-                if !state.workspaces.is_empty() {
-                    state.switch_workspace(state.selected);
-                    leave_navigate_mode(state);
-                }
-                return true;
-            }
             KeyCode::Tab => {
                 state.cycle_pane(false);
                 return true;
@@ -1258,15 +1301,6 @@ fn navigate_reserved_action_for_key(state: &AppState, key: &TerminalKey) -> Opti
     let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
     if modifiers.is_empty() {
         match code {
-            KeyCode::Enter => {
-                return (!state.workspaces.is_empty()).then_some(NavigateAction::SwitchWorkspace(
-                    state
-                        .visible_workspace_order()
-                        .iter()
-                        .position(|idx| *idx == state.selected)
-                        .unwrap_or(state.selected),
-                ));
-            }
             KeyCode::Tab => return Some(NavigateAction::CyclePaneNext),
             KeyCode::BackTab => return Some(NavigateAction::CyclePanePrevious),
             KeyCode::Left => return Some(NavigateAction::FocusPaneLeft),
@@ -1306,7 +1340,19 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
     state.update_dismissed = true;
     let terminal_key = TerminalKey::from(key);
 
-    if state.is_prefix_key(&terminal_key) || key.code == KeyCode::Esc {
+    if state.is_prefix_key(&terminal_key) {
+        leave_navigate_mode(state);
+        return;
+    }
+
+    if key.code == KeyCode::Esc {
+        state.restore_navigate_entry_focus();
+        leave_navigate_mode(state);
+        return;
+    }
+
+    if key.code == KeyCode::Enter {
+        state.navigate_entry_focus = None;
         leave_navigate_mode(state);
         return;
     }
@@ -2434,7 +2480,7 @@ focus_pane_down = "prefix+f"
 
         handle_navigate_key(
             &mut state,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()),
         );
         assert_eq!(state.workspaces[0].focused_pane_id(), Some(below));
         assert_eq!(state.mode, Mode::Navigate);
@@ -2522,44 +2568,152 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn default_letter_tab_and_workspace_keys_leave_navigate_mode() {
-        let mut state = state_with_workspaces(&["a", "b"]);
-        let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+    fn default_letter_pane_keys_stay_in_navigate_mode() {
+        let mut state = state_with_workspaces(&["test"]);
+        let left = state.workspaces[0].tabs[0].root_pane;
+        let right = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].layout.focus_pane(right);
         state.mode = Mode::Navigate;
-        state.active = Some(0);
-        state.selected = 0;
-        state.switch_workspace_tab(0, 0);
 
-        handle_navigate_key(
-            &mut state,
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
-        );
-        assert_eq!(state.workspaces[0].active_tab, second_tab);
-        assert_eq!(state.mode, Mode::Terminal);
-
-        state.mode = Mode::Navigate;
+        // `navigate_pane` reads the focus flags baked into `view.pane_infos`,
+        // so the view has to be recomputed between keys the way a redraw would.
+        crate::ui::compute_view(&mut state, ratatui::layout::Rect::new(0, 0, 80, 24));
         handle_navigate_key(
             &mut state,
             KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()),
         );
-        assert_eq!(state.workspaces[0].active_tab, 0);
-        assert_eq!(state.mode, Mode::Terminal);
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(left));
+        assert_eq!(state.mode, Mode::Navigate);
 
-        state.mode = Mode::Navigate;
+        crate::ui::compute_view(&mut state, ratatui::layout::Rect::new(0, 0, 80, 24));
         handle_navigate_key(
             &mut state,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
         );
-        assert_eq!(state.active, Some(1));
-        assert_eq!(state.mode, Mode::Terminal);
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(right));
+        assert_eq!(state.mode, Mode::Navigate);
+    }
 
-        state.mode = Mode::Navigate;
-        handle_navigate_key(
-            &mut state,
-            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::empty()),
-        );
-        assert_eq!(state.active, Some(0));
-        assert_eq!(state.mode, Mode::Terminal);
+    #[tokio::test]
+    async fn enter_commits_the_navigate_walk_and_leaves_the_mode() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Navigate);
+
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.state.navigate_entry_focus.is_none());
+    }
+
+    #[tokio::test]
+    async fn esc_cancels_the_navigate_walk_and_restores_the_entry_workspace() {
+        let mut app = app_with_test_workspaces(&["one", "two"]);
+        app.state.mode = Mode::Terminal;
+        let entry_focus = app
+            .state
+            .current_pane_focus_target()
+            .expect("entry pane focus");
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.active, Some(1));
+
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.current_pane_focus_target(), Some(entry_focus));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(app.state.navigate_entry_focus.is_none());
+    }
+
+    #[tokio::test]
+    async fn esc_restores_the_entry_pane_after_walking_panes() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        let root = app.state.workspaces[0].tabs[0].root_pane;
+        let below = app.state.workspaces[0].test_split(Direction::Vertical);
+        app.state.workspaces[0].layout.focus_pane(below);
+        app.state.view.pane_infos = app.state.workspaces[0]
+            .active_tab()
+            .unwrap()
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Char('i'), KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
+        assert_eq!(app.state.mode, Mode::Navigate);
+
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(below));
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[tokio::test]
+    async fn re_entering_navigate_mode_rebases_the_esc_target() {
+        let mut app = app_with_test_workspaces(&["one", "two", "three"]);
+        app.state.mode = Mode::Terminal;
+
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
+            .await;
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.active, Some(1));
+
+        // The committed workspace is the new baseline, not the original one.
+        app.handle_key(TerminalKey::new(
+            app.state.prefix_code,
+            app.state.prefix_mods,
+        ))
+        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.active, Some(2));
+
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.active, Some(1));
+    }
+
+    #[test]
+    fn default_tab_and_workspace_letter_bindings_are_unset() {
+        let keybinds = Config::default().keybinds();
+
+        assert!(keybinds.previous_tab.bindings.is_empty());
+        assert!(keybinds.next_tab.bindings.is_empty());
+        assert!(keybinds.previous_workspace.bindings.is_empty());
+        assert!(keybinds.next_workspace.bindings.is_empty());
     }
 
     #[test]
@@ -3040,7 +3194,7 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[tokio::test]
-    async fn prefix_focus_pane_is_one_shot_and_returns_to_terminal() {
+    async fn prefix_then_focus_pane_stays_in_navigate_mode() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -3067,15 +3221,15 @@ navigate_pane_down = "ctrl+j"
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
-        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.mode, Mode::Navigate);
     }
 
     #[tokio::test]
-    async fn navigate_focus_pane_returns_to_terminal() {
+    async fn navigate_focus_pane_keeps_navigate_mode_active() {
         let mut app = app_with_test_workspaces(&["test"]);
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let below = app.state.workspaces[0].test_split(Direction::Vertical);
@@ -3087,11 +3241,11 @@ navigate_pane_down = "ctrl+j"
             .panes(ratatui::layout::Rect::new(0, 0, 80, 24));
         app.state.mode = Mode::Navigate;
 
-        app.handle_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('i'), KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(root));
-        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.mode, Mode::Navigate);
     }
 
     #[tokio::test]

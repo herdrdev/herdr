@@ -13,13 +13,15 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 终端复用器位于终端和其中运行的程序之间。这些程序已经占用了大多数按键组合: `ctrl+c` 中断,`ctrl+r` 搜索历史,编辑器几乎占用了剩下的一切。如果 Herdr 直接抢占常用按键,就会破坏其中运行的程序。
 
-前缀键解决了这个问题。按下前缀键 (默认 `esc`),下一次按键会发给 Herdr 而不是终端。`prefix+c` 的意思是: 按下 `esc`,松开,再按 `c`。只保留一个键,而不是几十个。
+前缀键解决了这个问题。按下前缀键 (默认 `ctrl+s`),Herdr 进入导航模式,按键不再发给终端,而是运行 Herdr 命令。`prefix+t` 的意思是: 按下 `ctrl+s`,松开,再按 `t`。只保留一个键,而不是几十个。
 
-使用默认前缀键时,`esc esc` 会向聚焦窗格发送一个真正的 `esc`;按下 `esc` 之后再按一个未绑定的键,两个按键都会发给窗格,因此编辑器照常工作。想沿用 tmux 风格的前缀键,可在 `config.toml` 中设置 `keys.prefix = "ctrl+b"`。
+导航模式会一直开着,直到你退出,因此按一次前缀键就能连续运行多个命令。屏幕底部的提示行会列出已绑定的操作。`space` 打开命令面板,`↑`/`↓` 切换工作区,`←`/`→` 切换标签页,`n`/`e`/`i`/`a` 在窗格间移动。这些都不会退出导航模式,所以按一次前缀键就能走遍整个会话。
+
+退出有三种方式。`enter` 确认这次移动,在你停下的工作区、标签页和窗格上退出导航模式。`esc` 取消这次移动,把焦点还给进入导航模式之前的窗格。再次按下前缀键会退出并向聚焦窗格发送一个真正的前缀键,因此默认的 `ctrl+s ctrl+s` 让需要 `ctrl+s` 的程序照常工作。未绑定的键不会有任何效果,并让你留在导航模式。想沿用 tmux 风格的前缀键,可在 `config.toml` 中设置 `keys.prefix = "ctrl+b"`,此时 `ctrl+b ctrl+b` 会发送一个真正的 `ctrl+b`。
 
 ## 命令面板
 
-随时按 `prefix+?` 可以打开命令面板。它按区域分组,列出每个命令及其当前快捷键。
+随时按 `prefix+space` 可以打开命令面板。它按区域分组,列出每个命令及其当前快捷键。
 
 搜索框始终处于聚焦状态: 直接输入即可按命令名、快捷键或分组筛选。查询是正则表达式,因此 `^split` 或 `pane|tab` 都可用;模式不完整时会回退为普通子串匹配。使用 Backspace 编辑查询,或按 `ctrl+u` 清除。
 
@@ -39,7 +41,7 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 - 不带修饰键的按键会绑定为 `prefix+<key>`,因为不带修饰键的全局快捷键会在每个窗格里吞掉该按键。`v` 会变成 `prefix+v`。
 - 带修饰键的组合 (`ctrl+g`、`ctrl+alt+n`) 或功能键会直接绑定,不加前缀。
-- `prefix mode` 这一行比较特殊: 你按下的键会成为前缀键本身。
+- `navigation mode` 这一行比较特殊: 你按下的键会成为前缀键本身。
 - 如果该组合键已属于另一个命令,面板会提示并等待;再按一次同样的组合即可改绑,并解除原有命令的绑定。
 - `esc` 取消录制,永远不会被绑定。
 
@@ -49,9 +51,10 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 | 动作 | 按键 |
 | --- | --- |
-| 新建标签页 | `prefix+c` |
+| 新建标签页 | `prefix+t` |
 | 向右 / 向下分割 | `prefix+v` / `prefix+minus` |
-| 在窗格间移动 | `prefix+h/j/k/l` |
+| 在窗格间移动 | `prefix+n/e/i/a` |
+| 命令面板 | `prefix+space` |
 | 分离并让一切继续运行 | `prefix+q` |
 
 这些覆盖了日常的大部分移动操作。其余的都可以继续用鼠标。
@@ -72,7 +75,6 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 | 动作 | 按键 |
 | --- | --- |
-| 下一个 / 上一个标签页 | `prefix+a` / `prefix+n` |
 | 不退出导航模式切换下一个 / 上一个标签页 | `→` / `←` |
 | 跳转到标签页 1–9 | `prefix+1..9` |
 | 重命名标签页 | `prefix+shift+t` |
@@ -83,12 +85,13 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 | 动作 | 按键 |
 | --- | --- |
 | 新建工作区 | `prefix+shift+n` |
-| 下一个 / 上一个工作区 | `prefix+e` / `prefix+i` |
 | 不退出导航模式切换下一个 / 上一个工作区 | `↓` / `↑` |
 | 重命名工作区 | `prefix+shift+w` |
 | 关闭工作区 | `prefix+shift+d` |
 | Goto 选择器 | `prefix+g` |
 | 切换侧边栏 | `prefix+b` |
+
+数字键属于标签页,所以想直接跳到某个工作区需要单独绑定,例如 `switch_workspace = "prefix+shift+1..9"`。
 
 完整键位和绑定语法见[按键绑定参考](/zh-cn/docs/configuration/#按键绑定)。
 
@@ -117,13 +120,13 @@ prefix = "ctrl+a"
 
 ```toml
 [keys]
-focus_pane_left = ["prefix+h", "ctrl+alt+h"]
-focus_pane_down = ["prefix+j", "ctrl+alt+j"]
-focus_pane_up = ["prefix+k", "ctrl+alt+k"]
-focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_tab = ["prefix+n", "ctrl+alt+["]
-next_tab = ["prefix+a", "ctrl+alt+]"]
-new_tab = ["prefix+c", "ctrl+alt+c"]
+focus_pane_left = ["prefix+n", "ctrl+alt+h"]
+focus_pane_down = ["prefix+e", "ctrl+alt+j"]
+focus_pane_up = ["prefix+i", "ctrl+alt+k"]
+focus_pane_right = ["prefix+a", "ctrl+alt+l"]
+previous_tab = ["ctrl+alt+["]
+next_tab = ["ctrl+alt+]"]
+new_tab = ["prefix+t", "ctrl+alt+c"]
 split_vertical = ["prefix+v", "ctrl+alt+d"]
 split_horizontal = ["prefix+minus", "ctrl+alt+shift+d"]
 zoom = ["prefix+z", "ctrl+alt+z"]

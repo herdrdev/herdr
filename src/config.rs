@@ -152,7 +152,7 @@ command = "lazygit"
         assert!(profile.contains("[keys]"));
         assert!(profile.contains("prefix = \"ctrl+a\""));
         assert!(profile.contains("new_tab = \"prefix+t\""));
-        assert!(profile.contains("next_tab = \"prefix+a\""));
+        assert!(profile.contains("focus_pane_right = \"prefix+a\""));
         assert!(!profile.contains("lazygit"));
         assert!(!profile.contains("command ="));
         assert!(!profile.contains("[[keys.command]]"));

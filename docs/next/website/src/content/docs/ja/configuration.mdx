@@ -111,35 +111,35 @@ manage_ssh_config = true
 
 プレフィックスの導入ガイドと検証済みのプレフィックスなし構成については、[キーボード](/docs/keyboard/)を参照してください。
 
-Herdr には tmux に似たプレフィックスモードがあります。デフォルトのプレフィックスは `esc` で、2 回押すとフォーカス中のペインにリテラルの `esc` を送ります。キーバインド文字列は明示的です。`prefix+n` は設定されたプレフィックスを押してから `n` を押すという意味で、`ctrl+alt+n` はターミナルモードの直接ショートカットです。
+Herdr には tmux と同じように、プレフィックスキーで入るナビゲーションモードがあります。デフォルトのプレフィックスは `ctrl+s` です。`enter` でたどり着いた場所のままナビゲーションモードを抜け、`esc` で開始時のペインに戻り、もう一度プレフィックスキーを押すと抜けると同時にフォーカス中のペインにリテラルの `ctrl+s` を送ります。キーバインド文字列は明示的です。`prefix+n` は設定されたプレフィックスを押してから `n` を押すという意味で、`ctrl+alt+n` はターミナルモードの直接ショートカットです。
 
 小さなキーバインドの上書きは次のようになります:
 
 ```toml
 [keys]
-prefix = "esc"
+prefix = "ctrl+s"
 goto = "prefix+g"
 new_tab = "prefix+c"
-next_tab = "prefix+a"
-previous_tab = "prefix+n"
-focus_pane_left = "prefix+h"
+next_tab = "prefix+shift+a"
+previous_tab = "prefix+shift+n"
+focus_pane_left = "prefix+n"
 navigate_workspace_down = "j"
 navigate_pane_down = "ctrl+j"
 split_horizontal = "prefix+minus"
 ```
 
-デフォルトのキーマップはプレフィックス優先なので、Herdr がシェル、エディタ、tmux、ターミナルアプリから入力を奪うことはありません。[設定リファレンス](/docs/config-reference/)で `keys.` を検索すると、すべてのアクションとデフォルトのバインドを確認できます。`prefix+?` で開くアプリ内ヘルプパネルには、現在有効なバインドが表示されます。
+デフォルトのキーマップはプレフィックス優先なので、Herdr がシェル、エディタ、tmux、ターミナルアプリから入力を奪うことはありません。[設定リファレンス](/docs/config-reference/)で `keys.` を検索すると、すべてのアクションとデフォルトのバインドを確認できます。`prefix+space` のコマンドパレットには現在有効なバインドが表示され、その場で割り当てを変更できます。
 
 1 つのアクションに複数のショートカットが必要な場合、バインドを配列にすることもできます:
 
 ```toml
 [keys]
-next_tab = ["prefix+a", "ctrl+alt+]"]
+next_tab = ["prefix+shift+a", "ctrl+alt+]"]
 ```
 
 任意のアクションはデフォルトでは未設定です。プレフィックスモードの挙動には `prefix+` でバインドし、意図的に直接ショートカットにする場合は明示的な修飾キーコードを使ってください。
 
-キー文字列には、通常のキー、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` のような修飾キーの組み合わせ、`enter`、`tab`、`esc`、`left`、`right`、`up`、`down` のような特殊キーが使えます。`minus`、`comma`、`ampersand`、`plus`、`backtick` のような名前付き記号も使えます。`n` のような通常の印字可能キーの直接バインドは入力を妨げるため危険です。意図的に直接バインドするのでなければ `prefix+n` を使ってください。`navigate_workspace_*`、`navigate_tab_*`、`navigate_pane_*` のフィールドはナビゲートモード専用で、`j` や `k` のような通常のキーを使えます。これらには `prefix+`、`esc`、`enter`、`tab`、`shift+tab`、修飾なしの `1` から `9` は使えません。上下キーはワークスペースを、左右キーはタブを切り替えます。いずれもナビゲーションモードを抜けないので、続けて押せます。`navigate_tab_previous` と `navigate_tab_next` が未割り当ての場合、左右キーは左ペインと右ペインへのナビゲーションにフォールバックします。これらのナビゲートモードショートカットは、`focus_pane_down = "prefix+j"` のような一般アクションのバインドから独立しています。両方に同じキーが使われている場合、ナビゲートモードが開いている間はナビゲートモードのショートカットが優先されます。Alt、Cmd/Super、修飾キー付き記号は、ターミナルと tmux の設定に依存します。
+キー文字列には、通常のキー、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` のような修飾キーの組み合わせ、`enter`、`tab`、`esc`、`left`、`right`、`up`、`down` のような特殊キーが使えます。`minus`、`comma`、`ampersand`、`plus`、`backtick` のような名前付き記号も使えます。`n` のような通常の印字可能キーの直接バインドは入力を妨げるため危険です。意図的に直接バインドするのでなければ `prefix+n` を使ってください。`navigate_workspace_*`、`navigate_tab_*`、`navigate_pane_*` のフィールドはナビゲートモード専用で、`n` や `e` のような通常のキーを使えます。これらには `prefix+`、`esc`、`enter`、`tab`、`shift+tab`、修飾なしの `1` から `9` は使えません。上下キーはワークスペースを、左右キーはタブを、`n`/`e`/`i`/`a` はペインを切り替えます。いずれもナビゲーションモードを抜けないので、続けて押せます。`navigate_tab_previous` と `navigate_tab_next` が未割り当ての場合、左右キーは左ペインと右ペインへのナビゲーションにフォールバックします。これらのナビゲートモードショートカットは、`focus_pane_down = "prefix+e"` のような一般アクションのバインドから独立しており、ナビゲートモードが開いている間は常にナビゲートモード側が優先されます。プレフィックスなしでペインを移動したい場合は `focus_pane_*` に直接コードを割り当ててください。Alt、Cmd/Super、修飾キー付き記号は、ターミナルと tmux の設定に依存します。
 
 古いカスタムキーバインドを使っていて新しいデフォルトが欲しい場合は、`herdr config reset-keys` を実行してください。Herdr は `config.toml` をバックアップし、`[keys]` と `[[keys.command]]` を削除し、再起動または `herdr server reload-config` の後に組み込みの v2 デフォルトを使います。
 
@@ -205,7 +205,7 @@ command = "example.layout.apply"
 description = "apply layout"
 ```
 
-任意で `description` を指定できます。指定すると、キーバインドヘルプパネル（`prefix+?` で開く）に、デフォルトの `'custom command'` ラベルの代わりに表示されます。
+任意で `description` を指定できます。指定すると、コマンドパレット（`prefix+space` で開く）に、デフォルトの `'custom command'` ラベルの代わりに表示されます。
 
 カスタムコマンドは、利用可能な場合に `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID`、`HERDR_ACTIVE_PANE_CWD` を受け取ります。Herdr が検出できる場合、シェルコマンドはフォーカス中のペインの作業ディレクトリから実行されます。
 

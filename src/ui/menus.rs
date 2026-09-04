@@ -38,6 +38,17 @@ fn arrow_pair_label(first: String, second: String) -> String {
     }
 }
 
+/// Compact label for the four navigate-mode pane keys, in left/down/up/right
+/// order. Arrow keys collapse to their symbols the way the pair labels do.
+fn pane_cluster_label(cluster: [&crate::config::ActionKeybinds; 4]) -> String {
+    cluster
+        .map(|bindings| {
+            let label = keybind_label(bindings);
+            arrow_symbol(&label).map(str::to_string).unwrap_or(label)
+        })
+        .join("")
+}
+
 fn render_bottom_bar(frame: &mut Frame, area: Rect, line: Line<'_>, bg: ratatui::style::Color) {
     frame.render_widget(Clear, area);
     let buf = frame.buffer_mut();
@@ -142,11 +153,17 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         keybind_label(&kb.navigate.tab_previous),
         keybind_label(&kb.navigate.tab_next),
     );
+    let pane_nav = pane_cluster_label([
+        &kb.navigate.pane_left,
+        &kb.navigate.pane_down,
+        &kb.navigate.pane_up,
+        &kb.navigate.pane_right,
+    ]);
     let mut spans = vec![
         Span::styled(" NAVIGATE ", mode_style),
         Span::raw(" "),
         Span::styled("esc", key),
-        Span::styled(" back  ", dim),
+        Span::styled(" cancel  ", dim),
         Span::styled(commands, key),
         Span::styled(" commands  ", dim),
     ];
@@ -162,10 +179,10 @@ pub(super) fn render_navigate_overlay(app: &AppState, frame: &mut Frame, area: R
         Span::styled(" ws  ", dim),
         Span::styled(tab_nav, key),
         Span::styled(" tab  ", dim),
-        Span::styled("⇥", key),
+        Span::styled(pane_nav, key),
         Span::styled(" pane  ", dim),
         Span::styled("⏎", key),
-        Span::styled(" open  ", dim),
+        Span::styled(" done  ", dim),
         Span::styled(goto, key),
         Span::styled(" navigator  ", dim),
         Span::styled(new_tab, key),

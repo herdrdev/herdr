@@ -1443,6 +1443,9 @@ pub struct AppState {
     pub workspaces: Vec<Workspace>,
     pub active: Option<usize>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
+    /// Focus recorded when navigation mode was entered, so `esc` can cancel the
+    /// walk and put the user back where they started. `enter` discards it.
+    pub(crate) navigate_entry_focus: Option<PaneFocusTarget>,
     pub selected: usize,
     pub mode: Mode,
     pub should_quit: bool,
@@ -1702,6 +1705,9 @@ impl AppState {
     /// Enters navigation mode, the command realm the prefix key opens.
     pub(crate) fn enter_navigate_mode(&mut self) {
         self.mobile_switcher_scroll = 0;
+        if self.mode != Mode::Navigate {
+            self.navigate_entry_focus = self.current_pane_focus_target();
+        }
         self.mode = Mode::Navigate;
     }
 
@@ -1819,6 +1825,7 @@ impl AppState {
             workspaces: Vec::new(),
             active: None,
             previous_pane_focus: None,
+            navigate_entry_focus: None,
             selected: 0,
             mode: Mode::Navigate,
             should_quit: false,

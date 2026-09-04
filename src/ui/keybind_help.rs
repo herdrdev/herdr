@@ -400,6 +400,10 @@ mod tests {
             "next agent",
             "focus agent 1-9",
             "switch workspace 1-9",
+            "previous workspace",
+            "next workspace",
+            "previous tab",
+            "next tab",
         ] {
             let command = commands
                 .iter()
@@ -409,12 +413,10 @@ mod tests {
         }
 
         for (label, shortcut) in [
-            ("previous workspace", "prefix+i"),
-            ("next workspace", "prefix+e"),
-            ("focus pane left", "prefix+h"),
-            ("focus pane down", "prefix+j"),
-            ("focus pane up", "prefix+k"),
-            ("focus pane right", "prefix+l"),
+            ("focus pane left", "prefix+n"),
+            ("focus pane down", "prefix+e"),
+            ("focus pane up", "prefix+i"),
+            ("focus pane right", "prefix+a"),
         ] {
             let command = commands
                 .iter()

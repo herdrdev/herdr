@@ -13,11 +13,11 @@ Herdr is mouse-native. You can click panes, tabs, workspaces, and agents, drag s
 
 A terminal multiplexer sits between your terminal and the programs running inside it. Those programs already use most key combinations: `ctrl+c` interrupts, `ctrl+r` searches history, editors claim nearly everything else. If Herdr grabbed common keys directly, it would break the programs inside it.
 
-The prefix solves this. Press the prefix key, default `esc`, and Herdr enters navigation mode: keys stop going to your terminal and run Herdr commands instead. `prefix+c` means: press `esc`, release, then press `c`. One reserved key instead of dozens.
+The prefix solves this. Press the prefix key, default `ctrl+s`, and Herdr enters navigation mode: keys stop going to your terminal and run Herdr commands instead. `prefix+t` means: press `ctrl+s`, release, then press `t`. One reserved key instead of dozens.
 
-Navigation mode stays open until you leave it, so you can run several commands from one press. A hint line at the bottom of the screen lists what is bound. `space` opens the command palette, `↑`/`↓` switch workspaces, `←`/`→` switch tabs, and most commands that move focus drop you back in the terminal on their own. The four arrows keep navigation mode open, so you can walk through workspaces and tabs with one prefix press.
+Navigation mode stays open until you leave it, so you can run several commands from one press. A hint line at the bottom of the screen lists what is bound. `space` opens the command palette, `↑`/`↓` switch workspaces, `←`/`→` switch tabs, and `n`/`e`/`i`/`a` move between panes. All of those keep navigation mode open, so you can walk the whole session from one prefix press.
 
-Press the prefix key again to leave. With the default prefix that means `esc esc`, which also sends a literal `esc` to the focused pane, so vim and other editors stay usable. A key that is not bound does nothing and keeps you in navigation mode. Set `keys.prefix = "ctrl+b"` in `config.toml` for the tmux-style prefix; then `esc` leaves navigation mode without sending anything, and `ctrl+b ctrl+b` sends a literal `ctrl+b`.
+There are three ways out. `enter` commits the walk and leaves navigation mode on whatever workspace, tab, and pane you landed on. `esc` cancels it and returns focus to the pane that was focused before you opened navigation mode. Pressing the prefix key again leaves and sends a literal prefix to the focused pane, so with the default prefix `ctrl+s ctrl+s` keeps programs that use `ctrl+s` usable. A key that is not bound does nothing and keeps you in navigation mode. Set `keys.prefix = "ctrl+b"` in `config.toml` for the tmux-style prefix; then `ctrl+b ctrl+b` sends a literal `ctrl+b`.
 
 ## Command palette
 
@@ -51,9 +51,9 @@ Commands defined under `[[keys.command]]` run from the palette but are still edi
 
 | Action | Key |
 | --- | --- |
-| New tab | `prefix+c` |
+| New tab | `prefix+t` |
 | Split right / down | `prefix+v` / `prefix+minus` |
-| Move between panes | `prefix+h/j/k/l` |
+| Move between panes | `prefix+n/e/i/a` |
 | Command palette | `prefix+space` |
 | Detach, leave everything running | `prefix+q` |
 
@@ -75,7 +75,6 @@ Tabs:
 
 | Action | Key |
 | --- | --- |
-| Next / previous tab | `prefix+a` / `prefix+n` |
 | Next / previous tab, staying in navigation mode | `→` / `←` |
 | Jump to tab 1–9 | `prefix+1..9` |
 | Rename tab | `prefix+shift+t` |
@@ -86,7 +85,6 @@ Workspaces and session:
 | Action | Key |
 | --- | --- |
 | New workspace | `prefix+shift+n` |
-| Next / previous workspace | `prefix+e` / `prefix+i` |
 | Next / previous workspace, staying in navigation mode | `↓` / `↑` |
 | Rename workspace | `prefix+shift+w` |
 | Close workspace | `prefix+shift+d` |
@@ -122,13 +120,13 @@ This setup keeps the prefix bindings working and adds direct chords on top:
 
 ```toml
 [keys]
-focus_pane_left = ["prefix+h", "ctrl+alt+h"]
-focus_pane_down = ["prefix+j", "ctrl+alt+j"]
-focus_pane_up = ["prefix+k", "ctrl+alt+k"]
-focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_tab = ["prefix+n", "ctrl+alt+["]
-next_tab = ["prefix+a", "ctrl+alt+]"]
-new_tab = ["prefix+c", "ctrl+alt+c"]
+focus_pane_left = ["prefix+n", "ctrl+alt+h"]
+focus_pane_down = ["prefix+e", "ctrl+alt+j"]
+focus_pane_up = ["prefix+i", "ctrl+alt+k"]
+focus_pane_right = ["prefix+a", "ctrl+alt+l"]
+previous_tab = ["ctrl+alt+["]
+next_tab = ["ctrl+alt+]"]
+new_tab = ["prefix+t", "ctrl+alt+c"]
 split_vertical = ["prefix+v", "ctrl+alt+d"]
 split_horizontal = ["prefix+minus", "ctrl+alt+shift+d"]
 zoom = ["prefix+z", "ctrl+alt+z"]

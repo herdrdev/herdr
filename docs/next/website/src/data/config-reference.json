@@ -214,8 +214,8 @@
         {
           "key": "keys.prefix",
           "type": "string",
-          "default": "\"esc\"",
-          "description": "Prefix key to enter navigation mode (e.g. \"esc\", \"ctrl+b\", \"f12\"). Default: \"esc\"."
+          "default": "\"ctrl+s\"",
+          "description": "Prefix key to enter navigation mode (e.g. \"ctrl+s\", \"esc\", \"f12\"). Default: \"ctrl+s\"."
         },
         {
           "key": "keys.commands",
@@ -298,25 +298,25 @@
         {
           "key": "keys.navigate_pane_left",
           "type": "keybinding",
-          "default": "\"h\"",
+          "default": "\"n\"",
           "description": "Focus the pane to the left in navigate mode."
         },
         {
           "key": "keys.navigate_pane_down",
           "type": "keybinding",
-          "default": "\"j\"",
+          "default": "\"e\"",
           "description": "Focus the pane below in navigate mode."
         },
         {
           "key": "keys.navigate_pane_up",
           "type": "keybinding",
-          "default": "\"k\"",
+          "default": "\"i\"",
           "description": "Focus the pane above in navigate mode."
         },
         {
           "key": "keys.navigate_pane_right",
           "type": "keybinding",
-          "default": "\"l\"",
+          "default": "\"a\"",
           "description": "Focus the pane to the right in navigate mode."
         },
         {
@@ -340,14 +340,14 @@
         {
           "key": "keys.previous_workspace",
           "type": "keybinding",
-          "default": "\"prefix+i\"",
-          "description": "Select the previous workspace."
+          "default": "unset",
+          "description": "Select the previous workspace. Unset by default."
         },
         {
           "key": "keys.next_workspace",
           "type": "keybinding",
-          "default": "\"prefix+e\"",
-          "description": "Select the next workspace."
+          "default": "unset",
+          "description": "Select the next workspace. Unset by default."
         },
         {
           "key": "keys.previous_agent",
@@ -376,7 +376,7 @@
         {
           "key": "keys.new_tab",
           "type": "keybinding",
-          "default": "\"prefix+c\"",
+          "default": "\"prefix+t\"",
           "description": "Create a new tab in the active workspace."
         },
         {
@@ -388,14 +388,14 @@
         {
           "key": "keys.previous_tab",
           "type": "keybinding",
-          "default": "\"prefix+n\"",
-          "description": "Select the previous tab."
+          "default": "unset",
+          "description": "Select the previous tab. Unset by default."
         },
         {
           "key": "keys.next_tab",
           "type": "keybinding",
-          "default": "\"prefix+a\"",
-          "description": "Select the next tab."
+          "default": "unset",
+          "description": "Select the next tab. Unset by default."
         },
         {
           "key": "keys.switch_tab",
@@ -436,25 +436,25 @@
         {
           "key": "keys.focus_pane_left",
           "type": "keybinding",
-          "default": "\"prefix+h\"",
+          "default": "\"prefix+n\"",
           "description": "Focus the pane to the left."
         },
         {
           "key": "keys.focus_pane_down",
           "type": "keybinding",
-          "default": "\"prefix+j\"",
+          "default": "\"prefix+e\"",
           "description": "Focus the pane below."
         },
         {
           "key": "keys.focus_pane_up",
           "type": "keybinding",
-          "default": "\"prefix+k\"",
+          "default": "\"prefix+i\"",
           "description": "Focus the pane above."
         },
         {
           "key": "keys.focus_pane_right",
           "type": "keybinding",
-          "default": "\"prefix+l\"",
+          "default": "\"prefix+a\"",
           "description": "Focus the pane to the right."
         },
         {

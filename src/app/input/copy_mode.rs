@@ -1260,10 +1260,10 @@ mod tests {
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()))
             .await;
 
-        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.mode, Mode::Navigate);
         assert_eq!(app.state.copy_mode, Some(copy_mode.clone()));
         assert_eq!(
             app.state.workspaces[0].tabs[0].layout.focused(),
@@ -1271,12 +1271,13 @@ mod tests {
         );
 
         refresh_split_pane_infos(&mut app);
-        app.handle_key(TerminalKey::new(
-            app.state.prefix_code,
-            app.state.prefix_mods,
-        ))
-        .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('h'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::empty()))
+            .await;
+
+        assert_eq!(app.state.mode, Mode::Navigate);
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), first_pane);
+
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.mode, Mode::Copy);
@@ -1298,10 +1299,10 @@ mod tests {
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()))
             .await;
 
-        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.mode, Mode::Navigate);
         assert_eq!(
             app.state.workspaces[0].tabs[0].layout.focused(),
             second_pane
@@ -1354,10 +1355,14 @@ mod tests {
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('l'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.mode, Mode::Navigate);
+        assert!(app.state.copy_mode.is_some());
+
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
         assert_eq!(app.state.mode, Mode::Terminal);
-        assert!(app.state.copy_mode.is_some());
 
         assert!(!app.state.close_tab());
 

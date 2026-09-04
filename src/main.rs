@@ -184,25 +184,25 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # remove_worktree = ""  # optional, unset by default; opens confirmation
 # rename_workspace = "prefix+shift+w"
 # close_workspace = "prefix+shift+d"
-# previous_workspace = "prefix+i"
-# next_workspace = "prefix+e"
+# previous_workspace = ""  # optional, unset by default
+# next_workspace = ""      # optional, unset by default
 # previous_agent = ""     # optional, unset by default
 # next_agent = ""         # optional, unset by default
 # focus_agent = ""        # optional indexed binding, e.g. "prefix+alt+1..9"
 # remote_image_paste = "ctrl+v" # only active in herdr --remote; empty disables raw-key image paste
 # new_tab = "prefix+t"
 # rename_tab = "prefix+shift+t"
-# previous_tab = "prefix+n"
-# next_tab = "prefix+a"
+# previous_tab = ""    # optional, unset by default
+# next_tab = ""        # optional, unset by default
 # switch_tab = "prefix+1..9"
 # switch_workspace = ""   # optional indexed binding, e.g. "prefix+shift+1..9"
 # close_tab = "prefix+shift+x"
 # rename_pane = "prefix+shift+p"
 # edit_scrollback = "prefix+shift+e"
-# focus_pane_left = "prefix+h"
-# focus_pane_down = "prefix+j"
-# focus_pane_up = "prefix+k"
-# focus_pane_right = "prefix+l"
+# focus_pane_left = "prefix+n"
+# focus_pane_down = "prefix+e"
+# focus_pane_up = "prefix+i"
+# focus_pane_right = "prefix+a"
 # cycle_pane_next = "prefix+tab"
 # cycle_pane_previous = "prefix+shift+tab"
 # last_pane = ""          # optional, unset by default; bind e.g. "prefix+tab" for global back-and-forth
@@ -216,14 +216,16 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Navigate-mode movement. These local shortcuts win while navigate mode is open
 # and keep it open, so they can be pressed repeatedly.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
+# esc leaves navigate mode and restores the pane focused before it was opened;
+# enter leaves it keeping whatever the walk landed on.
 # navigate_workspace_up = "up"
 # navigate_workspace_down = "down"
 # navigate_tab_previous = "left"
 # navigate_tab_next = "right"
-# navigate_pane_left = "h"
-# navigate_pane_down = "j"
-# navigate_pane_up = "k"
-# navigate_pane_right = "l"
+# navigate_pane_left = "n"
+# navigate_pane_down = "e"
+# navigate_pane_up = "i"
+# navigate_pane_right = "a"
 
 # Custom commands use the same binding syntax.
 # type = "shell" runs detached in the background.

@@ -525,6 +525,7 @@ impl App {
             workspaces,
             active,
             previous_pane_focus: None,
+            navigate_entry_focus: None,
             selected,
             mode,
             should_quit: false,

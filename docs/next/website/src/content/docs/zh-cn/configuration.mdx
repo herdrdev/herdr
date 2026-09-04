@@ -111,35 +111,35 @@ manage_ssh_config = true
 
 有关前缀键的引导式介绍和经过验证的免前缀配置，请参阅[键盘](/docs/keyboard/)。
 
-Herdr 提供类似 tmux 的前缀模式。默认前缀是 `esc`,连按两次即可向聚焦窗格发送字面的 `esc`。按键绑定字符串是显式的：`prefix+n` 表示先按配置的前缀，再按 `n`；`ctrl+alt+n` 则是终端模式下的直接快捷键。
+Herdr 提供类似 tmux 的导航模式，通过前缀键进入。默认前缀是 `ctrl+s`。按 `enter` 在你走到的位置退出导航模式，按 `esc` 退出并回到开始时的窗格，再次按下前缀键则退出并向聚焦窗格发送字面的 `ctrl+s`。按键绑定字符串是显式的：`prefix+n` 表示先按配置的前缀，再按 `n`；`ctrl+alt+n` 则是终端模式下的直接快捷键。
 
 一个简短的按键绑定覆盖如下：
 
 ```toml
 [keys]
-prefix = "esc"
+prefix = "ctrl+s"
 goto = "prefix+g"
 new_tab = "prefix+c"
-next_tab = "prefix+a"
-previous_tab = "prefix+n"
-focus_pane_left = "prefix+h"
+next_tab = "prefix+shift+a"
+previous_tab = "prefix+shift+n"
+focus_pane_left = "prefix+n"
 navigate_workspace_down = "j"
 navigate_pane_down = "ctrl+j"
 split_horizontal = "prefix+minus"
 ```
 
-默认键位以前缀为主，因此 Herdr 不会抢占 shell、编辑器、tmux 或终端应用的输入。在[配置参考](/docs/config-reference/)中搜索 `keys.` 可查看每个动作及其默认绑定。应用内帮助面板可通过 `prefix+?` 打开，其中会显示当前生效的绑定。
+默认键位以前缀为主，因此 Herdr 不会抢占 shell、编辑器、tmux 或终端应用的输入。在[配置参考](/docs/config-reference/)中搜索 `keys.` 可查看每个动作及其默认绑定。`prefix+space` 的命令面板会显示当前生效的绑定，并可以就地重新绑定。
 
 当一个动作需要多个快捷键时，绑定也可以是数组：
 
 ```toml
 [keys]
-next_tab = ["prefix+a", "ctrl+alt+]"]
+next_tab = ["prefix+shift+a", "ctrl+alt+]"]
 ```
 
 可选动作默认不设置。使用 `prefix+` 可获得前缀模式行为；当你确实需要直接快捷键时，请使用显式的修饰组合键。
 
-按键字符串支持普通按键、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` 等修饰组合键，以及 `enter`、`tab`、`esc`、`left`、`right`、`up`、`down` 等特殊键。也支持 `minus`、`comma`、`ampersand`、`plus`、`backtick` 等命名标点。直接绑定 `n` 这样的普通可打印键并不安全，因为它会拦截输入；除非你有意设置直接绑定，否则请使用 `prefix+n`。`navigate_workspace_*`、`navigate_tab_*` 和 `navigate_pane_*` 字段仅在导航模式中生效，可以使用 `j` 或 `k` 等普通按键；它们不得使用 `prefix+`、`esc`、`enter`、`tab`、`shift+tab`，也不得使用无修饰键的 `1` 到 `9`。上下方向键切换工作区，左右方向键切换标签页，都不会退出导航模式，因此可以连续按。当 `navigate_tab_previous` 和 `navigate_tab_next` 未绑定时，左右方向键回退为向左和向右导航窗格。这些导航模式快捷键独立于 `focus_pane_down = "prefix+j"` 等通用动作绑定；两者使用同一按键时，打开导航模式后，导航模式快捷键优先。Alt、Cmd/Super 以及带修饰键的标点取决于你的终端和 tmux 设置。
+按键字符串支持普通按键、`ctrl+a`、`shift+n`、`alt+1`、`cmd+k` 等修饰组合键，以及 `enter`、`tab`、`esc`、`left`、`right`、`up`、`down` 等特殊键。也支持 `minus`、`comma`、`ampersand`、`plus`、`backtick` 等命名标点。直接绑定 `n` 这样的普通可打印键并不安全，因为它会拦截输入；除非你有意设置直接绑定，否则请使用 `prefix+n`。`navigate_workspace_*`、`navigate_tab_*` 和 `navigate_pane_*` 字段仅在导航模式中生效，可以使用 `n` 或 `e` 等普通按键；它们不得使用 `prefix+`、`esc`、`enter`、`tab`、`shift+tab`，也不得使用无修饰键的 `1` 到 `9`。上下方向键切换工作区，左右方向键切换标签页，`n`/`e`/`i`/`a` 切换窗格，都不会退出导航模式，因此可以连续按。当 `navigate_tab_previous` 和 `navigate_tab_next` 未绑定时，左右方向键回退为向左和向右导航窗格。这些导航模式快捷键独立于 `focus_pane_down = "prefix+e"` 等通用动作绑定；导航模式打开时始终由导航模式快捷键接管。若想不按前缀键就移动窗格，请把 `focus_pane_*` 绑定到直接组合键。Alt、Cmd/Super 以及带修饰键的标点取决于你的终端和 tmux 设置。
 
 如果你已有旧的自定义按键绑定，并想使用新的默认值，请运行 `herdr config reset-keys`。Herdr 会备份 `config.toml`，移除 `[keys]` 和 `[[keys.command]]`，并在重启或执行 `herdr server reload-config` 后使用内置的 v2 默认值。
 
@@ -205,7 +205,7 @@ command = "example.layout.apply"
 description = "apply layout"
 ```
 
-可以提供可选的 `description`。指定后，该描述会在按键绑定帮助面板（通过 `prefix+?` 打开）中显示，替代默认的 `'custom command'` 标签。
+可以提供可选的 `description`。指定后，该描述会在命令面板（通过 `prefix+space` 打开）中显示，替代默认的 `'custom command'` 标签。
 
 在相应值可用时，自定义命令会收到 `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID` 和 `HERDR_ACTIVE_PANE_CWD`。当 Herdr 能检测到聚焦窗格的工作目录时，shell 命令会从该目录运行。
 

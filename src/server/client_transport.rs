@@ -1144,7 +1144,7 @@ new_tab = "ctrl+notakey"
         assert!(keybindings.keybinds.new_tab.bindings.is_empty());
         assert!(keybindings
             .keybinds
-            .next_tab
+            .focus_pane_right
             .bindings
             .iter()
             .any(|binding| binding.label == "prefix+a"));

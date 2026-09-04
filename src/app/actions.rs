@@ -1912,6 +1912,30 @@ impl AppState {
         }
     }
 
+    /// Restores the workspace, tab, and pane recorded when navigation mode was
+    /// entered. Leaving the mode itself is the caller's job.
+    #[cfg(test)]
+    pub(crate) fn restore_navigate_entry_focus(&mut self) {
+        let Some(target) = self.navigate_entry_focus.take() else {
+            return;
+        };
+        if self.current_pane_focus_target().as_ref() == Some(&target) {
+            return;
+        }
+        let Some((ws_idx, tab_idx)) = self.pane_focus_target_indices(&target) else {
+            return;
+        };
+        self.switch_workspace_tab(ws_idx, tab_idx);
+        if let Some(tab) = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.tabs.get_mut(tab_idx))
+        {
+            tab.layout.focus_pane(target.pane_id);
+            self.mark_session_dirty();
+        }
+    }
+
     pub(crate) fn apply_pane_zoom(
         &mut self,
         ws_idx: usize,

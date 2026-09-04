@@ -1,0 +1,105 @@
+name: Fork release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "vendor/**"
+      - "assets/**"
+      - "skills/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/fork-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+jobs:
+  release:
+    # Fork-only. Keeps this workflow inert if these commits ever reach another repository.
+    if: github.repository == 'jacksluong/herdr'
+    runs-on: macos-latest
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: "true"
+      TARGET: aarch64-apple-darwin
+      ASSET: herdr-macos-aarch64
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ env.TARGET }}
+
+      - name: Restore Homebrew Zig cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: homebrew-zig-0.15-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            homebrew-zig-0.15-${{ runner.os }}-
+
+      - name: Install patched Zig
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
+          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix zig@0.15)/bin/zig" version
+
+      - name: Install build tools
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: fork-release-${{ env.TARGET }}
+
+      - name: Remove Zig caches
+        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
+
+      - name: Build
+        env:
+          HERDR_BUILD_CHANNEL: fork
+          HERDR_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          HERDR_BUILD_ID="$(git rev-parse --short HEAD)" \
+            cargo build --release --locked --target "$TARGET"
+          cp "target/$TARGET/release/herdr" "$ASSET"
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          SUBJECT="$(git log -1 --pretty=%s)"
+          {
+            printf 'Rolling build of `master` at [`%s`](%s/commit/%s).\n\n' \
+              "$SHORT_SHA" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf '> %s\n\n' "$SUBJECT"
+            printf 'Install or update on any Apple Silicon Mac:\n\n'
+            printf '```sh\ncurl -fsSL %s/%s/master/scripts/install-fork.sh | sh\n```\n' \
+              "https://raw.githubusercontent.com" "$GITHUB_REPOSITORY"
+          } > RELEASE_NOTES.md
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create latest "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "master $SHORT_SHA" \
+            --notes-file RELEASE_NOTES.md

@@ -7,6 +7,20 @@
 - Settings and `ui.status_indicators = "symbols"` can now use distinct static shapes for blocked, working, done, idle, and unknown agent states. (#2260)
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
 
+### Changed
+- The keybind help overlay is now a command palette: a search box filters commands by regular expression, `↑`/`↓` move the selection, `Enter` runs the selected command, and `esc` closes the panel.
+- Shortcuts can be rebound inline from the command palette with `ctrl+s` (or cleared with `ctrl+x`), which writes the `[keys]` entry to `config.toml` and applies it immediately. Reassigning a shortcut that another command owns asks for confirmation first.
+- The default prefix key is now `ctrl+s` instead of `ctrl+b`. Pressing it again leaves navigation mode and sends a literal prefix key to the focused pane, keys with no binding do nothing and keep you in navigation mode, and `esc` keeps its existing meaning for back/cancel in copy mode and overlays. Set `keys.prefix = "ctrl+b"` in `config.toml` to keep the previous default.
+- Held keys now repeat in overlays and navigation on terminals that use the kitty keyboard protocol, matching the behavior legacy terminals already had.
+- The prefix key now enters navigation mode directly; the one-shot prefix mode between them is gone. Commands stay available until you leave, and the bottom hint line lists them.
+- The command palette is bound to `prefix+space`, and its `[keys]` entry is now `commands` instead of `help`. Existing `help = ...` entries keep working as an alias.
+- Navigation mode now switches tabs with `←`/`→`, workspaces with `↑`/`↓`, and panes with `n`/`e`/`i`/`a`, none of which leave the mode, so a whole session can be walked from a single prefix press. `navigate_tab_previous` and `navigate_tab_next` configure the tab arrows; the workspace arrows switch immediately instead of moving a sidebar selection that `Enter` had to confirm.
+- `enter` and `esc` now do different things in navigation mode. `enter` commits the walk and leaves the mode on whatever workspace, tab, and pane you landed on. `esc` cancels it and restores the pane that was focused before navigation mode was opened.
+- Pane focus moved to the `n`/`e`/`i`/`a` cluster: `navigate_pane_left`, `navigate_pane_down`, `navigate_pane_up`, and `navigate_pane_right` default to `n`/`e`/`i`/`a`, and `focus_pane_*` to `prefix+n`/`prefix+e`/`prefix+i`/`prefix+a`. `new_tab` moved to `prefix+t` and `edit_scrollback` to `prefix+shift+e`.
+- `previous_tab`, `next_tab`, `previous_workspace`, and `next_workspace` are now unset by default, freeing the letters the pane cluster took over. Bind them explicitly to keep single-key tab and workspace switching.
+- Digits no longer jump to a workspace inside navigation mode, so `prefix+1..9` keeps its documented tab meaning everywhere. Bind `switch_workspace` (for example `prefix+shift+1..9`) to jump to workspaces by number.
+- The separate workspace picker at `prefix+w` is gone; navigation mode and the `prefix+g` navigator cover it. Configs still setting `keys.workspace_picker` keep loading without an unknown-key warning.
+
 ### Fixed
 - Configs containing the retired Herdr-written `ui.agent_panel_scope` setting no longer report it as an unknown key after upgrades. (#2292)
 - Claude Code confirmation prompts using `Enter to confirm · Esc to cancel` now report `blocked` instead of `idle`. (#2268)
@@ -28,15 +42,6 @@
 - Added a Simplified Chinese README. (#1990, thanks @patrick-xin)
 
 ### Changed
-- The prefix key now enters navigation mode directly; the one-shot prefix mode between them is gone. Commands stay available until you leave, and the bottom hint line lists them.
-- The keybind help overlay is now a command palette: a search box filters commands by regular expression, `↑`/`↓` move the selection, `Enter` runs the selected command, and `esc` closes the panel.
-- The command palette is bound to `prefix+space`, and its `[keys]` entry is now `commands` instead of `help`. Existing `help = ...` entries keep working as an alias.
-- Shortcuts can be rebound inline from the command palette with `ctrl+s` (or cleared with `ctrl+x`), which writes the `[keys]` entry to `config.toml` and applies it immediately. Reassigning a shortcut that another command owns asks for confirmation first.
-- Navigation mode now switches tabs with `←`/`→` and workspaces with `↑`/`↓` without leaving the mode, so tabs and workspaces can be walked through from a single prefix press. `navigate_tab_previous` and `navigate_tab_next` configure the tab arrows; the workspace arrows switch immediately instead of moving a sidebar selection that `Enter` had to confirm.
-- The `previous_tab` and `next_tab` defaults moved from `prefix+left`/`prefix+right` to `prefix+n`/`prefix+a`, `previous_workspace` and `next_workspace` are now bound by default to `prefix+i`/`prefix+e`, and `edit_scrollback` moved to `prefix+shift+e`.
-- Digits no longer jump to a workspace inside navigation mode, so `prefix+1..9` keeps its documented tab meaning everywhere. Bind `switch_workspace` (for example `prefix+shift+1..9`) to jump to workspaces by number.
-- The default prefix key is now `esc` instead of `ctrl+b`. Press it twice to leave navigation mode and send a literal `esc` to the focused pane; keys with no binding do nothing and keep you in navigation mode. `esc` keeps its existing meaning for back/cancel in copy mode and overlays. Set `keys.prefix = "ctrl+b"` in `config.toml` to keep the previous default.
-- Held keys now repeat in overlays and navigation on terminals that use the kitty keyboard protocol, matching the behavior legacy terminals already had.
 - Experimental options are no longer exposed in the Settings TUI and remain available through the config file.
 - Agent status indicators now use the same static workspace marks across the sidebar, navigator, and mobile views, eliminating continuous spinner rendering while agents work.
 - Hidden pane output no longer triggers unnecessary TUI rendering.

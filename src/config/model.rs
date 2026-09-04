@@ -361,13 +361,13 @@ pub struct KeysConfig {
     pub navigate_tab_previous: BindingConfig,
     /// Switch to the next tab in navigate mode, staying in navigate mode. Default: "right".
     pub navigate_tab_next: BindingConfig,
-    /// Focus the pane to the left in navigate mode. Default: "h".
+    /// Focus the pane to the left in navigate mode. Default: "n".
     pub navigate_pane_left: BindingConfig,
-    /// Focus the pane below in navigate mode. Default: "j".
+    /// Focus the pane below in navigate mode. Default: "e".
     pub navigate_pane_down: BindingConfig,
-    /// Focus the pane above in navigate mode. Default: "k".
+    /// Focus the pane above in navigate mode. Default: "i".
     pub navigate_pane_up: BindingConfig,
-    /// Focus the pane to the right in navigate mode. Default: "l".
+    /// Focus the pane to the right in navigate mode. Default: "a".
     pub navigate_pane_right: BindingConfig,
     /// Detach from server/client mode, or exit --no-session mode. Default: "prefix+q".
     pub detach: BindingConfig,
@@ -375,9 +375,9 @@ pub struct KeysConfig {
     pub reload_config: BindingConfig,
     /// Focus the currently visible notification target. Default: "prefix+o".
     pub open_notification_target: BindingConfig,
-    /// Select the previous workspace. Default: "prefix+i".
+    /// Select the previous workspace. Unset by default.
     pub previous_workspace: BindingConfig,
-    /// Select the next workspace. Default: "prefix+e".
+    /// Select the next workspace. Unset by default.
     pub next_workspace: BindingConfig,
     /// Focus the previous agent shown in the agent panel. Unset by default.
     pub previous_agent: BindingConfig,
@@ -391,9 +391,9 @@ pub struct KeysConfig {
     pub new_tab: BindingConfig,
     /// Rename the active tab. Default: "prefix+shift+t".
     pub rename_tab: BindingConfig,
-    /// Select the previous tab. Default: "prefix+n".
+    /// Select the previous tab. Unset by default.
     pub previous_tab: BindingConfig,
-    /// Select the next tab. Default: "prefix+a".
+    /// Select the next tab. Unset by default.
     pub next_tab: BindingConfig,
     /// Switch to tab 1-9. Default: "prefix+1..9".
     pub switch_tab: BindingConfig,
@@ -407,13 +407,13 @@ pub struct KeysConfig {
     pub edit_scrollback: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
-    /// Focus the pane to the left. Default: "prefix+h".
+    /// Focus the pane to the left. Default: "prefix+n".
     pub focus_pane_left: BindingConfig,
-    /// Focus the pane below. Default: "prefix+j".
+    /// Focus the pane below. Default: "prefix+e".
     pub focus_pane_down: BindingConfig,
-    /// Focus the pane above. Default: "prefix+k".
+    /// Focus the pane above. Default: "prefix+i".
     pub focus_pane_up: BindingConfig,
-    /// Focus the pane to the right. Default: "prefix+l".
+    /// Focus the pane to the right. Default: "prefix+a".
     pub focus_pane_right: BindingConfig,
     /// Swap the focused pane with the pane to the left. Default: "prefix+shift+h".
     pub swap_pane_left: BindingConfig,
@@ -985,33 +985,33 @@ impl Default for KeysConfig {
             navigate_workspace_down: BindingConfig::one("down"),
             navigate_tab_previous: BindingConfig::one("left"),
             navigate_tab_next: BindingConfig::one("right"),
-            navigate_pane_left: BindingConfig::one("h"),
-            navigate_pane_down: BindingConfig::one("j"),
-            navigate_pane_up: BindingConfig::one("k"),
-            navigate_pane_right: BindingConfig::one("l"),
+            navigate_pane_left: BindingConfig::one("n"),
+            navigate_pane_down: BindingConfig::one("e"),
+            navigate_pane_up: BindingConfig::one("i"),
+            navigate_pane_right: BindingConfig::one("a"),
             detach: BindingConfig::one("prefix+q"),
             reload_config: BindingConfig::one("prefix+shift+r"),
             open_notification_target: BindingConfig::one("prefix+o"),
-            previous_workspace: BindingConfig::one("prefix+i"),
-            next_workspace: BindingConfig::one("prefix+e"),
+            previous_workspace: BindingConfig::empty(),
+            next_workspace: BindingConfig::empty(),
             previous_agent: BindingConfig::empty(),
             next_agent: BindingConfig::empty(),
             focus_agent: BindingConfig::empty(),
             remote_image_paste: "ctrl+v".into(),
             new_tab: BindingConfig::one("prefix+t"),
             rename_tab: BindingConfig::one("prefix+shift+t"),
-            previous_tab: BindingConfig::one("prefix+n"),
-            next_tab: BindingConfig::one("prefix+a"),
+            previous_tab: BindingConfig::empty(),
+            next_tab: BindingConfig::empty(),
             switch_tab: BindingConfig::one("prefix+1..9"),
             switch_workspace: BindingConfig::empty(),
             close_tab: BindingConfig::one("prefix+shift+x"),
             rename_pane: BindingConfig::one("prefix+shift+p"),
             edit_scrollback: BindingConfig::one("prefix+shift+e"),
             copy_mode: BindingConfig::one("prefix+["),
-            focus_pane_left: BindingConfig::one("prefix+h"),
-            focus_pane_down: BindingConfig::one("prefix+j"),
-            focus_pane_up: BindingConfig::one("prefix+k"),
-            focus_pane_right: BindingConfig::one("prefix+l"),
+            focus_pane_left: BindingConfig::one("prefix+n"),
+            focus_pane_down: BindingConfig::one("prefix+e"),
+            focus_pane_up: BindingConfig::one("prefix+i"),
+            focus_pane_right: BindingConfig::one("prefix+a"),
             swap_pane_left: BindingConfig::one("prefix+shift+h"),
             swap_pane_down: BindingConfig::one("prefix+shift+j"),
             swap_pane_up: BindingConfig::one("prefix+shift+k"),
