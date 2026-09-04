@@ -932,6 +932,47 @@ fn codex_trust_directory_requires_live_top_region() {
 }
 
 #[test]
+fn codex_startup_update_requires_complete_live_chooser() {
+    let chooser = "Update available! 0.153.0 -> 9.8.7\n\
+        Run bun add -g @openai/codex to update.\n\n\
+        › 1. Update now\n\
+          2. Skip until next version\n\n\
+        Press enter to continue   \n";
+    let wrapped = "✨ Update available! 0.153.0\n\n\
+        Release notes: https://example\n\n\
+        › 1. Update now (runs `npm\n\
+             install -g\n\
+             @openai/codex`)\n\
+          2. Skip\n\
+          3. Skip until next\n\
+             version\n\n\
+        Press enter to continue\n";
+
+    for screen in [chooser, wrapped] {
+        let result = osc_explain(Agent::Codex, screen, "project", "");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("startup_update")
+        );
+        assert!(result.visible_blocker);
+    }
+
+    for screen in [
+        chooser.replace("Update now", "Install"),
+        format!("{wrapped}\n› Ask Codex to do anything\n"),
+    ] {
+        let result = osc_explain(Agent::Codex, &screen, "project", "");
+        assert_eq!(result.state, AgentState::Idle);
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("startup_update")
+        );
+        assert!(!result.visible_blocker);
+    }
+}
+
+#[test]
 fn codex_background_terminal_screen_does_not_override_osc_idle() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
     // They should not make Codex look busy once the foreground turn is idle.
