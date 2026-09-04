@@ -115,7 +115,7 @@ function Prepend-PathEntry {
 
     $normalize = {
         param([string]$Value)
-        $comparison = $Value.Trim().Trim('"').TrimEnd("\")
+        $comparison = [Environment]::ExpandEnvironmentVariables($Value.Trim().Trim('"')).TrimEnd("\")
         try { [System.IO.Path]::GetFullPath($comparison).TrimEnd("\") } catch { $comparison }
     }
     $needle = & $normalize $Entry

@@ -57,6 +57,8 @@ foreach ($functionName in @("Prepend-PathEntry", "Update-PathRegistryEntry")) {
 
 $pathTestVariable = "HERDR_INSTALLER_PATH_TEST"
 $oldPathTestVariable = [Environment]::GetEnvironmentVariable($pathTestVariable, "Process")
+$ownedPathTestVariable = "HERDR_INSTALLER_OWNED_PATH_TEST"
+$oldOwnedPathTestVariable = [Environment]::GetEnvironmentVariable($ownedPathTestVariable, "Process")
 $testRegistryPath = "Software\HerdrInstallerTests-$([Guid]::NewGuid().ToString('N'))"
 $testEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testRegistryPath)
 if ($null -eq $testEnvironmentKey) {
@@ -64,9 +66,10 @@ if ($null -eq $testEnvironmentKey) {
 }
 try {
     [Environment]::SetEnvironmentVariable($pathTestVariable, "C:\expanded", "Process")
+    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, "C:\Herdr", "Process")
     $testEnvironmentKey.SetValue(
         "Path",
-        "C:\Herdr\releases\deleted;C:\Herdr\bin;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old;C:\Herdr\releases\deleted",
+        "C:\Herdr\releases\deleted;%$ownedPathTestVariable%\bin;C:\Herdr\bin;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old;C:\Herdr\releases\deleted",
         [Microsoft.Win32.RegistryValueKind]::ExpandString
     )
     $ownedEntries = @("C:\Herdr\bin", "C:\Herdr\current")
@@ -99,6 +102,7 @@ try {
     $testEnvironmentKey.Dispose()
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testRegistryPath, $false)
     [Environment]::SetEnvironmentVariable($pathTestVariable, $oldPathTestVariable, "Process")
+    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, $oldOwnedPathTestVariable, "Process")
 }
 
 $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
