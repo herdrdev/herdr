@@ -540,6 +540,7 @@ fn rejected_or_stale_requests_do_not_schedule_rendering() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
+    server.app.state.kitty_graphics_enabled = false;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {

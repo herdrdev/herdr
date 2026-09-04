@@ -145,9 +145,9 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 
 クライアントは `offset_from_bottom == 0` を最下部にいる状態として扱えます。
 
-### 実験的なペイングラフィックス
+### ペイングラフィックス
 
-ペイングラフィックスを使うと、プラグインがペイン上に画像データを配置できます。`[experimental].kitty_graphics = true` の場合にのみ利用でき、それ以外ではすべてのペイングラフィックスメソッドが `feature_disabled` を返します。`pane.graphics.info` はグラフィックスレイヤーを作成せず、接続中クライアントのセルの幅と高さをピクセル単位で返します。`pane.graphics.set` は `data_base64` の `png`、`rgb`、`rgba` データを受け取り、`pane.graphics.clear` はレイヤーを削除します。
+ペイングラフィックスを使うと、プラグインがペイン上に画像データを配置できます。デフォルトで利用でき、サーバーで `[terminal].kitty_graphics = false` が設定されている場合は、すべてのペイングラフィックスメソッドが `feature_disabled` を返します。この設定の変更にはサーバーの再起動が必要です。`pane.graphics.info` はグラフィックスレイヤーを作成せず、接続中クライアントのセルの幅と高さをピクセル単位で返します。`pane.graphics.set` は `data_base64` の `png`、`rgb`、`rgba` データを受け取り、`pane.graphics.clear` はレイヤーを削除します。
 
 ```json
 {"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}

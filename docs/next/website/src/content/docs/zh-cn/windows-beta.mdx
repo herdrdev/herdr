@@ -82,7 +82,7 @@ switch_ascii_input_source_in_prefix = true
 
 Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过连接 Linux/macOS 主机的 `herdr --remote` 单独受支持。
 
-Kitty graphics 是实验性功能,并取决于外层终端。设置 `experimental.kitty_graphics = true` 后,Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证,但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。除非外层终端支持 Kitty graphics 且你正在测试该组合,否则请保持此选项禁用。
+Kitty graphics 默认启用，并取决于外层终端。Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证，但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。如果外层终端无法正确处理图形输出，请设置 `[terminal].kitty_graphics = false`。
 
 ## 已知注意事项
 

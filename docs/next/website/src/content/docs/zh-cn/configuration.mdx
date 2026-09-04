@@ -484,14 +484,16 @@ claude = "on"
 
 ## Kitty graphics
 
-面向已连接本地客户端的 Kitty graphics 渲染是一项实验性功能，默认禁用：
+Herdr 默认在兼容的外层终端中渲染窗格图像。要禁用图形渲染和窗格图形 API，请设置：
 
 ```toml
-[experimental]
-kitty_graphics = true
+[terminal]
+kitty_graphics = false
 ```
 
-仅在测试终端图像行为时启用。
+为兼容现有配置，旧的 `experimental.kitty_graphics` 设置仍然可用。若两者同时设置，`terminal.kitty_graphics` 优先。
+
+更改此设置后，需要重启受影响的 Herdr 服务器或重新连接客户端。在远程会话中，服务器端设置控制窗格图形解析和 API 可用性，本地客户端设置控制向外层终端输出图形。
 
 ## 智能体会话恢复
 

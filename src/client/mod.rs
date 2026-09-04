@@ -371,7 +371,7 @@ fn run_client_with_mode(
     let host_cursor = loaded_config.config.ui.host_cursor;
     let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
     let kitty_graphics_enabled =
-        loaded_config.config.experimental.kitty_graphics && client_rendered_shell;
+        loaded_config.config.kitty_graphics_enabled() && client_rendered_shell;
     let pixel_geometry_enabled = kitty_graphics_enabled || attach_escape.is_some();
     let loop_config = ClientLoopConfig {
         sound_config: loaded_config.config.ui.sound,

@@ -434,6 +434,12 @@
             "current",
             "path"
           ]
+        },
+        {
+          "key": "terminal.kitty_graphics",
+          "type": "boolean",
+          "default": "true",
+          "description": "Render pane images in Kitty graphics-compatible outer terminals. Set false to disable graphics rendering and the pane graphics API. Restart the server or reattach the client after changing it. In remote sessions, server configuration controls parsing and API availability while local client configuration controls outer-terminal output."
         }
       ]
     },
@@ -1453,8 +1459,8 @@
         {
           "key": "experimental.kitty_graphics",
           "type": "boolean",
-          "default": "false",
-          "description": "Experimental local Kitty graphics rendering for attached clients."
+          "default": "unset",
+          "description": "Deprecated compatibility key for terminal.kitty_graphics. Existing true and false values remain supported; terminal.kitty_graphics takes precedence when both are set."
         },
         {
           "key": "experimental.pane_history",

@@ -82,7 +82,7 @@ switch_ascii_input_source_in_prefix = true
 
 Windows 上の一部のエージェントは `ctrl+v` を受け取り、クリップボード画像を直接読み取れます。Herdr 自身のクリップボード画像リーダーはローカルのネイティブ Windows ペインには配線されていないため、エージェント自身による画像貼り付けはターミナルとエージェントに依存します。`alt+v` などエージェントの画像貼り付けショートカットによって、Herdr が管理するローカルクリップボードブリッジが追加されるわけではありません。リモートクリップボード画像ブリッジは、Linux/macOS ホストへの `herdr --remote` で別途サポートされます。
 
-Kitty graphics は実験的機能で、外側のターミナルに依存します。`experimental.kitty_graphics = true` の場合、Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルが Kitty graphics に対応しており、その組み合わせをテストする場合を除いて、このオプションは無効のままにしてください。
+Kitty graphics はデフォルトで有効で、外側のターミナルに依存します。Herdr は他のプラットフォームと同様に Windows でも Kitty graphics protocol の出力を送ります。この経路は Windows の WezTerm から WSL 内の Herdr をホストする構成で動作確認されていますが、ネイティブ Windows のターミナルと ConPTY の組み合わせはすべて検証済みではありません。Windows Terminal は Herdr が使う Kitty graphics 経路を提供しません。外側のターミナルがグラフィックス出力を正しく扱えない場合は、`[terminal].kitty_graphics = false` に設定してください。
 
 ## 既知の注意点
 

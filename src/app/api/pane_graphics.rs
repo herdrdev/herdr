@@ -536,7 +536,7 @@ fn require_enabled(app: &App, id: &str) -> Result<(), String> {
             encode_error(
                 id.to_owned(),
                 "feature_disabled",
-                "pane graphics require experimental.kitty_graphics",
+                "pane graphics are disabled by terminal.kitty_graphics",
             )
         })
 }

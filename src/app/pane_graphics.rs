@@ -108,6 +108,7 @@ impl Runtime {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
         self.mark_changed();
