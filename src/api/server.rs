@@ -7,9 +7,6 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
 use tracing::{debug, error, info, warn};
 
-#[cfg(all(test, unix))]
-use std::fs;
-
 use crate::api::schema::{
     ErrorBody, ErrorResponse, Method, Request, ResponseResult, ServerCapabilities, SuccessResponse,
 };
@@ -17,14 +14,13 @@ use crate::api::subscriptions::ActiveSubscription;
 use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_output};
 use crate::api::{request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, EventHub};
 use crate::ipc::{
-    bind_local_listener, is_connection_closed_error, local_stream_peer_closed,
+    bind_private_local_listener, is_connection_closed_error, local_stream_peer_closed,
     poll_local_stream_read, remove_socket_file_if_owned, set_local_stream_polling,
     socket_file_identity, LocalStream, LocalStreamRead, SocketFileIdentity,
 };
 
 mod pane_graphics_stream;
 
-const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -81,8 +77,7 @@ fn start_server_inner(
     let path = socket_path();
     prepare_socket_path(&path)?;
 
-    let listener = bind_local_listener(&path)?;
-    restrict_socket_permissions(&path)?;
+    let listener = bind_private_local_listener(&path)?;
     let identity = socket_file_identity(&path)?;
     info!(path = %path.display(), "api server listening");
 
@@ -134,10 +129,6 @@ fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
             path.display()
         )
     })
-}
-
-fn restrict_socket_permissions(path: &Path) -> std::io::Result<()> {
-    crate::ipc::restrict_socket_permissions(path, SOCKET_PERMISSION_MODE)
 }
 
 #[cfg(test)]
@@ -946,8 +937,6 @@ mod tests {
     use interprocess::local_socket::traits::Listener as _;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
-    use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixListener;
     use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc;
 
@@ -1089,23 +1078,6 @@ mod tests {
 
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         std::env::remove_var("XDG_CONFIG_HOME");
-    }
-
-    #[test]
-    fn restrict_socket_permissions_sets_user_only_mode() {
-        let dir = unique_test_path("socket-perms");
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("api.sock");
-        let _listener = UnixListener::bind(&path).unwrap();
-
-        restrict_socket_permissions(&path).unwrap();
-
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, SOCKET_PERMISSION_MODE);
-
-        drop(_listener);
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

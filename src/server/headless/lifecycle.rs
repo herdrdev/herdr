@@ -256,8 +256,7 @@ impl HeadlessServer {
 
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
-        let listener = bind_local_listener(&client_path)?;
-        restrict_socket_permissions(&client_path)?;
+        let listener = bind_private_local_listener(&client_path)?;
         let client_socket_identity = socket_file_identity(&client_path)?;
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
 

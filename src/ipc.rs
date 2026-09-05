@@ -10,6 +10,10 @@ use interprocess::local_socket::traits::Stream as _;
 pub(crate) type LocalListener = interprocess::local_socket::Listener;
 pub(crate) type LocalStream = interprocess::local_socket::Stream;
 
+/// Sockets carrying terminal traffic are owner-only.
+#[cfg(unix)]
+const SOCKET_PERMISSION_MODE: u32 = 0o600;
+
 pub(crate) enum LocalStreamRead {
     Data,
     Pending,
@@ -51,6 +55,9 @@ pub(crate) fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     }
 }
 
+/// Binds a listener without restricting who may connect. Production callers
+/// want [`bind_private_local_listener`].
+#[cfg(test)]
 pub(crate) fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
     #[cfg(unix)]
     {
@@ -138,12 +145,13 @@ pub(crate) fn shutdown_local_stream_write(stream: &LocalStream) -> io::Result<()
     }
 }
 
-/// Binds a listener for private terminal traffic. Unix callers restrict the
-/// socket file after binding; Windows must set the named-pipe DACL at creation.
+/// Binds a listener for private terminal traffic. Unix applies the socket mode
+/// to the descriptor before binding; Windows must set the named-pipe DACL at
+/// creation.
 pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListener> {
     #[cfg(unix)]
     {
-        bind_local_listener(path)
+        bind_private_socket(path, bind_local_listener_with_mode)
     }
 
     #[cfg(windows)]
@@ -165,6 +173,72 @@ pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListen
             .create_sync()?;
         fs::write(path, windows_socket_marker())?;
         Ok(listener)
+    }
+}
+
+/// Binds a private listener for callers that need the std `UnixListener` type.
+#[cfg(unix)]
+pub(crate) fn bind_private_unix_listener(
+    path: &Path,
+) -> io::Result<std::os::unix::net::UnixListener> {
+    match bind_private_socket(path, bind_local_listener_with_mode)? {
+        // `reclaim_name(false)` is already set, and the conversion forgets the
+        // reclaim guard, so unlinking stays the caller's responsibility.
+        LocalListener::UdSocket(listener) => Ok(listener.into()),
+    }
+}
+
+#[cfg(unix)]
+fn bind_local_listener_with_mode(path: &Path, mode: Option<u32>) -> io::Result<LocalListener> {
+    use interprocess::local_socket::{prelude::*, GenericFilePath, ListenerOptions};
+    use interprocess::os::unix::local_socket::ListenerOptionsExt as _;
+
+    let name = path.to_fs_name::<GenericFilePath>()?;
+    let options = ListenerOptions::new().name(name).reclaim_name(false);
+    match mode {
+        Some(mode) => options.mode(mode as libc::mode_t).create_sync(),
+        None => options.create_sync(),
+    }
+}
+
+/// Binds `path` so that only the owner can connect.
+///
+/// The mode is requested on the socket descriptor before `bind(2)`, so the
+/// pathname is never `chmod`ed. Filesystems that reject `fchmod` on a socket
+/// (virtiofs, and macOS for any unbound socket) surface `Unsupported`; those
+/// fall back to restricting the bound pathname instead. Any other bind error
+/// stays fatal.
+#[cfg(unix)]
+fn bind_private_socket<T>(
+    path: &Path,
+    bind: impl FnMut(&Path, Option<u32>) -> io::Result<T>,
+) -> io::Result<T> {
+    bind_private_socket_with(path, bind, |path| {
+        restrict_socket_permissions(path, SOCKET_PERMISSION_MODE)
+    })
+}
+
+#[cfg(unix)]
+fn bind_private_socket_with<T>(
+    path: &Path,
+    mut bind: impl FnMut(&Path, Option<u32>) -> io::Result<T>,
+    restrict: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<T> {
+    match bind(path, Some(SOCKET_PERMISSION_MODE)) {
+        Ok(bound) => Ok(bound),
+        Err(err) if err.kind() == io::ErrorKind::Unsupported => {
+            let bound = bind(path, None)?;
+            let identity = socket_file_identity(path)?;
+            if let Err(err) = restrict(path) {
+                // `reclaim_name(false)` means nothing unlinks the socket for
+                // us, so an unrestricted pathname would stay published.
+                drop(bound);
+                let _ = remove_socket_file_if_owned(path, &identity);
+                return Err(err);
+            }
+            Ok(bound)
+        }
+        Err(err) => Err(err),
     }
 }
 
@@ -333,15 +407,10 @@ fn windows_socket_marker() -> String {
 }
 
 #[cfg(unix)]
-pub(crate) fn restrict_socket_permissions(path: &Path, mode: u32) -> io::Result<()> {
+fn restrict_socket_permissions(path: &Path, mode: u32) -> io::Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(mode);
     fs::set_permissions(path, permissions)
-}
-
-#[cfg(windows)]
-pub(crate) fn restrict_socket_permissions(_path: &Path, _mode: u32) -> io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -436,5 +505,169 @@ mod tests {
     #[cfg(windows)]
     fn temp_socket_marker_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("herdr-{name}-{}.sock", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    mod unix_socket_mode {
+        use super::*;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        fn unique_dir(name: &str) -> std::path::PathBuf {
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "herdr-ipc-{name}-{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        fn mode_of(path: &Path) -> u32 {
+            fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+        }
+
+        #[test]
+        fn private_listener_binds_owner_only_without_touching_the_parent() {
+            let dir = unique_dir("owner-only");
+            let parent_mode = mode_of(&dir);
+            let path = dir.join("herdr.sock");
+
+            let listener = bind_private_local_listener(&path).unwrap();
+
+            assert_eq!(mode_of(&path), SOCKET_PERMISSION_MODE);
+            assert_eq!(
+                mode_of(&dir),
+                parent_mode,
+                "binding must not modify the parent directory"
+            );
+
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn private_unix_listener_binds_owner_only() {
+            let dir = unique_dir("owner-only-std");
+            let path = dir.join("herdr.sock");
+
+            let listener = bind_private_unix_listener(&path).unwrap();
+
+            assert_eq!(mode_of(&path), SOCKET_PERMISSION_MODE);
+
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn unsupported_creation_mode_falls_back_to_restricting_the_bound_socket() {
+            let dir = unique_dir("fallback");
+            let path = dir.join("herdr.sock");
+            let attempts = std::cell::Cell::new(0);
+
+            let listener = bind_private_socket(&path, |path, mode| {
+                attempts.set(attempts.get() + 1);
+                if mode.is_some() {
+                    // Stand in for virtiofs, and for macOS, where `fchmod` on an
+                    // unbound socket always fails this way.
+                    return Err(io::Error::from(io::ErrorKind::Unsupported));
+                }
+                bind_local_listener(path)
+            })
+            .unwrap();
+
+            assert_eq!(attempts.get(), 2, "the mode attempt must be retried once");
+            assert_eq!(mode_of(&path), SOCKET_PERMISSION_MODE);
+
+            drop(listener);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn creation_errors_other_than_unsupported_stay_fatal() {
+            // `interprocess` maps `fchmod`'s `EINVAL` to `Unsupported`, so no
+            // other kind may silently take the fallback path and bind a socket
+            // that nothing restricts.
+            for kind in [
+                io::ErrorKind::InvalidInput,
+                io::ErrorKind::PermissionDenied,
+                io::ErrorKind::AddrInUse,
+            ] {
+                let dir = unique_dir("fatal");
+                let path = dir.join("herdr.sock");
+                let attempts = std::cell::Cell::new(0);
+
+                let err = bind_private_socket(&path, |path, _mode| {
+                    attempts.set(attempts.get() + 1);
+                    let _ = path;
+                    Err::<LocalListener, _>(io::Error::from(kind))
+                })
+                .unwrap_err();
+
+                assert_eq!(err.kind(), kind);
+                assert_eq!(attempts.get(), 1, "{kind:?} must not be retried");
+                assert!(!path.exists());
+
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
+
+        #[test]
+        fn failed_restriction_unpublishes_the_socket_it_bound() {
+            let dir = unique_dir("restrict-fails");
+            let path = dir.join("herdr.sock");
+
+            let err = bind_private_socket_with(
+                &path,
+                |path, mode| {
+                    if mode.is_some() {
+                        return Err(io::Error::from(io::ErrorKind::Unsupported));
+                    }
+                    bind_local_listener(path)
+                },
+                |_| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+            )
+            .unwrap_err();
+
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+            assert!(
+                !path.exists(),
+                "an unrestricted socket must not stay published"
+            );
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn failed_restriction_leaves_a_replaced_socket_alone() {
+            let dir = unique_dir("replaced");
+            let path = dir.join("herdr.sock");
+            let mut survivor = None;
+
+            let err = bind_private_socket_with(
+                &path,
+                |path, mode| {
+                    if mode.is_some() {
+                        return Err(io::Error::from(io::ErrorKind::Unsupported));
+                    }
+                    bind_local_listener(path)
+                },
+                |path| {
+                    // Another process replaces the pathname after we bound it,
+                    // and then our restriction fails. The replacement is not
+                    // ours to unlink.
+                    fs::remove_file(path)?;
+                    survivor = Some(bind_local_listener(path)?);
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                },
+            )
+            .unwrap_err();
+
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+            assert!(path.exists(), "the replacement socket must survive");
+
+            drop(survivor);
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 }

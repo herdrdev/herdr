@@ -1,4 +1,5 @@
 use super::*;
+use crate::ipc::bind_local_listener;
 
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;

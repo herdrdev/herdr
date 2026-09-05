@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
 const BRIDGE_IO_POLL: Duration = Duration::from_millis(1);
-const BRIDGE_SOCKET_PERMISSION_MODE: u32 = 0o600;
 const REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_SERVER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
@@ -1678,12 +1677,6 @@ impl SshStdioBridge {
         })?;
         let listener = crate::ipc::bind_private_local_listener(&local_socket)?;
         let socket_identity = crate::ipc::socket_file_identity(&local_socket)?;
-        if let Err(err) =
-            crate::ipc::restrict_socket_permissions(&local_socket, BRIDGE_SOCKET_PERMISSION_MODE)
-        {
-            let _ = crate::ipc::remove_socket_file_if_owned(&local_socket, &socket_identity);
-            return Err(err);
-        }
         if let Err(err) = listener.set_nonblocking(ListenerNonblockingMode::Accept) {
             let _ = crate::ipc::remove_socket_file_if_owned(&local_socket, &socket_identity);
             return Err(err);
@@ -2211,7 +2204,7 @@ mod tests {
         .expect("start bridge listener");
 
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, BRIDGE_SOCKET_PERMISSION_MODE);
+        assert_eq!(mode, 0o600);
 
         drop(bridge);
         let _ = std::fs::remove_file(socket);
@@ -2326,10 +2319,7 @@ mod tests {
         }
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            mode, BRIDGE_SOCKET_PERMISSION_MODE,
-            "keepalive config must be user-only"
-        );
+        assert_eq!(mode, 0o600, "keepalive config must be user-only");
         // The config lives in a private 0700 dir, not a predictable temp path.
         let dir = path.parent().expect("config has a parent dir");
         let dir_mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;

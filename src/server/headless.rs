@@ -40,7 +40,7 @@ use crate::app;
 use crate::config;
 use crate::events::AppEvent;
 use crate::ipc::{
-    bind_local_listener, remove_socket_file_if_owned, socket_file_identity, LocalListener,
+    bind_private_local_listener, remove_socket_file_if_owned, socket_file_identity, LocalListener,
     SocketFileIdentity,
 };
 use crate::protocol::{
@@ -66,9 +66,7 @@ use crate::server::pane_input::{
     apply_client_pane_input_events, apply_client_popup_input_events, apply_terminal_attach_input,
     apply_terminal_attach_scroll, terminal_attach_mouse_position,
 };
-use crate::server::socket_paths::{
-    client_socket_path, prepare_socket_path, restrict_socket_permissions,
-};
+use crate::server::socket_paths::{client_socket_path, prepare_socket_path};
 use crate::server::terminal_attach::paste_payload_for_runtime;
 
 mod bootstrap;
@@ -316,8 +314,7 @@ impl HeadlessServer {
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
 
-        let listener = bind_local_listener(&client_path)?;
-        restrict_socket_permissions(&client_path)?;
+        let listener = bind_private_local_listener(&client_path)?;
         let client_socket_identity = socket_file_identity(&client_path)?;
         info!(path = %client_path.display(), "client protocol socket listening");
 
