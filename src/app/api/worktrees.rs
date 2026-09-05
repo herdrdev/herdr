@@ -817,7 +817,6 @@ mod tests {
 
     fn app_with_parent(repo: &Path) -> App {
         let mut app = test_app();
-        app.state.default_shell = test_shell().into();
         let mut parent = Workspace::test_new("main");
         parent.identity_cwd = repo.to_path_buf();
         app.state.workspaces = vec![parent];
