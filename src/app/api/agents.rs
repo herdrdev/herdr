@@ -438,6 +438,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_false_process_exit_makes_a_named_live_agent_unreachable_by_name() {
+        // Reproduces the registration loss reported on #3225 by rszrszrsz:
+        // a live agent pane with an assigned name stops resolving by that name
+        // while its process keeps running, and renaming is the only recovery.
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let observed_at = std::time::Instant::now();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+        terminal.set_agent_name("reviewer".into());
+
+        let found = app.handle_agent_get(
+            "req:before".into(),
+            AgentTarget {
+                target: "reviewer".into(),
+            },
+        );
+        assert!(
+            serde_json::from_str::<SuccessResponse>(&found).is_ok(),
+            "the assigned name must resolve while the agent is running: {found}"
+        );
+
+        // One process-exit observation, then the same agent is observed alive
+        // again on the next probe - the process never actually went away.
+        app.handle_internal_event(crate::events::AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Pi),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: true,
+            observed_at,
+        });
+        app.handle_internal_event(crate::events::AppEvent::AgentProcessDetected {
+            pane_id,
+            agent: Agent::Pi,
+            observed_at: observed_at + std::time::Duration::from_secs(1),
+        });
+
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(
+            terminal.detected_agent,
+            Some(Agent::Pi),
+            "the agent process is still there"
+        );
+
+        let after = app.handle_agent_get(
+            "req:after".into(),
+            AgentTarget {
+                target: "reviewer".into(),
+            },
+        );
+        assert!(
+            serde_json::from_str::<SuccessResponse>(&after).is_ok(),
+            "a live agent must stay reachable by its assigned name: {after}"
+        );
+    }
+
+    #[tokio::test]
     async fn agent_prompt_sends_text_then_delays_enter() {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;

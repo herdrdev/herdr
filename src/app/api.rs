@@ -2046,7 +2046,13 @@ mod tests {
                 observed_at: std::time::Instant::now(),
             });
 
-            assert!(app.state.terminals[&terminal_id].agent_name.is_none());
+            // The release event is this test's subject; the name outliving the
+            // observation is pinned by
+            // `a_process_exit_observation_alone_does_not_free_the_name`.
+            assert_eq!(
+                app.state.terminals[&terminal_id].agent_name.as_deref(),
+                agent_name
+            );
             assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
                 &event.data,
                 crate::api::schema::EventData::PaneAgentDetected {
@@ -2102,7 +2108,9 @@ mod tests {
 
         let terminal = &app.state.terminals[&terminal_id];
         assert_eq!(terminal.state, AgentState::Idle);
-        assert!(terminal.agent_name.is_none());
+        // Releasing the registration does not free the name yet; a wrong
+        // observation must not cost a live agent the handle its owner gave it.
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
         assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
             event.data,
             crate::api::schema::EventData::PaneAgentDetected { released: true, .. }

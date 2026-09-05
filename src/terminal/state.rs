@@ -574,7 +574,12 @@ impl TerminalState {
             self.hook_authority = None;
             self.persisted_agent_session = durable_session;
         }
-        if agent_released {
+        // Observing a process exit is not the same as the agent being gone: the
+        // observation can be wrong while the agent keeps running, and the name
+        // is the only handle its owner has on the pane. Detection uncertainty
+        // already keeps the name, so free it at the point the agent actually
+        // leaves the pane - a recorded exit with no agent detected any more.
+        if agent.is_none() && self.recent_agent_process_exit.is_some() {
             self.clear_agent_name();
         }
         TerminalStateMutation {
@@ -5429,6 +5434,94 @@ mod tests {
 
         assert!(mutation.session_ref_changed);
         assert!(terminal.hook_authority.is_none());
+    }
+
+    #[test]
+    fn a_process_exit_observation_alone_does_not_free_the_name() {
+        // The pane keeps reporting the same agent throughout: this models a
+        // process-exit observation that is wrong (the agent is still running),
+        // which is what `agent_alias_survives_detection_uncertainty_...`
+        // already refuses to let destroy the name through the detection path.
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+        terminal.set_agent_name("reviewer".into());
+
+        // Contract today: losing detection does not cost the pane its name.
+        terminal.set_detected_state(None, AgentState::Unknown);
+        assert_eq!(
+            terminal.agent_name.as_deref(),
+            Some("reviewer"),
+            "detection uncertainty must not release the name"
+        );
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+
+        // A single process-exit observation for that same agent destroys it.
+        let exit = terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            true,
+            now,
+        );
+        assert!(exit.agent_released);
+        assert_eq!(
+            terminal.agent_name.as_deref(),
+            Some("reviewer"),
+            "a process-exit observation for the still-detected agent must not \
+             destroy a name that detection uncertainty is allowed to keep"
+        );
+
+        // And the agent proving it is alive again must not leave the pane
+        // permanently unreachable by the name its owner assigned.
+        terminal.set_detected_agent_process_at(Agent::Pi, now + Duration::from_secs(1));
+        assert_eq!(
+            terminal.agent_name.as_deref(),
+            Some("reviewer"),
+            "the name must still resolve once the agent is observed alive again"
+        );
+        assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+    }
+
+    #[test]
+    fn a_confirmed_agent_exit_still_frees_the_name_for_reuse() {
+        // The other side of `a_process_exit_observation_alone_does_not_free_the_name`:
+        // once the agent is actually gone from the pane the name must be
+        // released, so `agent start` can reuse it.
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Working);
+        terminal.set_agent_name("reviewer".into());
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            true,
+            now,
+        );
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+
+        // The agent really is gone: the next observation finds no agent while
+        // the recorded exit still stands.
+        terminal.set_detected_state_with_screen_signals_at(
+            None,
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            now + Duration::from_secs(1),
+        );
+        assert_eq!(
+            terminal.agent_name, None,
+            "a confirmed exit must release the name"
+        );
+        assert!(!terminal.is_agent_terminal());
     }
 
     #[test]
