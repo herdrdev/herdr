@@ -245,45 +245,27 @@ impl ClientShellState {
     }
 
     pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput) {
-        self.request_selection_copy_with_fallback(outcome, None);
+        let content_revision = self.selection.as_ref().and_then(|selection| {
+            self.pane_surface
+                .as_ref()?
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == selection.pane_id)
+                .map(|pane| pane.content_revision)
+        });
+        self.request_selection_copy_at_revision(outcome, content_revision);
     }
 
-    pub(super) fn request_selection_copy_with_fallback(
+    pub(super) fn request_selection_copy_at_revision(
         &mut self,
         outcome: &mut ClientShellInput,
-        fallback_key: Option<crate::input::TerminalKey>,
+        content_revision: Option<u64>,
     ) {
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
         let pane_id = selection.pane_id.clone();
-        let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map(|pane| pane.content_revision);
         let (anchor, cursor) = selection.ordered_cells();
-        let fallback = fallback_key.and_then(|key| {
-            let press = ClientPaneInputEvent::from_terminal_key(key.clone())?;
-            let tracks_release = matches!(
-                &press,
-                ClientPaneInputEvent::Key {
-                    tracks_release: true,
-                    ..
-                }
-            );
-            let mut message =
-                super::target_event_message(ClientInputTarget::Pane(pane_id.clone()), press);
-            if tracks_release {
-                let release = ClientPaneInputEvent::from_terminal_key(
-                    key.with_kind(crossterm::event::KeyEventKind::Release),
-                )?;
-                if let ClientMessage::ClientShellPaneInput { events, .. } = &mut message {
-                    events.push(release);
-                }
-            }
-            Some(message)
-        });
         self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneSelectionRead(
                 crate::api::schema::PaneSelectionReadParams {
@@ -299,7 +281,7 @@ impl ClientShellState {
                     content_revision,
                 },
             ),
-            PendingEndpointKind::SelectionCopy { fallback },
+            PendingEndpointKind::SelectionCopy,
             outcome,
         );
     }
@@ -588,13 +570,7 @@ impl ClientShellState {
                 let repaint = self.complete_pane_scroll(pane_id, serial, result, &mut outcome);
                 return (repaint, outcome.actions);
             }
-            PendingEndpointKind::SelectionCopy { fallback } => {
-                let fallback = || {
-                    fallback
-                        .map(ClientShellAction::Request)
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                };
+            PendingEndpointKind::SelectionCopy => {
                 return match result {
                     Ok(crate::api::schema::ResponseResult::PaneSelection { text, .. })
                         if !text.is_empty() =>
@@ -606,14 +582,14 @@ impl ClientShellState {
                         )
                     }
                     Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
-                        (false, fallback())
+                        (false, Vec::new())
                     }
                     Ok(_) => {
                         self.endpoint_error =
                             Some("endpoint returned an unexpected selection result".to_owned());
-                        (true, fallback())
+                        (true, Vec::new())
                     }
-                    Err(_) => (true, fallback()),
+                    Err(_) => (true, Vec::new()),
                 };
             }
             PendingEndpointKind::WordSelection {

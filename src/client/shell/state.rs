@@ -283,7 +283,6 @@ pub(crate) enum ClientShellAction {
         request: Box<crate::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
-    Request(ClientMessage),
     OpenSafeWebUrl(String),
     ReplayMouse(Vec<crossterm::event::MouseEvent>),
     Keybind(crate::input::KeybindAction),
@@ -657,9 +656,7 @@ pub(super) enum PendingEndpointKind {
     WorktreeRemove {
         forced: bool,
     },
-    SelectionCopy {
-        fallback: Option<ClientMessage>,
-    },
+    SelectionCopy,
     PaneScroll {
         pane_id: String,
         serial: u64,

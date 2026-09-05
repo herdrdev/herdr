@@ -520,7 +520,8 @@ impl ClientShellState {
                 .as_ref()
                 .is_some_and(crate::selection::Selection::is_visible)
         {
-            self.request_selection_copy_with_fallback(outcome, Some(key.clone()));
+            // Unrelated live output must not invalidate a retained selection's copy.
+            self.request_selection_copy_at_revision(outcome, None);
             self.selection = None;
             self.stop_selection_autoscroll();
             self.selection_highlight_clear_deadline = None;
