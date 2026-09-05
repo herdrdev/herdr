@@ -728,8 +728,16 @@ fn automatic_selection_style(
 }
 
 fn automatic_selection_bg(p: &Palette, host_theme: crate::terminal_theme::TerminalTheme) -> Color {
-    let Some(background) = host_theme.background.map(terminal_theme_to_rgb) else {
-        return selection_palette_background(p);
+    let fallback = selection_palette_background(p);
+    let Some(background) = host_theme
+        .background
+        .map(|color| (color.r, color.g, color.b))
+        .or(match fallback {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        })
+    else {
+        return fallback;
     };
 
     let target = if relative_luminance(background) < 0.5 {
@@ -749,11 +757,18 @@ fn selection_palette_background(p: &Palette) -> Color {
     }
 }
 
-fn terminal_theme_to_rgb(color: crate::terminal_theme::RgbColor) -> Rgb {
-    (color.r, color.g, color.b)
-}
-
 fn selection_fg_for_bg(bg: Color, p: &Palette) -> Color {
+    if let Color::Rgb(r, g, b) = bg {
+        let luminance = relative_luminance((r, g, b));
+        let black_contrast = (luminance + 0.05) / 0.05;
+        let white_contrast = 1.05 / (luminance + 0.05);
+        return if black_contrast > white_contrast {
+            Color::Rgb(0, 0, 0)
+        } else {
+            Color::Rgb(255, 255, 255)
+        };
+    }
+
     color_to_rgb(bg)
         .map(|bg| {
             if relative_luminance(bg) < 0.5 {
@@ -1415,5 +1430,52 @@ mod tests {
             panic!("selection background should resolve to rgb");
         };
         assert!(relative_luminance((r, g, b)) > relative_luminance((12, 14, 16)));
+    }
+
+    #[test]
+    fn automatic_selection_rgb_style_is_readable_with_or_without_host_background() {
+        for (background, selected_bg, selected_fg) in [
+            ((239, 241, 245), (172, 174, 176), (0, 0, 0)),
+            ((26, 27, 38), (90, 91, 99), (255, 255, 255)),
+            ((45, 53, 59), (104, 110, 114), (255, 255, 255)),
+        ] {
+            let mut palette = Palette::catppuccin();
+            let (r, g, b) = background;
+            palette.panel_bg = Color::Rgb(r, g, b);
+            let expected = Style::reset()
+                .bg(Color::Rgb(selected_bg.0, selected_bg.1, selected_bg.2))
+                .fg(Color::Rgb(selected_fg.0, selected_fg.1, selected_fg.2));
+
+            assert_eq!(
+                automatic_selection_style(&palette, Default::default()),
+                expected
+            );
+            assert_eq!(
+                automatic_selection_style(
+                    &Palette::terminal(),
+                    crate::terminal_theme::TerminalTheme {
+                        background: Some(crate::terminal_theme::RgbColor { r, g, b }),
+                        ..Default::default()
+                    },
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_selection_preserves_symbolic_palette_fallbacks() {
+        let mut palette = Palette::terminal();
+        assert_eq!(
+            automatic_selection_style(&palette, Default::default()),
+            Style::reset().fg(Color::White).bg(Color::DarkGray)
+        );
+        for fallback in [Color::Blue, Color::White, Color::Indexed(42), Color::Reset] {
+            palette.surface_dim = fallback;
+            assert_eq!(
+                automatic_selection_bg(&palette, Default::default()),
+                fallback
+            );
+        }
     }
 }
