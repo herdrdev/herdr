@@ -407,6 +407,14 @@ impl TerminalRuntime {
         self.0.extract_selection(selection)
     }
 
+    pub(crate) fn extract_selection_checked(
+        &self,
+        selection: &crate::selection::Selection,
+        expected_cells: &[String],
+    ) -> Option<String> {
+        self.0.extract_selection_checked(selection, expected_cells)
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
         self.0.render(frame, area, show_cursor);
     }

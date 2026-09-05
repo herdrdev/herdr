@@ -29,6 +29,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "pane.resize",
     "pane.scroll",
     "pane.selection.read",
+    "pane.selection.read_checked",
     "pane.split",
     "pane.swap",
     "pane.zoom",

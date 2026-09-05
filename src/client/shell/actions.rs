@@ -1,6 +1,54 @@
 use super::*;
 
 impl ClientShellState {
+    pub(super) fn request_retained_selection_copy(&mut self, outcome: &mut ClientShellInput) {
+        let checked = (|| {
+            let selection = self.selection.as_ref()?;
+            let surface = self.pane_surface.as_ref()?;
+            let pane = surface
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == selection.pane_id)?;
+            let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
+            let mut expected_cells = Vec::new();
+            for row in start_row..=end_row {
+                let first = if row == start_row { start_col } else { 0 };
+                let last = if row == end_row {
+                    end_col
+                } else {
+                    pane.inner_rect.width.checked_sub(1)?
+                };
+                let cells = pane_surface_row(surface, pane, row)?
+                    .get(usize::from(first)..=usize::from(last))?;
+                expected_cells.extend(cells.iter().map(|cell| cell.symbol.clone()));
+            }
+            Some(crate::api::schema::Method::PaneSelectionReadChecked(
+                crate::api::schema::PaneSelectionReadCheckedParams {
+                    pane_id: selection.pane_id.clone(),
+                    anchor: crate::api::schema::PaneTextPoint {
+                        row: start_row,
+                        col: start_col,
+                    },
+                    cursor: crate::api::schema::PaneTextPoint {
+                        row: end_row,
+                        col: end_col,
+                    },
+                    expected_cells,
+                },
+            ))
+        })();
+        if let Some(method) = checked.filter(|method| self.supports_endpoint_method(method)) {
+            self.push_endpoint_method_with_kind(
+                method,
+                PendingEndpointKind::SelectionCopy,
+                outcome,
+            );
+        } else {
+            // Older endpoints and ranges beyond the retained surface still require an exact revision.
+            self.request_selection_copy(outcome);
+        }
+    }
+
     pub(super) fn record_binding(
         &mut self,
         binding: crate::input::KeybindMatch,
@@ -245,22 +293,16 @@ impl ClientShellState {
     }
 
     pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput) {
-        let content_revision = self.selection.as_ref().and_then(|selection| {
+        let Some(content_revision) = self.selection.as_ref().and_then(|selection| {
             self.pane_surface
                 .as_ref()?
                 .panes
                 .iter()
                 .find(|pane| pane.pane_id == selection.pane_id)
                 .map(|pane| pane.content_revision)
-        });
-        self.request_selection_copy_at_revision(outcome, content_revision);
-    }
-
-    pub(super) fn request_selection_copy_at_revision(
-        &mut self,
-        outcome: &mut ClientShellInput,
-        content_revision: Option<u64>,
-    ) {
+        }) else {
+            return;
+        };
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
@@ -278,7 +320,7 @@ impl ClientShellState {
                         row: cursor.0,
                         col: cursor.1,
                     },
-                    content_revision,
+                    content_revision: Some(content_revision),
                 },
             ),
             PendingEndpointKind::SelectionCopy,

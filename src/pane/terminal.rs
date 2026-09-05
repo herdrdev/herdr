@@ -522,6 +522,15 @@ impl PaneTerminal {
         self.ghostty.extract_selection(selection)
     }
 
+    pub(crate) fn extract_selection_checked(
+        &self,
+        selection: &crate::selection::Selection,
+        expected_cells: &[String],
+    ) -> Option<String> {
+        self.ghostty
+            .extract_selection_checked(selection, expected_cells)
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
         self.ghostty.render(frame, area, show_cursor);
     }
@@ -2182,6 +2191,54 @@ impl GhosttyPaneTerminal {
             .and_then(|mut core| ghostty_extract_selection(&mut core, selection).ok())
     }
 
+    pub(crate) fn extract_selection_checked(
+        &self,
+        selection: &crate::selection::Selection,
+        expected_cells: &[String],
+    ) -> Option<String> {
+        // Compare and extract under one lock: output may change other cells, not this range.
+        let mut core = self.core.lock().ok()?;
+        let cols = core.terminal.cols().ok()?;
+        let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
+        let mut expected = expected_cells.iter();
+        for row in start_row..=end_row {
+            let first = if row == start_row { start_col } else { 0 };
+            let last = if row == end_row {
+                end_col
+            } else {
+                cols.checked_sub(1)?
+            };
+            for col in first..=last {
+                let expected_symbol = expected.next()?;
+                let (wide, graphemes) = core.terminal.screen_cell(col, row).ok()?;
+                let symbol = match wide {
+                    crate::ghostty::CellWide::SpacerTail => String::new(),
+                    crate::ghostty::CellWide::SpacerHead => " ".to_owned(),
+                    _ => {
+                        let text: String =
+                            graphemes.into_iter().filter_map(char::from_u32).collect();
+                        if text.is_empty()
+                            || (crate::kitty_graphics::is_enabled()
+                                && text.chars().next().map(u32::from)
+                                    == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER))
+                        {
+                            " ".to_owned()
+                        } else {
+                            text
+                        }
+                    }
+                };
+                if ghostty_normalize_buffer_symbol(&symbol, wide) != *expected_symbol {
+                    return None;
+                }
+            }
+        }
+        if expected.next().is_some() {
+            return None;
+        }
+        ghostty_extract_selection(&mut core, selection).ok()
+    }
+
     pub fn visible_hyperlinks(&self, area: Rect) -> Vec<((u16, u16), String, String)> {
         self.core
             .lock()
@@ -2975,7 +3032,6 @@ pub(super) fn ghostty_blank_symbol_for_width(wide: crate::ghostty::CellWide) -> 
     }
 }
 
-#[cfg(test)]
 pub(super) fn ghostty_normalize_buffer_symbol(
     symbol: &str,
     wide: crate::ghostty::CellWide,
@@ -5317,6 +5373,61 @@ mod tests {
             .extract_selection(&selection)
             .expect("selection should extract text");
         assert_eq!(text, "000003\n000004\n000005");
+    }
+
+    #[test]
+    fn checked_selection_preserves_terminal_wrapping_and_wide_graphemes() {
+        for (input, start, end, expected, text) in [
+            (
+                "1ABCD2EFGH3IJKL",
+                (1, 0),
+                (2, 2),
+                vec!["2", "E", "F", "G", "H", "3", "I", "J"],
+                "2EFGH3IJ",
+            ),
+            (
+                "abc\r\ndef",
+                (0, 0),
+                (1, 2),
+                vec!["a", "b", "c", " ", " ", "d", "e", "f"],
+                "abc\ndef",
+            ),
+            (
+                "中e\u{301}!",
+                (0, 0),
+                (0, 3),
+                vec!["中", "", "e\u{301}", "!"],
+                "中e\u{301}!",
+            ),
+        ] {
+            let (tx, _rx) = mpsc::channel(4);
+            let mut terminal = crate::ghostty::Terminal::new(5, 3, 0).unwrap();
+            terminal.write(input.as_bytes());
+            let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+            let selection =
+                crate::selection::Selection::absolute_range(PaneId::from_raw(1), start, end);
+            let expected: Vec<String> = expected.into_iter().map(str::to_owned).collect();
+            assert_eq!(
+                pane.extract_selection_checked(&selection, &expected)
+                    .as_deref(),
+                Some(text)
+            );
+            assert!(pane
+                .extract_selection_checked(&selection, &expected[..expected.len() - 1])
+                .is_none());
+            let mut extra = expected.clone();
+            extra.push(" ".into());
+            assert!(pane.extract_selection_checked(&selection, &extra).is_none());
+            // Scrolling with no history replaces the absolute rows beneath the request.
+            pane.core
+                .lock()
+                .unwrap()
+                .terminal
+                .write(b"\r\nxxxxx\r\nyyyyy\r\nzzzzz");
+            assert!(pane
+                .extract_selection_checked(&selection, &expected)
+                .is_none());
+        }
     }
 
     #[test]

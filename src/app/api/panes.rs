@@ -266,6 +266,55 @@ impl App {
         }
     }
 
+    pub(crate) fn pane_selection_text_checked(
+        &self,
+        params: &crate::api::schema::PaneSelectionReadCheckedParams,
+    ) -> Result<String, (&'static str, String)> {
+        let runtime = self
+            .parse_pane_id(&params.pane_id)
+            .and_then(|(ws_idx, pane_id)| {
+                self.state
+                    .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+                    .map(|runtime| (pane_id, runtime))
+            });
+        let Some((pane_id, runtime)) = runtime else {
+            return Err((
+                "pane_not_found",
+                format!("pane not found: {}", params.pane_id),
+            ));
+        };
+        let selection = crate::selection::Selection::absolute_range(
+            pane_id,
+            (params.anchor.row, params.anchor.col),
+            (params.cursor.row, params.cursor.col),
+        );
+        runtime
+            .extract_selection_checked(&selection, &params.expected_cells)
+            .ok_or_else(|| {
+                (
+                    "stale_content",
+                    "selected text changed or is unavailable".to_owned(),
+                )
+            })
+    }
+
+    pub(super) fn handle_pane_selection_read_checked(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PaneSelectionReadCheckedParams,
+    ) -> String {
+        match self.pane_selection_text_checked(&params) {
+            Ok(text) => encode_success(
+                id,
+                ResponseResult::PaneSelection {
+                    pane_id: params.pane_id,
+                    text,
+                },
+            ),
+            Err((code, message)) => encode_error(id, code, message),
+        }
+    }
+
     pub(super) fn handle_pane_copy_motion(
         &mut self,
         id: String,

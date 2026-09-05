@@ -3070,6 +3070,18 @@ impl PaneRuntime {
         result
     }
 
+    pub(crate) fn extract_selection_checked(
+        &self,
+        selection: &crate::selection::Selection,
+        expected_cells: &[String],
+    ) -> Option<String> {
+        let result = self
+            .terminal
+            .extract_selection_checked(selection, expected_cells);
+        self.compression.wake();
+        result
+    }
+
     pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
         self.terminal.render(frame, area, show_cursor);
     }

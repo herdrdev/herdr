@@ -4,7 +4,7 @@ pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 
-fn pane_surface_row<'a>(
+pub(super) fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,
     pane: &crate::protocol::PaneSurfacePane,
     absolute_row: u32,
