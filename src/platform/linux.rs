@@ -34,6 +34,7 @@ enum ProcessDetectionMode {
 struct ProcGroupMember {
     pid: u32,
     comm: String,
+    state: char,
 }
 
 pub fn raise_server_nofile_limit() {}
@@ -47,6 +48,11 @@ pub(crate) fn should_query_host_terminal_palette() -> bool {
 }
 
 fn running_inside_wsl() -> bool {
+    static RUNNING_INSIDE_WSL: OnceLock<bool> = OnceLock::new();
+    *RUNNING_INSIDE_WSL.get_or_init(detect_running_inside_wsl)
+}
+
+fn detect_running_inside_wsl() -> bool {
     proc_file_indicates_wsl("/proc/sys/kernel/osrelease")
         || proc_file_indicates_wsl("/proc/version")
         || WSL_MARKER_ENV_VARS
@@ -140,23 +146,41 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    if let Some(tpgid) = foreground_process_group_id(child_pid) {
-        return foreground_job_for_group(child_pid, tpgid);
-    }
-
-    if process_detection_mode() != ProcessDetectionMode::ChildGroups {
-        return None;
-    }
-
-    foreground_job_for_group(child_pid, child_groups_foreground_process_group(child_pid)?)
+    let process_group_id = foreground_process_group_id(child_pid).or_else(|| {
+        (process_detection_mode() == ProcessDetectionMode::ChildGroups)
+            .then(|| child_groups_foreground_process_group(child_pid))
+            .flatten()
+    })?;
+    foreground_job_for_group(child_pid, process_group_id)
 }
 
 fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<ForegroundJob> {
     let members = foreground_process_group_members(child_pid, process_group_id)?;
+    foreground_job_from_members(
+        process_group_id,
+        members,
+        running_inside_wsl(),
+        process_argv,
+    )
+}
+
+fn foreground_job_from_members(
+    process_group_id: u32,
+    members: Vec<ProcGroupMember>,
+    running_inside_wsl: bool,
+    mut read_argv: impl FnMut(u32) -> Option<Vec<String>>,
+) -> Option<ForegroundJob> {
     let processes = members
         .into_iter()
         .map(|member| {
-            let argv = process_argv(member.pid);
+            // Reading procfs cmdline enters access_remote_vm. On WSL, that read can
+            // block indefinitely while a multithreaded process is exiting. A state
+            // check alone has a race, so WSL uses the cheap comm-based identity when
+            // it already identifies a supported agent without inspecting cmdline.
+            let argv =
+                process_allows_remote_memory_read(member.state, &member.comm, running_inside_wsl)
+                    .then(|| read_argv(member.pid))
+                    .flatten();
             ForegroundProcess {
                 pid: member.pid,
                 name: member.comm,
@@ -181,8 +205,8 @@ fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<For
 /// foreground groups. This mode is explicit because background jobs cannot be
 /// distinguished from foreground jobs without the native terminal signal.
 fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
-    let shell_group_id = process_pgrp_and_comm(child_pid)
-        .map(|(pgrp, _)| pgrp)
+    let shell_group_id = process_pgrp_comm_and_state(child_pid)
+        .map(|(pgrp, _, _)| pgrp)
         .filter(|pgrp| *pgrp > 0)? as u32;
 
     child_groups_foreground_process_group_with(
@@ -190,7 +214,7 @@ fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
         shell_group_id,
         process_task_ids,
         process_task_children,
-        |pid| process_pgrp_and_comm(pid).map(|(pgrp, _)| pgrp),
+        |pid| process_pgrp_comm_and_state(pid).map(|(pgrp, _, _)| pgrp),
     )
 }
 
@@ -311,17 +335,19 @@ fn numeric_file_name(entry: &std::fs::DirEntry) -> Option<u32> {
 }
 
 fn live_process_group_member(process_group_id: u32, pid: u32) -> Option<ProcGroupMember> {
-    let (pgrp, comm) = process_pgrp_and_comm(pid)?;
-    (pgrp > 0 && pgrp as u32 == process_group_id).then_some(ProcGroupMember { pid, comm })
+    let (pgrp, comm, state) = process_pgrp_comm_and_state(pid)?;
+    (pgrp > 0 && pgrp as u32 == process_group_id).then_some(ProcGroupMember { pid, comm, state })
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
-    let (pgrp, name) = process_pgrp_and_comm(process_group_id)?;
+    let (pgrp, name, state) = process_pgrp_comm_and_state(process_group_id)?;
     if pgrp as u32 != process_group_id {
         return None;
     }
 
-    let argv = process_argv(process_group_id);
+    let argv = process_allows_remote_memory_read(state, &name, running_inside_wsl())
+        .then(|| process_argv(process_group_id))
+        .flatten();
     Some(ForegroundJob {
         process_group_id,
         processes: vec![ForegroundProcess {
@@ -350,18 +376,28 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
-fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
+fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    process_pgrp_and_comm_from_stat(&stat)
+    process_pgrp_comm_and_state_from_stat(&stat)
 }
 
-fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
+fn process_pgrp_comm_and_state_from_stat(stat: &str) -> Option<(i32, String, char)> {
     let close = stat.rfind(')')?;
     let comm = stat.get(1 + stat.find('(')?..close)?.to_string();
     let rest = stat.get(close + 2..)?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
+    let state = fields.first()?.chars().next()?;
     let pgrp: i32 = fields.get(2)?.parse().ok()?;
-    Some((pgrp, comm))
+    Some((pgrp, comm, state))
+}
+
+fn process_state_allows_remote_memory_read(state: char) -> bool {
+    !matches!(state, 'D' | 'Z' | 'X' | 'x')
+}
+
+fn process_allows_remote_memory_read(state: char, comm: &str, running_inside_wsl: bool) -> bool {
+    process_state_allows_remote_memory_read(state)
+        && (!running_inside_wsl || crate::detect::identify_agent(comm).is_none())
 }
 
 fn process_argv(pid: u32) -> Option<Vec<String>> {
@@ -389,6 +425,10 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
 /// Read a Herdr agent identity hint from a process environment.
 pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     if pid == 0 {
+        return None;
+    }
+    let (_, comm, state) = process_pgrp_comm_and_state(pid)?;
+    if !process_allows_remote_memory_read(state, &comm, running_inside_wsl()) {
         return None;
     }
     let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
@@ -989,6 +1029,7 @@ mod tests {
                 (*pgrp == process_group_id).then(|| ProcGroupMember {
                     pid,
                     comm: (*comm).to_string(),
+                    state: 'S',
                 })
             },
         )
@@ -1023,6 +1064,7 @@ mod tests {
                 (pid == process_group_id).then(|| ProcGroupMember {
                     pid,
                     comm: "leader".to_string(),
+                    state: 'S',
                 })
             },
         )
@@ -1032,7 +1074,8 @@ mod tests {
             members,
             vec![ProcGroupMember {
                 pid: 200,
-                comm: "leader".to_string()
+                comm: "leader".to_string(),
+                state: 'S',
             }]
         );
     }
@@ -1058,6 +1101,7 @@ mod tests {
                         .then(|| ProcGroupMember {
                             pid,
                             comm: format!("member-{pid}"),
+                            state: 'S',
                         })
                         .filter(|_| process_group_id == 200)
                 },
@@ -1076,9 +1120,81 @@ mod tests {
     #[test]
     fn proc_stat_parsing_keeps_group_leader_inputs_live() {
         assert_eq!(
-            process_pgrp_and_comm_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
-            Some((456, "name with ) paren".to_string()))
+            process_pgrp_comm_and_state_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
+            Some((456, "name with ) paren".to_string(), 'S'))
         );
+    }
+
+    #[test]
+    fn foreground_job_does_not_read_remote_memory_for_uninterruptible_members() {
+        let argv_reads = RefCell::new(Vec::new());
+        let job = foreground_job_from_members(
+            200,
+            vec![
+                ProcGroupMember {
+                    pid: 200,
+                    comm: "codex".to_string(),
+                    state: 'D',
+                },
+                ProcGroupMember {
+                    pid: 201,
+                    comm: "helper".to_string(),
+                    state: 'S',
+                },
+            ],
+            true,
+            |pid| {
+                argv_reads.borrow_mut().push(pid);
+                Some(vec![format!("process-{pid}")])
+            },
+        )
+        .unwrap();
+
+        assert_eq!(argv_reads.into_inner(), vec![201]);
+        assert_eq!(job.processes[0].name, "codex");
+        assert_eq!(job.processes[0].argv, None);
+        assert_eq!(job.processes[1].argv, Some(vec!["process-201".to_string()]));
+    }
+
+    #[test]
+    fn foreground_job_on_wsl_skips_known_agents_but_reads_wrappers() {
+        let argv_reads = RefCell::new(Vec::new());
+        let job = foreground_job_from_members(
+            200,
+            vec![
+                ProcGroupMember {
+                    pid: 200,
+                    comm: "codex".to_string(),
+                    state: 'S',
+                },
+                ProcGroupMember {
+                    pid: 201,
+                    comm: "node".to_string(),
+                    state: 'S',
+                },
+            ],
+            true,
+            |pid| {
+                argv_reads.borrow_mut().push(pid);
+                Some(vec![format!("process-{pid}")])
+            },
+        )
+        .unwrap();
+
+        assert_eq!(argv_reads.into_inner(), vec![201]);
+        assert_eq!(job.processes[0].name, "codex");
+        assert_eq!(job.processes[0].argv, None);
+        assert_eq!(job.processes[1].argv, Some(vec!["process-201".to_string()]));
+    }
+
+    #[test]
+    fn remote_memory_reads_reject_dead_and_uninterruptible_states() {
+        for state in ['D', 'Z', 'X', 'x'] {
+            assert!(!process_state_allows_remote_memory_read(state));
+        }
+        for state in ['R', 'S', 'I', 'T', 't'] {
+            assert!(process_state_allows_remote_memory_read(state));
+        }
     }
 
     #[test]
