@@ -87,6 +87,30 @@ herdr
 
 Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
 
+## A pane shows `. /…/staged-commands/…` instead of the command
+
+A terminal accepts only a limited number of bytes on a single input line while
+the foreground program is reading in canonical mode — 1024 on macOS, 4096 on
+Linux. Beyond that the kernel silently discards the rest of the line, so a long
+command would be delivered truncated and never run.
+
+`herdr agent start` therefore writes a command longer than 512 bytes to a
+private file and types a short line that runs it, which is what you see in the
+pane. The file is removed the moment it runs. Commands shorter than that are
+typed unchanged, so this only appears for long arguments such as
+`--append-system-prompt`.
+
+Only shells Herdr knows how to source in are staged this way: `sh`, `bash`,
+`dash`, `zsh`, `ksh` and `mksh` use `.`, and `fish` uses `source`. In `csh`,
+`tcsh`, `nu`, `elvish` and `xonsh`, and on Windows, the command is typed
+unchanged and remains subject to the limit.
+
+Text sent with `herdr pane send-text`, `herdr pane run`, or pasted into a pane
+is delivered literally and is still subject to the terminal's line limit. Shells
+are in canonical mode more often than they look: `bash` and `zsh` return to it
+for the duration of every command they run, and `dash` — `/bin/sh` on Ubuntu —
+never leaves it. For long text, write it to a file and run that file instead.
+
 ## The `herdr` command is not found
 
 Restart the terminal so it reloads its environment, then confirm the Herdr install directory is on `PATH`. For package-manager installs, use that package manager to update Herdr and expose it on `PATH`. See [Install Herdr](/docs/install/#verify).

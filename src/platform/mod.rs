@@ -325,6 +325,22 @@ pub(crate) fn quote_powershell_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+/// How a shell spells "run the commands in this file", for the shells whose
+/// syntax herdr knows.
+///
+/// `None` means herdr must not rewrite a command for this shell. `csh`, `nu`,
+/// `elvish` and `xonsh` are all accepted pane shells that spell sourcing
+/// differently, and typing `.` at them would break a command that would
+/// otherwise have run.
+#[cfg(unix)]
+pub(crate) fn shell_source_keyword(shell_name: &str) -> Option<&'static str> {
+    match normalized_process_name(shell_name).as_str() {
+        "sh" | "bash" | "dash" | "zsh" | "ksh" | "mksh" => Some("."),
+        "fish" => Some("source"),
+        _ => None,
+    }
+}
+
 pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
     let normalized = normalized_process_name(name);
     matches!(
