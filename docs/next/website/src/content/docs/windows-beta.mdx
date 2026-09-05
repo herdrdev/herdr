@@ -32,7 +32,7 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 | Local persistent sessions | supported |
 | Native panes through ConPTY | supported |
 | Windows Terminal / PowerShell app attach | supported |
-| `herdr --remote` to Linux/macOS hosts | supported |
+| `herdr --remote` to Linux/macOS/Windows hosts | supported; Windows requires a compatible package with remote host support on `PATH` |
 | Remote clipboard images and image-file drops | supported |
 | `cmd.exe` panes | supported |
 | Native keyboard and mouse input | supported |
@@ -118,7 +118,6 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is 
 | Capability | Status |
 | --- | --- |
 | Direct terminal attach (`herdr terminal attach`) | unsupported |
-| Windows as a `herdr --remote` target host | unsupported |
 | Live server handoff | unsupported |
 | Unix file-descriptor handoff | unsupported |
 | Unix foreground process groups | unsupported |
@@ -131,7 +130,7 @@ From Windows Terminal, use the same remote command as Linux and macOS:
 herdr --remote workbox
 ```
 
-The target host must run Linux or macOS. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
+The target host can run Linux, macOS, or Windows. Windows hosts must already have a compatible Herdr package with remote host support on `PATH`; remote attach does not install or update it. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
 
 Windows updates run through the Windows installer and update the active versioned release path. New terminals and reconnected SSH sessions receive that path; start Herdr there to use the updated client. Compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
 

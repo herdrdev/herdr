@@ -1,17 +1,8 @@
 mod attach;
-#[cfg(unix)]
-mod host_unix;
+mod host;
 
 pub(crate) use attach::*;
-#[cfg(unix)]
-pub(crate) use host_unix::run_remote_client_bridge;
-
-#[cfg(windows)]
-pub(crate) fn run_remote_client_bridge() -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "remote Windows hosts are not supported yet",
-    ))
-}
+pub(crate) use host::run_remote_client_bridge;
 
 pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
     if is_remote_auth_error(err) {
