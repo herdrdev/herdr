@@ -138,9 +138,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             name: herdr-macos-aarch64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            name: herdr-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     env:
       LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
@@ -211,22 +208,12 @@ jobs:
           key: preview-${{ matrix.target }}
 
       - name: Remove Zig caches
-        if: runner.os != 'Windows'
         run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
-
-      - name: Remove Zig caches
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package artifact
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -255,25 +242,6 @@ jobs:
             echo "channel=preview"
           } >> BUILD_INFO.txt
 
-      - name: Package artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
-          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
-          .\scripts\package_windows_conpty.ps1 `
-            -HerdrExe target\${{ matrix.target }}\release\herdr.exe `
-            -PackagePath $package `
-            -StageDir $stage `
-            -OutputPath ${{ matrix.name }}
-          $hash = (Get-FileHash -Algorithm SHA256 ${{ matrix.name }}).Hash.ToLowerInvariant()
-          "$hash  ${{ matrix.name }}" | Out-File -Encoding ascii ${{ matrix.name }}.sha256
-          "commit=${{ needs.preflight.outputs.commit }}" | Out-File -Encoding utf8 BUILD_INFO.txt
-          "build_id=${{ needs.preflight.outputs.build_id }}" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
-          "target=${{ matrix.target }}" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
-          "channel=preview" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
-
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -283,8 +251,114 @@ jobs:
             ${{ matrix.name }}.sha256
             BUILD_INFO.txt
 
+  build-windows:
+    needs: preflight
+    if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
+    runs-on: windows-latest
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: 'true'
+      HERDR_BUILD_CHANNEL: preview
+      HERDR_BUILD_ID: ${{ needs.preflight.outputs.build_id }}
+      HERDR_BUILD_COMMIT: ${{ needs.preflight.outputs.commit }}
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: preview-x86_64-pc-windows-msvc
+
+      - name: Remove Zig caches
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows binary
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\target\x86_64-pc-windows-msvc\release\herdr.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Windows signature
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature target\x86_64-pc-windows-msvc\release\herdr.exe
+          if ($signature.Status -ne "Valid" -or $null -eq $signature.SignerCertificate) {
+            throw "Windows signature is not valid: $($signature.Status)"
+          }
+          if ($null -eq $signature.TimeStamperCertificate) {
+            throw "Windows signature is not timestamped"
+          }
+          Write-Output "Signer: $($signature.SignerCertificate.Subject)"
+          Write-Output "Signer thumbprint: $($signature.SignerCertificate.Thumbprint)"
+          Write-Output "Timestamp authority: $($signature.TimeStamperCertificate.Subject)"
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          .\scripts\package_windows_conpty.ps1 `
+            -HerdrExe target\x86_64-pc-windows-msvc\release\herdr.exe `
+            -PackagePath $package `
+            -StageDir $stage `
+            -OutputPath herdr-windows-x86_64.zip
+          $hash = (Get-FileHash -Algorithm SHA256 herdr-windows-x86_64.zip).Hash.ToLowerInvariant()
+          "$hash  herdr-windows-x86_64.zip" | Out-File -Encoding ascii herdr-windows-x86_64.zip.sha256
+          "commit=${{ needs.preflight.outputs.commit }}" | Out-File -Encoding utf8 BUILD_INFO.txt
+          "build_id=${{ needs.preflight.outputs.build_id }}" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          "target=x86_64-pc-windows-msvc" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          "channel=preview" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: herdr-windows-x86_64.zip
+          path: |
+            herdr-windows-x86_64.zip
+            herdr-windows-x86_64.zip.sha256
+            BUILD_INFO.txt
+
   publish:
-    needs: [preflight, build]
+    needs: [preflight, build, build-windows]
     if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     concurrency:
