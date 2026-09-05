@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.08.31.1"
+version = "2026.09.04.1"
 min_engine_version = 2
-updated_at = "2026-08-31T00:00:00Z"
+updated_at = "2026-09-04T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -162,8 +162,20 @@ any = [
   { contains = ["tab to amend"] },
   { contains = ["ctrl+e to explain"] },
 ]
+# Claude marks the selected option with "❯", so every option branch has to allow
+# that prefix. Numbered branches that omit it only match options the cursor has
+# moved away from, which left the resting layout below unmatched here (#2650):
+#   ❯ 1. Yes / 2. Yes, and don't ask again for: <cmd> / 3. No
+# Cover both the two-option and "don't ask again" three-option shapes so this
+# rule, not the narrower generic_permission_prompt, claims Bash approvals.
 all = [
-  { any = [{ line_regex = ['(?i)^\s*❯?\s*yes\b'] }, { line_regex = ['(?i)^\s*1\.\s*yes\b'] }, { line_regex = ['(?i)^\s*2\.\s*no\b'] }] },
+  { any = [
+    { line_regex = ['(?i)^\s*❯?\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*no\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*3\.\s*no\b'] },
+  ] },
 ]
 
 [[rules]]
