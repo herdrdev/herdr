@@ -803,6 +803,263 @@ fn claude_blocker_screen_outranks_stale_osc_progress() {
 }
 
 #[test]
+fn claude_wrapped_selection_dialog_is_blocked() {
+    // #2868: Claude word-wraps its own footer, so the reporter's 48-column pane
+    // splits `Esc to cancel` across two rendered rows and the contiguous needle
+    // stopped matching. Both captures come from the issue thread; only the pane
+    // width differs between them.
+    let wide = "──────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n";
+    let narrow = "────────────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to\ncancel\n";
+
+    for (label, screen) in [("50 columns", wide), ("48 columns", narrow)] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Blocked, "{label}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_blocked_form"),
+            "{label}"
+        );
+        assert!(result.visible_blocker, "{label}");
+    }
+}
+
+#[test]
+fn claude_wrapped_selection_dialog_is_blocked_on_a_full_screen() {
+    // The same dialog as a whole screen, reported on Windows two releases later.
+    // Only the wrap positions differ; every other row is identical.
+    let wide = concat!(
+        "───────────────────────────────────────────────────────────────────────────────\n",
+        " ☐ Indentation\n",
+        "\n",
+        "Do you prefer tabs or spaces for indentation?\n",
+        "\n",
+        "❯ 1. Spaces\n",
+        "     Indent with spaces (the common default in most style guides).\n",
+        "  2. Tabs\n",
+        "     Indent with tab characters.\n",
+        "  3. Type something.\n",
+        "───────────────────────────────────────────────────────────────────────────────\n",
+        "  4. Chat about this\n",
+        "\n",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n",
+    );
+    let narrow = concat!(
+        "──────────────────────────────────────────\n",
+        " ☐ Indentation\n",
+        "\n",
+        "Do you prefer tabs or spaces for\n",
+        "indentation?\n",
+        "\n",
+        "❯ 1. Spaces\n",
+        "     Indent with spaces (the common\n",
+        "     default in most style guides).\n",
+        "  2. Tabs\n",
+        "     Indent with tab characters.\n",
+        "  3. Type something.\n",
+        "──────────────────────────────────────────\n",
+        "  4. Chat about this\n",
+        "\n",
+        "Enter to select · ↑/↓ to navigate · Esc to\n",
+        "cancel\n",
+    );
+
+    for (label, screen) in [("wide", wide), ("narrow", narrow)] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Blocked, "{label}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_blocked_form"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn claude_wrapped_mcp_elicitation_dialog_is_blocked() {
+    // The elicitation header and its footer share the same wrap exposure, and
+    // the header needed line anchors, so it keeps them across the wrap.
+    let wide = concat!(
+        "MCP server \u{201C}notes\u{201D} requests your input\n",
+        "\n",
+        "\u{276F} Accept\n",
+        "  Decline\n",
+        "\n",
+        "Esc to cancel\n",
+    );
+    let narrow = concat!(
+        "MCP server \u{201C}notes\u{201D} requests your\n",
+        "input\n",
+        "\n",
+        "\u{276F} Accept\n",
+        "  Decline\n",
+        "\n",
+        "Esc to\n",
+        "cancel\n",
+    );
+
+    for (label, screen) in [("wide", wide), ("narrow", narrow)] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Blocked, "{label}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("mcp_elicitation_prompt"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn claude_mcp_elicitation_header_spans_one_wrap_only() {
+    // The quoted server name gets the same bounded tolerance as the footer: one
+    // continuation row, never a blank row and never a second wrap.
+    let rejected = [
+        (
+            "blank row inside the quoted name",
+            "MCP server \u{201C}notes\n\nserver\u{201D} requests your input\n\n\u{276F} Accept\n  Decline\n\nEsc to cancel\n",
+        ),
+        (
+            "name wrapped across three rows",
+            "MCP server \u{201C}a\nb\nc\u{201D} requests your input\n\n\u{276F} Accept\n  Decline\n\nEsc to cancel\n",
+        ),
+    ];
+
+    for (label, screen) in rejected {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("mcp_elicitation_prompt"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn claude_wrapped_permission_prompt_keeps_its_own_rule() {
+    // A narrow permission prompt already reported blocked, but only through the
+    // priority 300 legacy fallback. The owning rule must keep the match.
+    // The wide screen is the shape this rule was written against. The narrow one
+    // is that same screen with the footer phrase wrapped: no capture pins where
+    // this particular footer breaks, so it only asserts the rule survives a wrap.
+    let wide = "────────────────────────\nDo you want to proceed?\n\n\u{276F} 1. Yes\n  2. No\n\nEsc to cancel\n";
+    let narrow = "────────────────────────\nDo you want to proceed?\n\n\u{276F} 1. Yes\n  2. No\n\nEsc to\ncancel\n";
+
+    for (label, screen) in [("wide", wide), ("narrow", narrow)] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Blocked, "{label}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("generic_permission_prompt"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn claude_wrapped_dynamic_workflow_prompt_is_blocked() {
+    let narrow = "Run a dynamic\nworkflow?\n\n\u{276F} 1. Yes\n  2. No\n\nEnter to confirm · Esc to\ncancel\n";
+    let result = osc_explain(Agent::Claude, narrow, "", "");
+    assert_eq!(result.state, AgentState::Blocked);
+    assert!(result.visible_blocker);
+}
+
+#[test]
+fn claude_wrapped_model_picker_still_skips_the_state_update() {
+    // The picker is not a blocker; a wrapped footer must not cost it its skip.
+    let narrow = "Select model\n\n\u{276F} 1. Default\n  2. Opus\n\nEnter to set as\ndefault · Esc to\ncancel\n";
+    let result = osc_explain(Agent::Claude, narrow, "", "");
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("model_picker_menu")
+    );
+    assert!(result.skip_state_update);
+}
+
+#[test]
+fn claude_wrap_tolerant_blocker_leaves_neighbouring_screens_alone() {
+    // Negative controls for #2868: loosening the whitespace between the footer
+    // words must not reach streaming, overlay, or transcript screens.
+    // `live_turn_working` (priority 970) owns Claude's streaming screens. The
+    // widened blocker at 980 must not steal them. Both lines below are real
+    // Claude renderings: the spinner summary and the mode line.
+    let spinner = osc_explain(
+        Agent::Claude,
+        "✽ Cooking… (6s · ↓ 174 tokens · thinking)\n",
+        "",
+        "",
+    );
+    assert_eq!(spinner.state, AgentState::Working);
+    assert_eq!(
+        spinner.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("live_turn_working")
+    );
+
+    let mode_line = osc_explain(
+        Agent::Claude,
+        "⏵⏵ accept edits on · esc to interrupt\n",
+        "",
+        "",
+    );
+    assert_eq!(mode_line.state, AgentState::Working);
+    assert_eq!(
+        mode_line.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("live_turn_working")
+    );
+
+    let overlay = osc_explain(Agent::Claude, "  /btw\n  a note\n\nesc to close\n", "", "");
+    assert_eq!(overlay.state, AgentState::Working);
+    assert_eq!(
+        overlay.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("btw_overlay_working")
+    );
+
+    let transcript = osc_explain(
+        Agent::Claude,
+        "Showing detailed transcript · Ctrl+O to toggle\n",
+        "",
+        "",
+    );
+    assert_eq!(
+        transcript
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("transcript_viewer")
+    );
+    assert!(transcript.skip_state_update);
+}
+
+#[test]
+fn claude_blocker_footer_separator_spans_one_wrap_only() {
+    // The footer separator is deliberately bounded. A soft wrap inserts exactly
+    // one newline, so a blank line between the words is not a wrap, a
+    // non-breaking space is not a wrap point at all, and no whitespace is not a
+    // footer. All three must stay unmatched.
+    let rejected = [
+        (
+            "blank line between `esc to` and `cancel`",
+            "────────────────────────\nEnter to confirm\n\nsomething esc to\n\ncancel\n",
+        ),
+        (
+            "non-breaking spaces instead of a wrap",
+            "────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc\u{a0}to\u{a0}cancel\n",
+        ),
+        (
+            "no whitespace at all",
+            "────────────────────────\n  4. Chat about this\n\nEntertoselect · ↑/↓tonavigate · Esctocancel\n",
+        ),
+    ];
+
+    for (label, screen) in rejected {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_blocked_form"),
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn claude_osc_progress_4_0_is_idle() {
     let result = osc_explain(Agent::Claude, "", "", "4;0;");
     assert_eq!(result.state, AgentState::Idle);

@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.08.31.1"
+version = "2026.09.04.1"
 min_engine_version = 2
-updated_at = "2026-08-31T00:00:00Z"
+updated_at = "2026-09-04T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -43,7 +43,7 @@ visible_working = true
 regex = ['(?m)^[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}][ \t]+\S[^\n]*?(?:\n[ \t]+[^\n]*?){0,3}·(?:[ \t]+|\n[ \t]*)[1-9]\d*(?:[ \t]+|\n[ \t]*)MCP(?:[ \t]+|\n[ \t]*)tasks?(?:[ \t]+|\n[ \t]*)still(?:[ \t]+|\n[ \t]*)running[ \t]*$']
 not = [
   { contains = ["do you want to proceed?"] },
-  { contains = ["esc to cancel"] },
+  { regex = ['(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel'] },
   { contains = ["waiting for permission"] },
   { contains = ["do you want to allow this connection?"] },
   { contains = ["tab to amend"] },
@@ -82,15 +82,21 @@ state = "blocked"
 priority = 980
 region = "after_last_horizontal_rule"
 visible_blocker = true
-contains = ["esc to cancel"]
+# Claude word-wraps its own hint and footer lines, so any phrase sharing one of
+# those lines can be split by a real newline in a narrow pane (issue #2868).
+# Rules that gate on that evidence match across a single wrap with
+# `(?:[ \t]+|[ \t]*\n[ \t]*)`: spaces/tabs, or one newline with optional
+# indentation. The separator stays bounded on purpose. It must not match a
+# blank line between the words, and it must not match no whitespace at all.
+regex = ['(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel']
 any = [
-  { contains = ["enter to confirm"] },
-  { contains = ["enter to select"], any = [
-    { contains = ["tab/arrow keys to navigate"] },
-    { contains = ["arrow keys to navigate"] },
-    { contains = ["arrows to navigate"] },
-    { contains = ["↑/↓ to navigate"] },
-    { contains = ["↑↓ to navigate"] },
+  { regex = ['(?i)enter(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)confirm'] },
+  { regex = ['(?i)enter(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)select'], any = [
+    { regex = ['(?i)tab/arrow(?:[ \t]+|[ \t]*\n[ \t]*)keys(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
+    { regex = ['(?i)arrow(?:[ \t]+|[ \t]*\n[ \t]*)keys(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
+    { regex = ['(?i)arrows(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
+    { regex = ['(?i)↑/↓(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
+    { regex = ['(?i)↑↓(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
   ] },
 ]
 
@@ -100,7 +106,10 @@ state = "blocked"
 priority = 980
 region = "whole_recent"
 visible_blocker = true
-contains = ["run a dynamic workflow?", "esc to cancel"]
+regex = [
+  '(?i)run(?:[ \t]+|[ \t]*\n[ \t]*)a(?:[ \t]+|[ \t]*\n[ \t]*)dynamic(?:[ \t]+|[ \t]*\n[ \t]*)workflow\?',
+  '(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel',
+]
 
 [[rules]]
 id = "mcp_elicitation_prompt"
@@ -111,9 +120,13 @@ visible_blocker = true
 # MCP elicitation dialogs (elicitation/create) show Accept/Decline controls
 # with an "Esc to cancel" footer but no Enter hint, so live_blocked_form
 # cannot see them (issue #3283). Gate on the invariant header line, the
-# Accept/Decline control line, and the cancel footer.
-contains = ["esc to cancel"]
-line_regex = ['(?i)^\s*MCP server ["\x{201C}].+["\x{201D}] requests your input\s*$']
+# Accept/Decline control line, and the cancel footer. The header keeps its
+# line anchors so prose cannot impersonate it, but the quoted server name and
+# the trailing words may wrap in a narrow pane (#2868).
+regex = [
+  '(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel',
+  '(?im)^[ \t]*MCP(?:[ \t]+|[ \t]*\n[ \t]*)server(?:[ \t]+|[ \t]*\n[ \t]*)["\x{201C}][^\n]*?(?:\n[ \t]*[^\n]*?)?["\x{201D}](?:[ \t]+|[ \t]*\n[ \t]*)requests(?:[ \t]+|[ \t]*\n[ \t]*)your(?:[ \t]+|[ \t]*\n[ \t]*)input[ \t]*$',
+]
 all = [
   { any = [
     { line_regex = ['^\s*\x{276F}?\s*Accept\b'] },
@@ -128,12 +141,14 @@ priority = 950
 region = "prompt_box_body"
 visible_idle = true
 line_regex = ['^\s*❯']
+# A wrapped dialog footer must still suppress the idle claim, otherwise a
+# narrow pane reports idle when no blocked rule managed to match (#2868).
 not = [
-  { contains = ["enter to select"] },
-  { contains = ["esc to cancel"] },
-  { contains = ["tab/arrow keys"] },
-  { contains = ["arrow keys to navigate"] },
-  { contains = ["↑/↓ to navigate"] },
+  { regex = ['(?i)enter(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)select'] },
+  { regex = ['(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel'] },
+  { regex = ['(?i)tab/arrow(?:[ \t]+|[ \t]*\n[ \t]*)keys'] },
+  { regex = ['(?i)arrow(?:[ \t]+|[ \t]*\n[ \t]*)keys(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
+  { regex = ['(?i)↑/↓(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
 ]
 
 [[rules]]
@@ -142,7 +157,11 @@ state = "unknown"
 priority = 900
 region = "whole_recent"
 skip_state_update = true
-contains = ["select model", "enter to set as default", "esc to cancel"]
+regex = [
+  '(?i)select(?:[ \t]+|[ \t]*\n[ \t]*)model',
+  '(?i)enter(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)set(?:[ \t]+|[ \t]*\n[ \t]*)as(?:[ \t]+|[ \t]*\n[ \t]*)default',
+  '(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel',
+]
 not = [
   { contains = ["do you want to proceed?"] },
   { contains = ["enter to select"] },
@@ -172,7 +191,10 @@ state = "blocked"
 priority = 840
 region = "after_last_horizontal_rule"
 visible_blocker = true
-contains = ["do you want to proceed?", "esc to cancel"]
+# "Do you want to proceed?" renders on its own line and only wraps below ~24
+# columns, so it stays a contiguous needle; the shared footer does not.
+contains = ["do you want to proceed?"]
+regex = ['(?i)esc(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)cancel']
 all = [
   { any = [
     { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
