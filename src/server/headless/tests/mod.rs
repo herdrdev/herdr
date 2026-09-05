@@ -620,6 +620,9 @@ async fn client_shell_attach_seeds_workspace() {
 #[tokio::test]
 async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let mut server = test_headless_server();
+    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("endpoint")];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
     let (writer, control_rx, _render_rx) = test_client_writer();
     let client_id = 41;
     assert!(
