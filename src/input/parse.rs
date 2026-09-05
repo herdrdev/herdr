@@ -19,10 +19,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .next()
         .filter(|field| !field.is_empty())
         .unwrap_or("1");
-    let associated_text = match fields.next() {
-        Some(value) => Some(parse_kitty_associated_text(value)?),
-        None => None,
-    };
+    let associated_text = fields.next();
     if fields.next().is_some() {
         return None;
     }
@@ -38,6 +35,14 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .and_then(|field| field.parse::<u32>().ok());
 
     let code = kitty_codepoint_to_keycode(codepoint)?;
+    let associated_text = match associated_text {
+        Some(value) => match parse_kitty_associated_text(value) {
+            Some(text) => Some(text),
+            None if matching_control_associated_text(value, code) => None,
+            None => return None,
+        },
+        None => None,
+    };
     let kind = parse_kitty_event_type(event_type)?;
     let mut modifiers = key_modifiers_from_u8(modifier);
     // Kitty permits the shifted alternate only while Shift is active. Normalize
@@ -66,6 +71,16 @@ fn parse_kitty_associated_text(value: &str) -> Option<String> {
         text.push(ch);
     }
     (!text.is_empty()).then_some(text)
+}
+
+// WezTerm can attach the matching legacy control code in report-all mode even
+// though the Kitty protocol forbids control characters in associated text.
+// Keep the unambiguous key event, but never expose that field as generated text.
+fn matching_control_associated_text(value: &str, code: KeyCode) -> bool {
+    matches!(
+        (code, value),
+        (KeyCode::Enter, "13") | (KeyCode::Backspace, "8")
+    )
 }
 
 #[allow(dead_code)] // Reserved for the upcoming raw stdin parser.
@@ -710,11 +725,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_wezterm_control_associated_text_keeps_report_all_key_events() {
+        for (sequence, expected_code, expected_kind) in [
+            (
+                "\x1b[13;1;13u",
+                KeyCode::Enter,
+                crossterm::event::KeyEventKind::Press,
+            ),
+            (
+                "\x1b[13;1:3u",
+                KeyCode::Enter,
+                crossterm::event::KeyEventKind::Release,
+            ),
+            (
+                "\x1b[127::8;1;8u",
+                KeyCode::Backspace,
+                crossterm::event::KeyEventKind::Press,
+            ),
+            (
+                "\x1b[127::8;1:3u",
+                KeyCode::Backspace,
+                crossterm::event::KeyEventKind::Release,
+            ),
+        ] {
+            let key = parse_terminal_key_sequence(sequence).expect("captured key should parse");
+            assert_eq!(key.code, expected_code);
+            assert_eq!(key.modifiers, KeyModifiers::empty());
+            assert_eq!(key.kind, expected_kind);
+            assert_eq!(key.generated_text, None);
+        }
+    }
+
+    #[test]
     fn reject_malformed_kitty_associated_text() {
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;1114112u"), None);
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;20320:bad:u"), None);
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;27u"), None);
         assert_eq!(parse_terminal_key_sequence("\x1b[32;;133u"), None);
+        assert_eq!(parse_terminal_key_sequence("\x1b[13;1;8u"), None);
+        assert_eq!(parse_terminal_key_sequence("\x1b[127::8;1;13u"), None);
+        assert_eq!(parse_terminal_key_sequence("\x1b[13;1;13:10u"), None);
     }
 
     #[test]
