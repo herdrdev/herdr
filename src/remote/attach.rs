@@ -31,7 +31,7 @@ const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
 const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
 const REMOTE_BINARY_ENV_VAR: &str = "HERDR_REMOTE_BINARY";
-const WINDOWS_BRIDGE_READY_MARKER: &str = "herdr-windows-bridge-ready:1";
+const REMOTE_OUTPUT_READY_MARKER: &str = "herdr-remote-output-ready:1";
 const SSH_CONTROL_SOCKET_NAME: &str = "ctl";
 pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
 
@@ -309,8 +309,10 @@ impl RemoteExecutable {
             named_args.as_slice()
         };
         match self {
-            Self::PosixShellPath(_) => format!("exec {}", self.command(args)),
-            Self::WindowsPath(path) => windows_powershell_bridge_command(path, args),
+            Self::PosixShellPath(_) => {
+                posix_remote_output_command(&format!("exec {}", self.command(args)))
+            }
+            Self::WindowsPath(_) => self.command(args),
         }
     }
 
@@ -382,14 +384,14 @@ fn windows_powershell_application_script(path: &str, args: &[&str]) -> String {
     script
 }
 
-fn windows_powershell_bridge_command(path: &str, args: &[&str]) -> String {
-    windows_powershell_script_command(&format!(
-        "[Console]::Out.WriteLine(); [Console]::Out.WriteLine('{WINDOWS_BRIDGE_READY_MARKER}'); [Console]::Out.Flush(); {}",
-        windows_powershell_application_script(path, args)
-    ))
+fn posix_remote_output_command(command: &str) -> String {
+    format!("printf '\n%s\n' '{REMOTE_OUTPUT_READY_MARKER}'\n{command}")
 }
 
 fn windows_powershell_script_command(script: &str) -> String {
+    let script = format!(
+        "[Console]::Out.WriteLine(); [Console]::Out.WriteLine('{REMOTE_OUTPUT_READY_MARKER}'); [Console]::Out.Flush(); {script}"
+    );
     let utf16 = script
         .encode_utf16()
         .flat_map(u16::to_le_bytes)
@@ -590,6 +592,7 @@ impl RemoteSsh {
     }
 
     fn sh_output(&self, script: &str) -> io::Result<Output> {
+        let script = posix_remote_output_command(script);
         let mut child = self
             .command()
             .arg("/bin/sh -s")
@@ -608,16 +611,20 @@ impl RemoteSsh {
         };
         let output = child.wait_with_output()?;
         write_result?;
-        Ok(output)
+        normalize_remote_output(output)
     }
 
-    fn user_shell_output(&self, command: &str) -> io::Result<Output> {
-        self.command().arg(command).output()
+    fn framed_user_shell_output(&self, command: &str) -> io::Result<Output> {
+        normalize_remote_output(self.command().arg(command).output()?)
+    }
+
+    fn posix_user_shell_output(&self, command: &str) -> io::Result<Output> {
+        self.framed_user_shell_output(&posix_remote_output_command(command))
     }
 
     fn shell_output(&self, platform: &RemotePlatform, command: &str) -> io::Result<Output> {
         if platform.is_windows() {
-            self.user_shell_output(command)
+            self.framed_user_shell_output(command)
         } else {
             self.sh_output(command)
         }
@@ -666,6 +673,24 @@ impl RemoteSsh {
             )))
         }
     }
+}
+
+fn normalize_remote_output(mut output: Output) -> io::Result<Output> {
+    normalize_remote_stdout(&mut output.stdout, output.status.success())?;
+    Ok(output)
+}
+
+fn normalize_remote_stdout(stdout: &mut Vec<u8>, command_succeeded: bool) -> io::Result<()> {
+    let consumed = {
+        let mut reader = io::Cursor::new(stdout.as_slice());
+        match discard_remote_output_preamble(&mut reader) {
+            Ok(()) => reader.position() as usize,
+            Err(_) if !command_succeeded => return Ok(()),
+            Err(err) => return Err(err),
+        }
+    };
+    stdout.drain(..consumed);
+    Ok(())
 }
 
 fn remote_install_prepare_script(remote_herdr: &RemoteHerdr) -> String {
@@ -901,7 +926,7 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<RemotePlatform> {
     ) {
         return Err(posix_error);
     }
-    let windows_output = match ssh.user_shell_output(&windows_platform_probe_command()) {
+    let windows_output = match ssh.framed_user_shell_output(&windows_platform_probe_command()) {
         Ok(output) if output.status.success() => output,
         _ => return Err(posix_error),
     };
@@ -1036,7 +1061,7 @@ fn remote_binary_on_path_any(
     ssh: &RemoteSsh,
     remote_herdr: &RemoteHerdr,
 ) -> io::Result<Option<RemoteHerdr>> {
-    let output = ssh.user_shell_output("command -v herdr")?;
+    let output = ssh.posix_user_shell_output("command -v herdr")?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         if let Some(candidate) = remote_herdr_from_path_discovery(remote_herdr, &stdout) {
@@ -1474,15 +1499,11 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
 }
 
 fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatus> {
-    let parsed = status
-        .lines()
-        .rev()
-        .find_map(|line| serde_json::from_str::<RemoteServerStatusJson>(line).ok())
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "could not parse remote server status JSON from `{status}`"
-            ))
-        })?;
+    let parsed: RemoteServerStatusJson = serde_json::from_str(status).map_err(|err| {
+        io::Error::other(format!(
+            "could not parse remote server status JSON from `{status}`: {err}"
+        ))
+    })?;
     if !parsed.running {
         return Ok(RemoteServerStatus::NotRunning);
     }
@@ -1638,7 +1659,7 @@ fn version_label(version: Option<&str>) -> &str {
 }
 
 fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
-    let output = ssh.user_shell_output("command -v herdr")?;
+    let output = ssh.posix_user_shell_output("command -v herdr")?;
     if output.status.success()
         && remote_shell_resolves_managed_install(&String::from_utf8_lossy(&output.stdout))
     {
@@ -2049,7 +2070,6 @@ fn bridge_connection(
     ssh_options: Option<&ManagedSshOptions>,
     _bridge_stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let discard_preamble = remote_herdr.platform.is_windows();
     let mut command = Command::new("ssh");
     apply_managed_ssh_options(&mut command, ssh_options);
     command
@@ -2079,18 +2099,22 @@ fn bridge_connection(
     });
     let download = thread::spawn(move || {
         let mut child_stdout = io::BufReader::new(child_stdout);
-        let ready = !discard_preamble || discard_windows_bridge_preamble(&mut child_stdout).is_ok();
-        if ready {
+        let ready = discard_remote_output_preamble(&mut child_stdout);
+        if ready.is_ok() {
             let _ = copy_flush(&mut child_stdout, &mut child_to_stream);
         }
         let _ = crate::ipc::shutdown_local_stream_write(&child_to_stream);
+        ready
     });
 
     let status = child.wait()?;
     let _ = upload.join();
-    let _ = download.join();
+    let ready = download
+        .join()
+        .map_err(|_| io::Error::other("remote bridge download worker panicked"))?;
 
     if status.success() {
+        ready?;
         Ok(())
     } else {
         Err(io::Error::new(
@@ -2109,7 +2133,6 @@ fn bridge_connection(
     ssh_options: Option<&ManagedSshOptions>,
     bridge_stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let discard_preamble = remote_herdr.platform.is_windows();
     let mut command = Command::new("ssh");
     apply_managed_ssh_options(&mut command, ssh_options);
     command
@@ -2172,12 +2195,7 @@ fn bridge_connection(
     let download_upload_stop = Arc::clone(&upload_stop);
     let download = thread::spawn(move || {
         let mut child_stdout = io::BufReader::new(child_stdout);
-        let result = if discard_preamble {
-            discard_windows_bridge_preamble(&mut child_stdout)
-        } else {
-            Ok(())
-        }
-        .and_then(|()| {
+        let result = discard_remote_output_preamble(&mut child_stdout).and_then(|()| {
             copy_reader_to_local_stream(
                 &mut child_stdout,
                 &mut child_to_stream,
@@ -2259,20 +2277,44 @@ fn bridge_connection(
     }
 }
 
-fn discard_windows_bridge_preamble(reader: &mut impl io::BufRead) -> io::Result<()> {
-    let mut line = Vec::new();
+fn discard_remote_output_preamble(reader: &mut impl io::BufRead) -> io::Result<()> {
+    let marker = REMOTE_OUTPUT_READY_MARKER.as_bytes();
+    let mut matched = 0;
+    let mut matching = true;
     loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "Windows remote bridge exited before it was ready",
-            ));
-        }
-        while matches!(line.last(), Some(b'\r' | b'\n')) {
-            line.pop();
-        }
-        if line == WINDOWS_BRIDGE_READY_MARKER.as_bytes() {
+        let (consumed, ready) = {
+            let buffer = reader.fill_buf()?;
+            if buffer.is_empty() {
+                if matching && matched == marker.len() {
+                    return Ok(());
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "remote command exited before producing its output marker",
+                ));
+            }
+
+            let mut consumed = 0;
+            let mut ready = false;
+            for &byte in buffer {
+                consumed += 1;
+                if byte == b'\n' {
+                    if matching && matched == marker.len() {
+                        ready = true;
+                        break;
+                    }
+                    matched = 0;
+                    matching = true;
+                } else if matching && matched < marker.len() && byte == marker[matched] {
+                    matched += 1;
+                } else if matching && (matched != marker.len() || byte != b'\r') {
+                    matching = false;
+                }
+            }
+            (consumed, ready)
+        };
+        reader.consume(consumed);
+        if ready {
             return Ok(());
         }
     }
@@ -2720,8 +2762,12 @@ mod tests {
 
         assert!(prepare.contains("mkdir -p \"$dir\""));
         assert!(prepare.contains("printf '%s\\0%s\\0' \"$tmp\" \"$dest\""));
+        let mut framed_paths =
+            b"profile output\r\nherdr-remote-output-ready:1\r\n/home/a b/herdr.tmp.42\0/home/a b/herdr\0"
+                .to_vec();
+        normalize_remote_stdout(&mut framed_paths, true).unwrap();
         assert_eq!(
-            parse_remote_install_paths(b"/home/a b/herdr.tmp.42\0/home/a b/herdr\0").unwrap(),
+            parse_remote_install_paths(&framed_paths).unwrap(),
             (
                 "/home/a b/herdr.tmp.42".to_string(),
                 "/home/a b/herdr".to_string()
@@ -3000,17 +3046,23 @@ mod tests {
             (
                 "default bridge",
                 executable.bridge_command(crate::session::DEFAULT_SESSION_NAME),
-                "[Console]::Out.WriteLine(); [Console]::Out.WriteLine('herdr-windows-bridge-ready:1'); [Console]::Out.Flush(); & herdr.exe remote-client-bridge; exit $LASTEXITCODE",
+                "& herdr.exe remote-client-bridge; exit $LASTEXITCODE",
             ),
             (
                 "named bridge",
                 executable.bridge_command("agent_work-1"),
-                "[Console]::Out.WriteLine(); [Console]::Out.WriteLine('herdr-windows-bridge-ready:1'); [Console]::Out.Flush(); & herdr.exe '--session' agent_work-1 remote-client-bridge; exit $LASTEXITCODE",
+                "& herdr.exe '--session' agent_work-1 remote-client-bridge; exit $LASTEXITCODE",
             ),
         ];
 
         for (label, command, expected) in commands {
             let script = decode(&command);
+            let preamble = format!(
+                "[Console]::Out.WriteLine(); [Console]::Out.WriteLine('{REMOTE_OUTPUT_READY_MARKER}'); [Console]::Out.Flush(); "
+            );
+            let script = script
+                .strip_prefix(&preamble)
+                .unwrap_or_else(|| panic!("{label} lacks shared output marker: {script}"));
             assert_eq!(script, expected, "{label}");
             for forbidden in ["/bin/sh", "test -x", "exec ", "'\\''"] {
                 assert!(!script.contains(forbidden), "{label}: {script}");
@@ -3019,17 +3071,34 @@ mod tests {
     }
 
     #[test]
-    fn windows_bridge_preamble_discards_shell_output_and_preserves_binary() {
+    fn remote_output_framing_discards_any_banner_and_preserves_binary() {
         let payload = [0, 1, 2, 0xff, b'\n'];
-        let mut input = Vec::from("profile output without newline".as_bytes());
-        input.extend_from_slice(b"\r\nherdr-windows-bridge-ready:1\r\n");
+        let mut input = vec![b'x'; 4 * 1024 * 1024];
+        input.extend_from_slice(b"\r\nherdr-remote-output-ready:1\r\n");
         input.extend_from_slice(&payload);
-        let mut reader = io::BufReader::new(io::Cursor::new(input));
+        let mut reader = io::BufReader::with_capacity(17, io::Cursor::new(input));
 
-        discard_windows_bridge_preamble(&mut reader).unwrap();
+        discard_remote_output_preamble(&mut reader).unwrap();
         let mut output = Vec::new();
         io::Read::read_to_end(&mut reader, &mut output).unwrap();
         assert_eq!(output, payload);
+
+        let mut missing = b"profile output without marker".to_vec();
+        assert!(normalize_remote_stdout(&mut missing, true).is_err());
+        normalize_remote_stdout(&mut missing, false).unwrap();
+        assert_eq!(missing, b"profile output without marker");
+
+        let mut platform = b"profile output\nherdr-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
+        normalize_remote_stdout(&mut platform, true).unwrap();
+        let platform = String::from_utf8(platform).unwrap();
+        let mut lines = platform.lines();
+        assert_eq!(
+            RemotePlatform::from_uname(lines.next().unwrap(), lines.next().unwrap()),
+            Some(RemotePlatform {
+                os: "linux",
+                arch: "x86_64"
+            })
+        );
     }
 
     #[cfg(unix)]
@@ -3097,14 +3166,18 @@ mod tests {
     }
 
     #[test]
-    fn remote_bridge_command_uses_installed_binary() {
+    fn posix_remote_commands_emit_output_marker() {
         let remote_herdr = RemoteHerdr::for_platform(RemotePlatform {
             os: "linux",
             arch: "x86_64",
         });
         assert_eq!(
             remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
-            "exec \"$HOME/.local/bin/herdr\" remote-client-bridge"
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec \"$HOME/.local/bin/herdr\" remote-client-bridge"
+        );
+        assert_eq!(
+            posix_remote_output_command("command -v herdr"),
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\ncommand -v herdr"
         );
     }
 
@@ -3119,7 +3192,7 @@ mod tests {
 
         assert_eq!(
             remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
-            "exec /usr/bin/herdr remote-client-bridge"
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /usr/bin/herdr remote-client-bridge"
         );
     }
 
@@ -3135,7 +3208,7 @@ mod tests {
 
         assert_eq!(
             remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
-            "exec '/opt/herdr bin/herdr' remote-client-bridge"
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr bin/herdr' remote-client-bridge"
         );
     }
 
@@ -3151,7 +3224,7 @@ mod tests {
 
         assert_eq!(
             remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
-            "exec /opt/homebrew/bin/herdr remote-client-bridge"
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec /opt/homebrew/bin/herdr remote-client-bridge"
         );
         assert_eq!(remote_herdr.platform.asset_key(), "macos-aarch64");
     }
@@ -3246,7 +3319,7 @@ mod tests {
 
         assert_eq!(
             remote_bridge_command(&remote_herdr, crate::session::DEFAULT_SESSION_NAME),
-            "exec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
+            "printf '\n%s\n' 'herdr-remote-output-ready:1'\nexec '/opt/herdr'\\''s/bin/herdr' remote-client-bridge"
         );
     }
 
@@ -3302,11 +3375,9 @@ mod tests {
 
     #[test]
     fn parse_remote_server_status_json_reads_running_server() {
+        let status = "{\"status\":\"running\",\"running\":true,\"version\":\"0.6.0\",\"protocol\":8,\"capabilities\":{\"live_handoff\":true,\"detached_server_daemon\":true,\"endpoint_protocol_generation\":1}}";
         assert_eq!(
-            parse_remote_server_status_json(
-                "profile output\n{\"status\":\"running\",\"running\":true,\"version\":\"0.6.0\",\"protocol\":8,\"capabilities\":{\"live_handoff\":true,\"detached_server_daemon\":true,\"endpoint_protocol_generation\":1}}\nwrapper output"
-            )
-            .unwrap(),
+            parse_remote_server_status_json(status).unwrap(),
             RemoteServerStatus::Running {
                 version: Some("0.6.0".into()),
                 endpoint_protocol_generation: Some(1),
@@ -3314,6 +3385,7 @@ mod tests {
                 detached_server_daemon: true
             }
         );
+        assert!(parse_remote_server_status_json(&format!("profile output\n{status}")).is_err());
     }
 
     #[test]

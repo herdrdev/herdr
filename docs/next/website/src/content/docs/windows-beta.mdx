@@ -80,7 +80,7 @@ switch_ascii_input_source_in_prefix = true
 
 Other Windows IMEs are not supported by this option yet. See [Configuration](/docs/configuration/#prefix-input-source-switching).
 
-Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux and macOS hosts.
+Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux, macOS, and Windows hosts.
 
 Kitty graphics is enabled by default and depends on the outer terminal. Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Set `[terminal].kitty_graphics = false` if the outer terminal mishandles graphics output.
 
