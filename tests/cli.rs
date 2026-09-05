@@ -1,4 +1,4 @@
-#![cfg(not(target_os = "macos"))]
+#![cfg(all(unix, not(target_os = "macos")))]
 
 pub mod support;
 

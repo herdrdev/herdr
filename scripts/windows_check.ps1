@@ -29,62 +29,12 @@ function Invoke-CargoWithZigCacheRecovery {
     Invoke-Checked cargo $Arguments
 }
 
-function Invoke-CargoTestFilter {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Filter,
-        [switch]$Exact
-    )
-
-    $commonArguments = @(
-        "test",
-        "--locked",
-        "--target",
-        "x86_64-pc-windows-msvc",
-        "--bin",
-        "herdr",
-        $Filter
-    )
-    $harnessArguments = @("--list")
-    if ($Exact) {
-        $harnessArguments += "--exact"
-    }
-
-    $listArguments = $commonArguments + @("--") + $harnessArguments
-    $listOutput = @(& cargo @listArguments)
-    if ($LASTEXITCODE -ne 0) {
-        throw "could not enumerate tests for filter '$Filter': $($listOutput -join [Environment]::NewLine)"
-    }
-
-    $testNames = @(
-        foreach ($line in $listOutput) {
-            $match = [regex]::Match([string]$line, '^\s*(\S+): test\s*$')
-            if ($match.Success) {
-                $match.Groups[1].Value
-            }
-        }
-    )
-    if ($testNames.Count -eq 0) {
-        throw "test filter '$Filter' selected zero tests"
-    }
-
-    Write-Host "Running $($testNames.Count) test(s) for '$Filter'"
-    $runArguments = $commonArguments
-    if ($Exact) {
-        $runArguments += @("--", "--exact")
-    }
-    Invoke-Checked cargo $runArguments
-}
-
-Invoke-Checked rustup @("target", "add", "x86_64-pc-windows-msvc")
 Invoke-Checked cargo @("fmt", "--check")
 Invoke-CargoWithZigCacheRecovery @(
     "clippy",
     "--bin",
     "herdr",
     "--locked",
-    "--target",
-    "x86_64-pc-windows-msvc",
     "--",
     "-D",
     "warnings"
@@ -94,9 +44,5 @@ if ($Mode -eq "lint") {
     return
 }
 
-Invoke-CargoTestFilter "windows_"
-Invoke-CargoTestFilter "server::client_transport::tests"
-Invoke-CargoTestFilter "input::lease::tests::duplicate_physical_press_normalizes_for_forwarded_and_consumed_leases" -Exact
-Invoke-CargoTestFilter "client::shell::tests::input_domain::physical_release_uses_the_leased_press_code_with_current_modifiers" -Exact
-Invoke-CargoTestFilter "client::shell::tests::input_domain::pane_key_release_keeps_the_press_target" -Exact
-Invoke-Checked cargo @("build", "--locked", "--target", "x86_64-pc-windows-msvc")
+Invoke-Checked just @("test")
+Invoke-Checked cargo @("build", "--locked")

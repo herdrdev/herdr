@@ -9,6 +9,8 @@ pub(crate) mod agent_view;
 mod agents;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
+#[cfg(test)]
+pub(crate) use api::test_support::exiting_test_command;
 mod api_helpers;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod creation;
@@ -975,13 +977,15 @@ mod tests {
 
     fn test_app() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::new(
+        let mut app = App::new(
             &Config::default(),
             crate::app::AppPolicy::TEST,
             None,
             api_rx,
             crate::api::EventHub::default(),
-        )
+        );
+        app.state.default_shell = exiting_test_command().into();
+        app
     }
 
     fn unique_temp_path(name: &str) -> std::path::PathBuf {
@@ -990,16 +994,6 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("herdr-{name}-{}-{stamp}", std::process::id()))
-    }
-
-    #[cfg(windows)]
-    fn exiting_test_command() -> &'static str {
-        "C:\\Windows\\System32\\whoami.exe"
-    }
-
-    #[cfg(not(windows))]
-    fn exiting_test_command() -> &'static str {
-        "/usr/bin/true"
     }
 
     fn config_env_lock() -> &'static Mutex<()> {
@@ -2657,7 +2651,7 @@ mod tests {
     async fn pane_split_request_applies_ratio() {
         let _guard = config_env_lock().lock().unwrap();
         let original_shell = std::env::var_os("SHELL");
-        std::env::set_var("SHELL", "/usr/bin/true");
+        std::env::set_var("SHELL", exiting_test_command());
 
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-split-ratio");
@@ -2713,7 +2707,7 @@ mod tests {
     async fn pane_split_request_uses_active_focused_pane_when_target_is_omitted() {
         let _guard = config_env_lock().lock().unwrap();
         let original_shell = std::env::var_os("SHELL");
-        std::env::set_var("SHELL", "/usr/bin/true");
+        std::env::set_var("SHELL", exiting_test_command());
 
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-split-current");

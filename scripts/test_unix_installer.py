@@ -15,6 +15,7 @@ INSTALLER = REPO_ROOT / "distribution" / "install.sh"
 REQUIRED_COMMANDS = ("awk", "cat", "chmod", "cp", "mkdir", "mktemp", "mv", "rm")
 
 
+@unittest.skipUnless(os.name == "posix", "Unix installer requires a POSIX host")
 class UnixInstallerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="herdr-installer-test-")

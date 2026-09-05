@@ -1,6 +1,8 @@
 //! Integration tests for detach/reattach flow.
 //!
 
+#![cfg(unix)]
+
 pub mod support;
 
 use std::fs;

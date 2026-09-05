@@ -65,9 +65,9 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertTrue(index.exists())
         text = index.read_text()
         missing = [
-            str(path.relative_to(project_root))
+            path.relative_to(project_root).as_posix()
             for path in patches
-            if str(path.relative_to(project_root)) not in text
+            if path.relative_to(project_root).as_posix() not in text
         ]
         self.assertEqual(missing, [])
 

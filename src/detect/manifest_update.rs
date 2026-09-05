@@ -699,7 +699,14 @@ path = "codex.toml"
             .unwrap();
             std::env::set_var(
                 CATALOG_URL_ENV,
-                format!("file://{}", web_dir.join("index.toml").display()),
+                format!(
+                    "file:///{}",
+                    web_dir
+                        .join("index.toml")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .trim_start_matches('/')
+                ),
             );
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -762,7 +769,14 @@ path = "codex.toml"
             fs::write(remote_manifest_path(Agent::Codex), current).unwrap();
             std::env::set_var(
                 CATALOG_URL_ENV,
-                format!("file://{}", web_dir.join("index.toml").display()),
+                format!(
+                    "file:///{}",
+                    web_dir
+                        .join("index.toml")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .trim_start_matches('/')
+                ),
             );
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -833,7 +847,14 @@ path = "missing-cursor.toml"
             .unwrap();
             std::env::set_var(
                 CATALOG_URL_ENV,
-                format!("file://{}", web_dir.join("index.toml").display()),
+                format!(
+                    "file:///{}",
+                    web_dir
+                        .join("index.toml")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .trim_start_matches('/')
+                ),
             );
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(1);

@@ -794,13 +794,15 @@ mod tests {
 
     fn test_app_with_event_hub(event_hub: crate::api::EventHub) -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::new(
+        let mut app = App::new(
             &Config::default(),
             crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub,
-        )
+        );
+        app.state.default_shell = test_shell().into();
+        app
     }
 
     #[cfg(windows)]

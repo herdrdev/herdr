@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 pub mod support;
 
 use std::fs;

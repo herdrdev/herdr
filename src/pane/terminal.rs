@@ -4681,10 +4681,18 @@ mod tests {
             unicode: u16::from(b'/'),
             control_key_state: 0x0010,
         });
+        #[cfg(windows)]
+        let legacy_expected = b"\x1b[55;8;47;1;16;3_".as_slice();
+        #[cfg(not(windows))]
+        let legacy_expected = b"///".as_slice();
         assert_eq!(
             pane.encode_terminal_key(shifted.clone(), crate::input::KeyboardProtocol::Legacy,),
-            b"///"
+            legacy_expected
         );
+        let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        terminal.write(b"\x1b[>15u");
+        let (tx, _rx) = mpsc::channel(4);
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         assert_eq!(
             pane.encode_terminal_key(shifted, crate::input::KeyboardProtocol::Kitty { flags: 15 },),
             b"\x1b[47;2:1u\x1b[47;2:2u\x1b[47;2:2u"
