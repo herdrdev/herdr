@@ -1564,8 +1564,7 @@ impl ClientShellState {
                 return false;
             };
             previous.content_revision != next.content_revision
-                && (!selection.is_in_progress()
-                    || !previous.content_revision.is_multiple_of(2)
+                && (!previous.content_revision.is_multiple_of(2)
                     || !next.content_revision.is_multiple_of(2)
                     || previous.inner_rect.width != next.inner_rect.width
                     || previous.inner_rect.height != next.inner_rect.height

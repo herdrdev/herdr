@@ -199,6 +199,16 @@ fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
         .as_ref()
         .is_some_and(crate::selection::Selection::is_finalized));
 
+    // Agent output outside the selected text must not cancel a pending copy.
+    let mut updated = state.pane_surface.clone().expect("pane surface");
+    updated.panes[0].content_revision = 2;
+    updated.frame.cells[4].symbol = "-".into();
+    state.set_pane_surface(updated);
+    assert!(state
+        .selection
+        .as_ref()
+        .is_some_and(crate::selection::Selection::is_finalized));
+
     let copy = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
         KeyCode::Char('c'),
         KeyModifiers::CONTROL,
