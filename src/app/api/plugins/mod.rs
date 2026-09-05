@@ -1516,7 +1516,7 @@ platforms = ["linux", "macos"]
             long_where.as_os_str().encode_wide().count()
                 >= windows_sys::Win32::Foundation::MAX_PATH as usize
         );
-        let script = "@echo off\r\n(echo %1&cd)>capture-%1.txt\r\n";
+        let script = "@echo off\r\n(echo %1&cd)>capture-%1.tmp\r\nmove /y capture-%1.tmp capture-%1.txt >nul\r\n";
         std::fs::write(root.join("slot.cmd"), script).unwrap();
         std::fs::write(child_cwd.join("slot.cmd"), script).unwrap();
         write_manifest_content(
@@ -1632,7 +1632,21 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
-        std::fs::remove_dir_all(cleanup_root).unwrap();
+        // PTY actor shutdown is queued, so its Windows handles can outlive `shutdown()`.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match std::fs::remove_dir_all(&cleanup_root) {
+                Ok(()) => break,
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "failed to remove {} after runtime shutdown: {error}",
+                        cleanup_root.display()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
     }
 
     #[cfg(unix)]
