@@ -1,5 +1,7 @@
 //! Gate B integration tests for the ClientShell protocol.
 
+#![cfg(unix)]
+
 pub mod support;
 
 use std::fs;

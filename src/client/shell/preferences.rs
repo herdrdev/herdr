@@ -54,7 +54,7 @@ pub(super) fn store(path: &Path, preferences: ClientChromePreferences) -> Result
     let temp_path = parent.join(temp_name);
     std::fs::write(&temp_path, content)
         .map_err(|error| format!("failed to write client shell state: {error}"))?;
-    crate::platform::replace_file(&temp_path, path).map_err(|error| {
+    std::fs::rename(&temp_path, path).map_err(|error| {
         let _ = std::fs::remove_file(&temp_path);
         format!("failed to replace client shell state: {error}")
     })

@@ -18,7 +18,7 @@ fn test_headless_server() -> HeadlessServer {
 fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
     let config = crate::config::Config::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-    let app = crate::app::App::new(
+    let mut app = crate::app::App::new(
         &config,
         crate::app::AppPolicy::TEST,
         None,
@@ -26,6 +26,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         event_hub,
     );
 
+    app.state.default_shell = crate::app::exiting_test_command().into();
     let dir = std::env::temp_dir().join(format!(
         "hh-{}-{}",
         std::process::id(),
@@ -619,6 +620,9 @@ async fn client_shell_attach_seeds_workspace() {
 #[tokio::test]
 async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let mut server = test_headless_server();
+    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("endpoint")];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
     let (writer, control_rx, _render_rx) = test_client_writer();
     let client_id = 41;
     assert!(

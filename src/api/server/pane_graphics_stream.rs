@@ -393,7 +393,7 @@ fn read_line(
                 total_deadline,
                 "timed out reading stream frame header",
             )?;
-            match stream.read(&mut byte) {
+            match wait.read(stream, &mut byte) {
                 Ok(0) => return Ok(None),
                 Ok(_) => {
                     wait.on_progress();
@@ -455,7 +455,7 @@ fn read_exact(
             )?;
             let remaining = len - data.len();
             let read_len = remaining.min(chunk.len());
-            match stream.read(&mut chunk[..read_len]) {
+            match wait.read(stream, &mut chunk[..read_len]) {
                 Ok(0) if data.is_empty() => return Ok(None),
                 Ok(0) => {
                     return Err(io::Error::new(
@@ -494,6 +494,17 @@ enum ReadWait {
 }
 
 impl ReadWait {
+    fn read(&self, stream: &mut LocalStream, buffer: &mut [u8]) -> io::Result<usize> {
+        if matches!(self, Self::SocketTimeout) {
+            return stream.read(buffer);
+        }
+        match crate::ipc::poll_local_stream_read_count(stream, buffer)? {
+            crate::ipc::LocalStreamReadCount::Data(count) => Ok(count),
+            crate::ipc::LocalStreamReadCount::Pending => Err(io::ErrorKind::WouldBlock.into()),
+            crate::ipc::LocalStreamReadCount::Closed => Ok(0),
+        }
+    }
+
     fn after_retry(&mut self, idle_deadline: Option<Instant>, total_deadline: Option<Instant>) {
         if let Self::Poll(backoff) = self {
             sleep_until_poll(idle_deadline, total_deadline, backoff.interval);
@@ -545,9 +556,11 @@ fn with_timed_reads<T>(
             finish_timed_read(result, || stream.set_recv_timeout(None))
         }
         Err(err) if err.kind() == io::ErrorKind::Unsupported => {
-            stream.set_nonblocking(true)?;
+            crate::ipc::set_local_stream_polling(stream, true)?;
             let result = read(stream, ReadWait::Poll(PollBackoff::new()));
-            finish_timed_read(result, || stream.set_nonblocking(false))
+            finish_timed_read(result, || {
+                crate::ipc::set_local_stream_polling(stream, false)
+            })
         }
         // A peer can disconnect after the caller's running check but before
         // setsockopt. macOS reports that closed-socket race as EINVAL.

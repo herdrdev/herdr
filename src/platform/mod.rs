@@ -227,14 +227,6 @@ mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{begin_cli_output, end_cli_output};
 
-#[cfg(not(windows))]
-pub(crate) fn replace_file(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
 
