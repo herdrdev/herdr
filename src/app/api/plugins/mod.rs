@@ -1625,10 +1625,8 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
             );
             let mut lines = capture.lines();
             assert_eq!(lines.next(), Some(entrypoint));
-            assert_eq!(
-                lines.next(),
-                Some(expected_cwd.display().to_string().as_str())
-            );
+            let actual_cwd = std::fs::canonicalize(lines.next().expect("captured cwd")).unwrap();
+            assert_eq!(actual_cwd, expected_cwd.canonicalize().unwrap());
         }
 
         for (_, runtime) in app.terminal_runtimes.drain() {
