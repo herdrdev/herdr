@@ -1602,14 +1602,13 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
                     .state
                     .runtime_for_pane_in_workspace(&app.terminal_runtimes, ws_idx, pane_id)
                     .expect("long executable pane runtime");
-                let expected = child_cwd.join(where_probe).display().to_string();
+                let expected = child_cwd.join(where_probe).canonicalize().unwrap();
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
                     let text = runtime.recent_unwrapped_text(20);
-                    if text
-                        .lines()
-                        .any(|line| line.trim().eq_ignore_ascii_case(&expected))
-                    {
+                    if text.lines().any(|line| {
+                        std::fs::canonicalize(line.trim()).is_ok_and(|path| path == expected)
+                    }) {
                         break;
                     }
                     assert!(
