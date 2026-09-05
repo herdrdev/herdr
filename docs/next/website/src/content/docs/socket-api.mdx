@@ -175,11 +175,12 @@ pane.
 
 Clients can treat `offset_from_bottom == 0` as at-bottom state.
 
-### Experimental pane graphics
+### Pane graphics
 
-Pane graphics let a plugin place image data over a pane. They are available
-only when `[experimental].kitty_graphics = true`; otherwise every pane graphics
-method returns `feature_disabled`. Calling `pane.graphics.info` explicitly
+Pane graphics let a plugin place image data over a pane. They are available by
+default; when the server has `[terminal].kitty_graphics = false`, every pane
+graphics method returns `feature_disabled`. Changing this setting requires a
+server restart. Calling `pane.graphics.info` explicitly
 activates capability discovery and returns the attached client's cell size,
 file-frame options, pixel-mouse support, the 16-layer limit, and `pane_visible`.
 `pane_visible` is true only when the target is in the active workspace and tab

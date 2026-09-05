@@ -38,6 +38,10 @@ class UnixInstallerTests(unittest.TestCase):
 case "$1" in
   -s) echo Linux ;;
   -m) echo x86_64 ;;
+  -o)
+    [ "${FAKE_UNAME_OS_UNAVAILABLE:-}" != "1" ] || exit 1
+    echo "${FAKE_UNAME_OS:-GNU/Linux}"
+    ;;
   *) exit 1 ;;
 esac
 """,
@@ -45,6 +49,7 @@ esac
         self._write_executable(
             "curl",
             """#!/bin/sh
+: > "$FAKE_CURL_MARKER"
 out=""
 previous=""
 for argument in "$@"; do
@@ -114,7 +119,12 @@ exec {sha256sum} "$@"
         path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         return path
 
-    def _run_installer(self, checksum: str | None, tool: str = "sha256sum") -> subprocess.CompletedProcess[str]:
+    def _run_installer(
+        self,
+        checksum: str | None,
+        tool: str = "sha256sum",
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         self._select_checksum_tool(tool)
         manifest = self._write_manifest(checksum)
         env = {
@@ -122,7 +132,9 @@ exec {sha256sum} "$@"
             "PATH": str(self.bin_dir),
             "FAKE_MANIFEST": str(manifest),
             "FAKE_PAYLOAD": str(self.payload),
+            "FAKE_CURL_MARKER": str(self.root / "curl-called"),
             "HERDR_INSTALL_DIR": str(self.install_dir),
+            **(extra_env or {}),
         }
         return subprocess.run(
             ["/bin/sh", str(INSTALLER)],
@@ -143,6 +155,30 @@ exec {sha256sum} "$@"
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((self.install_dir / "herdr").read_bytes(), self.payload.read_bytes())
+
+    def test_android_is_rejected_before_replacing_existing_binary(self) -> None:
+        self.install_dir.mkdir()
+        installed = self.install_dir / "herdr"
+        installed.write_bytes(b"existing-herdr\n")
+
+        result = self._run_installer(
+            self.expected_sha256,
+            extra_env={"FAKE_UNAME_OS": "Android"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Android/Termux is not currently supported", result.stderr)
+        self.assertFalse((self.root / "curl-called").exists())
+        self.assertEqual(installed.read_bytes(), b"existing-herdr\n")
+
+    def test_missing_uname_operating_system_flag_keeps_linux_supported(self) -> None:
+        result = self._run_installer(
+            self.expected_sha256,
+            extra_env={"FAKE_UNAME_OS_UNAVAILABLE": "1"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.install_dir / "herdr").read_bytes(), self.payload.read_bytes())
 
     def test_checksum_mismatch_does_not_replace_existing_binary(self) -> None:
         self.install_dir.mkdir()

@@ -76,6 +76,11 @@ pub(crate) fn devin_dir() -> io::Result<PathBuf> {
         return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("devin"));
     }
 
+    #[cfg(windows)]
+    if let Some(value) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(value).join("devin"));
+    }
+
     Ok(home_dir()?.join(".config").join("devin"))
 }
 
@@ -215,7 +220,31 @@ pub(crate) fn home_dir() -> io::Result<PathBuf> {
 }
 
 #[cfg(test)]
-pub(crate) fn integration_env_lock() -> MutexGuard<'static, ()> {
+pub(crate) struct IntegrationEnvLock {
+    _guard: MutexGuard<'static, ()>,
+    #[cfg(windows)]
+    appdata: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl Drop for IntegrationEnvLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(appdata) = self.appdata.take() {
+            std::env::set_var("APPDATA", appdata);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    IntegrationEnvLock {
+        _guard: guard,
+        #[cfg(windows)]
+        appdata: std::env::var_os("APPDATA"),
+    }
 }

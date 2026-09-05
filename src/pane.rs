@@ -3133,6 +3133,7 @@ impl PaneRuntime {
     }
 
     fn paste_payload(&self, text: String) -> Bytes {
+        let text = crate::platform::prepare_paste_text_for_pty(text);
         let bracketed = self.bracketed_paste_enabled();
         let payload = if bracketed {
             format!("\x1b[200~{text}\x1b[201~")

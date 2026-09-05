@@ -488,14 +488,16 @@ Search the [Config reference](/docs/config-reference/) for scrollback limits, ne
 
 ## Kitty graphics
 
-Kitty graphics rendering for attached local clients is experimental and disabled by default:
+Herdr renders pane images by default in compatible outer terminals. To disable graphics rendering and the pane graphics API:
 
 ```toml
-[experimental]
-kitty_graphics = true
+[terminal]
+kitty_graphics = false
 ```
 
-Enable it only when testing terminal image behavior.
+The legacy `experimental.kitty_graphics` setting remains accepted for existing configurations. `terminal.kitty_graphics` takes precedence when both are set.
+
+Changing this setting requires restarting the affected Herdr server or reattaching the client. In remote sessions, the server's setting controls pane graphics parsing and API availability, while the local client's setting controls output to the outer terminal.
 
 ## Agent session restore
 

@@ -21,7 +21,7 @@ curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del 
 
 Windows builds are available through both stable and preview update channels. New installs use stable by default, and stable is recommended for normal use. Existing preview installs stay on preview until you run `herdr channel set stable`. If an older preview build rejects that command, run `herdr update` once on preview and retry. Preview provides newer, less-tested fixes from `master` and may regress; opt in with `herdr channel set preview` only when you want that tradeoff.
 
-The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, points `%LOCALAPPDATA%\Programs\Herdr\bin` at the current release, and keeps a small number of older releases so running processes do not block updates.
+The installer stores releases under `%USERPROFILE%\.herdr\packages\standalone\releases`, puts the active versioned release directory on PATH, keeps `%LOCALAPPDATA%\Programs\Herdr\bin` as a stable compatibility alias, and retains a small number of older releases so running processes do not block updates.
 
 For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom manifest instead of Herdr's stable or preview manifest. Set `HERDR_CHANNEL=preview` with a custom preview manifest.
 
@@ -51,7 +51,7 @@ Local persistent sessions continue running after the client detaches or its term
 
 Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers, including npm/Node and Git Bash process chains. It follows Git Bash-launched agents across emulated `exec` boundaries, but it is not the same as Unix foreground process-group detection.
 
-Windows integration installation currently supports Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, OpenCode, Kilo Code CLI, Droid, Kimi Code CLI, Qoder CLI, and Antigravity CLI. Availability is narrower than on Unix; Herdr hides or rejects integrations whose install format is not supported on Windows. Devin CLI process and screen detection work on Windows, but its optional session-identity hook cannot currently be installed.
+Windows integration installation currently supports Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, OpenCode, Kilo Code CLI, Droid, Kimi Code CLI, Qoder CLI, and Antigravity CLI. Availability is narrower than on Unix; Herdr hides or rejects integrations whose install format is not supported on Windows.
 
 Plugins support `windows` as a manifest platform in preview. GitHub install, local link, build commands, actions, events, and plugin panes are best-effort on Windows. Commands are argv commands and must be Windows-compatible; Node package shims such as `npm`, `bun`, and `node` are expected to work when they are on `PATH`, while Unix-only examples using `sh` or Bash need Windows-specific alternatives. Platform filters skip unsupported build commands and return `platform_unsupported` for unsupported actions or panes.
 
@@ -82,7 +82,7 @@ Other Windows IMEs are not supported by this option yet. See [Configuration](/do
 
 Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux and macOS hosts.
 
-Kitty graphics is experimental and depends on the outer terminal. When `experimental.kitty_graphics = true`, Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Leave the option disabled unless the outer terminal supports Kitty graphics and you are testing that combination.
+Kitty graphics is enabled by default and depends on the outer terminal. Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Set `[terminal].kitty_graphics = false` if the outer terminal mishandles graphics output.
 
 ## Known caveats
 
@@ -133,7 +133,7 @@ herdr --remote workbox
 
 The target host must run Linux or macOS. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
 
-Windows updates run through the Windows installer and update the versioned install junction. Start Herdr again to use the updated client; compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
+Windows updates run through the Windows installer and update the active versioned release path. New terminals and reconnected SSH sessions receive that path; start Herdr there to use the updated client. Compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
 
 ## Reporting Windows issues
 

@@ -57,6 +57,8 @@ foreach ($functionName in @("Prepend-PathEntry", "Update-PathRegistryEntry")) {
 
 $pathTestVariable = "HERDR_INSTALLER_PATH_TEST"
 $oldPathTestVariable = [Environment]::GetEnvironmentVariable($pathTestVariable, "Process")
+$ownedPathTestVariable = "HERDR_INSTALLER_OWNED_PATH_TEST"
+$oldOwnedPathTestVariable = [Environment]::GetEnvironmentVariable($ownedPathTestVariable, "Process")
 $testRegistryPath = "Software\HerdrInstallerTests-$([Guid]::NewGuid().ToString('N'))"
 $testEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testRegistryPath)
 if ($null -eq $testEnvironmentKey) {
@@ -64,22 +66,32 @@ if ($null -eq $testEnvironmentKey) {
 }
 try {
     [Environment]::SetEnvironmentVariable($pathTestVariable, "C:\expanded", "Process")
+    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, "C:\Herdr", "Process")
     $testEnvironmentKey.SetValue(
         "Path",
-        "%$pathTestVariable%\bin;C:\existing",
+        "C:\Herdr\releases\deleted;%$ownedPathTestVariable%\bin;C:\Herdr\bin;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old;C:\Herdr\releases\deleted",
         [Microsoft.Win32.RegistryValueKind]::ExpandString
     )
-    $pathChanged = Update-PathRegistryEntry -EnvironmentKey $testEnvironmentKey -Entry "C:\Herdr\bin"
+    $ownedEntries = @("C:\Herdr\bin", "C:\Herdr\current")
+    $pathChanged = Update-PathRegistryEntry `
+        -EnvironmentKey $testEnvironmentKey `
+        -Entry "C:\Herdr\releases\new" `
+        -OwnedEntriesToRemove $ownedEntries `
+        -OwnedEntryParentToRemove "C:\Herdr\releases"
     if (-not $pathChanged) {
         throw "installer PATH update reported no change"
     }
-    if (Update-PathRegistryEntry -EnvironmentKey $testEnvironmentKey -Entry "C:\Herdr\bin") {
+    if (Update-PathRegistryEntry `
+        -EnvironmentKey $testEnvironmentKey `
+        -Entry "C:\Herdr\releases\new" `
+        -OwnedEntriesToRemove $ownedEntries `
+        -OwnedEntryParentToRemove "C:\Herdr\releases") {
         throw "installer PATH update was not idempotent"
     }
 
     $options = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
     $rawPath = $testEnvironmentKey.GetValue("Path", $null, $options)
-    $expectedPath = "C:\Herdr\bin;%$pathTestVariable%\bin;C:\existing"
+    $expectedPath = "C:\Herdr\releases\new;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old"
     if ($rawPath -cne $expectedPath) {
         throw "installer changed raw PATH: expected '$expectedPath', got '$rawPath'"
     }
@@ -90,6 +102,7 @@ try {
     $testEnvironmentKey.Dispose()
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testRegistryPath, $false)
     [Environment]::SetEnvironmentVariable($pathTestVariable, $oldPathTestVariable, "Process")
+    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, $oldOwnedPathTestVariable, "Process")
 }
 
 $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
@@ -133,13 +146,34 @@ $stableManifest = @{
 } | ConvertTo-Json -Depth 5
 $previewManifestPath = Join-Path $webRoot "preview.json"
 $stableManifestPath = Join-Path $webRoot "latest.json"
+$customPreviewManifestPath = Join-Path $webRoot "candidate.json"
+$customPreviewManifest = $previewManifest | ConvertFrom-Json
+$customPreviewManifest.PSObject.Properties.Remove("channel")
 $previewManifest | Out-File -LiteralPath $previewManifestPath -Encoding utf8
 $legacyStableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
+$customPreviewManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $customPreviewManifestPath -Encoding utf8
 
 $server = $null
 $oldHerdrHome = $env:HERDR_HOME
 $oldInstallerUrl = $env:HERDR_INSTALLER_URL
 $oldProcessPath = $env:Path
+$registryOptions = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+$realUserEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+if ($null -eq $realUserEnvironmentKey) {
+    throw "unable to open the current user's environment registry key"
+}
+$realUserPathExisted = $realUserEnvironmentKey.GetValueNames() -contains "Path"
+$realUserPath = if ($realUserPathExisted) {
+    $realUserEnvironmentKey.GetValue("Path", $null, $registryOptions)
+} else {
+    $null
+}
+$realUserPathKind = if ($realUserPathExisted) {
+    $realUserEnvironmentKey.GetValueKind("Path")
+} else {
+    $null
+}
+$realUserEnvironmentKey.Dispose()
 try {
     $server = Start-Process python -ArgumentList @("-m", "http.server", "$port", "--bind", "127.0.0.1", "--directory", $webRoot) -PassThru -WindowStyle Hidden
     $env:HERDR_HOME = Join-Path $root "unused\..\home"
@@ -256,6 +290,39 @@ try {
     if ($null -eq $releaseDir) {
         throw "installer did not create a versioned release"
     }
+
+    $pathWithoutHerdr = @(
+        $env:Path.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries) |
+            Where-Object {
+                -not (Test-Path -LiteralPath (Join-Path $_ "herdr.exe") -PathType Leaf) -and
+                -not (Test-Path -LiteralPath (Join-Path $_ "herdr.cmd") -PathType Leaf)
+            }
+    ) -join ";"
+    $env:Path = $pathWithoutHerdr
+    if ($null -ne (Get-Command herdr -ErrorAction SilentlyContinue)) {
+        throw "test PATH still resolves Herdr before current-junction migration discovery"
+    }
+    $oldConfigPath = $env:HERDR_CONFIG_PATH
+    try {
+        $env:HERDR_CONFIG_PATH = Join-Path $root "preview-config.toml"
+        "[update]`nchannel = `"preview`"" | Out-File -LiteralPath $env:HERDR_CONFIG_PATH -Encoding ascii
+        & $installerPath `
+            -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
+            -InstallDir $installDir `
+            -ExpectedBuildId "installer-test"
+    } finally {
+        if ($null -eq $oldConfigPath) {
+            Remove-Item Env:HERDR_CONFIG_PATH -ErrorAction SilentlyContinue
+        } else {
+            $env:HERDR_CONFIG_PATH = $oldConfigPath
+        }
+    }
+    if ($null -eq (Get-ChildItem -LiteralPath $releasesDir -Directory |
+        Where-Object { $_.Name.StartsWith("0.0.0-preview.installer-test-") } |
+        Select-Object -First 1)) {
+        throw "installer did not discover the preview channel through the current junction"
+    }
+
     Remove-Item -LiteralPath (Join-Path $releaseDir.FullName "conpty\conpty.dll") -Force
 
     $badManifest = $previewManifest | ConvertFrom-Json
@@ -429,16 +496,72 @@ try {
         throw "installer accepted a manifest that did not match the updater-selected build"
     }
 
+    $currentDir = Join-Path $herdrHome "packages\standalone\current"
+    $unrelatedPathOne = Join-Path $env:SystemRoot "System32"
+    $unrelatedPathTwo = Join-Path $root "unrelated-two"
+    New-Item -ItemType Directory -Force -Path $unrelatedPathTwo | Out-Null
+    $staleReleasePath = Join-Path $releasesDir "0.0.0-deleted-x86_64-pc-windows-msvc"
+    $nestedReleasePath = Join-Path $releaseDir.FullName "nested"
+    $similarReleasePath = "$releasesDir-old\old"
+    $pathBeforeStable = "$installDir;$staleReleasePath;$($releaseDir.FullName);$currentDir;$unrelatedPathOne;$nestedReleasePath;$similarReleasePath;$installDir;$unrelatedPathTwo"
+    $realUserEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try {
+        $realUserEnvironmentKey.SetValue("Path", $pathBeforeStable, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally {
+        $realUserEnvironmentKey.Dispose()
+    }
+    $env:Path = $pathBeforeStable
+
     $stableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
     & "$PSScriptRoot\..\distribution\install.ps1" `
         -Channel stable `
         -ManifestUrl $stableManifestUrl `
-        -InstallDir $installDir
+        -InstallDir $installDir `
+        -Retain 1
     $stableReleaseDir = Get-ChildItem -LiteralPath (Join-Path $herdrHome "packages\standalone\releases") -Directory |
         Where-Object { $_.Name.StartsWith("0.0.1-") } |
         Select-Object -First 1
     if ($null -eq $stableReleaseDir) {
         throw "installer did not install the stable Windows package"
+    }
+    if (Test-Path -LiteralPath $releaseDir.FullName) {
+        throw "installer did not prune the old concrete preview release"
+    }
+    $expectedPath = "$($stableReleaseDir.FullName);$unrelatedPathOne;$nestedReleasePath;$similarReleasePath;$unrelatedPathTwo"
+    $realUserEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment")
+    try {
+        $actualPath = $realUserEnvironmentKey.GetValue("Path", $null, $registryOptions)
+        if ($actualPath -cne $expectedPath -or $env:Path -cne $expectedPath) {
+            throw "installer did not replace managed PATH entries while preserving unrelated entries"
+        }
+        if ($realUserEnvironmentKey.GetValueKind("Path") -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+            throw "installer changed the real PATH registry value kind"
+        }
+    } finally {
+        $realUserEnvironmentKey.Dispose()
+    }
+    $pathDirectory = Get-Item -LiteralPath ($env:Path.Split(";")[0]) -Force
+    if (($pathDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        -not $pathDirectory.FullName.Equals($stableReleaseDir.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "installer PATH does not start with the active concrete release directory"
+    }
+    $resolvedHerdr = Get-Command herdr -CommandType Application -ErrorAction Stop
+    if (-not $resolvedHerdr.Source.Equals(
+        (Join-Path $stableReleaseDir.FullName "herdr.exe"),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "installed command does not resolve through the active concrete release"
+    }
+    & herdr --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "installed command failed from the concrete release PATH entry"
+    }
+    foreach ($junction in @($installDir, $currentDir)) {
+        $junctionItem = Get-Item -LiteralPath $junction -Force
+        if (-not ($junctionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            -not ([string]$junctionItem.Target).Equals($stableReleaseDir.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "installer did not preserve compatibility junction $junction"
+        }
     }
     foreach ($relative in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $installDir $relative) -PathType Leaf)) {
@@ -446,34 +569,40 @@ try {
         }
     }
 
-    $customPreviewManifestPath = Join-Path $webRoot "candidate.json"
-    $customPreviewManifest = $previewManifest | ConvertFrom-Json
-    $customPreviewManifest.PSObject.Properties.Remove("channel")
-    $customPreviewManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $customPreviewManifestPath -Encoding utf8
     $fakeBin = Join-Path $root "fake-existing"
+    $fakeInvocationMarker = Join-Path $root "fake-existing-invoked"
     New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
-    @'
+    @"
 @echo off
+echo invoked>"$fakeInvocationMarker"
 if "%1"=="channel" if "%2"=="show" (
   echo preview
   exit /b 0
 )
 exit /b 1
-'@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
+"@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
 
     $preserveHome = Join-Path $root "preserve-home"
     $preserveBin = Join-Path $root "preserve-bin"
     $env:HERDR_HOME = $preserveHome
     $env:Path = "$fakeBin;$oldProcessPath"
-    & "$PSScriptRoot\..\distribution\install.ps1" `
-        -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
-        -InstallDir $preserveBin `
-        -ExpectedBuildId "installer-test"
-    $preservedPreview = Get-ChildItem -LiteralPath (Join-Path $preserveHome "packages\standalone\releases") -Directory |
-        Where-Object { $_.Name.StartsWith("0.0.0-preview.installer-test-") } |
-        Select-Object -First 1
-    if ($null -eq $preservedPreview) {
-        throw "installer did not preserve the existing preview channel"
+    $unrecognizedCommandRejected = $false
+    try {
+        & "$PSScriptRoot\..\distribution\install.ps1" `
+            -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
+            -InstallDir $preserveBin `
+            -ExpectedBuildId "installer-test"
+    } catch {
+        if ($_.Exception.Message -notlike "Refusing to run unrecognized Herdr command*") {
+            throw
+        }
+        $unrecognizedCommandRejected = $true
+    }
+    if (-not $unrecognizedCommandRejected) {
+        throw "installer accepted implicit channel detection through an unrecognized command"
+    }
+    if (Test-Path -LiteralPath $fakeInvocationMarker) {
+        throw "installer invoked an unrecognized command during implicit channel detection"
     }
 
     & "$PSScriptRoot\..\distribution\install.ps1" `
@@ -484,7 +613,10 @@ exit /b 1
         Where-Object { $_.Name.StartsWith("0.0.1-") } |
         Select-Object -First 1
     if ($null -eq $explicitStable) {
-        throw "explicit stable channel did not override the existing preview channel"
+        throw "explicit stable channel did not install past the unrecognized command"
+    }
+    if (Test-Path -LiteralPath $fakeInvocationMarker) {
+        throw "installer invoked an unrecognized command despite an explicit channel"
     }
 } finally {
     $env:HERDR_HOME = $oldHerdrHome
@@ -492,6 +624,16 @@ exit /b 1
     $env:Path = $oldProcessPath
     if ($null -ne $server -and -not $server.HasExited) {
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+    }
+    $realUserEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try {
+        if ($realUserPathExisted) {
+            $realUserEnvironmentKey.SetValue("Path", $realUserPath, $realUserPathKind)
+        } else {
+            $realUserEnvironmentKey.DeleteValue("Path", $false)
+        }
+    } finally {
+        $realUserEnvironmentKey.Dispose()
     }
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -359,7 +359,7 @@ impl App {
         event_hub: crate::api::EventHub,
     ) -> Self {
         let (prefix_code, prefix_mods) = config.prefix_key();
-        crate::kitty_graphics::set_enabled(config.experimental.kitty_graphics);
+        crate::kitty_graphics::set_enabled(config.kitty_graphics_enabled());
         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
         let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
@@ -494,7 +494,7 @@ impl App {
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
             cjk_ime_agents: parse_cjk_ime_agents(&config.experimental.cjk_ime_agents),
             cjk_ime_cursor_shape: config.experimental.cjk_ime_cursor_shape.to_decscusr(),
-            kitty_graphics_enabled: config.experimental.kitty_graphics,
+            kitty_graphics_enabled: config.kitty_graphics_enabled(),
             default_shell: config.terminal.default_shell.clone(),
             shell_mode: config.terminal.shell_mode,
             new_terminal_cwd: config.terminal.new_cwd.clone(),
@@ -841,14 +841,18 @@ impl App {
             }
         }
 
+        let graphics_config_valid = !invalid_section("terminal")
+            && (config.terminal.kitty_graphics.is_some() || !invalid_section("experimental"));
+        if graphics_config_valid
+            && config.kitty_graphics_enabled() != self.state.kitty_graphics_enabled
+        {
+            diagnostics.push(
+                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                    .into(),
+            );
+        }
+
         if !invalid_section("experimental") {
-            let was_kitty_graphics_enabled = self.state.kitty_graphics_enabled;
-            self.state.kitty_graphics_enabled = config.experimental.kitty_graphics;
-            crate::kitty_graphics::set_enabled(config.experimental.kitty_graphics);
-            if was_kitty_graphics_enabled && !config.experimental.kitty_graphics {
-                self.pane_graphics.clear();
-                self.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
-            }
             self.state.reveal_hidden_cursor_for_cjk_ime =
                 config.experimental.reveal_hidden_cursor_for_cjk_ime;
             self.state.cjk_ime_agent_filter_configured =
@@ -1716,6 +1720,33 @@ mod tests {
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
         assert_eq!(toast.title, "reloaded config");
         assert_eq!(toast.context, "using config.toml");
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_keeps_kitty_graphics_until_restart() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-kitty-graphics");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[terminal]\nkitty_graphics = false\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        assert!(app.state.kitty_graphics_enabled);
+
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(app.state.kitty_graphics_enabled);
+        assert_eq!(
+            report.diagnostics,
+            vec![
+                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                    .to_owned()
+            ]
+        );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -2782,9 +2813,9 @@ mod tests {
             id: "req_agent_start_input".into(),
             method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
                 name: "worker".into(),
-                kind: "pi".into(),
+                kind: "codex".into(),
                 pane_id: pane_id.clone(),
-                args: Vec::new(),
+                args: vec!["resume".into(), "codex-session".into()],
                 timeout_ms: Some(4_000),
             }),
         };
@@ -2792,6 +2823,9 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(response["error"]["code"], "agent_start_input_failed");
         assert_eq!(app.state.terminals[&terminal_id].agent_name, None);
+        assert!(app.state.terminals[&terminal_id]
+            .persisted_agent_session
+            .is_none());
         assert_eq!(
             app.state.terminals[&terminal_id].manual_label.as_deref(),
             Some("shell")
@@ -2804,6 +2838,15 @@ mod tests {
         let retry = app.handle_api_request(request());
         let retry: serde_json::Value = serde_json::from_str(&retry).unwrap();
         assert_eq!(retry["result"]["type"], "agent_started");
+        assert_eq!(
+            retry["result"]["agent"]["agent_session"],
+            serde_json::json!({
+                "source": "herdr:codex",
+                "agent": "codex",
+                "kind": "id",
+                "value": "codex-session",
+            })
+        );
         assert_eq!(
             app.state.terminals[&terminal_id].agent_name.as_deref(),
             Some("worker")

@@ -258,6 +258,8 @@ pub struct TerminalConfig {
     pub shell_mode: ShellModeConfig,
     /// CWD policy for new interactive panes, tabs, and workspaces.
     pub new_cwd: NewTerminalCwdConfig,
+    /// Render Kitty graphics in compatible outer terminals. Default: true.
+    pub kitty_graphics: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -978,8 +980,8 @@ impl Default for RemoteConfig {
 pub struct ExperimentalConfig {
     /// Allow launching herdr inside an existing herdr pane. Default: false.
     pub allow_nested: bool,
-    /// Experimental local Kitty graphics rendering for attached clients. Default: false.
-    pub kitty_graphics: bool,
+    /// Deprecated compatibility key for `terminal.kitty_graphics`.
+    pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.
     pub pane_history: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
@@ -1911,16 +1913,41 @@ pane_history = true
     }
 
     #[test]
-    fn kitty_graphics_default_off_and_parse() {
-        let config = Config::default();
-        assert!(!config.experimental.kitty_graphics);
+    fn kitty_graphics_default_on_with_stable_opt_out() {
+        assert!(Config::default().kitty_graphics_enabled());
 
-        let toml = r#"
+        let config: Config = toml::from_str(
+            r#"
+[terminal]
+kitty_graphics = false
+"#,
+        )
+        .unwrap();
+        assert!(!config.kitty_graphics_enabled());
+    }
+
+    #[test]
+    fn legacy_experimental_kitty_graphics_setting_remains_compatible() {
+        let disabled: Config = toml::from_str(
+            r#"
+[experimental]
+kitty_graphics = false
+"#,
+        )
+        .unwrap();
+        assert!(!disabled.kitty_graphics_enabled());
+
+        let stable_setting_wins: Config = toml::from_str(
+            r#"
+[terminal]
+kitty_graphics = false
+
 [experimental]
 kitty_graphics = true
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.experimental.kitty_graphics);
+"#,
+        )
+        .unwrap();
+        assert!(!stable_setting_wins.kitty_graphics_enabled());
     }
 
     #[test]
@@ -1934,7 +1961,8 @@ switch_ascii_input_source_in_prefix = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.experimental.allow_nested);
-        assert!(config.experimental.kitty_graphics);
+        assert_eq!(config.experimental.kitty_graphics, Some(true));
+        assert!(config.kitty_graphics_enabled());
         assert!(config.experimental.pane_history);
         assert!(config.experimental.switch_ascii_input_source_in_prefix);
     }

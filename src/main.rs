@@ -114,6 +114,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # "current" for Herdr's process directory, or a fixed path such as "~/Projects".
 # new_cwd = "follow"
 
+# Render pane images in Kitty graphics-compatible outer terminals.
+# kitty_graphics = true
+
 [update]
 # Update channel used by background version checks and `herdr update`.
 # Stable builds default to "stable". Windows preview builds default to "preview"
@@ -400,9 +403,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.
 # allow_nested = false
-# Experimental local Kitty graphics rendering for attached clients.
-# Requires a Kitty graphics-compatible outer terminal.
-# kitty_graphics = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to

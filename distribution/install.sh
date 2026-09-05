@@ -21,6 +21,10 @@ main() {
         *)      err "unsupported OS: $OS" ;;
     esac
 
+    if [ "$OS" = "Linux" ] && [ "$(uname -o 2>/dev/null || true)" = "Android" ]; then
+        err "Android/Termux is not currently supported by Herdr release binaries. SSH to a supported host instead: https://herdr.dev/docs/how-to-work/#work-from-your-phone"
+    fi
+
     ARCH="$(uname -m)"
     case "$ARCH" in
         x86_64|amd64)   arch="x86_64" ;;

@@ -798,7 +798,7 @@ mod tests {
             .send(super::super::error_response_json(
                 open.request.id,
                 "feature_disabled",
-                "pane graphics require experimental.kitty_graphics".into(),
+                "pane graphics are disabled by terminal.kitty_graphics".into(),
             ))
             .unwrap();
 

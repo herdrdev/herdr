@@ -175,9 +175,7 @@ herdr integration install devin
 
 The hook reports native session identity from Devin session, prompt, tool-use, permission, and stop events. Devin state still comes from Herdr's screen manifest and OSC detection because Devin hooks do not emit a reliable state transition after every permission cancellation or user interrupt.
 
-On Linux and macOS, Herdr uses `~/.config/devin` by default, or `$XDG_CONFIG_HOME/devin` when `XDG_CONFIG_HOME` is set. The Devin config directory must already exist. Install writes `herdr-agent-state.sh` and updates `config.json` with Herdr hook entries. The hook refreshes the session reference while Devin runs. Uninstall removes Herdr entries from `config.json` and deletes the hook script.
-
-Devin integration installation is not currently supported on Windows. Devin stores its Windows config under `%APPDATA%\devin`, which Herdr does not yet resolve. Native process and screen detection still work without the hook.
+Herdr uses `$XDG_CONFIG_HOME/devin` when `XDG_CONFIG_HOME` is set. Otherwise, it uses `~/.config/devin` on Linux and macOS or `%APPDATA%\devin` on Windows. The Devin config directory must already exist. Install writes `herdr-agent-state.sh` on Unix or `herdr-agent-state.ps1` on Windows and updates `config.json` with Herdr hook entries. The hook refreshes the session reference while Devin runs. Uninstall removes Herdr entries from `config.json` and deletes the hook script.
 
 Herdr resumes stored Devin sessions with `devin --resume <id>`. Native screen manifest detection remains the state authority whether or not the hook is installed.
 

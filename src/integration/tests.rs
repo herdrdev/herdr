@@ -134,6 +134,8 @@ fn clear_integration_path_env() {
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
     std::env::remove_var("XDG_CONFIG_HOME");
+    #[cfg(windows)]
+    std::env::remove_var("APPDATA");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(QWEN_HOME_ENV_VAR);
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
@@ -206,6 +208,36 @@ fn home_dir_uses_userprofile_when_home_is_missing() {
         std::env::set_var("USERPROFILE", userprofile);
     } else {
         std::env::remove_var("USERPROFILE");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_devin_dir_uses_appdata_without_xdg_override() {
+    let previous_appdata;
+    {
+        let _lock = integration_env_lock();
+        previous_appdata = std::env::var_os("APPDATA");
+        let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let base = unique_base();
+        let appdata = base.join("appdata");
+        let xdg = base.join("xdg");
+        std::env::set_var("APPDATA", &appdata);
+
+        assert_eq!(devin_dir().unwrap(), appdata.join("devin"));
+
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        assert_eq!(devin_dir().unwrap(), xdg.join("devin"));
+
+        if let Some(value) = previous_xdg {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+    {
+        let _lock = integration_env_lock();
+        assert_eq!(std::env::var_os("APPDATA"), previous_appdata);
     }
 }
 

@@ -95,6 +95,13 @@ impl Config {
         self.onboarding.unwrap_or(true)
     }
 
+    pub fn kitty_graphics_enabled(&self) -> bool {
+        self.terminal
+            .kitty_graphics
+            .or(self.experimental.kitty_graphics)
+            .unwrap_or(true)
+    }
+
     pub fn prefix_key(&self) -> (KeyCode, KeyModifiers) {
         self.validated_keybinds().1
     }
