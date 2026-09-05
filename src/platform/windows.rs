@@ -30,7 +30,7 @@ use windows_sys::{
     Win32::{
         Foundation::{
             CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
-            NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
+            MAX_PATH, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
         Security::SECURITY_ATTRIBUTES,
@@ -103,6 +103,44 @@ pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
 
 pub(crate) fn prepare_paste_text_for_pty_platform(text: String) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+pub(crate) fn plugin_runtime_path_platform(path: &std::path::Path) -> PathBuf {
+    use std::os::windows::ffi::OsStrExt;
+
+    let Some(candidate) = standard_windows_path(path) else {
+        return path.to_path_buf();
+    };
+    // Rust can canonicalize a long standard path by adding its own verbatim prefix, but native
+    // process consumers still need the original prefix when the plugin root exceeds MAX_PATH.
+    if candidate.join("").as_os_str().encode_wide().count() >= MAX_PATH as usize {
+        return path.to_path_buf();
+    }
+    match candidate.canonicalize() {
+        Ok(canonical) if canonical == path => candidate,
+        _ => path.to_path_buf(),
+    }
+}
+
+fn standard_windows_path(path: &std::path::Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    let mut candidate = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut candidate = PathBuf::from(r"\\");
+            candidate.push(server);
+            candidate.push(share);
+            candidate
+        }
+        _ => return None,
+    };
+    candidate.push(components.as_path());
+    Some(candidate)
 }
 
 /// Resolves against the current foreground layout because asynchronous console
@@ -2568,6 +2606,73 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn windows_standard_plugin_runtime_paths_drop_only_disk_and_unc_verbatim_prefixes() {
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(r"\\?\C:\plugins\example")),
+            Some(std::path::PathBuf::from(r"C:\plugins\example"))
+        );
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(
+                r"\\?\UNC\server\share\plugins\example"
+            )),
+            Some(std::path::PathBuf::from(r"\\server\share\plugins\example"))
+        );
+        assert_eq!(
+            super::standard_windows_path(std::path::Path::new(
+                r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\plugins"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_plugin_runtime_path_keeps_extended_path_when_normal_form_is_not_equivalent() {
+        let path = std::path::PathBuf::from(format!(
+            r"\\?\C:\herdr-missing-plugin-runtime-path-{}",
+            std::process::id()
+        ));
+        assert_eq!(super::plugin_runtime_path_platform(&path), path);
+    }
+
+    #[test]
+    fn windows_plugin_runtime_path_keeps_verbatim_root_beyond_max_path() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let base = std::env::temp_dir().join(format!(
+            "herdr-plugin-runtime-path-limit-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&base).expect("create test base");
+        let extended_base = base.canonicalize().expect("canonicalize test base");
+        let normal_base = super::standard_windows_path(&extended_base)
+            .expect("test base has a standard drive path");
+        let normal_base_len = normal_base.as_os_str().encode_wide().count();
+        let root_at_length = |length| {
+            let component_len = length - normal_base_len - 1;
+            let path = extended_base.join("é".repeat(component_len));
+            fs::create_dir(&path).expect("create length-boundary test root");
+            path.canonicalize()
+                .expect("canonicalize length-boundary test root")
+        };
+
+        let at_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 2);
+        let at_limit_normal =
+            super::standard_windows_path(&at_limit).expect("convert root at MAX_PATH boundary");
+        assert_eq!(
+            super::plugin_runtime_path_platform(&at_limit),
+            at_limit_normal
+        );
+
+        let beyond_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 1);
+        assert_eq!(
+            super::plugin_runtime_path_platform(&beyond_limit),
+            beyond_limit
+        );
+
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
 
     #[test]
     fn paste_text_uses_windows_line_endings() {

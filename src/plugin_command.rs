@@ -1,24 +1,28 @@
-use std::ffi::{OsStr, OsString};
-use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) fn command_for_argv_in_dir(program: &str, args: &[String], cwd: &Path) -> Command {
     let program = program_for_cwd(program, cwd);
-    let mut command = command_for_program(&program);
+    let mut command = command_for_program(program.as_os_str());
     command.args(args).current_dir(cwd);
     command
 }
 
-fn program_for_cwd(program: &str, cwd: &Path) -> OsString {
+pub(crate) fn program_for_cwd(program: &str, cwd: &Path) -> PathBuf {
     let path = Path::new(program);
     let has_separator = program.contains('/') || (cfg!(windows) && program.contains('\\'));
-    if path.is_relative() && has_separator {
+    if path.is_relative() && (has_separator || (cfg!(windows) && cwd.join(path).is_file())) {
         let relative = path.strip_prefix(Path::new(".")).unwrap_or(path);
-        cwd.join(relative).into_os_string()
+        #[cfg(windows)]
+        if is_windows_batch_file_name(path.as_os_str()) {
+            return cwd.join(relative);
+        }
+        #[cfg(windows)]
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        cwd.join(relative)
     } else {
-        path.as_os_str().to_os_string()
+        path.to_path_buf()
     }
 }
 
@@ -139,11 +143,8 @@ mod tests {
     fn resolves_explicit_relative_program_against_working_directory() {
         let cwd = Path::new("plugin-root");
 
-        assert_eq!(
-            program_for_cwd("./bin/tool", cwd),
-            cwd.join("bin/tool").into_os_string()
-        );
-        assert_eq!(program_for_cwd("tool", cwd), OsString::from("tool"));
+        assert_eq!(program_for_cwd("./bin/tool", cwd), cwd.join("bin/tool"));
+        assert_eq!(program_for_cwd("tool", cwd), PathBuf::from("tool"));
     }
 
     #[test]
@@ -157,24 +158,29 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_batch_command_captures_output() {
-        let path = std::env::temp_dir().join(format!(
-            "herdr-plugin-command-output-{}.cmd",
+        let root = std::env::temp_dir().join(format!(
+            "herdr plugin command output {}",
             std::process::id()
         ));
+        std::fs::create_dir_all(&root).expect("create batch fixture directory");
+        let path = root.join("capture.cmd");
         std::fs::write(&path, "@echo off\r\necho plugin-%1\r\n").expect("write batch fixture");
-        let cwd = path.parent().expect("batch fixture parent");
-
-        let output =
-            command_for_argv_in_dir(&path.display().to_string(), &["ready".to_string()], cwd)
+        for program in [
+            path.display().to_string(),
+            "./capture.cmd".to_string(),
+            "capture.cmd".to_string(),
+        ] {
+            let output = command_for_argv_in_dir(&program, &["ready".to_string()], &root)
                 .output()
                 .expect("run batch fixture");
-        let _ = std::fs::remove_file(&path);
-
-        assert!(output.status.success(), "{output:?}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "plugin-ready"
-        );
+            assert!(output.status.success(), "{program}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "plugin-ready",
+                "{program}"
+            );
+        }
+        std::fs::remove_dir_all(root).expect("remove batch fixture directory");
     }
 
     #[cfg(windows)]

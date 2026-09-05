@@ -440,7 +440,7 @@ impl App {
         let Some(entrypoint) = normalize_action_id(&params.entrypoint) else {
             return encode_error(id, "invalid_plugin_entrypoint", "invalid entrypoint id");
         };
-        let Some(pane) = plugin
+        let Some(mut pane) = plugin
             .panes
             .iter()
             .find(|pane| pane.id == entrypoint)
@@ -458,6 +458,12 @@ impl App {
         ) {
             return encode_error(id, code, message);
         }
+        pane.command[0] = crate::plugin_command::program_for_cwd(
+            &pane.command[0],
+            std::path::Path::new(&plugin.plugin_root),
+        )
+        .display()
+        .to_string();
         let placement = params.placement.unwrap_or(pane.placement);
         if placement != PluginPanePlacement::Popup
             && (params.width.is_some() || params.height.is_some())
@@ -987,7 +993,16 @@ platforms = ["linux", "macos", "windows"]
         assert_eq!(plugin.plugin_id, "example.worktree-bootstrap");
         assert_eq!(plugin.name, "Worktree Bootstrap");
         assert_eq!(plugin.version, "0.1.0");
-        assert_eq!(plugin.plugin_root, canonical_path_string(&root));
+        assert_eq!(
+            plugin.manifest_path,
+            canonical_path_string(&root.join("herdr-plugin.toml"))
+        );
+        assert_eq!(
+            plugin.plugin_root,
+            crate::platform::plugin_runtime_path(&root.canonicalize().unwrap())
+                .display()
+                .to_string()
+        );
         assert!(plugin.enabled);
         assert_eq!(plugin.build.len(), 1);
         assert_eq!(plugin.build[0].command, ["bun", "install"]);
@@ -1464,6 +1479,163 @@ platforms = ["linux", "macos"]
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["error"]["code"], "invalid_params");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_plugin_pane_commands_resolve_from_plugin_root_with_cwd_override() {
+        use std::os::windows::ffi::OsStrExt;
+
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-pane-paths")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+
+        let root = unique_temp_path("plugin-pane-paths");
+        let child_cwd = root.join("child-cwd");
+        std::fs::create_dir_all(&child_cwd).unwrap();
+        let cleanup_root = root.canonicalize().unwrap();
+        let tool = root.join("tool.exe");
+        let long_where_relative = format!("bin/{}/where.exe", "x".repeat(220));
+        let long_where = root.join(&long_where_relative);
+        std::fs::create_dir_all(long_where.parent().unwrap()).unwrap();
+        let shell = std::env::var_os("ComSpec").expect("ComSpec");
+        std::fs::copy(&shell, &tool).unwrap();
+        let where_exe = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/where.exe");
+        std::fs::copy(where_exe, &long_where).unwrap();
+        let where_probe = "herdr-long-path-probe.exe";
+        std::fs::write(child_cwd.join(where_probe), b"").unwrap();
+        assert!(
+            root.as_os_str().encode_wide().count()
+                < windows_sys::Win32::Foundation::MAX_PATH as usize
+        );
+        assert!(
+            long_where.as_os_str().encode_wide().count()
+                >= windows_sys::Win32::Foundation::MAX_PATH as usize
+        );
+        let script = "@echo off\r\n(echo %1&cd)>capture-%1.txt\r\n";
+        std::fs::write(root.join("slot.cmd"), script).unwrap();
+        std::fs::write(child_cwd.join("slot.cmd"), script).unwrap();
+        write_manifest_content(
+            &root,
+            &format!(
+                r#"
+id = "example.pane-paths"
+name = "Pane Paths"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+platforms = ["windows"]
+
+[[panes]]
+id = "explicit"
+title = "Explicit"
+command = ["./tool.exe", "/d", "/c", "slot.cmd", "explicit"]
+
+[[panes]]
+id = "bare"
+title = "Bare"
+command = ["tool.exe", "/d", "/c", "slot.cmd", "bare"]
+
+[[panes]]
+id = "path"
+title = "Path"
+command = ["cmd.exe", "/d", "/c", "slot.cmd", "path"]
+
+[[panes]]
+id = "absolute"
+title = "Absolute"
+command = ['{}', "/d", "/c", "slot.cmd", "absolute"]
+
+[[panes]]
+id = "long"
+title = "Long executable"
+command = ['./{}', "{}"]
+
+[[panes]]
+id = "default"
+title = "Default cwd"
+command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
+"#,
+                tool.display(),
+                long_where_relative,
+                where_probe
+            ),
+        );
+        link_manifest(&mut app, &root);
+
+        for (entrypoint, cwd) in [
+            ("explicit", Some(&child_cwd)),
+            ("bare", Some(&child_cwd)),
+            ("path", Some(&child_cwd)),
+            ("absolute", Some(&child_cwd)),
+            ("long", Some(&child_cwd)),
+            ("default", None),
+        ] {
+            let expected_cwd = cwd.unwrap_or(&root);
+            let open = app.handle_api_request(Request {
+                id: format!("pane-open-{entrypoint}"),
+                method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                    plugin_id: "example.pane-paths".into(),
+                    entrypoint: entrypoint.into(),
+                    placement: Some(PluginPanePlacement::Split),
+                    width: None,
+                    height: None,
+                    workspace_id: None,
+                    target_pane_id: None,
+                    direction: None,
+                    cwd: cwd.map(|path| path.display().to_string()),
+                    focus: false,
+                    env: std::collections::HashMap::new(),
+                }),
+            });
+            let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
+                panic!("failed to open {entrypoint} plugin pane: {open}");
+            };
+            if entrypoint == "long" {
+                let Some((ws_idx, pane_id)) = app.parse_pane_id(&plugin_pane.pane.pane_id) else {
+                    panic!("opened pane id should parse");
+                };
+                let runtime = app
+                    .state
+                    .runtime_for_pane_in_workspace(&app.terminal_runtimes, ws_idx, pane_id)
+                    .expect("long executable pane runtime");
+                let expected = child_cwd.join(where_probe).display().to_string();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let text = runtime.recent_unwrapped_text(20);
+                    if text
+                        .lines()
+                        .any(|line| line.trim().eq_ignore_ascii_case(&expected))
+                    {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "long where.exe output missing from pane: {text:?}"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                continue;
+            }
+            let capture = read_capture_when_ready(
+                &expected_cwd.join(format!("capture-{entrypoint}.txt")),
+                || {},
+            );
+            let mut lines = capture.lines();
+            assert_eq!(lines.next(), Some(entrypoint));
+            assert_eq!(
+                lines.next(),
+                Some(expected_cwd.display().to_string().as_str())
+            );
+        }
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        std::fs::remove_dir_all(cleanup_root).unwrap();
     }
 
     #[cfg(unix)]

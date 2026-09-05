@@ -128,15 +128,13 @@ pub(crate) fn load_plugin_manifest(
     let manifest_path = manifest_path
         .canonicalize()
         .map_err(|err| ("plugin_manifest_not_found", err.to_string()))?;
-    let plugin_root = manifest_path
-        .parent()
-        .ok_or_else(|| {
+    let plugin_root =
+        crate::platform::plugin_runtime_path(manifest_path.parent().ok_or_else(|| {
             (
                 "invalid_plugin_manifest_path",
                 "manifest path has no parent directory".to_string(),
             )
-        })?
-        .to_path_buf();
+        })?);
     let content = std::fs::read_to_string(&manifest_path)
         .map_err(|err| ("plugin_manifest_read_failed", err.to_string()))?;
     let raw: RawPluginManifest = toml::from_str(&content)
