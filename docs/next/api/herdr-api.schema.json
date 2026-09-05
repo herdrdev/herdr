@@ -3198,6 +3198,33 @@
           ],
           "type": "object"
         },
+        "PaneSelectionReadCheckedParams": {
+          "properties": {
+            "anchor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "cursor": {
+              "$ref": "#/schemas/request/$defs/PaneTextPoint"
+            },
+            "expected_cells": {
+              "description": "Selected cell symbols in reading order, including empty wide-character tails.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "anchor",
+            "cursor",
+            "expected_cells"
+          ],
+          "type": "object"
+        },
         "PaneSelectionReadParams": {
           "properties": {
             "anchor": {
@@ -5703,6 +5730,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneSelectionReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.selection.read_checked",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneSelectionReadCheckedParams"
             }
           },
           "required": [

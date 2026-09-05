@@ -4,7 +4,7 @@ pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 
-fn pane_surface_row<'a>(
+pub(super) fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,
     pane: &crate::protocol::PaneSurfacePane,
     absolute_row: u32,
@@ -283,7 +283,6 @@ pub(crate) enum ClientShellAction {
         request: Box<crate::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
-    Request(ClientMessage),
     OpenSafeWebUrl(String),
     ReplayMouse(Vec<crossterm::event::MouseEvent>),
     Keybind(crate::input::KeybindAction),
@@ -657,9 +656,7 @@ pub(super) enum PendingEndpointKind {
     WorktreeRemove {
         forced: bool,
     },
-    SelectionCopy {
-        fallback: Option<ClientMessage>,
-    },
+    SelectionCopy,
     PaneScroll {
         pane_id: String,
         serial: u64,

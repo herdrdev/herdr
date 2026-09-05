@@ -1,6 +1,54 @@
 use super::*;
 
 impl ClientShellState {
+    pub(super) fn request_retained_selection_copy(&mut self, outcome: &mut ClientShellInput) {
+        let checked = (|| {
+            let selection = self.selection.as_ref()?;
+            let surface = self.pane_surface.as_ref()?;
+            let pane = surface
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == selection.pane_id)?;
+            let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
+            let mut expected_cells = Vec::new();
+            for row in start_row..=end_row {
+                let first = if row == start_row { start_col } else { 0 };
+                let last = if row == end_row {
+                    end_col
+                } else {
+                    pane.inner_rect.width.checked_sub(1)?
+                };
+                let cells = pane_surface_row(surface, pane, row)?
+                    .get(usize::from(first)..=usize::from(last))?;
+                expected_cells.extend(cells.iter().map(|cell| cell.symbol.clone()));
+            }
+            Some(crate::api::schema::Method::PaneSelectionReadChecked(
+                crate::api::schema::PaneSelectionReadCheckedParams {
+                    pane_id: selection.pane_id.clone(),
+                    anchor: crate::api::schema::PaneTextPoint {
+                        row: start_row,
+                        col: start_col,
+                    },
+                    cursor: crate::api::schema::PaneTextPoint {
+                        row: end_row,
+                        col: end_col,
+                    },
+                    expected_cells,
+                },
+            ))
+        })();
+        if let Some(method) = checked.filter(|method| self.supports_endpoint_method(method)) {
+            self.push_endpoint_method_with_kind(
+                method,
+                PendingEndpointKind::SelectionCopy,
+                outcome,
+            );
+        } else {
+            // Older endpoints and ranges beyond the retained surface still require an exact revision.
+            self.request_selection_copy(outcome);
+        }
+    }
+
     pub(super) fn record_binding(
         &mut self,
         binding: crate::input::KeybindMatch,
@@ -245,45 +293,21 @@ impl ClientShellState {
     }
 
     pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput) {
-        self.request_selection_copy_with_fallback(outcome, None);
-    }
-
-    pub(super) fn request_selection_copy_with_fallback(
-        &mut self,
-        outcome: &mut ClientShellInput,
-        fallback_key: Option<crate::input::TerminalKey>,
-    ) {
+        let Some(content_revision) = self.selection.as_ref().and_then(|selection| {
+            self.pane_surface
+                .as_ref()?
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == selection.pane_id)
+                .map(|pane| pane.content_revision)
+        }) else {
+            return;
+        };
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
         let pane_id = selection.pane_id.clone();
-        let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map(|pane| pane.content_revision);
         let (anchor, cursor) = selection.ordered_cells();
-        let fallback = fallback_key.and_then(|key| {
-            let press = ClientPaneInputEvent::from_terminal_key(key.clone())?;
-            let tracks_release = matches!(
-                &press,
-                ClientPaneInputEvent::Key {
-                    tracks_release: true,
-                    ..
-                }
-            );
-            let mut message =
-                super::target_event_message(ClientInputTarget::Pane(pane_id.clone()), press);
-            if tracks_release {
-                let release = ClientPaneInputEvent::from_terminal_key(
-                    key.with_kind(crossterm::event::KeyEventKind::Release),
-                )?;
-                if let ClientMessage::ClientShellPaneInput { events, .. } = &mut message {
-                    events.push(release);
-                }
-            }
-            Some(message)
-        });
         self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneSelectionRead(
                 crate::api::schema::PaneSelectionReadParams {
@@ -296,10 +320,10 @@ impl ClientShellState {
                         row: cursor.0,
                         col: cursor.1,
                     },
-                    content_revision,
+                    content_revision: Some(content_revision),
                 },
             ),
-            PendingEndpointKind::SelectionCopy { fallback },
+            PendingEndpointKind::SelectionCopy,
             outcome,
         );
     }
@@ -588,13 +612,7 @@ impl ClientShellState {
                 let repaint = self.complete_pane_scroll(pane_id, serial, result, &mut outcome);
                 return (repaint, outcome.actions);
             }
-            PendingEndpointKind::SelectionCopy { fallback } => {
-                let fallback = || {
-                    fallback
-                        .map(ClientShellAction::Request)
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                };
+            PendingEndpointKind::SelectionCopy => {
                 return match result {
                     Ok(crate::api::schema::ResponseResult::PaneSelection { text, .. })
                         if !text.is_empty() =>
@@ -606,14 +624,14 @@ impl ClientShellState {
                         )
                     }
                     Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
-                        (false, fallback())
+                        (false, Vec::new())
                     }
                     Ok(_) => {
                         self.endpoint_error =
                             Some("endpoint returned an unexpected selection result".to_owned());
-                        (true, fallback())
+                        (true, Vec::new())
                     }
-                    Err(_) => (true, fallback()),
+                    Err(_) => (true, Vec::new()),
                 };
             }
             PendingEndpointKind::WordSelection {

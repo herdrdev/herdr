@@ -115,6 +115,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
             if params.pane_id == "pane_1"
                 && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
                 && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 2 }
+                && params.content_revision == Some(0)
     ));
 
     let (repaint, actions) = state.handle_endpoint_result(
@@ -164,8 +165,8 @@ fn clipboard_feedback_is_client_local_and_respects_config() {
     assert!(state.copy_feedback_deadline.is_none());
 }
 
-#[test]
-fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
+#[tokio::test]
+async fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.config.copy_on_select = false;
     state.set_snapshot(Box::new(snapshot()));
@@ -217,40 +218,158 @@ fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
     assert!(matches!(
         &copy.actions[..],
         [ClientShellAction::Endpoint { request, .. }]
-            if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(_))
+            if matches!(request.method, crate::api::schema::Method::PaneSelectionReadChecked(_))
     ));
     assert!(copy.requests.is_empty());
-    let request_id = match &copy.actions[0] {
-        ClientShellAction::Endpoint { request, .. } => request.id.clone(),
-        _ => unreachable!(),
+    let ClientShellAction::Endpoint { request, .. } = &copy.actions[0] else {
+        unreachable!();
     };
-    let (_, fallback) = state.handle_endpoint_result(
+    let crate::api::schema::Method::PaneSelectionReadChecked(params) = &request.method else {
+        unreachable!();
+    };
+    let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut app = crate::app::App::new(
+        &Config::default(),
+        crate::app::AppPolicy::TEST,
+        None,
+        rx,
+        crate::api::EventHub::default(),
+    );
+    app.state.workspaces = vec![crate::workspace::Workspace::test_new("copy")];
+    app.state.ensure_test_terminals();
+    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+    let runtime =
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(4, 2, 1000, b"LIVE\r\nPANE");
+    runtime.test_process_pty_bytes(b"\r-ANE");
+    // More output arrives after Ctrl+C, before the server extracts the selection.
+    runtime.test_process_pty_bytes(b"\rMORE");
+    app.state.insert_test_runtime(pane_id, runtime);
+    let mut params = params.clone();
+    params.pane_id = app.public_pane_id(0, pane_id).expect("pane id");
+    let checked = crate::api::schema::PaneSelectionReadParams {
+        pane_id: params.pane_id.clone(),
+        anchor: params.anchor,
+        cursor: params.cursor,
+        content_revision: Some(2),
+    };
+    assert_eq!(
+        app.pane_selection_text(&checked).unwrap_err().0,
+        "stale_content"
+    );
+    let text = app
+        .pane_selection_text_checked(&params)
+        .expect("copy during output");
+    assert_eq!(text, "LIV");
+    // Selected cells changing between the key and extraction must reject the copy.
+    app.state
+        .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+        .expect("runtime")
+        .test_process_pty_bytes(b"\x1b[HOTHER");
+    assert_eq!(
+        app.pane_selection_text_checked(&params).unwrap_err().0,
+        "stale_content"
+    );
+    let (_, actions) = state.handle_endpoint_result(
         "boot-1",
-        &request_id,
+        &request.id,
         Ok(crate::api::schema::ResponseResult::PaneSelection {
             pane_id: "pane_1".into(),
-            text: String::new(),
+            text,
         }),
     );
     assert!(matches!(
-        &fallback[..],
-        [ClientShellAction::Request(ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events,
-        })] if pane_id == "pane_1"
-            && matches!(
-                &events[..],
-                [ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    kind: crate::protocol::ClientKeyKind::Press,
-                    ..
-                }, ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    kind: crate::protocol::ClientKeyKind::Release,
-                    ..
-                }]
-            )
+        &actions[..],
+        [ClientShellAction::ClipboardWrite(bytes)] if bytes == b"LIV"
     ));
+}
+
+#[test]
+fn retained_selection_copy_failures_never_send_terminal_input() {
+    use crate::api::schema::ResponseResult;
+
+    for result in [
+        Ok(ResponseResult::PaneSelection {
+            pane_id: "pane_1".into(),
+            text: String::new(),
+        }),
+        Ok(ResponseResult::Ok {}),
+        Err(ClientShellEndpointError {
+            code: Some("stale_content".into()),
+            message: "pane content changed".into(),
+        }),
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "timed out".into(),
+        }),
+        Err(ClientShellEndpointError {
+            code: Some("selection_unavailable".into()),
+            message: "selection unavailable".into(),
+        }),
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.config.copy_on_select = false;
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        let mut selection =
+            crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 2));
+        assert!(selection.finish());
+        state.selection = Some(selection);
+        let copy = state.handle_input_bytes(b"\x03");
+        assert!(copy.requests.is_empty());
+        let [ClientShellAction::Endpoint { request, .. }] = &copy.actions[..] else {
+            panic!("Ctrl+C should request a copy");
+        };
+        let (_, actions) = state.handle_endpoint_result("boot-1", &request.id, result);
+        assert!(
+            actions.is_empty(),
+            "copy failure must never interrupt the pane"
+        );
+    }
+}
+
+#[test]
+fn retained_selection_copy_requires_revision_without_checked_read() {
+    for (offscreen, invalidate) in [(false, false), (true, false), (false, true)] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.config.copy_on_select = false;
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        if !offscreen {
+            state.set_endpoint_methods(Some(vec!["pane.selection.read".into()]));
+        }
+        let mut selection = crate::selection::Selection::absolute_range(
+            "pane_1".to_owned(),
+            (0, 0),
+            (if offscreen { 2 } else { 0 }, 2),
+        );
+        selection.finish();
+        state.selection = Some(selection);
+        if invalidate {
+            state.invalidate_pane_surface();
+        }
+        let copy = state.handle_input_bytes(b"\x03");
+        if invalidate {
+            assert!(copy.actions.is_empty());
+            assert!(copy.requests.is_empty());
+            continue;
+        }
+        let [ClientShellAction::Endpoint { request, .. }] = &copy.actions[..] else {
+            panic!("copy request");
+        };
+        assert!(
+            matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params) if params.content_revision == Some(0))
+        );
+        let (_, actions) = state.handle_endpoint_result(
+            "boot-1",
+            &request.id,
+            Err(ClientShellEndpointError {
+                code: Some("stale_content".into()),
+                message: "pane content changed".into(),
+            }),
+        );
+        assert!(actions.is_empty());
+        assert!(copy.requests.is_empty());
+    }
 }
 
 #[test]
@@ -412,7 +531,8 @@ fn keyboard_copy_mode_owns_cursor_selection_copy_and_scroll_restore() {
     assert!(copy.actions.iter().any(|action| matches!(
         action,
         ClientShellAction::Endpoint { request, .. }
-            if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(_))
+            if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
+                if params.content_revision == Some(0))
     )));
     assert!(copy.actions.iter().any(|action| matches!(
         action,
@@ -940,7 +1060,7 @@ fn retained_selection_copy_suppresses_key_repeats() {
     assert!(press.actions.iter().any(|action| matches!(
         action,
         ClientShellAction::Endpoint { request, .. }
-            if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(_))
+            if matches!(request.method, crate::api::schema::Method::PaneSelectionReadChecked(_))
     )));
     let repeat = state.handle_raw_events(vec![RawInputEvent::Key(
         key.with_kind(crossterm::event::KeyEventKind::Repeat),

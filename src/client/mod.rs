@@ -541,9 +541,6 @@ fn dispatch_client_shell_actions(
             shell::ClientShellAction::ClipboardWrite(bytes) => {
                 crate::selection::write_osc52_bytes(&bytes);
             }
-            shell::ClientShellAction::Request(request) => {
-                write_to_server(write_stream, &request).map_err(ClientError::ConnectionLost)?;
-            }
             shell::ClientShellAction::OpenSafeWebUrl(url) => {
                 if crate::app::actions::safe_web_url(&url).is_some() {
                     match crate::platform::open_url(&url) {
