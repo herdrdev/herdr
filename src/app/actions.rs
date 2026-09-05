@@ -541,6 +541,13 @@ impl AppState {
                         .and_then(|terminal| terminal.manual_label.as_deref().map(str::to_string))
                 })
                 .or_else(|| {
+                    terminal.and_then(|terminal| {
+                        terminal
+                            .effective_agent_label()
+                            .and_then(|_| terminal.terminal_title_stripped())
+                    })
+                })
+                .or_else(|| {
                     terminal.and_then(|terminal| terminal.agent_name.as_deref().map(str::to_string))
                 })
                 .or_else(|| {
@@ -3759,6 +3766,31 @@ mod tests {
             row.target,
             crate::app::state::NavigatorTarget::Pane { pane_id, .. } if pane_id == agent
         ) && row.meta.contains("claude")));
+    }
+
+    #[test]
+    fn navigator_agent_pane_label_uses_terminal_title() {
+        let mut state = app_with_workspaces(&["one"]);
+        let agent = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].terminal_id(agent).cloned().unwrap();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        terminal.set_terminal_title(Some("⠋ OC | Add session titles".into()));
+
+        state.open_navigator();
+        let rows = state.navigator_rows();
+        let row = rows
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.target,
+                    crate::app::state::NavigatorTarget::Pane { pane_id, .. } if pane_id == agent
+                )
+            })
+            .unwrap();
+
+        assert_eq!(row.label, "OC | Add session titles");
+        assert_eq!(row.meta, "opencode · idle");
     }
 
     #[test]
