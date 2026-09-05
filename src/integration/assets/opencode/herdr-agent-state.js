@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 
 import net from "node:net";
 
@@ -13,8 +13,8 @@ let requestChain = Promise.resolve();
 let reportedRootSessionID;
 
 // Track child sessions so their events cannot replace the pane's root session.
-// Their user prompts still project state without attaching the child session id.
-const childSessions = new Set();
+// User prompts carry the root id to preserve its identity and cross-talk guard.
+const childSessions = new Map();
 const CHILD_EVENT_STATES = new Map([
   ["permission.asked", "blocked"],
   ["question.asked", "blocked"],
@@ -141,12 +141,16 @@ export const HerdrAgentStatePlugin = async () => {
 
       const info = properties.info;
       if (info?.id && info.parentID) {
-        childSessions.add(info.id);
+        childSessions.set(info.id, info.parentID);
       }
       if (sessionID && childSessions.has(sessionID)) {
         const state = CHILD_EVENT_STATES.get(type);
         if (state) {
-          await reportState(state);
+          let rootSessionID = sessionID;
+          while (childSessions.has(rootSessionID)) {
+            rootSessionID = childSessions.get(rootSessionID);
+          }
+          await reportState(state, rootSessionID);
         }
         return;
       }

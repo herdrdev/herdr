@@ -167,7 +167,6 @@ test("reports child prompts without replacing the root session", async () => {
     event: {
       type: "session.created",
       properties: {
-        sessionID: "child-session",
         info: { id: "child-session", parentID: "root-session" },
       },
     },
@@ -188,11 +187,39 @@ test("reports child prompts without replacing the root session", async () => {
     "working",
   ]);
   expect(requests.map(requestSessionID)).toEqual([
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
+    "root-session",
+    "root-session",
+    "root-session",
+    "root-session",
+    "root-session",
+  ]);
+});
+
+test("routes nested child prompts to their own root, not the last active root", async () => {
+  const plugin = await loadPlugin();
+  for (const info of [
+    { id: "child-session", parentID: "root-session" },
+    { id: "nested-session", parentID: "child-session" },
+  ]) {
+    await plugin.event({ event: { type: "session.created", properties: { info } } });
+  }
+  await plugin["chat.message"]({ sessionID: "other-root" });
+  await plugin.event({
+    event: { type: "permission.asked", properties: { sessionID: "nested-session" } },
+  });
+  await plugin.event({
+    event: { type: "permission.replied", properties: { sessionID: "nested-session" } },
+  });
+  await plugin.event({
+    event: { type: "session.idle", properties: { sessionID: "nested-session" } },
+  });
+  await plugin["chat.message"]({ sessionID: "nested-session" });
+
+  expect(requests.map(requestState)).toEqual(["working", "blocked", "working"]);
+  expect(requests.map(requestSessionID)).toEqual([
+    "other-root",
+    "root-session",
+    "root-session",
   ]);
 });
 

@@ -4786,6 +4786,60 @@ mod tests {
     }
 
     #[test]
+    fn opencode_child_prompt_reports_with_root_id_preserve_lifecycle_authority() {
+        let mut terminal = test_terminal();
+        let root = crate::agent_resume::AgentSessionRef::id("opencode-root").unwrap();
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::OpenCode,
+            "herdr:opencode",
+            "opencode",
+            root.clone(),
+        );
+
+        // The plugin projects child permission/question events onto their root.
+        for (seq, state) in [
+            (20, AgentState::Working),
+            (21, AgentState::Blocked),
+            (22, AgentState::Working),
+            (23, AgentState::Idle),
+        ] {
+            let mutation = terminal
+                .set_hook_authority_with_session_ref(
+                    "herdr:opencode".into(),
+                    "opencode".into(),
+                    state,
+                    None,
+                    Some(root.clone()),
+                    Some(seq),
+                )
+                .expect("root-scoped lifecycle report should be accepted");
+            assert!(!mutation.session_ref_changed);
+            assert_eq!(terminal.state, state);
+            assert_eq!(
+                terminal
+                    .hook_authority
+                    .as_ref()
+                    .unwrap()
+                    .session_ref
+                    .as_ref(),
+                Some(&root)
+            );
+        }
+
+        let foreign_child_prompt = terminal.set_hook_authority_with_session_ref(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Blocked,
+            None,
+            crate::agent_resume::AgentSessionRef::id("opencode-other-root"),
+            Some(24),
+        );
+        assert!(foreign_child_prompt.is_none());
+        assert_eq!(terminal.state, AgentState::Idle);
+    }
+
+    #[test]
     fn opencode_tui_selection_reanchors_full_lifecycle_authority() {
         let mut terminal = test_terminal();
         let old_session = crate::agent_resume::AgentSessionRef::id("opencode-newer").unwrap();
