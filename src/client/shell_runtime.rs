@@ -28,11 +28,6 @@ pub(super) fn dispatch_client_shell_actions(
             shell::ClientShellAction::ClipboardWrite(bytes) => {
                 crate::selection::write_osc52_bytes(&bytes);
             }
-            shell::ClientShellAction::Request(request) => {
-                if endpoints.active_surface_available() {
-                    write_to_server(endpoints, &request).map_err(ClientError::ConnectionLost)?;
-                }
-            }
             shell::ClientShellAction::ActivateEndpoint {
                 endpoint_id,
                 target,

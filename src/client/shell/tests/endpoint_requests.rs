@@ -216,7 +216,7 @@ fn cancelled_integration_install_does_not_queue_a_refresh() {
 }
 
 #[test]
-fn cancelled_selection_does_not_replay_its_fallback_key() {
+fn cancelled_selection_does_not_send_terminal_input() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -226,13 +226,7 @@ fn cancelled_selection_does_not_replay_its_fallback_key() {
         (0, 2),
     ));
     let mut outcome = ClientShellInput::default();
-    state.request_selection_copy_with_fallback(
-        &mut outcome,
-        Some(crate::input::TerminalKey::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-        )),
-    );
+    state.request_selection_copy(&mut outcome);
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         request_id(&outcome.actions),

@@ -224,7 +224,7 @@ fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
         ClientShellAction::Endpoint { request, .. } => request.id.clone(),
         _ => unreachable!(),
     };
-    let (_, fallback) = state.handle_endpoint_result(
+    let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
         Ok(crate::api::schema::ResponseResult::PaneSelection {
@@ -232,25 +232,10 @@ fn retained_mouse_selection_copies_only_on_exact_copy_shortcut() {
             text: String::new(),
         }),
     );
-    assert!(matches!(
-        &fallback[..],
-        [ClientShellAction::Request(ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events,
-        })] if pane_id == "pane_1"
-            && matches!(
-                &events[..],
-                [ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    kind: crate::protocol::ClientKeyKind::Press,
-                    ..
-                }, ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
-                    kind: crate::protocol::ClientKeyKind::Release,
-                    ..
-                }]
-            )
-    ));
+    assert!(
+        actions.is_empty(),
+        "failed copy must not send terminal input"
+    );
 }
 
 #[test]
