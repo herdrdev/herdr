@@ -29,7 +29,9 @@ mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
+mod text_editor;
 mod worktrees;
+use text_editor::TextEditor;
 
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
@@ -58,30 +60,6 @@ use crate::protocol::{
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
-
-fn delete_overlay_word(rename: &mut ClientRenameOverlay) {
-    if rename.replace_on_type {
-        rename.input.clear();
-        rename.replace_on_type = false;
-        return;
-    }
-    while rename.input.chars().last().is_some_and(char::is_whitespace) {
-        rename.input.pop();
-    }
-    let Some(word) = rename
-        .input
-        .chars()
-        .last()
-        .map(|character| character.is_alphanumeric() || character == '_')
-    else {
-        return;
-    };
-    while rename.input.chars().last().is_some_and(|character| {
-        !character.is_whitespace() && (character.is_alphanumeric() || character == '_') == word
-    }) {
-        rename.input.pop();
-    }
-}
 
 fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
     match target {

@@ -14,9 +14,10 @@ pub(super) fn is_modal_paste_shortcut_for_platform(
     key: &crate::input::TerminalKey,
     macos: bool,
 ) -> bool {
-    matches!(key.code, KeyCode::Char('v' | 'V'))
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || macos && key.modifiers.contains(KeyModifiers::SUPER))
+    key.generated_text.as_deref().is_none_or(str::is_empty)
+        && matches!(key.code, KeyCode::Char('v' | 'V'))
+        && (key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::CONTROL
+            || macos && key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::SUPER)
 }
 
 fn is_modal_paste_shortcut(key: &crate::input::TerminalKey) -> bool {
@@ -428,12 +429,14 @@ impl ClientShellState {
         if self.popup_pending || self.popup_input_target().is_some() {
             return false;
         }
-        if self
-            .copy_mode
-            .as_ref()
-            .is_some_and(|copy_mode| copy_mode.search_prompt.is_some())
+        if self.mode == ClientShellMode::Copy
+            && self.overlay.is_none()
+            && self
+                .copy_mode
+                .as_ref()
+                .is_some_and(|copy_mode| copy_mode.search_prompt.is_some())
         {
-            return self.overlay.is_none();
+            return true;
         }
         matches!(
             self.overlay.as_ref(),
@@ -593,7 +596,12 @@ impl ClientShellState {
                 None
             }
             ClientShellMode::Copy => {
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
+                if self
+                    .copy_mode
+                    .as_ref()
+                    .is_none_or(|copy_mode| copy_mode.search_prompt.is_none())
+                    && crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix)
+                {
                     self.mode = ClientShellMode::Prefix;
                     outcome.repaint = true;
                 } else {

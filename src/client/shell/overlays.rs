@@ -627,12 +627,10 @@ fn render_rename_overlay(
     );
     let input = Rect::new(i.x, i.y + 2, i.width, 1);
     b.set_style(input, Style::default().fg(p.text).bg(p.surface0));
-    put_text(
+    let cursor = text_editor::render(
         b,
-        input.x,
-        input.y,
-        input.width.saturating_sub(1),
-        &format!(" {}", v.input),
+        Rect::new(input.x + 1, input.y, input.width.saturating_sub(1), 1),
+        &v.input,
         Style::default().fg(p.text).bg(p.surface0),
     );
     let rs = row(i, &[8, 10, 12], 2, 3);
@@ -663,12 +661,7 @@ fn render_rename_overlay(
         navigator_rows: Vec::new(),
         worktree_search: Rect::default(),
         worktree_rows: Vec::new(),
-        cursor: Some(crate::protocol::CursorState {
-            x: (input.x + 1 + display_width(&v.input)).min(input.right() - 1),
-            y: input.y,
-            visible: true,
-            shape: 0,
-        }),
+        cursor,
         ..OverlayRender::default()
     })
 }
@@ -688,11 +681,12 @@ fn render_navigator_overlay(
         a.y + my,
         a.width.saturating_sub(mx * 2).max(4),
         a.height.saturating_sub(my * 2).max(4),
-    );
+    )
+    .intersection(a);
     let i = panel(b, q, p.accent, p.panel_bg)?;
     let rows = super::aggregate_navigation::navigator_rows(endpoints, active_endpoint_id, n);
     let search = if n.search_focused {
-        format!(" / {}", n.query)
+        " / ".to_owned()
     } else if let Some(f) = n.filter {
         format!(
             " / {}",
@@ -718,16 +712,32 @@ fn render_navigator_overlay(
             .fg(if n.search_focused { p.text } else { p.overlay0 })
             .bg(p.panel_bg),
     );
+    let count = format!(
+        "{} panes",
+        rows.iter()
+            .filter(|row| matches!(row.target, ClientNavigatorTarget::Pane { .. }))
+            .count()
+    );
+    let cursor = if n.search_focused {
+        text_editor::render(
+            b,
+            Rect::new(
+                i.x + 3,
+                i.y,
+                i.width.saturating_sub(4 + display_width(&count)),
+                1,
+            ),
+            &n.query,
+            Style::default().fg(p.text).bg(p.panel_bg),
+        )
+    } else {
+        None
+    };
     put_right_text(
         b,
         i,
         i.y,
-        &format!(
-            "{} panes",
-            rows.iter()
-                .filter(|row| matches!(row.target, ClientNavigatorTarget::Pane { .. }))
-                .count()
-        ),
+        &count,
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
     put_text(
@@ -904,12 +914,7 @@ fn render_navigator_overlay(
         navigator_rows: row_hits,
         worktree_search: Rect::default(),
         worktree_rows: Vec::new(),
-        cursor: n.search_focused.then(|| crate::protocol::CursorState {
-            x: i.x + 3 + display_width(&n.query),
-            y: i.y,
-            visible: true,
-            shape: 0,
-        }),
+        cursor,
         ..OverlayRender::default()
     })
 }
@@ -1023,7 +1028,7 @@ fn render_help_overlay(
         sy,
         i.width,
         &if h.search_focused {
-            format!(" / {}", h.query)
+            " / ".to_owned()
         } else {
             " / press / to filter by command or shortcut".to_owned()
         },
@@ -1031,6 +1036,16 @@ fn render_help_overlay(
             .fg(if h.search_focused { p.text } else { p.overlay0 })
             .bg(p.panel_bg),
     );
+    let cursor = if h.search_focused {
+        text_editor::render(
+            b,
+            Rect::new(i.x + 3, sy, i.width.saturating_sub(3), 1),
+            &h.query,
+            Style::default().fg(p.text).bg(p.panel_bg),
+        )
+    } else {
+        None
+    };
 
     let body = Rect::new(i.x, i.y + 3, i.width, i.height.saturating_sub(5));
     let lines = help_lines(k, &h.query, p);
@@ -1090,7 +1105,7 @@ fn render_help_overlay(
         i.bottom() - 1,
         i.width,
         if h.search_focused {
-            " filter type/backspace · clear ctrl+u · scroll ↑↓/pgup/pgdn · back esc"
+            " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
         } else {
             " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
         },
@@ -1102,12 +1117,7 @@ fn render_help_overlay(
         help_scrollbar: scrollbar.unwrap_or_default(),
         help_scroll_metrics: Some(metrics),
         help_max_scroll: max_scroll,
-        cursor: h.search_focused.then(|| crate::protocol::CursorState {
-            x: (i.x + 3 + display_width(&h.query)).min(i.right() - 1),
-            y: sy,
-            visible: true,
-            shape: 0,
-        }),
+        cursor,
         ..OverlayRender::default()
     })
 }

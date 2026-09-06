@@ -851,7 +851,7 @@ fn named_workspace_overlay_targets_projected_source_workspace() {
                 ..
             },
             ..
-        })) if value == "repo" && source_workspace_id.as_deref() == Some("ws_1")
+        })) if value.as_str() == "repo" && source_workspace_id.as_deref() == Some("ws_1")
     ));
     let create = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &create.actions[..] else {
