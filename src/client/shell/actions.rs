@@ -247,7 +247,7 @@ impl ClientShellState {
         }
     }
 
-    pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput) {
+    pub(super) fn request_selection_copy(&mut self, outcome: &mut ClientShellInput, live: bool) {
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
@@ -256,7 +256,10 @@ impl ClientShellState {
             .pane_surface
             .as_ref()
             .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map(|pane| pane.content_revision);
+            .map(|pane| pane.content_revision)
+            // Read a manual mouse selection atomically from the live terminal. Output
+            // between the displayed frame and this request must not reject the copy.
+            .filter(|_| !live);
         let (anchor, cursor) = selection.ordered_cells();
         self.push_endpoint_method_with_kind(
             crate::api::schema::Method::PaneSelectionRead(
@@ -700,7 +703,7 @@ impl ClientShellState {
                 self.selection_highlight_clear_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
                 let mut outcome = ClientShellInput::default();
-                self.request_selection_copy(&mut outcome);
+                self.request_selection_copy(&mut outcome, false);
                 return (true, outcome.actions);
             }
             PendingEndpointKind::PaneLinkActivate {

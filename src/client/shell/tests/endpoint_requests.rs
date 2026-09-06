@@ -216,7 +216,7 @@ fn cancelled_integration_install_does_not_queue_a_refresh() {
 }
 
 #[test]
-fn cancelled_selection_does_not_send_terminal_input() {
+fn failed_selection_copy_does_not_send_terminal_input() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -225,18 +225,27 @@ fn cancelled_selection_does_not_send_terminal_input() {
         (0, 0),
         (0, 2),
     ));
-    let mut outcome = ClientShellInput::default();
-    state.request_selection_copy(&mut outcome);
-    let (_, actions) = state.handle_endpoint_result(
-        "boot-1",
-        request_id(&outcome.actions),
+    for result in [
+        Ok(crate::api::schema::ResponseResult::PaneSelection {
+            pane_id: "pane_1".into(),
+            text: String::new(),
+        }),
         Err(ClientShellEndpointError {
             code: Some("endpoint_cancelled".into()),
             message: "cancelled".into(),
         }),
-    );
-    assert!(actions.is_empty());
-    assert!(state.pending_requests.is_empty());
+        Err(ClientShellEndpointError {
+            code: Some("selection_unavailable".into()),
+            message: "selection text is unavailable".into(),
+        }),
+    ] {
+        let mut outcome = ClientShellInput::default();
+        state.request_selection_copy(&mut outcome, false);
+        let (_, actions) =
+            state.handle_endpoint_result("boot-1", request_id(&outcome.actions), result);
+        assert!(actions.is_empty());
+        assert!(state.pending_requests.is_empty());
+    }
 }
 
 #[test]
