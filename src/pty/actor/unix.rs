@@ -1183,10 +1183,14 @@ mod tests {
             Bytes::from_static(b"\r"),
             Duration::ZERO,
         ) {
-            Ok(completion) => completion
-                .recv()
-                .expect("actor reports submission")
-                .expect_err("closed PTY rejects submission"),
+            Ok(completion) => match completion.recv_timeout(Duration::from_secs(1)) {
+                Ok(result) => result.expect_err("closed PTY rejects submission"),
+                // The actor can exit before processing the queued submission.
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("actor did not reject submission after PTY closed")
+                }
+            },
             Err(err) => err,
         };
 
