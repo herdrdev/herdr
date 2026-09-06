@@ -23,6 +23,16 @@ pub(crate) use super::unix_common::{
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
 const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
+/// Upper bound on the number of processes visited while resolving a pane's
+/// foreground process-group tree. Foreground-job detection reads /proc/<pid>/stat
+/// for every visited process on a repeated (per-tick/5s) cadence, so an unbounded
+/// walk lets accumulated descendants or unreaped zombies under the pane shell grow
+/// the server's read-syscall rate and CPU without limit at a constant pane count
+/// (see AGENTS.md multiplicative performance paths). The foreground-group leader
+/// and shell roots are enqueued first, so the detected agent is always retained
+/// when a pathologically large tree is truncated. Mirrors CHILD_GROUPS_SCAN_LIMIT
+/// on the fallback path.
+const FOREGROUND_TREE_SCAN_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessDetectionMode {
@@ -270,6 +280,12 @@ fn process_tree_pids(
     let mut pids = Vec::new();
     while let Some(pid) = pending.pop_front() {
         pids.push(pid);
+        // Truncate the traversal once the bound is reached so foreground detection
+        // does a bounded number of /proc reads regardless of how many descendants
+        // or zombies have accumulated under the pane shell.
+        if pids.len() >= FOREGROUND_TREE_SCAN_LIMIT {
+            break;
+        }
         for tid in task_ids(pid) {
             for child_pid in task_children(pid, tid) {
                 if child_pid > 0 && visited.insert(child_pid) {
@@ -1010,6 +1026,55 @@ mod tests {
         assert!(task_reads.borrow().contains(&220));
         assert!(!task_reads.borrow().contains(&9999));
         assert!(!member_reads.borrow().contains(&9999));
+    }
+
+    #[test]
+    fn foreground_tree_traversal_is_bounded_by_the_scan_limit() {
+        // A pane shell whose descendant tree is far larger than the bound (long-lived
+        // agents accumulating children or unreaped zombies) must not make foreground
+        // detection read /proc/<pid>/stat for an unbounded number of processes.
+        let child_count = FOREGROUND_TREE_SCAN_LIMIT + 200;
+        let shell_children: Vec<u32> = (10..10 + child_count as u32).collect();
+        let stat_reads = RefCell::new(Vec::new());
+
+        let members = foreground_process_group_members_with(
+            1,
+            2,
+            // Shell(1) has one task; every other pid is its own single task.
+            |pid| vec![pid],
+            // The shell task exposes the whole huge child list; leaves have none.
+            |pid, _tid| {
+                if pid == 1 {
+                    shell_children.clone()
+                } else {
+                    Vec::new()
+                }
+            },
+            |process_group_id, pid| {
+                // Every visited pid triggers a /proc/<pid>/stat read; count them.
+                stat_reads.borrow_mut().push(pid);
+                (process_group_id == 2).then(|| ProcGroupMember {
+                    pid,
+                    comm: format!("p{pid}"),
+                })
+            },
+        )
+        .unwrap();
+
+        // Bounded: foreground detection inspects at most the scan limit processes,
+        // regardless of how large the descendant tree has grown.
+        assert!(
+            stat_reads.borrow().len() <= FOREGROUND_TREE_SCAN_LIMIT,
+            "foreground traversal read /proc/stat for {} processes, exceeding the {} bound",
+            stat_reads.borrow().len(),
+            FOREGROUND_TREE_SCAN_LIMIT
+        );
+        assert!(members.len() <= FOREGROUND_TREE_SCAN_LIMIT);
+        // The foreground-group leader (an enqueued root) is always retained.
+        assert!(
+            members.iter().any(|member| member.pid == 2),
+            "group leader must survive truncation"
+        );
     }
 
     #[test]
