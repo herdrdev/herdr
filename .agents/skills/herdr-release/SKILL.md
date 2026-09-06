@@ -1,42 +1,41 @@
 ---
 name: herdr-release
-description: Prepare and publish a stable Herdr release with repository just recipes. Use when asked to release Herdr or create and push a stable release tag; keep an explicit version, otherwise increment Cargo.toml's patch version.
+description: Prepare and publish releases of trungnt13/herdr containing the latest upstream master changes. Without an explicit version, use the latest upstream stable release version plus an incrementing +fork.N suffix.
 ---
 
-# Release Herdr
+# Release this Herdr fork
 
-Use only inside the Herdr repository. It publishes stable releases, not previews.
+Publish only to `trungnt13/herdr`. Use `herdrdev/herdr` as the read-only upstream source, never as the publication destination. Updating this skill does not authorize publishing a release or changing GitHub's fork relationship.
 
-## Verify authority and destination
+## Verify destination and release tooling
 
-Before working:
+- Read current repository instructions, `justfile`, and release workflows. Verify `origin` targets `trungnt13/herdr`, `upstream` targets `herdrdev/herdr`, and the authenticated account has write access to the fork. Stop on a mismatch; do not change remotes automatically.
+- Preserve unrelated changes. Require a clean release checkout on `master` before preparing a release; never reset, stash, or force-push user work without approval.
+- Check that repository policy permits fork publication. If inherited upstream-only rules still prohibit it, report the conflict and obtain approval to update those rules rather than bypassing them.
+- Verify recipes and CI support `MAJOR.MINOR.PATCH+fork.N` end to end: Cargo and lockfile, changelog parsing, tag validation, binaries, release assets, and version display. Ensure CI runs for this fork and publication, issue automation, manifests, and update destinations cannot affect upstream services.
+- SemVer build metadata does not affect version precedence. Do not claim automatic updates between fork revisions work unless fork-aware comparison and update sources have been implemented and validated.
+- Known migration blockers: the inherited `release-prepare` and `release-publish` recipes accept only three-part versions, and release CI contains `herdrdev/herdr` repository gates. Recheck these each time. If unresolved, stop before version edits, commits, tags, or pushes; request a separate tooling migration. Do not silently substitute a version or manually bypass the recipes.
 
-1. Read repository release instructions and current `justfile` recipes; they override this skill.
-3. Require `master`; preserve every pre-existing change. If any authority check fails, do not release from a fork, change remotes, revert changes, or publish.
+## Include the latest upstream changes
+
+1. Fetch `upstream/master` and `origin/master`. Query upstream's latest published stable GitHub Release, excluding drafts and prereleases; resolve its tag to a commit. Do not infer the stable version from Cargo.toml, local tags, preview releases, or the most recently created tag.
+2. Integrate the fetched `upstream/master` while preserving fork changes. Follow the repository's rebase skill when applicable; stop for conflicts or any required history rewrite that lacks approval.
+3. Require both the upstream stable tag commit and fetched `upstream/master` to be ancestors of the release candidate. The stable tag supplies the version prefix, not the code cutoff: include unreleased upstream master changes too.
+4. Record the upstream tag and master commit in the release notes. Immediately before publication, fetch master and query the latest stable release again. If either changed, update the candidate/version and repeat affected validation and confirmation. “Latest” means the upstream state verified at that check, not future commits.
 
 ## Choose the version
 
-- Use an explicit semantic version unchanged, stripping request prefix `v` only for `just`.
-- Otherwise increment only the `Cargo.toml` package patch (`0.8.2` → `0.8.3`).
-- Require `MAJOR.MINOR.PATCH`; never silently substitute. Stop if the target tag exists or repository validation rejects the target.
+- Let `BASE` be the latest upstream stable tag without its leading `v`; require `MAJOR.MINOR.PATCH`.
+- Without an explicit version, inspect the fork's remote tags and GitHub Releases, including draft reservations, for exact `vBASE+fork.N` versions. Choose one greater than the highest positive integer `N`; start at `1` when none exist. Compare revisions numerically, not lexicographically. If enumeration is incomplete or fails, stop rather than assume no releases exist.
+- Examples: upstream `v0.8.2` → `0.8.2+fork.1` → `0.8.2+fork.2`; a new upstream `v0.8.3` starts `0.8.3+fork.1`.
+- If explicitly supplied, strip only the leading `v`; require the current `BASE+fork.N` form and a revision greater than existing revisions. Reject an incompatible request with an explanation; never silently rewrite it.
+- Use the same version in Cargo.toml, Cargo.lock, and release metadata, with `v` prepended for the Git tag. Check local and remote tag collisions; stop rather than overwrite or reuse a tag. An orphan local tag is a blocker, not evidence of a published release.
 
-## Establish release readiness
+## Validate and publish
 
-1. Follow `../herdr-pre-release-audit/SKILL.md`. A release request authorizes applying required release-document finalization, but not guessing product decisions. Stop for any unresolved release blocker or user decision.
-2. Never edit CI-owned preview or published-release files.
-3. Finalize release notes and next-release docs; align `skills/herdr/SKILL.md` with the stable release; pass `just pre-release-check` and review its benchmarks.
-4. Before `just release`, commit every required finalization change except `skills/herdr/SKILL.md`, which the recipe intentionally includes in its release commit. Show every separate diff and proposed message; get alignment before committing. Exclude unrelated changes and require `just release-prepare` to accept the state.
-
-## Confirm and publish
-
-Immediately before publication, show current→target version, destination repository and branch, proposed commit `release: v<TARGET>`, tag `v<TARGET>`, and that `just release <TARGET>` creates the commit, pushes `master`, creates the annotated tag, and pushes it. Require explicit confirmation.
-
-Then run only:
-
-```bash
-just release <TARGET>
-```
-
-Never manually recreate its version edits, commit, tag, or pushes. If it fails before publication, preserve state, report the exact failure, and never blindly retry a push or tag.
-
-After success, verify remote `master` contains the release commit and remote `refs/tags/v<TARGET>` resolves to it. Report both checks and GitHub Release workflow status. Release CI owns binaries, GitHub Release, published docs, issue closure, and `distribution/latest.json`.
+1. Follow `../herdr-pre-release-audit/SKILL.md` where applicable to this fork. Finalize release notes and docs for the complete candidate, including unreleased upstream changes. Do not modify CI-owned snapshots manually.
+2. Run `just check` and `just pre-release-check`; inspect benchmark results. Align `skills/herdr/SKILL.md` with the release as required by repository policy. Resolve failures without weakening checks.
+3. Propose messages and obtain alignment before any commits. Use the supported repository recipes for finalization and release; keep unrelated changes out.
+4. Immediately before publication, show the destination `trungnt13/herdr`, branch, upstream stable tag and master commit, current→target version, proposed `release: v<TARGET>` commit, and `v<TARGET>` tag. Explain that `just release <TARGET>` prepares a commit, pushes master, creates an annotated tag, and pushes it. Require explicit confirmation.
+5. Run `just release <TARGET>` only after all tooling blockers are resolved. On failure, preserve state and report the exact completed and failed steps; do not blindly retry publication.
+6. Verify the remote master contains the release commit and the remote tag resolves to it. Monitor release CI to completion and verify the GitHub Release and expected assets belong to `trungnt13/herdr`. Report failures or pending external dependencies; never describe a pushed tag alone as a completed release.

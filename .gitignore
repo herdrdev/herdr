@@ -9,6 +9,7 @@ __pycache__/
 .DS_Store
 
 /docs/*
+!/docs/porting-from-herdr-upstream.md
 !/docs/next/
 !/docs/next/**
 !/docs/preview/

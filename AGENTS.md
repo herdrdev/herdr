@@ -93,11 +93,6 @@ The client-owned TUI endpoint generation is independent from the private same-in
 - Stable and preview update manifests advertise `endpoint_generation`. Keep release tooling aligned so an older updater knows when a new server generation really requires replacement.
 - Existing-value digests cannot detect an appended enum variant. Review every enum reachable from a frozen codec as append-closed even when tests remain green.
 
-## Maintainer Workflow
-
-This section applies only to verified maintainers as defined under Scope and
-Audience. Everyone else must skip this section and follow the external
-contributor guardrail.
 
 ### Multi-agent isolation
 
