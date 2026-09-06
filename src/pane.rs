@@ -1298,6 +1298,37 @@ impl PaneRuntimeIo {
         }
     }
 
+    #[cfg(windows)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
+    fn windows_handoff_supported(&self) -> bool {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.supports_handoff(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => false,
+        }
+    }
+
+    #[cfg(windows)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
+    fn duplicate_windows_handoff(
+        &self,
+        target: &std::process::Child,
+    ) -> std::io::Result<crate::pty::backend::WindowsPtyHandoff> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.duplicate_for_handoff(target),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Err(std::io::Error::other(
+                "test runtime has no transferable PTY",
+            )),
+        }
+    }
+
     #[cfg(unix)]
     fn foreground_process_group_id(&self) -> Option<u32> {
         match self {
@@ -1307,7 +1338,11 @@ impl PaneRuntimeIo {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     fn begin_handoff(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.begin_handoff(timeout),
@@ -1316,7 +1351,11 @@ impl PaneRuntimeIo {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     fn set_handoff_paused(&self, paused: bool) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => {
@@ -1331,7 +1370,11 @@ impl PaneRuntimeIo {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     fn release_after_commit(&self) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.release_after_commit(),
@@ -1836,7 +1879,32 @@ impl PaneRuntime {
         self.io.duplicate_handoff_fd()
     }
 
-    #[cfg(unix)]
+    #[cfg(windows)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
+    pub(crate) fn windows_handoff_supported(&self) -> bool {
+        self.io.windows_handoff_supported()
+    }
+
+    #[cfg(windows)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
+    pub(crate) fn duplicate_windows_handoff(
+        &self,
+        target: &std::process::Child,
+    ) -> std::io::Result<crate::pty::backend::WindowsPtyHandoff> {
+        self.io.duplicate_windows_handoff(target)
+    }
+
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     pub fn preserve_for_handoff(mut self) {
         if let Err(err) = self.io.release_after_commit() {
             warn!(
@@ -1857,7 +1925,11 @@ impl PaneRuntime {
         self.preserve_processes_on_drop = false;
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     pub fn set_handoff_reader_paused(&self, paused: bool) {
         if let Err(err) = self.io.set_handoff_paused(paused) {
             warn!(
@@ -1869,7 +1941,11 @@ impl PaneRuntime {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        all(windows, not(test)),
+        allow(dead_code, reason = "used by the stacked Windows handoff integration")
+    )]
     pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         self.io.begin_handoff(timeout)
     }
@@ -2409,6 +2485,8 @@ impl PaneRuntime {
                 master_fd: spawned.master_fd,
                 #[cfg(windows)]
                 master: spawned.master,
+                #[cfg(windows)]
+                handoff_child: spawned.handoff_child,
                 initially_quiesced: false,
                 on_read,
                 on_reader_exit: None,
