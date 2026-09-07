@@ -16,12 +16,13 @@ pub(crate) fn connect_saved_ssh(
     profile_id: &str,
     target: &str,
     session: &str,
+    windows_desktop: bool,
 ) -> io::Result<SavedSshStream> {
     validate_profile_path_id(profile_id)?;
     crate::session::validate_name(session)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let ssh = RemoteSsh::new_noninteractive(target.to_owned());
-    let remote_herdr = find_installed_remote_herdr(&ssh)?;
+    let remote_herdr = find_installed_remote_herdr(&ssh, windows_desktop)?;
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
@@ -30,6 +31,7 @@ pub(crate) fn connect_saved_ssh(
         session.to_owned(),
         ssh.options(),
         true,
+        windows_desktop,
     )?;
     let stream = crate::ipc::connect_local_stream(&path)?;
     Ok(SavedSshStream {
@@ -38,11 +40,20 @@ pub(crate) fn connect_saved_ssh(
     })
 }
 
-pub(crate) fn saved_ssh_bootstrap_command(target: &str, session: &str) -> String {
+pub(crate) fn saved_ssh_bootstrap_command(
+    target: &str,
+    session: &str,
+    windows_desktop: bool,
+) -> String {
     format!(
-        "herdr --remote {} --session {}",
+        "herdr --remote {} --session {}{}",
         super::shell_quote(target),
-        super::shell_quote(session)
+        super::shell_quote(session),
+        if windows_desktop {
+            " --remote-desktop"
+        } else {
+            ""
+        }
     )
 }
 
@@ -111,8 +122,12 @@ mod tests {
     #[test]
     fn bootstrap_command_preserves_the_explicit_remote_session() {
         assert_eq!(
-            saved_ssh_bootstrap_command("build host", "agent work"),
+            saved_ssh_bootstrap_command("build host", "agent work", false),
             "herdr --remote 'build host' --session 'agent work'"
+        );
+        assert_eq!(
+            saved_ssh_bootstrap_command("build", "agents", true),
+            "herdr --remote build --session agents --remote-desktop"
         );
     }
 

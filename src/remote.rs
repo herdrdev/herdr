@@ -1,5 +1,6 @@
 mod args;
 mod attach;
+mod desktop;
 mod host;
 mod process;
 mod restart_policy;
@@ -7,6 +8,7 @@ mod saved;
 
 pub(crate) use args::*;
 pub(crate) use attach::*;
+pub(crate) use desktop::*;
 pub(crate) use host::run_remote_client_bridge;
 pub(crate) use saved::*;
 

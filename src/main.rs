@@ -491,6 +491,13 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    let raw_args = match remote::apply_desktop_bootstrap_args(&raw_args) {
+        Ok(args) => args,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(2);
+        }
+    };
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
@@ -539,7 +546,21 @@ fn main() -> io::Result<()> {
 
     // Subcommands and flags (no TUI, no logging needed)
     if args.get(1).map(|s| s.as_str()) == Some("remote-client-bridge") {
-        return remote::run_remote_client_bridge();
+        let require_desktop = match &args[2..] {
+            [] => false,
+            [flag] if flag == "--require-desktop" => true,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "usage: herdr remote-client-bridge [--require-desktop]",
+                ));
+            }
+        };
+        return remote::run_remote_client_bridge(require_desktop);
+    }
+
+    if args.get(1).map(|s| s.as_str()) == Some("remote-desktop") {
+        return remote::run_remote_desktop_command(&args[2..]);
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("server") {
@@ -679,6 +700,7 @@ fn main() -> io::Result<()> {
         println!("Options:");
         println!("  --session <name>    Use or create a named persistent session");
         println!("  --remote <target>   Attach through SSH to a remote Herdr server");
+        println!("  --remote-desktop    Start a Windows remote server in the signed-in desktop");
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
@@ -719,6 +741,7 @@ fn main() -> io::Result<()> {
         "--session",
         "--remote",
         "--remote-keybindings",
+        "--remote-desktop",
         "--version",
         "-V",
         "--default-config",
@@ -738,6 +761,7 @@ fn main() -> io::Result<()> {
                 "server",
                 "client",
                 "remote-client-bridge",
+                "remote-desktop",
                 "update",
                 "status",
                 "config",

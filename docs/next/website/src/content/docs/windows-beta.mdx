@@ -33,6 +33,7 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 | Native panes through ConPTY | supported |
 | Windows Terminal / PowerShell app attach | supported |
 | `herdr --remote` and saved SSH machines to Linux/macOS/Windows hosts | supported; interactive attach and saved-machine setup can install or update Windows packages after confirmation; background reconnect only discovers installed packages |
+| Remote agents in the signed-in Windows desktop | supported with `--remote-desktop` |
 | Remote clipboard images and image-file drops | supported |
 | `cmd.exe` panes | supported |
 | Native keyboard and mouse input | supported |
@@ -48,6 +49,8 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 | Nested launch override | supported |
 
 Local persistent sessions continue running after the client detaches or its terminal window closes. Servers and pane processes launched through Windows OpenSSH also survive logout; run `herdr` again to reconnect.
+
+Windows OpenSSH starts its normal server in Windows Session 0. Add `--remote-desktop` to a direct remote attach or `machine add` command when agents must interact with apps in the SSH account's active desktop login. Herdr asks before it uses a one-time Windows task for the initial start, removes the task after readiness, and leaves an existing server in another Windows session untouched.
 
 Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers, including npm/Node and Git Bash process chains. It follows Git Bash-launched agents across emulated `exec` boundaries, but it is not the same as Unix foreground process-group detection.
 

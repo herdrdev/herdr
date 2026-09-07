@@ -23,6 +23,8 @@ pub(crate) struct SavedSshEndpoint {
     pub(crate) target: String,
     pub(crate) session: String,
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) windows_desktop: bool,
 }
 
 impl SavedSshEndpoint {
@@ -37,6 +39,7 @@ impl SavedSshEndpoint {
             target: target.into(),
             session: session.into(),
             enabled: true,
+            windows_desktop: false,
         };
         profile.validate()?;
         Ok(profile)
@@ -169,6 +172,20 @@ impl EndpointCatalog {
         let profile = SavedSshEndpoint::new(label, target, session)?;
         let id = profile.id.clone();
         self.ssh.push(profile);
+        Ok(id)
+    }
+
+    pub(crate) fn add_ssh_with_desktop(
+        &mut self,
+        label: impl Into<String>,
+        target: impl Into<String>,
+        session: impl Into<String>,
+        windows_desktop: bool,
+    ) -> Result<ProfileId, String> {
+        let id = self.add_ssh(label, target, session)?;
+        if let Some(profile) = self.ssh.last_mut() {
+            profile.windows_desktop = windows_desktop;
+        }
         Ok(id)
     }
 
@@ -397,7 +414,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
         let mut catalog = EndpointCatalog::default();
         let id = catalog
-            .add_ssh("Build", "ssh://dev@build.example:2222", "agents")
+            .add_ssh_with_desktop("Build", "ssh://dev@build.example:2222", "agents", true)
             .unwrap();
         assert!(catalog.select_ssh(&id));
         catalog.store_to_path(&path).unwrap();
@@ -409,7 +426,28 @@ mod tests {
         let loaded = EndpointCatalog::load_from_path(&path).unwrap();
         assert_eq!(loaded, catalog);
         assert_eq!(loaded.ssh[0].id, id);
+        assert!(loaded.ssh[0].windows_desktop);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn catalogs_from_before_desktop_hosting_default_to_normal_ssh() {
+        let catalog: EndpointCatalog = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "ssh": [{
+                "id": "0123456789abcdef0123456789abcdef",
+                "label": "Build",
+                "target": "build",
+                "session": "default",
+                "enabled": true
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!catalog.ssh[0].windows_desktop);
+        catalog.validate().unwrap();
     }
 
     #[test]

@@ -100,6 +100,21 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command) 
 }
 
 #[cfg(not(windows))]
+pub(crate) fn verify_remote_desktop_stream(
+    _stream: &crate::ipc::LocalStream,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Windows desktop hosting is unavailable on this platform",
+    ))
+}
+
+#[cfg(not(windows))]
+pub(crate) fn detach_remote_desktop_console() -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn configure_background_command_platform(_command: &mut std::process::Command) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

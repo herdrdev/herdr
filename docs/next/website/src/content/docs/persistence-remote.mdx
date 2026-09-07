@@ -42,6 +42,7 @@ Save repeat targets to work across several machines from one Herdr client:
 ```bash
 herdr machine add workbox --label "Build machine" --remote-session agents
 herdr machine add ssh://you@server:2222 --label "Production" --remote-session operations
+herdr machine add windows-workbox --label "Desktop agents" --remote-desktop
 herdr machine list
 ```
 
@@ -68,7 +69,7 @@ herdr machine remove <profile-id>
 
 Renaming updates the label without reconnecting. Removing or disabling a machine disconnects only that machine from the client; its remote sessions keep running, even if the machine is unreachable. If you remove or disable the machine you are viewing, the client returns to Local. If Local is unavailable, it shows that and reconnects rather than selecting another remote. An unreadable or invalid saved-machine file leaves current connections unchanged and shows a notice; the client retries reading it automatically.
 
-Saved profiles contain only the opaque ID, label, SSH target, explicit remote session, and enabled state. Passwords, private keys, agent tickets, and SSH control sockets are never stored in the machine catalog.
+Saved profiles contain only the opaque ID, label, SSH target, explicit remote session, enabled state, and whether Windows desktop hosting is required. Passwords, private keys, agent tickets, and SSH control sockets are never stored in the machine catalog.
 
 The client uses local keybindings by default. Custom commands advertised by the selected machine still execute on that machine. Herdr does not copy local command plugins, configuration, executables, or secrets to SSH hosts; a missing remote command or plugin fails visibly.
 
@@ -82,6 +83,14 @@ herdr --remote ssh://you@server:2222
 ```
 
 In this mode, your local Herdr is a thin client. It connects over SSH, starts or attaches to the remote Herdr server, and streams the UI back to your local terminal. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
+
+Windows SSH normally starts processes outside the signed-in desktop. To let agents on a Windows target interact with desktop apps, opt in explicitly:
+
+```bash
+herdr --remote windows-workbox --remote-desktop
+```
+
+To start a desktop server, Herdr requires exactly one active desktop login for the SSH account. It asks for confirmation, creates a one-time Windows task to launch the server in that login, and removes the task after the server is ready. Automatic reconnects only attach; they do not create tasks or start a server. A server with the same Herdr session name in Windows Session 0 or another login is left running and reported as a conflict. Use a different `--session` or stop that server explicitly. This option does not sign in, unlock Windows, or move existing panes between Windows sessions.
 
 By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. The local keybindings are a snapshot from attach time; detach and reattach after editing local keybindings. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
 

@@ -114,6 +114,7 @@ impl EndpointSupervisors {
                     && profile.enabled
                     && profile.target == previous.target
                     && profile.session == previous.session
+                    && profile.windows_desktop == previous.windows_desktop
             });
             if !keep {
                 retired.push(endpoint_id.clone());
@@ -257,9 +258,9 @@ fn connect_once(
             (stream, Box::new(()))
         }
         ConnectTarget::Ssh(profile) => {
-            let connected = crate::remote::connect_saved_ssh(profile.id.as_str(), &profile.target, &profile.session).map_err(|error| {
+            let connected = crate::remote::connect_saved_ssh(profile.id.as_str(), &profile.target, &profile.session, profile.windows_desktop).map_err(|error| {
                 if failure_needs_attention(&error) {
-                    std::io::Error::new(error.kind(), format!("{error}. Run `{}` interactively to approve setup, then restart this client", crate::remote::saved_ssh_bootstrap_command(&profile.target, &profile.session)))
+                    std::io::Error::new(error.kind(), format!("{error}. Run `{}` interactively to approve setup, then restart this client", crate::remote::saved_ssh_bootstrap_command(&profile.target, &profile.session, profile.windows_desktop)))
                 } else { error }
             })?;
             (connected.stream, Box::new(connected.bridge))
@@ -352,6 +353,7 @@ mod tests {
             target: "build".into(),
             session: "agents".into(),
             enabled: true,
+            windows_desktop: false,
         }
     }
 
