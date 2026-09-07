@@ -1249,6 +1249,12 @@ pub struct PaneRuntime {
     detect_reset_notify: Arc<Notify>,
     pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
     preserve_processes_on_drop: bool,
+    // Cached foreground cwd keyed on (pgid, shell_pid): skip the expensive /proc tree walk when
+    // the foreground process group hasn't changed. Without this, `pane.list` does 3-N /proc reads
+    // per pane on every call — O(panes × procs) on a busy system. With it, an unchanged pane costs
+    // one /proc/pid/stat read (to check pgid) and returns the cached PathBuf.
+    #[cfg(unix)]
+    cached_foreground_cwd: std::sync::Mutex<Option<(u32, std::path::PathBuf)>>,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
     detect_handle: Option<tokio::task::AbortHandle>,
@@ -2237,6 +2243,8 @@ impl PaneRuntime {
             detect_reset_notify,
             pending_release,
             preserve_processes_on_drop: true,
+            #[cfg(unix)]
+            cached_foreground_cwd: std::sync::Mutex::new(None),
             compression,
             detect_handle: Some(detect_handle),
         })
@@ -2813,6 +2821,8 @@ impl PaneRuntime {
             detect_reset_notify,
             pending_release,
             preserve_processes_on_drop: false,
+            #[cfg(unix)]
+            cached_foreground_cwd: std::sync::Mutex::new(None),
             compression,
             detect_handle,
         })
@@ -3285,23 +3295,49 @@ impl PaneRuntime {
     }
 
     /// Get the current working directory of the process group controlling the pane PTY.
+    ///
+    /// Caches the result keyed on the foreground process group id: when the pgid hasn't changed
+    /// since the last call, the cached cwd is returned without re-reading `/proc`. This turns
+    /// `pane.list` from O(panes × /proc-reads) to O(panes × 1-read) for idle sessions — the pgid
+    /// check is a single `/proc/<pid>/stat` read vs the full tree walk the uncached path does.
     pub fn foreground_cwd(&self) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {
             let pid = self.child_pid.load(Ordering::Acquire);
-            let shell_cwd = absolute_process_cwd(pid);
             let foreground_pgid = self
                 .io
                 .foreground_process_group_id()
                 .or_else(|| crate::platform::foreground_process_group_id(pid));
+
+            // Fast path: pgid unchanged since last call — return cached cwd.
+            if let Some(pgid) = foreground_pgid {
+                if let Ok(cache) = self.cached_foreground_cwd.lock() {
+                    if let Some((cached_pgid, ref cached_cwd)) = *cache {
+                        if cached_pgid == pgid {
+                            return Some(cached_cwd.clone());
+                        }
+                    }
+                }
+            }
+
+            let shell_cwd = absolute_process_cwd(pid);
             let leader_cwd = foreground_pgid.and_then(absolute_process_cwd);
 
             // The group leader's cwd is authoritative (issue #3270): a helper
             // process that chdirs elsewhere inside the same foreground group
             // must not override it. Scan other members only when the leader's
             // cwd cannot be read at all.
-            leader_cwd
-                .or_else(|| foreground_member_cwd_different_from_shell(pid, shell_cwd.as_ref()))
+            let result = leader_cwd
+                .or_else(|| foreground_member_cwd_different_from_shell(pid, shell_cwd.as_ref()));
+
+            // Update cache with the new pgid→cwd mapping.
+            if let (Some(pgid), Some(ref cwd)) = (foreground_pgid, &result) {
+                if let Ok(mut cache) = self.cached_foreground_cwd.lock() {
+                    *cache = Some((pgid, cwd.clone()));
+                }
+            }
+
+            result
         }
 
         #[cfg(not(unix))]
@@ -4052,6 +4088,8 @@ mod tests {
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
+            #[cfg(unix)]
+            cached_foreground_cwd: std::sync::Mutex::new(None),
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
         };
@@ -4089,6 +4127,8 @@ mod tests {
             detect_reset_notify: Arc::new(Notify::new()),
             pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
+            #[cfg(unix)]
+            cached_foreground_cwd: std::sync::Mutex::new(None),
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
         };
