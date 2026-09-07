@@ -33,6 +33,54 @@ pub(crate) fn wait_client_stream_readable(
     Ok(())
 }
 
+pub(crate) fn forward_remote_bridge_stdio(stream: crate::ipc::LocalStream) -> std::io::Result<()> {
+    use interprocess::TryClone as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut stdout = std::io::stdout().lock();
+    let mut socket_to_stdout = stream.try_clone()?;
+    let mut stdin_to_socket = stream;
+    let upload_done = Arc::new(AtomicBool::new(false));
+    let upload_done_worker = Arc::clone(&upload_done);
+    let _upload = std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
+        upload_done_worker.store(true, Ordering::Release);
+    });
+
+    let mut buffer = [0_u8; 16 * 1024];
+    while !upload_done.load(Ordering::Acquire) {
+        match crate::ipc::poll_local_stream_read_count(&mut socket_to_stdout, &mut buffer)? {
+            crate::ipc::LocalStreamReadCount::Data(read) => {
+                std::io::Write::write_all(&mut stdout, &buffer[..read])?;
+                std::io::Write::flush(&mut stdout)?;
+            }
+            crate::ipc::LocalStreamReadCount::Pending => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            crate::ipc::LocalStreamReadCount::Closed => break,
+        }
+    }
+    Ok(())
+}
+
+fn copy_flush<R: std::io::Read, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+) -> std::io::Result<()> {
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        writer.write_all(&buffer[..read])?;
+        writer.flush()?;
+    }
+}
+
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::size()
 }
@@ -650,7 +698,7 @@ fn powershell_agent_script(argv: &[String]) -> Option<String> {
         .join(" ");
     let command_line = args
         .iter()
-        .map(|arg| quote_windows_command_line_arg(arg))
+        .map(|arg| super::quote_windows_command_line_arg(arg))
         .collect::<Vec<_>>()
         .join(" ");
     Some(format!(
@@ -661,35 +709,6 @@ fn powershell_agent_script(argv: &[String]) -> Option<String> {
         super::quote_powershell_arg(program),
         super::quote_powershell_arg(&command_line),
     ))
-}
-
-fn quote_windows_command_line_arg(value: &str) -> String {
-    if !value.is_empty()
-        && !value
-            .chars()
-            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
-    {
-        return value.to_string();
-    }
-
-    let mut quoted = String::from("\"");
-    let mut backslashes = 0;
-    for ch in value.chars() {
-        if ch == '\\' {
-            backslashes += 1;
-            continue;
-        }
-        if ch == '"' {
-            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-        } else {
-            quoted.push_str(&"\\".repeat(backslashes));
-        }
-        backslashes = 0;
-        quoted.push(ch);
-    }
-    quoted.push_str(&"\\".repeat(backslashes * 2));
-    quoted.push('"');
-    quoted
 }
 
 fn cmd_encoded_powershell_command(script: &str) -> String {
@@ -996,7 +1015,7 @@ fn windows_command_line(command: &std::process::Command) -> std::io::Result<Stri
         .chain(command.get_args())
         .map(|value| {
             unicode_windows_value(value, "server command argument")
-                .map(|value| quote_windows_command_line_arg(&value))
+                .map(|value| super::quote_windows_command_line_arg(&value))
         })
         .collect::<std::io::Result<Vec<_>>>()
         .map(|parts| parts.join(" "))

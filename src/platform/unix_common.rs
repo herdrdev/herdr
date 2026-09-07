@@ -27,6 +27,38 @@ pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> s
     Ok(())
 }
 
+pub(crate) fn forward_remote_bridge_stdio(stream: crate::ipc::LocalStream) -> std::io::Result<()> {
+    use interprocess::TryClone as _;
+
+    let mut stdout = std::io::stdout().lock();
+    let mut socket_to_stdout = stream.try_clone()?;
+    let mut stdin_to_socket = stream;
+    let _upload = std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
+        let crate::ipc::LocalStream::UdSocket(stream) = stdin_to_socket;
+        let _ = stream.inner().shutdown(std::net::Shutdown::Write);
+    });
+    copy_flush(&mut socket_to_stdout, &mut stdout)
+}
+
+fn copy_flush<R: std::io::Read, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+) -> std::io::Result<()> {
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        writer.write_all(&buffer[..read])?;
+        writer.flush()?;
+    }
+}
+
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::window_size().map(|size| (size.columns, size.rows))
 }

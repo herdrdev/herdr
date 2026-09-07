@@ -19,7 +19,11 @@ fi
 case "$last" in
     'tee '*) cat >/dev/null; exit 0 ;;
 esac
-script=$(cat)
+case "$last" in
+    *'herdr-remote-output-ready:1'*) script=$last ;;
+    *) script=$(cat) ;;
+esac
+printf '\n%s\n' 'herdr-remote-output-ready:1'
 case "$script" in
     *'uname -s'*) uname -s; uname -m ;;
     *'version='*) echo /home/remote/.local/bin/herdr ;;
