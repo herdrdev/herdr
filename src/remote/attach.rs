@@ -1072,6 +1072,9 @@ pub(super) fn prepare_remote_herdr(
             "--remote-desktop requires a Windows SSH target",
         ));
     }
+    if platform.is_windows() {
+        eprintln!("Windows remote/server support is experimental. Report issues at https://github.com/herdrdev/herdr/issues.");
+    }
     let remote_herdr = RemoteHerdr::for_platform(platform);
     let override_binary = remote_binary_override_path()?;
     let custom_package = override_binary.is_some();

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(windows)]
+mod windows_handoff;
 
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
@@ -50,7 +52,11 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     let (server_event_tx, server_event_rx) = mpsc::channel(64);
     let should_quit = Arc::new(AtomicBool::new(false));
     #[cfg(windows)]
-    spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
+    let client_listener_control = spawn_windows_client_accept_thread(
+        crate::platform::TransferableLocalListener::bound(listener).unwrap(),
+        should_quit.clone(),
+        server_event_tx.clone(),
+    );
     let server_keybindings = app_keybindings(&app);
     let headless_size = app.state.headless_size;
 
@@ -61,8 +67,10 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         api_server: None,
         #[cfg(unix)]
         client_listener: listener,
+        #[cfg(windows)]
+        client_listener_control,
         client_socket_path: socket_path,
-        client_socket_identity,
+        client_socket_identity: Some(client_socket_identity),
         clients: HashMap::new(),
         #[cfg(unix)]
         next_client_id: 1,

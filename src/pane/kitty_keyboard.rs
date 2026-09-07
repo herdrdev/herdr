@@ -128,7 +128,7 @@ impl KittyKeyboardTracker {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn replay_ansi(&self) -> Option<String> {
         let mut ansi = String::new();
         if self.stack.is_empty() {
@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(tracker.flags, 0);
         assert!(tracker.stack.is_empty());
         assert_eq!(tracker.modify_other_keys_level(), 0);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         assert_eq!(tracker.replay_ansi(), None);
     }
 
@@ -202,7 +202,7 @@ mod tests {
 
         tracker.observe(b"\x1b[>4;1m");
         assert_eq!(tracker.modify_other_keys_level(), 1);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         assert_eq!(tracker.replay_ansi().as_deref(), Some("\x1b[>4;1m"));
 
         tracker.observe(b"\x1b[>4;2m");

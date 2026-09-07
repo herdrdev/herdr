@@ -240,6 +240,408 @@ impl SynchronousIoCancel {
     }
 }
 
+const LISTENER_HANDOFF_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) fn windows_socket_marker() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{}:{now}", std::process::id())
+}
+
+pub(crate) struct WindowsHandoffMarker {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    identity: crate::ipc::SocketFileIdentity,
+}
+
+impl WindowsHandoffMarker {
+    pub(crate) fn prepare(path: &std::path::Path) -> std::io::Result<Self> {
+        // Acquire write access before READY without changing the source marker.
+        let file = std::fs::OpenOptions::new().write(true).open(path)?;
+        Ok(Self {
+            file,
+            path: path.to_owned(),
+            identity: crate::ipc::SocketFileIdentity {
+                marker: windows_socket_marker().into_bytes(),
+            },
+        })
+    }
+
+    pub(crate) fn publish(mut self) -> crate::ipc::SocketFileIdentity {
+        use std::io::Write as _;
+        let result = (|| {
+            if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("marker_publish") {
+                return Err(std::io::Error::other(
+                    "test handoff marker publication failure",
+                ));
+            }
+            self.file.write_all(&self.identity.marker)?;
+            self.file.set_len(self.identity.marker.len() as u64)
+        })();
+        if let Err(err) = result {
+            // COMMIT has transferred ownership. Metadata failure cannot stop it.
+            tracing::warn!(path = %self.path.display(), %err, "failed to publish handoff socket marker; continuing as owner");
+        }
+        self.identity
+    }
+}
+
+/// Bounded IO only for the private replacement transaction. Public streams
+/// remain blocking: PIPE_NOWAIT can return zero while their write buffer is full.
+pub(crate) struct WindowsHandoffStream {
+    stream: crate::ipc::LocalStream,
+    deadline: std::cell::Cell<std::time::Instant>,
+}
+
+impl WindowsHandoffStream {
+    pub(crate) fn new(stream: crate::ipc::LocalStream, timeout: Duration) -> std::io::Result<Self> {
+        use interprocess::local_socket::traits::Stream as _;
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            deadline: std::cell::Cell::new(std::time::Instant::now() + timeout),
+        })
+    }
+
+    pub(crate) fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.deadline
+            .set(std::time::Instant::now() + timeout.unwrap_or(Duration::from_secs(30)));
+        Ok(())
+    }
+
+    fn check_deadline(&self) -> std::io::Result<()> {
+        if std::time::Instant::now() >= self.deadline.get() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "handoff IO timed out",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::io::Read for WindowsHandoffStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            self.check_deadline()?;
+            match crate::ipc::poll_local_stream_read_count(&mut self.stream, buffer)? {
+                crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
+                crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
+                crate::ipc::LocalStreamReadCount::Pending => {
+                    std::thread::sleep(Duration::from_millis(1))
+                }
+            }
+        }
+    }
+}
+
+impl std::io::Write for WindowsHandoffStream {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            self.check_deadline()?;
+            match std::io::Write::write(&mut self.stream, buffer) {
+                Ok(0) => {}
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                result => return result,
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) enum TransferableLocalListener {
+    Bound(crate::ipc::LocalListener),
+    Adopted(
+        interprocess::os::windows::named_pipe::PipeListener<
+            interprocess::os::windows::named_pipe::pipe_mode::Bytes,
+            interprocess::os::windows::named_pipe::pipe_mode::Bytes,
+        >,
+    ),
+}
+
+impl TransferableLocalListener {
+    pub(crate) fn bound(listener: crate::ipc::LocalListener) -> std::io::Result<Self> {
+        use interprocess::local_socket::traits::Listener as _;
+        use interprocess::local_socket::ListenerNonblockingMode;
+
+        listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
+        Ok(Self::Bound(listener))
+    }
+
+    pub(crate) fn from_handoff_handle(
+        handle: OwnedHandle,
+        path: &std::path::Path,
+    ) -> std::io::Result<Self> {
+        use interprocess::os::windows::named_pipe::PipeListenerOptions;
+
+        let path = format!(r"\\.\pipe\{}", path.to_string_lossy());
+        let options = PipeListenerOptions::new()
+            .path(path)
+            .nonblocking(true)
+            .to_owned()?;
+        Ok(Self::Adopted(
+            interprocess::os::windows::named_pipe::PipeListener::from_handle_and_options(
+                handle, options,
+            ),
+        ))
+    }
+
+    pub(crate) fn accept(&self) -> std::io::Result<crate::ipc::LocalStream> {
+        use interprocess::local_socket::traits::Listener as _;
+
+        match self {
+            Self::Bound(listener) => listener.accept(),
+            Self::Adopted(listener) => {
+                let stream = listener.accept()?;
+                stream.set_nonblocking(false)?;
+                Ok(crate::ipc::LocalStream::NamedPipe(stream.into()))
+            }
+        }
+    }
+
+    fn raw_handle(&self) -> usize {
+        use std::os::windows::io::AsRawHandle as _;
+
+        match self {
+            Self::Bound(crate::ipc::LocalListener::NamedPipe(listener)) => {
+                listener.as_ref().as_raw_handle() as usize
+            }
+            Self::Adopted(listener) => listener.as_raw_handle() as usize,
+        }
+    }
+}
+
+pub(crate) struct WindowsListenerHandoff {
+    handle: usize,
+    target_process: Option<OwnedHandle>,
+}
+
+impl WindowsListenerHandoff {
+    pub(crate) fn into_raw_handle(mut self) -> usize {
+        self.target_process.take();
+        std::mem::take(&mut self.handle)
+    }
+}
+
+impl Drop for WindowsListenerHandoff {
+    fn drop(&mut self) {
+        let Some(target_process) = self.target_process.as_ref() else {
+            return;
+        };
+        if self.handle != 0 && self.handle != INVALID_HANDLE_VALUE as usize {
+            let _ = close_handle_in_process(self.handle, target_process.as_raw_handle() as usize);
+        }
+    }
+}
+
+enum ListenerControlCommand {
+    Pause(std::sync::mpsc::Sender<std::io::Result<()>>),
+    Duplicate {
+        target_process: OwnedHandle,
+        reply: std::sync::mpsc::Sender<std::io::Result<WindowsListenerHandoff>>,
+    },
+    Resume(std::sync::mpsc::Sender<std::io::Result<()>>),
+    Release(std::sync::mpsc::Sender<std::io::Result<()>>),
+}
+
+#[derive(Clone)]
+pub(crate) struct WindowsListenerControl {
+    tx: std::sync::mpsc::Sender<ListenerControlCommand>,
+}
+
+impl WindowsListenerControl {
+    pub(crate) fn pause(&self) -> std::io::Result<()> {
+        self.request(ListenerControlCommand::Pause)
+    }
+
+    pub(crate) fn resume(&self) -> std::io::Result<()> {
+        self.request(ListenerControlCommand::Resume)
+    }
+
+    pub(crate) fn release_after_commit(&self) -> std::io::Result<()> {
+        self.request(ListenerControlCommand::Release)
+    }
+
+    pub(crate) fn duplicate_for_handoff(
+        &self,
+        target: &std::process::Child,
+    ) -> std::io::Result<WindowsListenerHandoff> {
+        use std::os::windows::io::{AsRawHandle as _, BorrowedHandle};
+
+        let target_process =
+            unsafe { BorrowedHandle::borrow_raw(target.as_raw_handle()) }.try_clone_to_owned()?;
+        self.request(|reply| ListenerControlCommand::Duplicate {
+            target_process,
+            reply,
+        })
+    }
+
+    fn request<T>(
+        &self,
+        command: impl FnOnce(std::sync::mpsc::Sender<std::io::Result<T>>) -> ListenerControlCommand,
+    ) -> std::io::Result<T> {
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let command = command(reply_tx);
+        let pause = matches!(command, ListenerControlCommand::Pause(_));
+        self.tx
+            .send(command)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "listener stopped"))?;
+        match reply_rx.recv_timeout(LISTENER_HANDOFF_TIMEOUT) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // A late pause is followed by this queued resume, so a timed-out
+                // request cannot leave the source listener frozen.
+                if pause {
+                    let (resume_tx, _) = std::sync::mpsc::channel();
+                    let _ = self.tx.send(ListenerControlCommand::Resume(resume_tx));
+                }
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "listener handoff control timed out",
+                ))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "listener stopped during handoff control",
+            )),
+        }
+    }
+}
+
+pub(crate) fn spawn_transferable_listener<F, S>(
+    listener: TransferableLocalListener,
+    label: &'static str,
+    mut should_stop: S,
+    mut on_accept: F,
+) -> (std::thread::JoinHandle<()>, WindowsListenerControl)
+where
+    F: FnMut(crate::ipc::LocalStream) + Send + 'static,
+    S: FnMut() -> bool + Send + 'static,
+{
+    let (control_tx, control_rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let mut paused = false;
+        loop {
+            let command = if paused {
+                match control_rx.recv_timeout(Duration::from_millis(10)) {
+                    Ok(command) => Some(command),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                control_rx.try_recv().ok()
+            };
+            if let Some(command) = command {
+                match command {
+                    ListenerControlCommand::Pause(reply) => {
+                        paused = true;
+                        let _ = reply.send(Ok(()));
+                    }
+                    ListenerControlCommand::Duplicate {
+                        target_process,
+                        reply,
+                    } => {
+                        let result = if paused {
+                            duplicate_handle_into_process(
+                                listener.raw_handle(),
+                                target_process.as_raw_handle() as usize,
+                            )
+                            .map(|handle| WindowsListenerHandoff {
+                                handle,
+                                target_process: Some(target_process),
+                            })
+                        } else {
+                            Err(std::io::Error::other(
+                                "listener must be paused before handoff duplication",
+                            ))
+                        };
+                        let _ = reply.send(result);
+                    }
+                    ListenerControlCommand::Resume(reply) => {
+                        paused = false;
+                        let _ = reply.send(Ok(()));
+                    }
+                    ListenerControlCommand::Release(reply) => {
+                        let _ = reply.send(Ok(()));
+                        break;
+                    }
+                }
+                continue;
+            }
+            if paused {
+                continue;
+            }
+            if should_stop() {
+                break;
+            }
+            match listener.accept() {
+                Ok(stream) => on_accept(stream),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(err) => {
+                    tracing::error!(err = %err, "{label} accept failed");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+        tracing::debug!("{label} accept thread exiting");
+    });
+    (thread, WindowsListenerControl { tx: control_tx })
+}
+
+pub(crate) fn named_pipe_peer_pid(stream: &crate::ipc::LocalStream) -> std::io::Result<u32> {
+    use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
+
+    let crate::ipc::LocalStream::NamedPipe(pipe) = stream;
+    let mut pid = 0;
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId(
+            pipe.as_handle().as_raw_handle(),
+            &mut pid,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(pid)
+    }
+}
+
+pub(crate) fn ensure_same_process_session(child_pid: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+
+    let mut source_session = 0;
+    let mut child_session = 0;
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut source_session) } == 0
+        || unsafe { ProcessIdToSessionId(child_pid, &mut child_session) } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    if source_session != child_session {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "handoff replacement started in a different Windows session",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn duplicate_handle_into_process(
     source: usize,
     target_process: usize,
@@ -2773,6 +3175,72 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn windows_private_handoff_io_preserves_full_writes_and_bounds_stalled_peers() {
+        use std::io::{Read, Write};
+        fn pair(label: &str) -> (crate::ipc::LocalStream, crate::ipc::LocalStream) {
+            let path = std::env::temp_dir()
+                .join(format!("herdr-handoff-io-{}-{label}", std::process::id()));
+            let listener = super::TransferableLocalListener::bound(
+                crate::ipc::bind_local_listener(&path).unwrap(),
+            )
+            .unwrap();
+            let connect_path = path.clone();
+            let client =
+                thread::spawn(move || crate::ipc::connect_local_stream(&connect_path).unwrap());
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let server = loop {
+                match listener.accept() {
+                    Ok(stream) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(err) => panic!("{err}"),
+                }
+            };
+            fs::remove_file(path).unwrap();
+            (server, client.join().unwrap())
+        }
+        let (server, mut client) = pair("full");
+        let receiver = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            let mut payload = vec![0; 1024 * 1024];
+            client.read_exact(&mut payload).unwrap();
+            assert!(payload
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == (index % 251) as u8));
+            let mut commit = [0; 10];
+            client.read_exact(&mut commit).unwrap();
+            assert_eq!(&commit, b"committed\n");
+        });
+        let mut stream = super::WindowsHandoffStream::new(server, Duration::from_secs(5)).unwrap();
+        let payload: Vec<_> = (0..1024 * 1024).map(|index| (index % 251) as u8).collect();
+        stream.write_all(&payload).unwrap();
+        stream.write_all(b"committed\n").unwrap();
+        receiver.join().unwrap();
+        assert!(crate::ipc::is_connection_closed_error(
+            &stream.write_all(b"closed").unwrap_err()
+        ));
+        let (server, _stalled_client) = pair("stall");
+        let start = Instant::now();
+        let mut stream =
+            super::WindowsHandoffStream::new(server, Duration::from_millis(100)).unwrap();
+        assert_eq!(
+            stream.write_all(&payload).unwrap_err().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        assert_eq!(
+            stream.read_exact(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
 
     #[test]
     fn windows_standard_plugin_runtime_paths_drop_only_disk_and_unc_verbatim_prefixes() {

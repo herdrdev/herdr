@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{layout::Rect, Frame};
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -128,7 +128,7 @@ fn decscusr_cursor_shape(style: crate::ghostty::CursorVisualStyle, blinking: boo
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputState {
     pub alternate_screen: bool,
@@ -419,7 +419,7 @@ impl PaneTerminal {
         Some((RetainedTextBuffer::new_search(cols, rows, 0), active_screen))
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(any(unix, windows, test))]
     pub fn input_state(&self) -> Option<InputState> {
         self.ghostty.input_state()
     }
@@ -597,7 +597,7 @@ impl PaneTerminal {
         self.ghostty.keyboard_protocol().unwrap_or(fallback)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn kitty_keyboard_state_ansi(&self) -> Option<String> {
         self.ghostty
             .kitty_keyboard_state_ansi()
@@ -1275,7 +1275,7 @@ impl GhosttyPaneTerminal {
             .and_then(|core| core.agent_osc_state.terminal_title().map(str::to_string))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn seed_terminal_title(&self, title: Option<String>) {
         if let Ok(mut core) = self.core.lock() {
             core.agent_osc_state.seed_terminal_title(title);
@@ -1553,7 +1553,7 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn seed_handoff_input_state(&self, input_state: InputState) {
         let Ok(mut core) = self.core.lock() else {
             return;
@@ -1617,7 +1617,7 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn seed_keyboard_protocol_flags(&self, flags: u16) {
         if flags == 0 {
             return;
@@ -1625,7 +1625,7 @@ impl GhosttyPaneTerminal {
         self.seed_keyboard_protocol_ansi(&format!("\x1b[>{flags}u"));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn seed_keyboard_protocol_ansi(&self, ansi: &str) {
         if ansi.is_empty() {
             return;
@@ -1764,7 +1764,7 @@ impl GhosttyPaneTerminal {
         ))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn kitty_keyboard_state_ansi(&self) -> Option<String> {
         let core = self.core.lock().ok()?;
         core.kitty_keyboard.replay_ansi()
@@ -1824,7 +1824,7 @@ impl GhosttyPaneTerminal {
 
     // This aggregate snapshot performs multiple terminal queries. Pane-scaled
     // callers should add a narrow accessor instead.
-    #[cfg(any(unix, test))]
+    #[cfg(any(unix, windows, test))]
     pub fn input_state(&self) -> Option<InputState> {
         let Ok(core) = self.core.lock() else {
             return None;

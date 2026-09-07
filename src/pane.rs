@@ -7,9 +7,11 @@ use std::sync::{
 };
 
 use bytes::Bytes;
-use portable_pty::CommandBuilder;
 #[cfg(all(test, unix))]
-use portable_pty::{native_pty_system, PtySize};
+use portable_pty::native_pty_system;
+use portable_pty::CommandBuilder;
+#[cfg(any(windows, all(test, unix)))]
+use portable_pty::PtySize;
 use ratatui::{layout::Rect, Frame};
 #[cfg(test)]
 use tokio::sync::watch;
@@ -40,7 +42,7 @@ use self::agent_detection::{
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
 };
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 pub use self::terminal::InputState;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{
@@ -693,7 +695,7 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn spawn_basic_detection_task(
     pane_id: PaneId,
     child_pid: Arc<AtomicU32>,
@@ -1241,6 +1243,8 @@ pub struct PaneRuntime {
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     child_wait_completed: Option<Arc<AtomicBool>>,
+    #[cfg(windows)]
+    handoff_wait_start: Option<tokio::sync::oneshot::Sender<()>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
@@ -1284,10 +1288,6 @@ impl PaneRuntimeIo {
     }
 
     #[cfg(windows)]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     fn windows_handoff_supported(&self) -> bool {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.supports_handoff(),
@@ -1297,10 +1297,6 @@ impl PaneRuntimeIo {
     }
 
     #[cfg(windows)]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     fn duplicate_windows_handoff(
         &self,
         target: &std::process::Child,
@@ -1324,10 +1320,6 @@ impl PaneRuntimeIo {
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     fn begin_handoff(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.begin_handoff(timeout),
@@ -1337,10 +1329,6 @@ impl PaneRuntimeIo {
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     fn set_handoff_paused(&self, paused: bool) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => {
@@ -1356,13 +1344,18 @@ impl PaneRuntimeIo {
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     fn release_after_commit(&self) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.release_after_commit(),
+            #[cfg(test)]
+            PaneRuntimeIo::TestChannel { .. } => Ok(()),
+        }
+    }
+
+    #[cfg(windows)]
+    fn activate_after_handoff(&self) -> std::io::Result<()> {
+        match self {
+            PaneRuntimeIo::Actor(actor) => actor.activate_after_handoff(),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => Ok(()),
         }
@@ -1583,7 +1576,7 @@ fn shutdown_pane_processes(
     );
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn truncate_handoff_history(history: String, max_bytes: usize) -> String {
     if history.len() <= max_bytes {
         return history;
@@ -1865,19 +1858,11 @@ impl PaneRuntime {
     }
 
     #[cfg(windows)]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     pub(crate) fn windows_handoff_supported(&self) -> bool {
         self.io.windows_handoff_supported()
     }
 
     #[cfg(windows)]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     pub(crate) fn duplicate_windows_handoff(
         &self,
         target: &std::process::Child,
@@ -1886,10 +1871,6 @@ impl PaneRuntime {
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     pub fn preserve_for_handoff(mut self) {
         if let Err(err) = self.io.release_after_commit() {
             warn!(
@@ -1905,16 +1886,28 @@ impl PaneRuntime {
         self.preserve_processes_on_drop = true;
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn assume_handoff_ownership(&mut self) {
         self.preserve_processes_on_drop = false;
+        #[cfg(windows)]
+        if let Some(start) = self.handoff_wait_start.take() {
+            let _ = start.send(());
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn activate_after_handoff(&self) -> std::io::Result<()> {
+        self.io.activate_after_handoff()?;
+        if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("activation_ack") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "test handoff activation acknowledgement timeout",
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     pub fn set_handoff_reader_paused(&self, paused: bool) {
         if let Err(err) = self.io.set_handoff_paused(paused) {
             warn!(
@@ -1927,15 +1920,11 @@ impl PaneRuntime {
     }
 
     #[cfg(any(unix, windows))]
-    #[cfg_attr(
-        all(windows, not(test)),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
     pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         self.io.begin_handoff(timeout)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn handoff_runtime_state(
         &self,
         pane_id: u32,
@@ -1960,7 +1949,7 @@ impl PaneRuntime {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn handoff_history_ansi(&self) -> Option<String> {
         if self.terminal.alternate_screen_active() {
             return None;
@@ -2144,8 +2133,8 @@ impl PaneRuntime {
         )
     }
 
-    #[cfg(unix)]
-    pub fn from_handoff_fd(
+    #[cfg(any(unix, windows))]
+    pub fn from_handoff(
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
@@ -2154,7 +2143,11 @@ impl PaneRuntime {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
-        let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
+        #[cfg(unix)]
+        let master_fd = import.master_fd;
+        #[cfg(windows)]
+        let windows_pty = import.windows_pty;
+        let state = import.state;
         let crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
             child_pid,
@@ -2169,9 +2162,31 @@ impl PaneRuntime {
             initial_history_ansi,
         } = state;
         let pane_id = PaneId::from_raw(pane_id);
+        #[cfg(unix)]
         use std::os::fd::FromRawFd;
 
+        #[cfg(unix)]
         let master_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(master_fd) };
+
+        #[cfg(windows)]
+        let spawned = unsafe {
+            crate::pty::backend::adopt_windows_handoff(
+                windows_pty,
+                PtySize {
+                    rows,
+                    cols,
+                    pixel_width: cell_width_px.min(u16::MAX as u32) as u16,
+                    pixel_height: cell_height_px.min(u16::MAX as u32) as u16,
+                },
+            )
+        }?;
+        #[cfg(windows)]
+        if spawned.child.process_id() != Some(child_pid) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "transferred pane process identity does not match its manifest",
+            ));
+        }
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
@@ -2207,6 +2222,46 @@ impl PaneRuntime {
         let content_seq = Arc::new(AtomicU64::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+
+        #[cfg(unix)]
+        let child_wait_completed = None;
+        #[cfg(windows)]
+        let (handoff_wait_start, wait_start) = tokio::sync::oneshot::channel();
+        #[cfg(windows)]
+        let child_wait_completed = {
+            let completed = Arc::new(AtomicBool::new(false));
+            let completed_for_wait = Arc::clone(&completed);
+            let wait_events = events.clone();
+            let rt = tokio::runtime::Handle::current();
+            let mut child = spawned.child;
+            // Before COMMIT, dropping the runtime cancels this task and closes
+            // only the duplicate child handle; no exit event is published.
+            tokio::spawn(async move {
+                if wait_start.await.is_err() {
+                    return;
+                }
+                tokio::task::spawn_blocking(move || {
+                    let exit_reason = match child.wait() {
+                        Ok(status) => {
+                            let exit_reason = crate::platform::classify_child_exit(&status);
+                            let status_text = format!("{status:?}");
+                            crate::logging::pane_exited(pane_id.raw(), &status_text);
+                            exit_reason
+                        }
+                        Err(err) => {
+                            crate::logging::pane_exit_failed(pane_id.raw(), &err.to_string());
+                            crate::platform::ChildExitReason::WaitFailed
+                        }
+                    };
+                    completed_for_wait.store(true, Ordering::Release);
+                    let _ = rt.block_on(wait_events.send(AppEvent::PaneDied {
+                        pane_id,
+                        exit_reason,
+                    }));
+                });
+            });
+            Some(completed)
+        };
 
         let io = {
             let terminal = terminal.clone();
@@ -2268,22 +2323,31 @@ impl PaneRuntime {
                     terminal_responses: result.terminal_responses,
                 }
             });
-            let exit_events = events.clone();
-            let on_reader_exit = Box::new(move || {
-                // Imported handoff panes have no child wait handle, so their exit cause is
-                // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
-                let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason: crate::platform::ChildExitReason::Handoff,
-                }));
-                debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
-            });
+            #[cfg(unix)]
+            let on_reader_exit = {
+                let exit_events = events.clone();
+                Some(Box::new(move || {
+                    // Unix imports have no child wait handle, so their exit cause is unknown.
+                    let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
+                        pane_id,
+                        exit_reason: crate::platform::ChildExitReason::Handoff,
+                    }));
+                    debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
+                }) as Box<dyn FnOnce() + Send + 'static>)
+            };
+            #[cfg(windows)]
+            let on_reader_exit = None;
             PaneRuntimeIo::Actor(PtyIoActor::spawn(PtyIoActorConfig {
                 pane_id: pane_id.raw(),
+                #[cfg(unix)]
                 master_fd,
+                #[cfg(windows)]
+                master: spawned.master,
+                #[cfg(windows)]
+                handoff_child: spawned.handoff_child,
                 initially_quiesced: true,
                 on_read,
-                on_reader_exit: Some(on_reader_exit),
+                on_reader_exit,
             })?)
         };
 
@@ -2304,7 +2368,9 @@ impl PaneRuntime {
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,
-            child_wait_completed: None,
+            child_wait_completed,
+            #[cfg(windows)]
+            handoff_wait_start: Some(handoff_wait_start),
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
@@ -2883,6 +2949,8 @@ impl PaneRuntime {
             child_pid,
             reported_cwd,
             child_wait_completed: Some(child_wait_completed),
+            #[cfg(windows)]
+            handoff_wait_start: None,
             kitty_keyboard_flags,
             content_seq,
             content_write_lock,
@@ -3047,7 +3115,7 @@ impl PaneRuntime {
         result
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(any(unix, windows, test))]
     pub fn input_state(&self) -> Option<InputState> {
         self.terminal.input_state()
     }
@@ -3458,6 +3526,8 @@ impl PaneRuntime {
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
                 child_wait_completed: None,
+                #[cfg(windows)]
+                handoff_wait_start: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
@@ -4122,6 +4192,8 @@ mod tests {
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
+            #[cfg(windows)]
+            handoff_wait_start: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
@@ -4159,6 +4231,8 @@ mod tests {
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
+            #[cfg(windows)]
+            handoff_wait_start: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),

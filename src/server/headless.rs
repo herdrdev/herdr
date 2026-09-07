@@ -21,15 +21,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 use interprocess::local_socket::traits::Listener as _;
-#[cfg(windows)]
-use interprocess::local_socket::traits::Stream as _;
 #[cfg(unix)]
 use interprocess::local_socket::ListenerNonblockingMode;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
-#[cfg(windows)]
-use tracing::error;
 use tracing::{debug, info, warn};
 
 use base64::Engine;
@@ -39,9 +36,10 @@ use crate::api;
 use crate::app;
 use crate::config;
 use crate::events::AppEvent;
+#[cfg(unix)]
+use crate::ipc::LocalListener;
 use crate::ipc::{
-    bind_local_listener, remove_socket_file_if_owned, socket_file_identity, LocalListener,
-    SocketFileIdentity,
+    bind_local_listener, remove_socket_file_if_owned, socket_file_identity, SocketFileIdentity,
 };
 use crate::protocol::{
     self, AttachScrollDirection, AttachScrollSource, FrameData, ServerMessage, MAX_FRAME_SIZE,
@@ -197,12 +195,13 @@ pub struct HeadlessServer {
     #[cfg(unix)]
     api_tx: Option<api::ApiRequestSender>,
     // Kept on every platform so dropping HeadlessServer owns API server shutdown.
-    #[cfg_attr(windows, allow(dead_code))]
     api_server: Option<api::ServerHandle>,
     #[cfg(unix)]
     client_listener: LocalListener,
+    #[cfg(windows)]
+    client_listener_control: crate::platform::WindowsListenerControl,
     client_socket_path: PathBuf,
-    client_socket_identity: SocketFileIdentity,
+    client_socket_identity: Option<SocketFileIdentity>,
     clients: HashMap<u64, ClientConnection>,
     #[cfg(unix)]
     next_client_id: u64,
@@ -258,33 +257,23 @@ pub struct HeadlessServer {
 
 #[cfg(windows)]
 fn spawn_windows_client_accept_thread(
-    listener: LocalListener,
+    listener: crate::platform::TransferableLocalListener,
     should_quit: Arc<AtomicBool>,
     server_event_tx: mpsc::Sender<ServerEvent>,
-) {
-    std::thread::spawn(move || {
-        let mut next_client_id = 1_u64;
-        while !should_quit.load(Ordering::Acquire) {
-            let stream = match listener.accept() {
-                Ok(stream) => stream,
-                Err(err) => {
-                    if should_quit.load(Ordering::Acquire) {
-                        break;
-                    }
-                    error!(err = %err, "client listener accept failed");
-                    std::thread::sleep(Duration::from_millis(50));
-                    continue;
-                }
-            };
-
+) -> crate::platform::WindowsListenerControl {
+    let stop = should_quit.clone();
+    let mut next_client_id = 1_u64;
+    let (_, control) = crate::platform::spawn_transferable_listener(
+        listener,
+        "client listener",
+        move || stop.load(Ordering::Acquire),
+        move |mut stream| {
             let client_id = next_client_id;
             next_client_id = next_client_id.saturating_add(1);
-
-            if let Err(err) = stream.set_nonblocking(true) {
-                warn!(err = %err, "failed to set client stream nonblocking");
-                continue;
+            if let Err(err) = crate::ipc::set_local_stream_polling(&mut stream, true) {
+                warn!(err = %err, "failed to configure client stream polling");
+                return;
             }
-
             let should_quit = should_quit.clone();
             let server_event_tx = server_event_tx.clone();
             std::thread::spawn(move || {
@@ -297,8 +286,9 @@ fn spawn_windows_client_accept_thread(
                     debug!(client_id, err = %err, "client handshake failed");
                 }
             });
-        }
-    });
+        },
+    );
+    control
 }
 
 impl HeadlessServer {
@@ -323,14 +313,41 @@ impl HeadlessServer {
         let client_socket_identity = socket_file_identity(&client_path)?;
         info!(path = %client_path.display(), "client protocol socket listening");
 
-        // Set non-blocking on Unix so we can poll it from the event loop.
+        #[cfg(windows)]
+        let listener = crate::platform::TransferableLocalListener::bound(listener)?;
         #[cfg(unix)]
         listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
+        Ok(Self::new_on_listener(
+            app,
+            config_diagnostics,
+            api_tx,
+            api_server,
+            should_quit,
+            listener,
+            client_socket_identity,
+        ))
+    }
+
+    fn new_on_listener(
+        app: app::App,
+        config_diagnostics: &[String],
+        api_tx: Option<api::ApiRequestSender>,
+        api_server: Option<api::ServerHandle>,
+        should_quit: Arc<AtomicBool>,
+        #[cfg(unix)] listener: LocalListener,
+        #[cfg(windows)] listener: crate::platform::TransferableLocalListener,
+        client_socket_identity: SocketFileIdentity,
+    ) -> Self {
+        let client_path = client_socket_path();
 
         // Channel for server events from client threads.
         let (server_event_tx, server_event_rx) = mpsc::channel(64);
         #[cfg(windows)]
-        spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
+        let client_listener_control = spawn_windows_client_accept_thread(
+            listener,
+            should_quit.clone(),
+            server_event_tx.clone(),
+        );
 
         let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
@@ -338,15 +355,17 @@ impl HeadlessServer {
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
         let _ = api_tx;
-        Ok(Self {
+        Self {
             app,
             #[cfg(unix)]
             api_tx,
             api_server,
             #[cfg(unix)]
             client_listener: listener,
+            #[cfg(windows)]
+            client_listener_control,
             client_socket_path: client_path,
-            client_socket_identity,
+            client_socket_identity: Some(client_socket_identity),
             clients: HashMap::new(),
             #[cfg(unix)]
             next_client_id: 1,
@@ -379,7 +398,7 @@ impl HeadlessServer {
             should_quit,
             server_event_rx,
             server_event_tx,
-        })
+        }
     }
 
     /// Runs the headless server event loop until shutdown.
@@ -734,7 +753,7 @@ impl HeadlessServer {
         stamp
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn resize_shared_runtime_to_effective_size(&mut self) {
         self.resize_shared_runtime_to_effective_size_with_pending_agent_resumes(true);
     }
@@ -1104,8 +1123,7 @@ impl HeadlessServer {
         )
     }
 
-    /// Windows named-pipe clients can block in connect unless the server has a
-    /// pending blocking accept. The dedicated accept thread handles that path.
+    /// The dedicated Windows accept thread polls the pending pipe instance.
     #[cfg(windows)]
     fn accept_client_connections(&mut self) -> io::Result<()> {
         Ok(())
@@ -1751,7 +1769,7 @@ impl HeadlessServer {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn disconnect_all_clients_for_handoff(&mut self) {
         let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
         for client_id in client_ids {

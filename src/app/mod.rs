@@ -30,7 +30,7 @@ mod window_title;
 mod worktrees;
 
 use std::collections::HashMap;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -92,7 +92,7 @@ impl AppPolicy {
         background_updates: false,
     };
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) const HANDOFF_REPLACEMENT: Self = Self {
         restore_session: false,
         persist_session: true,
@@ -626,7 +626,7 @@ impl App {
         app
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn new_from_handoff(
         config: &Config,
         config_diagnostic: Option<String>,
@@ -686,9 +686,14 @@ impl App {
         self.terminal_runtimes.set_handoff_readers_paused(false);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn assume_handoff_ownership(&mut self) {
         self.terminal_runtimes.assume_handoff_ownership();
+    }
+
+    #[cfg(windows)]
+    pub fn activate_handoff_runtimes(&self) {
+        self.terminal_runtimes.activate_after_handoff()
     }
 
     pub(crate) fn ensure_default_workspace(&mut self) -> bool {

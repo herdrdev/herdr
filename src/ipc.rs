@@ -29,7 +29,7 @@ pub(crate) struct SocketFileIdentity {
     #[cfg(unix)]
     ino: u64,
     #[cfg(windows)]
-    marker: Vec<u8>,
+    pub(crate) marker: Vec<u8>,
 }
 
 pub(crate) fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
@@ -73,7 +73,7 @@ pub(crate) fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
             .name(name)
             .reclaim_name(false)
             .create_sync()?;
-        fs::write(path, windows_socket_marker())?;
+        fs::write(path, crate::platform::windows_socket_marker())?;
         Ok(listener)
     }
 }
@@ -156,7 +156,7 @@ pub(crate) fn bind_private_local_listener(path: &Path) -> io::Result<LocalListen
             .reclaim_name(false)
             .security_descriptor(security_descriptor)
             .create_sync()?;
-        fs::write(path, windows_socket_marker())?;
+        fs::write(path, crate::platform::windows_socket_marker())?;
         Ok(listener)
     }
 }
@@ -314,15 +314,6 @@ pub(crate) fn remove_socket_file_if_owned(
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
-}
-
-#[cfg(windows)]
-fn windows_socket_marker() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{}:{now}", std::process::id())
 }
 
 #[cfg(unix)]

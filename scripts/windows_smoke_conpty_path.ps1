@@ -73,10 +73,15 @@ try {
         throw "command failed with exit code $LASTEXITCODE`: $exe --default-config"
     }
 
-    $server = Start-Process -FilePath $exe -ArgumentList "server" -PassThru -WindowStyle Hidden
+    $serverErrorPath = Join-Path $fakeDir "server-stderr.log"
+    $server = Start-Process -FilePath $exe -ArgumentList "server" -PassThru -WindowStyle Hidden -RedirectStandardError $serverErrorPath
     $deadline = (Get-Date).AddSeconds(10)
     do {
         Start-Sleep -Milliseconds 250
+        if ($server.HasExited -and $server.ExitCode -ne 0) {
+            $serverError = Get-Content -LiteralPath $serverErrorPath -Raw
+            throw "server exited with exit code $($server.ExitCode) before becoming ready: $serverError"
+        }
         $status = & $exe status server 2>&1
         if ($LASTEXITCODE -eq 0 -and (($status -join "`n") -match "status: running")) {
             break
@@ -96,7 +101,8 @@ try {
         $ErrorActionPreference = $savedErrorActionPreference
     }
     if ($createdExitCode -ne 0) {
-        throw "workspace create failed with exit code $createdExitCode`: $($created -join "`n")"
+        $serverError = Get-Content -LiteralPath $serverErrorPath -Raw
+        throw "workspace create failed with exit code $createdExitCode`: $($created -join "`n")`n$serverError"
     }
     $paneId = (($created -join "`n") | ConvertFrom-Json).result.root_pane.pane_id
     if ([string]::IsNullOrWhiteSpace($paneId)) {

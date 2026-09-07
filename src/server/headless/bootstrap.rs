@@ -116,7 +116,7 @@ fn take_startup_cwd() -> Option<PathBuf> {
     (!cwd.is_empty()).then(|| PathBuf::from(cwd))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> {
     let loaded_config = config::Config::load();
     let mut received = crate::server::handoff::receive(socket_path, token)?;
@@ -127,6 +127,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
     let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
+    #[cfg(unix)]
     for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
         let pane_id = pane.pane_id;
         imports.insert(
@@ -137,6 +138,19 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             },
         );
     }
+
+    #[cfg(windows)]
+    for (pane, windows_pty) in received.manifest.panes.into_iter().zip(received.ptys) {
+        imports.insert(
+            pane.pane_id,
+            crate::handoff_runtime::ImportedHandoffRuntime {
+                windows_pty,
+                state: pane,
+            },
+        );
+    }
+    #[cfg(windows)]
+    let [api_listener, client_listener] = received.listeners;
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -152,37 +166,79 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &received.manifest.snapshot,
             &mut imports,
         )?;
-        crate::server::handoff::report_restored(&mut received.stream)?;
-        if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
-            return Err(io::Error::other(
-                "test handoff import failure after restored",
-            ));
-        }
-        wait_for_old_public_sockets_to_close(Duration::from_secs(5))?;
+        #[cfg(unix)]
+        let mut server = {
+            crate::server::handoff::report_restored(&mut received.stream)?;
+            if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
+                return Err(io::Error::other(
+                    "test handoff import failure after restored",
+                ));
+            }
+            wait_for_old_public_sockets_to_close(Duration::from_secs(5))?;
 
-        let api_server = api::start_server_with_stop_control(
-            api_tx.clone(),
-            event_hub.clone(),
-            should_quit.clone(),
-        )?;
-        let mut server = HeadlessServer::new(
-            app,
-            &loaded_config.diagnostics,
-            Some(api_tx.clone()),
-            Some(api_server),
-            should_quit,
-        )?;
-        // Carried across before any client attaches, so the first title sent is
-        // the override rather than the configured one it replaced.
+            let api_server = api::start_server_with_stop_control(
+                api_tx.clone(),
+                event_hub.clone(),
+                should_quit.clone(),
+            )?;
+            let server = HeadlessServer::new(
+                app,
+                &loaded_config.diagnostics,
+                Some(api_tx.clone()),
+                Some(api_server),
+                should_quit,
+            )?;
+            crate::server::handoff::report_ready(&mut received.stream)?;
+            crate::server::handoff::wait_committed(&mut received.stream)?;
+            server
+        };
+        #[cfg(windows)]
+        let mut server = {
+            let api_marker = crate::platform::WindowsHandoffMarker::prepare(&api::socket_path())?;
+            let client_marker =
+                crate::platform::WindowsHandoffMarker::prepare(&client_socket_path())?;
+            if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
+                return Err(io::Error::other(
+                    "test handoff import failure after restored",
+                ));
+            }
+            crate::server::handoff::report_ready(&mut received.stream)?;
+            crate::server::handoff::wait_committed(&mut received.stream)?;
+            if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("marker_delayed") {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            let api_server = api::start_server_from_handoff(
+                api_listener,
+                api_marker.publish(),
+                api_tx.clone(),
+                event_hub.clone(),
+                should_quit.clone(),
+            );
+            HeadlessServer::new_on_listener(
+                app,
+                &loaded_config.diagnostics,
+                Some(api_tx.clone()),
+                Some(api_server),
+                should_quit,
+                client_listener,
+                client_marker.publish(),
+            )
+        };
         server.api_window_title = received.manifest.api_window_title.take();
-        crate::server::handoff::report_ready(&mut received.stream)?;
-        crate::server::handoff::wait_committed(&mut received.stream)?;
         server.app.assume_handoff_ownership();
-        server.app.unpause_handoff_readers();
-        server.pending_handoff_repaint_nudge = true;
-        if let Err(err) = crate::server::handoff::report_owned(&mut received.stream) {
-            warn!(err = %err, "failed to report handoff ownership; continuing as owner");
+        #[cfg(unix)]
+        {
+            server.app.unpause_handoff_readers();
+            server.pending_handoff_repaint_nudge = true;
         }
+        #[cfg(windows)]
+        server.app.activate_handoff_runtimes();
+        if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() != Ok("lost_owned") {
+            if let Err(err) = crate::server::handoff::report_owned(&mut received.stream) {
+                warn!(err = %err, "failed to report handoff ownership; continuing as owner");
+            }
+        }
+        drop(received.stream);
         info!("handoff import server started");
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
@@ -194,7 +250,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
     result
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn run_handoff_import_server(_socket_path: &Path, _token: &str) -> io::Result<()> {
     Err(io::Error::other("live handoff is only supported on Unix"))
 }

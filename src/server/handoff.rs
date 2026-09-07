@@ -1,35 +1,39 @@
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(unix)]
+type HandoffStream = UnixStream;
+#[cfg(windows)]
+type HandoffStream = crate::platform::WindowsHandoffStream;
+#[cfg(any(unix, windows))]
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::process::{Child, Command};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use tracing::{info, warn};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const HANDOFF_VERSION: u32 = 1;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const OWNED_ACK_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(unix)]
 pub(crate) const MAX_FDS_PER_HANDOFF: usize = 64;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) const MAX_REPLAY_BYTES_PER_PANE: usize = 8 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) const COMMIT_TIMEOUT: Duration = READY_TIMEOUT;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Serialize, Deserialize)]
 pub(crate) struct HandoffManifest {
     pub version: u32,
@@ -46,19 +50,24 @@ pub(crate) struct HandoffManifest {
     pub api_window_title: Option<String>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) struct ReceivedHandoff {
     pub manifest: HandoffManifest,
+    #[cfg(unix)]
     pub fds: Vec<RawFd>,
-    pub stream: UnixStream,
+    #[cfg(windows)]
+    pub ptys: Vec<crate::pty::backend::WindowsPtyHandoff>,
+    #[cfg(windows)]
+    pub listeners: [crate::platform::TransferableLocalListener; 2],
+    pub stream: HandoffStream,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn handoff_socket_path() -> PathBuf {
     crate::session::data_dir().join(format!("herdr-handoff-{}.sock", std::process::id()))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn spawn_handoff_import(
     import_exe: Option<&Path>,
     socket_path: &Path,
@@ -105,33 +114,6 @@ pub(crate) fn spawn_handoff_import(
 }
 
 #[cfg(unix)]
-pub(crate) fn cleanup_failed_import_child(child: &mut Child) {
-    let pid = child.id();
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            info!(pid, status = %status, "handoff import server exited during rollback");
-            return;
-        }
-        Ok(None) => {}
-        Err(err) => {
-            warn!(pid, err = %err, "failed to inspect handoff import server before rollback");
-        }
-    }
-
-    if let Err(err) = child.kill() {
-        warn!(pid, err = %err, "failed to kill handoff import server during rollback");
-    }
-    match child.wait() {
-        Ok(status) => {
-            info!(pid, status = %status, "handoff import server reaped during rollback");
-        }
-        Err(err) => {
-            warn!(pid, err = %err, "failed to reap handoff import server during rollback");
-        }
-    }
-}
-
-#[cfg(unix)]
 pub(crate) fn bind_listener(socket_path: &Path) -> io::Result<UnixListener> {
     let _ = std::fs::remove_file(socket_path);
     let listener = UnixListener::bind(socket_path)?;
@@ -173,7 +155,10 @@ pub(crate) fn accept_and_validate_on(
 }
 
 #[cfg(unix)]
-pub(crate) fn send_fds_and_wait_restored(stream: &mut UnixStream, fds: &[RawFd]) -> io::Result<()> {
+pub(crate) fn send_fds_and_wait_restored(
+    stream: &mut HandoffStream,
+    fds: &[RawFd],
+) -> io::Result<()> {
     if fds.len() > MAX_FDS_PER_HANDOFF {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -192,8 +177,8 @@ pub(crate) fn send_fds_and_wait_restored(stream: &mut UnixStream, fds: &[RawFd])
     Ok(())
 }
 
-#[cfg(unix)]
-pub(crate) fn wait_ready(stream: &mut UnixStream) -> io::Result<()> {
+#[cfg(any(unix, windows))]
+pub(crate) fn wait_ready(stream: &mut HandoffStream) -> io::Result<()> {
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
     let ready = read_line_unbuffered(&mut *stream)?;
     if ready.trim_end() != "ready" {
@@ -202,14 +187,14 @@ pub(crate) fn wait_ready(stream: &mut UnixStream) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-pub(crate) fn report_committed(stream: &mut UnixStream) -> io::Result<()> {
-    stream.write_all(b"committed\n")?;
-    stream.flush()
+#[cfg(any(unix, windows))]
+pub(crate) fn report_committed(stream: &mut HandoffStream) -> io::Result<()> {
+    // Completing this write is irreversible. Do not add a fallible flush.
+    stream.write_all(b"committed\n")
 }
 
-#[cfg(unix)]
-pub(crate) fn wait_owned_ack(stream: &mut UnixStream) {
+#[cfg(any(unix, windows))]
+pub(crate) fn wait_owned_ack(stream: &mut HandoffStream) {
     if let Err(err) = stream.set_read_timeout(Some(OWNED_ACK_TIMEOUT)) {
         warn!(err = %err, "failed to set handoff ownership ack timeout");
         return;
@@ -238,6 +223,19 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
     let manifest_line = read_line_unbuffered(&mut stream)?;
     let manifest: HandoffManifest =
         serde_json::from_str(&manifest_line).map_err(io::Error::other)?;
+    validate_manifest(&manifest)?;
+    stream.write_all(b"validated\n")?;
+    stream.flush()?;
+    let fds = recv_fds(&stream, manifest.panes.len())?;
+    Ok(ReceivedHandoff {
+        manifest,
+        fds,
+        stream,
+    })
+}
+
+#[cfg(any(unix, windows))]
+fn validate_manifest(manifest: &HandoffManifest) -> io::Result<()> {
     if manifest.version != HANDOFF_VERSION {
         return Err(io::Error::other(format!(
             "unsupported handoff version {}",
@@ -265,31 +263,24 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             crate::build_info::version()
         )));
     }
-    stream.write_all(b"validated\n")?;
-    stream.flush()?;
-    let fds = recv_fds(&stream, manifest.panes.len())?;
-    Ok(ReceivedHandoff {
-        manifest,
-        fds,
-        stream,
-    })
+    Ok(())
 }
 
 #[cfg(unix)]
-pub(crate) fn report_restored(stream: &mut UnixStream) -> io::Result<()> {
+pub(crate) fn report_restored(stream: &mut HandoffStream) -> io::Result<()> {
     stream.write_all(b"restored\n")?;
     stream.flush()
 }
 
-#[cfg(unix)]
-pub(crate) fn report_ready(stream: &mut UnixStream) -> io::Result<()> {
+#[cfg(any(unix, windows))]
+pub(crate) fn report_ready(stream: &mut HandoffStream) -> io::Result<()> {
     stream.write_all(b"ready\n")?;
     stream.flush()
 }
 
-#[cfg(unix)]
-pub(crate) fn wait_committed(stream: &mut UnixStream) -> io::Result<()> {
-    stream.set_read_timeout(Some(READY_TIMEOUT))?;
+#[cfg(any(unix, windows))]
+pub(crate) fn wait_committed(stream: &mut HandoffStream) -> io::Result<()> {
+    stream.set_read_timeout(Some(COMMIT_TIMEOUT))?;
     let committed = read_line_unbuffered(&mut *stream)?;
     if committed.trim_end() != "committed" {
         return Err(io::Error::other("handoff source did not commit"));
@@ -297,13 +288,13 @@ pub(crate) fn wait_committed(stream: &mut UnixStream) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-pub(crate) fn report_owned(stream: &mut UnixStream) -> io::Result<()> {
+#[cfg(any(unix, windows))]
+pub(crate) fn report_owned(stream: &mut HandoffStream) -> io::Result<()> {
     stream.write_all(b"owned\n")?;
     stream.flush()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn manifest_for(
     snapshot: crate::persist::SessionSnapshot,
     panes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
@@ -321,6 +312,144 @@ pub(crate) fn manifest_for(
         panes,
         api_window_title,
     }
+}
+
+#[cfg(windows)]
+#[derive(Serialize, Deserialize)]
+struct WindowsResources {
+    panes: Vec<[usize; 6]>,
+    listeners: [usize; 2],
+}
+
+#[cfg(windows)]
+pub(crate) fn bind_listener(path: &Path) -> io::Result<crate::platform::TransferableLocalListener> {
+    crate::platform::TransferableLocalListener::bound(crate::ipc::bind_private_local_listener(
+        path,
+    )?)
+}
+
+#[cfg(windows)]
+pub(crate) fn accept_windows_handoff(
+    listener: crate::platform::TransferableLocalListener,
+    child: &Child,
+    token: &str,
+    manifest: &HandoffManifest,
+    panes: Vec<crate::pty::backend::WindowsPtyHandoff>,
+    listeners: [crate::platform::WindowsListenerHandoff; 2],
+) -> io::Result<HandoffStream> {
+    let deadline = std::time::Instant::now() + READY_TIMEOUT;
+    let stream = loop {
+        match listener.accept() {
+            Ok(stream) => break stream,
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "handoff accept timed out",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => return Err(err),
+        }
+    };
+    if crate::platform::named_pipe_peer_pid(&stream)? != child.id() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "handoff peer is not the spawned replacement",
+        ));
+    }
+    let mut stream = HandoffStream::new(stream, READY_TIMEOUT)?;
+    if read_line_unbuffered(&mut stream)?.trim_end() != token {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "handoff import token mismatch",
+        ));
+    }
+    serde_json::to_writer(&mut stream, manifest).map_err(io::Error::other)?;
+    stream.write_all(b"\n")?;
+    if read_line_unbuffered(&mut stream)?.trim_end() != "validated" {
+        return Err(io::Error::other("handoff import did not validate manifest"));
+    }
+    // From this point, only the target owns these duplicates. On failure the
+    // caller kills and reaps the exact child before resuming the source.
+    let resources = WindowsResources {
+        panes: panes
+            .into_iter()
+            .map(|pty| pty.into_raw_handles())
+            .collect(),
+        listeners: listeners.map(|listener| listener.into_raw_handle()),
+    };
+    serde_json::to_writer(&mut stream, &resources).map_err(io::Error::other)?;
+    stream.write_all(b"\n")?;
+    wait_ready(&mut stream)?;
+    Ok(stream)
+}
+
+#[cfg(windows)]
+pub(crate) fn receive(path: &Path, token: &str) -> io::Result<ReceivedHandoff> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    let mut stream = HandoffStream::new(crate::ipc::connect_local_stream(path)?, READY_TIMEOUT)?;
+    writeln!(stream, "{token}")?;
+    let manifest: HandoffManifest =
+        serde_json::from_str(&read_line_unbuffered(&mut stream)?).map_err(io::Error::other)?;
+    validate_manifest(&manifest)?;
+    stream.write_all(b"validated\n")?;
+    let resources: WindowsResources =
+        serde_json::from_str(&read_line_unbuffered(&mut stream)?).map_err(io::Error::other)?;
+    let mut handles = std::collections::HashSet::new();
+    if resources.panes.len() != manifest.panes.len()
+        || !resources
+            .panes
+            .iter()
+            .flatten()
+            .chain(resources.listeners.iter())
+            .all(|handle| *handle != 0 && *handle != usize::MAX && handles.insert(*handle))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "handoff resources do not match manifest",
+        ));
+    }
+    // The private source transfers target-local handles; validate cardinality
+    // and uniqueness before establishing exactly one RAII owner for each.
+    let ptys = resources
+        .panes
+        .into_iter()
+        .map(|handles| unsafe { crate::pty::backend::WindowsPtyHandoff::from_raw_handles(handles) })
+        .collect();
+    let [api, client] = resources
+        .listeners
+        .map(|handle| unsafe { OwnedHandle::from_raw_handle(handle as _) });
+    let listeners = [
+        crate::platform::TransferableLocalListener::from_handoff_handle(
+            api,
+            &crate::api::socket_path(),
+        )?,
+        crate::platform::TransferableLocalListener::from_handoff_handle(
+            client,
+            &crate::server::socket_paths::client_socket_path(),
+        )?,
+    ];
+    Ok(ReceivedHandoff {
+        manifest,
+        ptys,
+        listeners,
+        stream,
+    })
+}
+
+#[cfg(any(unix, windows))]
+pub(crate) fn cleanup_failed_import_child(child: &mut Child) -> io::Result<()> {
+    if child.try_wait()?.is_none() {
+        if let Err(error) = child.kill() {
+            if child.try_wait()?.is_none() {
+                return Err(error);
+            }
+        }
+        child.wait()?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -354,8 +483,8 @@ fn accept_with_timeout(
     }
 }
 
-#[cfg(unix)]
-fn read_line_unbuffered(stream: &mut UnixStream) -> io::Result<String> {
+#[cfg(any(unix, windows))]
+fn read_line_unbuffered(stream: &mut HandoffStream) -> io::Result<String> {
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -467,7 +596,7 @@ fn recv_fds(stream: &UnixStream, expected: usize) -> io::Result<Vec<RawFd>> {
     Ok(out)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn log_import_result(panes: usize) {
     info!(panes, "handoff import ready");
 }

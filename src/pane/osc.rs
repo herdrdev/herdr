@@ -498,7 +498,7 @@ impl AgentOscStateTracker {
         self.terminal_title.as_deref()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn seed_terminal_title(&mut self, title: Option<String>) {
         self.terminal_title = title;
     }

@@ -96,6 +96,8 @@ Unlike snapshot restore, pane history replay, and native agent session restore, 
 
 A successful handoff preserves long-lived server-owned session state: pane PTYs and processes, agent identity and durable metadata, and plugin/session state needed by the replacement server. It does not preserve transient coordination across the replacement boundary. In-flight CLI or API requests, waits, subscription streams, client sockets, and pane-to-pane messages may be interrupted; clients should reconnect and retry them.
 
+On Windows, live handoff requires the bundled ConPTY runtime. It is unavailable when Herdr uses the system runtime, including servers started with `HERDR_WINDOWS_CONPTY=system`.
+
 Live handoff is experimental and opt-in:
 
 ```bash

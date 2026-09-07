@@ -21,30 +21,35 @@ pub(super) fn wait_for_live_handoff_response_write(
 }
 
 impl HeadlessServer {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn perform_live_handoff(
         &mut self,
         params: crate::api::schema::ServerLiveHandoffParams,
     ) -> io::Result<()> {
-        info!("starting live handoff");
-        let import_exe = params.import_exe.as_deref().map(std::path::PathBuf::from);
-        let socket_path = crate::server::handoff::handoff_socket_path();
+        use crate::server::handoff;
+        #[cfg(windows)]
+        if !crate::pty::backend::windows_handoff_available()
+            || self
+                .app
+                .terminal_runtimes
+                .values()
+                .any(|runtime| !runtime.windows_handoff_supported())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "live handoff requires the bundled ConPTY runtime",
+            ));
+        }
+        let socket_path = handoff::handoff_socket_path();
         let token = format!(
             "{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos()
         );
-        let listener = match crate::server::handoff::bind_listener(&socket_path) {
-            Ok(listener) => listener,
-            Err(err) => {
-                self.handoff_in_progress = false;
-                return Err(err);
-            }
-        };
-
+        let listener = handoff::bind_listener(&socket_path)?;
         let mut pane_by_terminal = HashMap::new();
         for ws in &self.app.state.workspaces {
             for tab in &ws.tabs {
@@ -53,177 +58,186 @@ impl HeadlessServer {
                 }
             }
         }
-        if pane_by_terminal.len() > crate::server::handoff::MAX_FDS_PER_HANDOFF {
+        #[cfg(unix)]
+        if pane_by_terminal.len() > handoff::MAX_FDS_PER_HANDOFF {
             let _ = std::fs::remove_file(&socket_path);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "live handoff supports at most {} panes in one update; close panes or restart herdr normally",
-                    crate::server::handoff::MAX_FDS_PER_HANDOFF
-                ),
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                format!("live handoff supports at most {} panes in one update; close panes or restart herdr normally", handoff::MAX_FDS_PER_HANDOFF)));
         }
 
         self.handoff_in_progress = true;
-        self.disconnect_all_clients_for_handoff();
-        let _ = reject_pending_client_connections(&self.client_listener);
-
         let mut paused_terminal_ids = Vec::new();
-        for terminal_id in pane_by_terminal.keys() {
-            if let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) {
-                if let Err(err) = runtime.pause_handoff_reader(Duration::from_secs(2)) {
-                    self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                    return Err(err);
+        let mut import_child = None;
+        #[cfg(unix)]
+        let mut public_sockets_released = false;
+        let transaction = (|| {
+            #[cfg(windows)]
+            {
+                self.api_server
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("API listener unavailable"))?
+                    .pause_listener_for_handoff()?;
+                self.client_listener_control.pause()?;
+            }
+            self.disconnect_all_clients_for_handoff();
+            #[cfg(unix)]
+            let _ = reject_pending_client_connections(&self.client_listener);
+            for terminal_id in pane_by_terminal.keys() {
+                if let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) {
+                    runtime.pause_handoff_reader(Duration::from_secs(2))?;
+                    paused_terminal_ids.push(terminal_id.clone());
                 }
-                paused_terminal_ids.push(terminal_id.clone());
             }
-        }
-
-        let snapshot = crate::persist::capture(
-            &self.app.state.workspaces,
-            &self.app.state.terminals,
-            &self.app.terminal_runtimes,
-            self.app.state.active,
-            self.app.state.selected,
-        );
-
-        let mut handoff_entries = Vec::new();
-        for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
-            let Some(pane_id) = pane_by_terminal.get(terminal_id).copied() else {
-                continue;
-            };
-            let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
-            let has_agent_session = self
-                .app
-                .state
-                .terminals
-                .get(terminal_id)
-                .is_some_and(|terminal| terminal.persisted_agent_session.is_some());
-            if !has_agent_session {
-                handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
-            }
-            handoff_entries.push((terminal_id.clone(), handoff_runtime));
-        }
-
-        let panes = handoff_entries
-            .iter()
-            .map(|(_, runtime)| runtime.clone())
-            .collect();
-        let manifest = crate::server::handoff::manifest_for(
-            snapshot,
-            panes,
-            params.expected_protocol,
-            params.expected_version,
-            self.api_window_title.clone(),
-        );
-        let mut import_child = match crate::server::handoff::spawn_handoff_import(
-            import_exe.as_deref(),
-            &socket_path,
-            &token,
-        ) {
-            Ok(child) => child,
-            Err(err) => {
-                self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                return Err(err);
-            }
-        };
-        let child_pid = import_child.id();
-        info!(pid = child_pid, socket = %socket_path.display(), "spawned handoff import server");
-
-        let mut fds = Vec::new();
-        let duplicate_result = (|| {
-            for (terminal_id, _) in &handoff_entries {
-                let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
+            let snapshot = crate::persist::capture(
+                &self.app.state.workspaces,
+                &self.app.state.terminals,
+                &self.app.terminal_runtimes,
+                self.app.state.active,
+                self.app.state.selected,
+            );
+            let mut entries = Vec::new();
+            for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
+                let Some(pane_id) = pane_by_terminal.get(terminal_id).copied() else {
                     continue;
                 };
-                fds.push(runtime.duplicate_handoff_fd()?);
-            }
-            Ok::<(), io::Error>(())
-        })();
-        if let Err(err) = duplicate_result {
-            for fd in fds {
-                let _ = unsafe { libc::close(fd) };
-            }
-            crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-            self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-            return Err(err);
-        }
-
-        let mut stream = match crate::server::handoff::accept_and_validate_on(
-            listener,
-            &socket_path,
-            &token,
-            &manifest,
-        ) {
-            Ok(stream) => stream,
-            Err(err) => {
-                for fd in fds {
-                    let _ = unsafe { libc::close(fd) };
+                let mut state = runtime.handoff_runtime_state(pane_id);
+                if self
+                    .app
+                    .state
+                    .terminals
+                    .get(terminal_id)
+                    .is_none_or(|terminal| terminal.persisted_agent_session.is_none())
+                {
+                    state.initial_history_ansi = runtime.handoff_history_ansi();
                 }
-                crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-                self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                return Err(err);
+                entries.push((runtime, state));
+            }
+            let manifest = handoff::manifest_for(
+                snapshot,
+                entries.iter().map(|(_, state)| state.clone()).collect(),
+                params.expected_protocol,
+                params.expected_version,
+                self.api_window_title.clone(),
+            );
+            let _child = import_child.insert(handoff::spawn_handoff_import(
+                params.import_exe.as_deref().map(Path::new),
+                &socket_path,
+                &token,
+            )?);
+            #[cfg(windows)]
+            let mut stream = {
+                let child = _child;
+                crate::platform::ensure_same_process_session(child.id())?;
+                let panes = entries
+                    .iter()
+                    .map(|(runtime, _)| runtime.duplicate_windows_handoff(child))
+                    .collect::<io::Result<Vec<_>>>()?;
+                let api = self
+                    .api_server
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("API listener unavailable"))?
+                    .duplicate_listener_for_handoff(child)?;
+                let client = self.client_listener_control.duplicate_for_handoff(child)?;
+                handoff::accept_windows_handoff(
+                    listener,
+                    child,
+                    &token,
+                    &manifest,
+                    panes,
+                    [api, client],
+                )?
+            };
+            #[cfg(unix)]
+            let mut stream = {
+                use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+                let fds = entries
+                    .iter()
+                    .map(|(runtime, _)| {
+                        runtime
+                            .duplicate_handoff_fd()
+                            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                let mut stream =
+                    handoff::accept_and_validate_on(listener, &socket_path, &token, &manifest)?;
+                handoff::send_fds_and_wait_restored(
+                    &mut stream,
+                    &fds.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>(),
+                )?;
+                if let Some(api) = &self.api_server {
+                    let _ = api.remove_socket_file_if_owned();
+                } else {
+                    let _ = std::fs::remove_file(crate::api::socket_path());
+                }
+                if let Some(identity) = &self.client_socket_identity {
+                    let _ = remove_socket_file_if_owned(&self.client_socket_path, identity);
+                }
+                public_sockets_released = true;
+                handoff::wait_ready(&mut stream)?;
+                stream
+            };
+            handoff::report_committed(&mut stream)?;
+            Ok::<_, io::Error>(stream)
+        })();
+        let _ = std::fs::remove_file(&socket_path);
+        let mut stream = match transaction {
+            Ok(stream) => stream,
+            Err(error) => {
+                // No source authority resumes while the target can still run.
+                if let Some(child) = import_child.as_mut() {
+                    handoff::cleanup_failed_import_child(child).map_err(|cleanup| {
+                        io::Error::other(format!("{error}; replacement cleanup failed: {cleanup}"))
+                    })?;
+                }
+                #[cfg(unix)]
+                let restore = if public_sockets_released {
+                    self.wait_then_restore_public_sockets_after_failed_handoff()
+                } else {
+                    Ok(())
+                };
+                #[cfg(windows)]
+                let restore = {
+                    let api = self
+                        .api_server
+                        .as_ref()
+                        .map(|api| api.resume_listener_after_handoff())
+                        .transpose();
+                    let client = self.client_listener_control.resume();
+                    api.and(client)
+                };
+                for terminal_id in &paused_terminal_ids {
+                    if let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) {
+                        runtime.set_handoff_reader_paused(false);
+                    }
+                }
+                self.handoff_in_progress = false;
+                return Err(match restore {
+                    Ok(()) => error,
+                    Err(restore) => io::Error::other(format!(
+                        "{error}; source listener restore failed: {restore}"
+                    )),
+                });
             }
         };
-
-        let send_result = crate::server::handoff::send_fds_and_wait_restored(&mut stream, &fds);
-        for fd in fds {
-            let _ = unsafe { libc::close(fd) };
-        }
-        if let Err(err) = send_result {
-            crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-            self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-            return Err(err);
-        }
-
-        if let Some(api_server) = &self.api_server {
-            let _ = api_server.remove_socket_file_if_owned();
-        } else {
-            let _ = std::fs::remove_file(crate::api::socket_path());
-        }
-        let _ = remove_socket_file_if_owned(&self.client_socket_path, &self.client_socket_identity);
-        if let Err(err) = crate::server::handoff::wait_ready(&mut stream) {
-            crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-            match self.wait_then_restore_public_sockets_after_failed_handoff() {
-                Ok(()) => {
-                    self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                }
-                Err(restore_err) => {
-                    self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                    return Err(io::Error::other(format!(
-                        "handoff replacement server did not become ready: {err}; old server could not restore public sockets: {restore_err}"
-                    )));
+        // COMMIT was fully delivered. OWNED and source release errors cannot roll back.
+        #[cfg(windows)]
+        {
+            if let Some(api) = &mut self.api_server {
+                if let Err(err) = api.release_listener_after_handoff() {
+                    warn!(%err, "failed to release old API acceptance");
                 }
             }
-            return Err(io::Error::other(format!(
-                "handoff replacement server did not become ready: {err}"
-            )));
-        }
-        if let Err(err) = crate::server::handoff::report_committed(&mut stream) {
-            crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-            match self.wait_then_restore_public_sockets_after_failed_handoff() {
-                Ok(()) => {
-                    self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                }
-                Err(restore_err) => {
-                    self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-                    return Err(io::Error::other(format!(
-                        "handoff replacement server was ready, but commit failed: {err}; old server could not restore public sockets: {restore_err}"
-                    )));
-                }
+            self.client_socket_identity = None;
+            if let Err(err) = self.client_listener_control.release_after_commit() {
+                warn!(%err, "failed to release old client acceptance");
             }
-            return Err(err);
         }
-
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
-            if !pane_by_terminal.contains_key(&terminal_id) {
-                continue;
+            if pane_by_terminal.contains_key(&terminal_id) {
+                runtime.preserve_for_handoff();
             }
-            debug!(terminal = %terminal_id, "preserving pane runtime for handoff");
-            runtime.preserve_for_handoff();
         }
-        crate::server::handoff::wait_owned_ack(&mut stream);
-
+        handoff::wait_owned_ack(&mut stream);
         Ok(())
     }
 
@@ -234,7 +248,7 @@ impl HeadlessServer {
         info!("live handoff completed; old server exiting");
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     pub(super) fn perform_live_handoff(
         &mut self,
         _params: crate::api::schema::ServerLiveHandoffParams,
@@ -264,7 +278,7 @@ impl HeadlessServer {
         self.api_server = Some(api_server);
         self.client_listener = listener;
         self.client_socket_path = client_path;
-        self.client_socket_identity = client_socket_identity;
+        self.client_socket_identity = Some(client_socket_identity);
         Ok(())
     }
 
@@ -273,21 +287,6 @@ impl HeadlessServer {
         let timeout = crate::server::handoff::COMMIT_TIMEOUT + Duration::from_secs(2);
         wait_for_old_public_sockets_to_close(timeout)?;
         self.restore_public_sockets_after_failed_handoff()
-    }
-
-    #[cfg(unix)]
-    fn rollback_handoff_before_commit(
-        &mut self,
-        socket_path: &Path,
-        paused_terminal_ids: &[crate::terminal::TerminalId],
-    ) {
-        for terminal_id in paused_terminal_ids {
-            if let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) {
-                runtime.set_handoff_reader_paused(false);
-            }
-        }
-        self.handoff_in_progress = false;
-        let _ = std::fs::remove_file(socket_path);
     }
 
     #[cfg(unix)]
@@ -363,15 +362,15 @@ impl HeadlessServer {
 
     /// Removes socket files created by the server.
     pub(super) fn cleanup_sockets(&self) -> io::Result<()> {
-        if let Err(err) =
-            remove_socket_file_if_owned(&self.client_socket_path, &self.client_socket_identity)
-        {
-            if err.kind() != io::ErrorKind::NotFound {
-                warn!(
-                    path = %self.client_socket_path.display(),
-                    err = %err,
-                    "failed to remove client socket on shutdown"
-                );
+        if let Some(identity) = &self.client_socket_identity {
+            if let Err(err) = remove_socket_file_if_owned(&self.client_socket_path, identity) {
+                if err.kind() != io::ErrorKind::NotFound {
+                    warn!(
+                        path = %self.client_socket_path.display(),
+                        err = %err,
+                        "failed to remove client socket on shutdown"
+                    );
+                }
             }
         }
         Ok(())
