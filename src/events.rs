@@ -58,7 +58,7 @@ pub enum AppEvent {
     /// A pane's child process exited.
     PaneDied {
         pane_id: PaneId,
-        checkpoint_session: bool,
+        exit_reason: crate::platform::ChildExitReason,
     },
     /// A worktree-removal runtime could not be restored normally.
     WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },

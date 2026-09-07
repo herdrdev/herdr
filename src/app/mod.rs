@@ -697,9 +697,17 @@ impl App {
         }
 
         let cwd = self.resolve_new_terminal_cwd(None);
+        let preserve_checkpoint = self.pane_exit_checkpoint_pending && !self.state.session_dirty;
 
         match self.create_workspace_with_options(cwd, true) {
-            Ok(_) => true,
+            Ok(_) => {
+                if preserve_checkpoint {
+                    // Automatic replacement is part of pane removal, not a new user mutation.
+                    self.pane_exit_checkpoint_pending = true;
+                    self.finish_checkpointed_pane_exit();
+                }
+                true
+            }
             Err(err) => {
                 tracing::error!(err = %err, "failed to create default workspace");
                 self.state.mode = Mode::Navigate;
@@ -3078,8 +3086,8 @@ mod tests {
         assert!(app.session_save_thread.is_none());
     }
 
-    #[test]
-    fn signaled_pane_exits_cannot_overwrite_the_last_good_session_on_shutdown() {
+    #[tokio::test]
+    async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let config_home = unique_temp_path("signaled-pane-session-checkpoint");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -3096,13 +3104,14 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: first_pane,
-            checkpoint_session: true,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
         });
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: second_pane,
-            checkpoint_session: true,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
         });
         assert!(app.state.workspaces.is_empty());
+        assert!(app.ensure_default_workspace());
 
         app.save_session_on_shutdown();
 
@@ -3131,7 +3140,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id,
-            checkpoint_session: true,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
         });
         assert!(crate::persist::load().is_some());
 
@@ -3154,27 +3163,35 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
 
-        let mut app = test_app();
-        app.policy.persist_session = true;
-        let workspace = Workspace::test_new("old");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.state.workspaces = vec![workspace];
-        app.state.active = Some(0);
-        app.state.ensure_test_terminals();
+        for another_interrupted_exit in [false, true] {
+            let mut app = test_app();
+            app.policy.persist_session = true;
+            let workspace = Workspace::test_new("old");
+            let pane_id = workspace.tabs[0].root_pane;
+            app.state.workspaces = vec![workspace];
+            app.state.active = Some(0);
+            app.state.ensure_test_terminals();
 
-        app.handle_internal_event(AppEvent::PaneDied {
-            pane_id,
-            checkpoint_session: true,
-        });
-        app.state.workspaces = vec![Workspace::test_new("newer")];
-        app.state.active = Some(0);
-        app.state.ensure_test_terminals();
-        app.state.mark_session_dirty();
-        app.save_session_on_shutdown();
+            app.handle_internal_event(AppEvent::PaneDied {
+                pane_id,
+                exit_reason: crate::platform::ChildExitReason::Interrupted,
+            });
+            app.state.workspaces = vec![Workspace::test_new("newer")];
+            app.state.active = Some(0);
+            app.state.ensure_test_terminals();
+            app.state.mark_session_dirty();
+            if another_interrupted_exit {
+                app.handle_internal_event(AppEvent::PaneDied {
+                    pane_id: app.state.workspaces[0].tabs[0].root_pane,
+                    exit_reason: crate::platform::ChildExitReason::Interrupted,
+                });
+            }
+            app.save_session_on_shutdown();
 
-        let snapshot = crate::persist::load().expect("newer session should be saved");
-        assert_eq!(snapshot.workspaces.len(), 1);
-        assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("newer"));
+            let snapshot = crate::persist::load().expect("newer session should be saved");
+            assert_eq!(snapshot.workspaces.len(), 1);
+            assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("newer"));
+        }
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(config_home);

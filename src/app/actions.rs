@@ -3298,7 +3298,7 @@ mod tests {
         let deadline = state.next_pending_agent_notification_deadline().unwrap();
         state.handle_app_event(AppEvent::PaneDied {
             pane_id: bg_pane_id,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         assert!(state.pending_agent_notifications.is_empty());

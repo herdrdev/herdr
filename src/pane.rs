@@ -2198,7 +2198,7 @@ impl PaneRuntime {
                 // unknowable. Checkpoint conservatively; normal autosave settles clean exits.
                 let _ = rt.block_on(exit_events.send(AppEvent::PaneDied {
                     pane_id,
-                    checkpoint_session: true,
+                    exit_reason: crate::platform::ChildExitReason::Handoff,
                 }));
                 debug!(pane = pane_id.raw(), "handoff PTY actor exiting");
             });
@@ -2304,23 +2304,23 @@ impl PaneRuntime {
                 crate::logging::pane_spawned(pane_id.raw(), pid);
             }
             tokio::task::spawn_blocking(move || {
-                let checkpoint_session = match child.wait() {
+                let exit_reason = match child.wait() {
                     Ok(status) => {
-                        let signaled = status.signal().is_some();
+                        let exit_reason = crate::platform::classify_child_exit(&status);
                         let status_text = format!("{status:?}");
                         crate::logging::pane_exited(pane_id.raw(), &status_text);
-                        signaled
+                        exit_reason
                     }
                     Err(e) => {
                         crate::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
-                        false
+                        crate::platform::ChildExitReason::WaitFailed
                     }
                 };
                 child_wait_completed.store(true, Ordering::Release);
                 // Use blocking send — PaneDied is critical, must not be dropped
                 if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
                     pane_id,
-                    checkpoint_session,
+                    exit_reason,
                 })) {
                     error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
                 }

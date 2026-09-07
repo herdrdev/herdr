@@ -2210,7 +2210,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
 
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: opened_pane_id,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(app.state.popup_pane.is_none());
         assert!(event_hub.events_after(0).is_empty());
@@ -3451,7 +3451,7 @@ command = ["sh", "-c", "echo ok"]
 
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         assert!(!app.state.plugin_panes.contains_key(&pane_id));

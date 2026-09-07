@@ -95,7 +95,7 @@ impl App {
                 worktree_restore_failed = true;
                 AppEvent::PaneDied {
                     pane_id,
-                    checkpoint_session: false,
+                    exit_reason: crate::platform::ChildExitReason::Exited,
                 }
             }
             ev => ev,
@@ -231,8 +231,8 @@ impl App {
             &ev,
             AppEvent::PaneDied {
                 pane_id,
-                checkpoint_session: true,
-            } if self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
+                exit_reason,
+            } if exit_reason.requires_session_checkpoint() && self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
         );
         if checkpointed_pane_exit {
             self.checkpoint_session_before_pane_exit();
@@ -1985,7 +1985,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         let overlay_tab = &app.state.workspaces[0].tabs[0];
@@ -2014,7 +2014,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: dead_pane,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         let events = event_hub.events_after(0);
@@ -2164,7 +2164,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         let events = event_hub.events_after(0);
@@ -2190,7 +2190,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         let tab = &app.state.workspaces[0].tabs[0];
@@ -2210,7 +2210,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id: overlay_pane,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         let tab = &app.state.workspaces[0].tabs[0];
@@ -2252,7 +2252,7 @@ mod tests {
 
         app.handle_internal_event(AppEvent::PaneDied {
             pane_id,
-            checkpoint_session: false,
+            exit_reason: crate::platform::ChildExitReason::Exited,
         });
 
         assert!(

@@ -98,17 +98,14 @@ impl App {
     }
 
     pub(crate) fn checkpoint_session_before_pane_exit(&mut self) {
-        if !self.policy.persist_session || self.pane_exit_checkpoint_pending {
+        if !self.policy.persist_session
+            || (self.pane_exit_checkpoint_pending && !self.state.session_dirty)
+        {
             return;
         }
-        if let Some(thread) = self.session_save_thread.take() {
-            let _ = thread.join();
-        }
-
-        run_session_save_job(self.capture_session_save_job());
+        self.save_session_now();
         self.pane_exit_checkpoint_pending = true;
         self.state.session_dirty = false;
-        self.session_save_deadline = None;
     }
 
     pub(crate) fn finish_checkpointed_pane_exit(&mut self) {

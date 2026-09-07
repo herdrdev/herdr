@@ -3617,7 +3617,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
             pane_id: dead_pane,
-            checkpoint_session: false
+            exit_reason: crate::platform::ChildExitReason::Exited
         })
     );
 
@@ -3686,7 +3686,7 @@ async fn pane_death_reapplies_controller_geometry() {
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
             pane_id: dead_pane,
-            checkpoint_session: false
+            exit_reason: crate::platform::ChildExitReason::Exited
         })
     );
 
@@ -3871,7 +3871,7 @@ fn expected_worktree_runtime_exit_does_not_release_agent() {
     assert!(
         server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
             pane_id,
-            checkpoint_session: false
+            exit_reason: crate::platform::ChildExitReason::Exited
         })
     );
 
