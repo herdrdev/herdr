@@ -170,6 +170,9 @@ impl TextEditor {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+            return None;
+        }
         let previous_len = self.text.len();
         let mut content_changed = false;
         let cursor = self.cursor;
@@ -484,6 +487,18 @@ mod tests {
         let repeat =
             TerminalKey::new(KeyCode::Left, KeyModifiers::NONE).with_kind(KeyEventKind::Repeat);
         assert!(editor.handle_key(&repeat).expect("repeat").cursor_changed);
+    }
+
+    #[test]
+    fn enter_and_escape_ignore_generated_text() {
+        for code in [KeyCode::Enter, KeyCode::Esc] {
+            let mut editor = TextEditor::new("default", true);
+            let before = editor.clone();
+            let event = TerminalKey::new(code, KeyModifiers::NONE)
+                .with_generated_text(Some("printable".into()));
+            assert_eq!(editor.handle_key(&event), None, "{code:?}");
+            assert_eq!(editor, before, "{code:?}");
+        }
     }
 
     #[test]

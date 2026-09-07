@@ -291,6 +291,51 @@ fn cursor_movement_preserves_filter_selection_scroll_and_branch_error() {
 }
 
 #[test]
+fn enter_and_escape_preserve_overlay_actions_with_generated_text() {
+    use crate::api::schema::Method;
+    for field in [5, 7, 8] {
+        for code in [KeyCode::Enter, KeyCode::Esc] {
+            let mut state = shell(field);
+            *editor(&mut state) = TextEditor::from("feature");
+            let before = editor(&mut state).clone();
+            let result = state.handle_raw_events(vec![RawInputEvent::Key(
+                TerminalKey::new(code, KeyModifiers::NONE)
+                    .with_generated_text(Some("printable".into())),
+            )]);
+            assert!(result.repaint);
+            assert!(result.requests.is_empty());
+            if code == KeyCode::Enter && field != 7 {
+                assert_eq!(editor(&mut state), &before);
+                let [ClientShellAction::Endpoint { request, .. }] = &result.actions[..] else {
+                    panic!("field {field} should submit");
+                };
+                match &request.method {
+                    Method::WorktreeCreate(params) if field == 5 => {
+                        assert_eq!(params.branch.as_deref(), Some("feature"));
+                    }
+                    Method::WorktreeOpen(params) if field == 8 => {
+                        assert_eq!(params.path.as_deref(), Some("/repo-feature"));
+                    }
+                    _ => panic!("wrong method for field {field}"),
+                }
+            } else {
+                assert!(result.actions.is_empty());
+                if field == 7 && code == KeyCode::Esc {
+                    let Some(ClientShellOverlay::Help(help)) = &state.overlay else {
+                        panic!("Escape should leave help open");
+                    };
+                    assert!(!help.search_focused);
+                    assert!(help.query.is_empty());
+                    assert_eq!(help.scroll, 0);
+                } else {
+                    assert!(state.overlay.is_none(), "field {field}, {code:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn busy_worktree_inputs_ignore_edits_paste_and_cancel() {
     for field in [5, 8] {
         let mut state = shell(field);
