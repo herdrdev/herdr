@@ -458,6 +458,7 @@ fn status_commands_report_client_and_server_versions() {
     assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(full_json["client"]["protocol"], 22);
     assert_eq!(full_json["client"]["endpoint_protocol_generation"], 1);
+    assert_eq!(full_json["client"]["remote_host_bridge"], true);
     assert_eq!(full_json["server"]["status"], "running");
     assert_eq!(full_json["server"]["running"], true);
     assert_eq!(full_json["server"]["compatible"], true);
@@ -482,6 +483,7 @@ fn status_commands_report_client_and_server_versions() {
     assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(client_json["protocol"], 22);
     assert_eq!(client_json["endpoint_protocol_generation"], 1);
+    assert_eq!(client_json["remote_host_bridge"], true);
     assert!(client_json["binary"]
         .as_str()
         .is_some_and(|path| !path.is_empty()));
