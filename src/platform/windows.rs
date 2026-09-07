@@ -186,6 +186,7 @@ use windows_sys::{
                 PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
                 PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, THREAD_SUSPEND_RESUME,
             },
+            IO::CancelSynchronousIo,
         },
         UI::{
             Input::{
@@ -215,11 +216,6 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
 const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
 const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn CancelSynchronousIo(thread: HANDLE) -> i32;
-}
 
 pub(crate) struct SynchronousIoCancel {
     thread: OwnedHandle,
