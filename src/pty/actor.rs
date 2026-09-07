@@ -500,8 +500,11 @@ mod windows {
         pub(crate) fn shutdown(&self) {
             self.state.shutdown.store(true, Ordering::Release);
             if let Ok(mut state) = self.state.state.lock() {
-                *state = ActorState::Shutdown;
+                if *state != ActorState::Released {
+                    *state = ActorState::Shutdown;
+                }
             }
+            self.state.resumed.notify_all();
             let _ = self.control_tx.send(PtyIoControlCommand::Shutdown);
         }
     }
@@ -844,7 +847,10 @@ mod windows {
                 }
                 PtyIoDataCommand::Pause { active, reply } => {
                     let _ = reply.send(());
-                    if state.wait_until_resumed(&active) == ActorState::Released {
+                    if matches!(
+                        state.wait_until_resumed(&active),
+                        ActorState::Released | ActorState::Shutdown
+                    ) {
                         break;
                     }
                 }
@@ -888,7 +894,10 @@ mod windows {
     ) -> bool {
         let mut buf = [0u8; 8192];
         loop {
-            if state.wait_to_read(&reader_pause) == ActorState::Released {
+            if matches!(
+                state.wait_to_read(&reader_pause),
+                ActorState::Released | ActorState::Shutdown
+            ) {
                 return false;
             }
             match reader.read(&mut buf) {
@@ -1339,6 +1348,76 @@ mod windows {
                     .collect::<Vec<_>>(),
                 vec![b"first".as_slice(), b"\r".as_slice()]
             );
+        }
+
+        #[test]
+        fn shutdown_wakes_paused_workers_without_resuming_io() {
+            for terminal_state in [ActorState::Quiesced, ActorState::Released] {
+                let state = Arc::new(SharedActorState::new(true));
+                let active = Arc::new(AtomicBool::new(true));
+                let reader_pause = Arc::new(ReaderPause::default());
+                let reader_paused = reader_pause.request(Arc::clone(&active));
+                let (data_tx, mut data_rx) = mpsc::channel(2);
+                let (input_paused_tx, input_paused) = std_mpsc::channel();
+                data_tx
+                    .try_send(PtyIoDataCommand::Pause {
+                        active,
+                        reply: input_paused_tx,
+                    })
+                    .unwrap();
+                data_tx
+                    .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
+                        b"must not write",
+                    )))
+                    .unwrap();
+                let (write_tx, write_rx) = std_mpsc::channel();
+                let (control_tx, _control_rx) = std_mpsc::channel();
+                let handle = PtyIoActorHandle {
+                    data_tx,
+                    control_tx,
+                    write_tx,
+                    response_order: Arc::new(Mutex::new(())),
+                    state,
+                    reader_pause,
+                    handoff_supported: true,
+                };
+                let input_handle = handle.clone();
+                let (input_done_tx, input_done) = std_mpsc::channel();
+                let input_thread = std::thread::spawn(move || {
+                    run_input_forwarder(&mut data_rx, input_handle.write_tx, input_handle.state);
+                    input_done_tx.send(()).unwrap();
+                });
+                let reader_handle = handle.clone();
+                let (reader_done_tx, reader_done) = std_mpsc::channel();
+                let reader_thread = std::thread::spawn(move || {
+                    let mut reader = std::io::Cursor::new(b"replacement output");
+                    let publish_exit = run_reader(
+                        1,
+                        &mut reader,
+                        Box::new(|_| panic!("shutdown must not consume replacement output")),
+                        reader_handle.write_tx,
+                        reader_handle.response_order,
+                        reader_handle.state,
+                        reader_handle.reader_pause,
+                    );
+                    reader_done_tx
+                        .send((reader.position(), publish_exit))
+                        .unwrap();
+                });
+                input_paused.recv_timeout(Duration::from_secs(1)).unwrap();
+                reader_paused.recv_timeout(Duration::from_secs(1)).unwrap();
+                // Model release followed by Drop before paused workers reacquire the lock.
+                *handle.state.state.lock().unwrap() = terminal_state;
+                handle.shutdown();
+                assert_eq!(
+                    reader_done.recv_timeout(Duration::from_secs(1)).unwrap(),
+                    (0, false)
+                );
+                input_done.recv_timeout(Duration::from_secs(1)).unwrap();
+                assert!(write_rx.try_recv().is_err());
+                reader_thread.join().unwrap();
+                input_thread.join().unwrap();
+            }
         }
 
         #[test]
