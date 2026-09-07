@@ -79,7 +79,7 @@ index 0e9a18c6..d6b69449 100644
 +}
 +
 +impl ConPtyMasterPty {
-+    pub fn supports_handoff(&self) -> bool {
++    pub fn supports_handoff() -> bool {
 +        PsuedoCon::supports_handoff()
 +    }
 +

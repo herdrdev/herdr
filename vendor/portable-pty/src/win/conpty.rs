@@ -128,7 +128,7 @@ impl Drop for ConPtyHandoff {
 }
 
 impl ConPtyMasterPty {
-    pub fn supports_handoff(&self) -> bool {
+    pub fn supports_handoff() -> bool {
         PsuedoCon::supports_handoff()
     }
 

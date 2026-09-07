@@ -155,8 +155,9 @@ local files:
 
 reason: Windows live server handoff must preserve each running pane process.
 Expose transactional transfer and adoption of the master PTY and exact child
-process handle. Patch 0001 supplies bundled pseudo-console packing; the system
-ConPTY fallback remains unsupported.
+process handle. Query handoff support before creating a PTY so empty sessions
+can report the selected runtime's capability. Patch 0001 supplies bundled
+pseudo-console packing; the system ConPTY fallback remains unsupported.
 
 remove when: upstream `portable-pty` supports transactional cross-process
 transfer and adoption for the pinned bundled ConPTY runtime, including partial

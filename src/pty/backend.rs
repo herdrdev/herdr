@@ -136,10 +136,15 @@ fn duplicate_child_handle(child: &dyn Child) -> std::io::Result<OwnedHandle> {
 }
 
 #[cfg(windows)]
+pub(crate) fn windows_handoff_available() -> bool {
+    portable_pty::win::conpty::ConPtyMasterPty::supports_handoff()
+}
+
+#[cfg(windows)]
 pub(crate) fn windows_handoff_supported(master: &dyn MasterPty) -> bool {
     master
         .downcast_ref::<portable_pty::win::conpty::ConPtyMasterPty>()
-        .is_some_and(|master| master.supports_handoff())
+        .is_some_and(|_| windows_handoff_available())
 }
 
 #[cfg(windows)]
@@ -426,6 +431,7 @@ mod tests {
     }
 
     fn run_source() -> anyhow::Result<()> {
+        assert!(windows_handoff_available());
         let executable = std::env::current_exe()?;
         let mut command = CommandBuilder::new(&executable);
         command.args(["--ignored", "--exact", TEST_NAME, "--nocapture"]);
@@ -471,23 +477,29 @@ mod tests {
             std::process::id()
         ));
         std::fs::copy(std::env::current_exe()?, &executable)?;
-        let status = Command::new(&executable)
-            .args(["--ignored", "--exact", TEST_NAME, "--nocapture"])
-            .env(ROLE, "source")
-            .status();
+        let statuses = [("system", "system"), ("source", "bundled")].map(|(role, backend)| {
+            Command::new(&executable)
+                .args(["--ignored", "--exact", TEST_NAME, "--nocapture"])
+                .env(ROLE, role)
+                .env("HERDR_WINDOWS_CONPTY", backend)
+                .status()
+        });
         let _ = std::fs::remove_file(&executable);
-        let status = status?;
-        if status.success() {
-            Ok(())
-        } else {
-            anyhow::bail!("source exited with {status}")
+        for status in statuses {
+            let status = status?;
+            anyhow::ensure!(status.success(), "handoff test child exited with {status}");
         }
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires HERDR_CONPTY_PACKAGE_DIR with the verified bundled runtime"]
     fn bundled_conpty_handoff_transfers_six_handles_between_processes() {
         let result = match std::env::var(ROLE).as_deref() {
+            Ok("system") => {
+                assert!(!windows_handoff_available());
+                Ok(())
+            }
             Ok("pane") => run_pane_child(),
             Ok("target") => run_target(),
             Ok("source") => run_source(),
