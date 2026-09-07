@@ -3,8 +3,9 @@ use crate::win::psuedocon::PsuedoCon;
 use crate::{Child, MasterPty, PtyPair, PtySize, PtySystem, SlavePty};
 use anyhow::Error;
 use filedescriptor::{FileDescriptor, Pipe};
+use std::io::{self, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::winnt::HANDLE;
@@ -31,7 +32,7 @@ impl PtySystem for ConPtySystem {
             inner: Arc::new(Mutex::new(Inner {
                 con,
                 readable: stdout.read,
-                writable: stdin.write,
+                writable: Some(stdin.write),
                 writer_taken: false,
                 size,
             })),
@@ -51,7 +52,7 @@ impl PtySystem for ConPtySystem {
 struct Inner {
     con: PsuedoCon,
     readable: FileDescriptor,
-    writable: FileDescriptor,
+    writable: Option<FileDescriptor>,
     writer_taken: bool,
     size: PtySize,
 }
@@ -87,6 +88,34 @@ pub struct ConPtySlavePty {
     inner: Arc<Mutex<Inner>>,
 }
 
+struct ConPtyWriter {
+    writer: FileDescriptor,
+    inner: Weak<Mutex<Inner>>,
+}
+
+impl Write for ConPtyWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl Drop for ConPtyWriter {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.upgrade() {
+            // Keep the handoff duplicate source only for the returned writer's lifetime.
+            inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .writable
+                .take();
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ConPtyHandoff {
     handles: [usize; 5],
@@ -106,7 +135,7 @@ impl ConPtyHandoff {
     /// # Safety
     ///
     /// Each value must be a live, target-local handle whose ownership is being
-    /// transferred to the returned handoff.
+    /// transferred to the returned handoff. Unconsumed local handles close on drop.
     pub unsafe fn from_raw_handles(handles: [usize; 5]) -> Self {
         Self {
             handles,
@@ -142,11 +171,16 @@ impl ConPtyMasterPty {
             .con
             .duplicate_for_handoff(
                 target_process,
-                inner.writable.as_raw_handle() as _,
+                inner
+                    .writable
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("PTY writer is closed"))?
+                    .as_raw_handle() as _,
                 inner.readable.as_raw_handle() as _,
             )
             .map(|handles| ConPtyHandoff {
                 handles,
+                // These handles live in the target process, not this process.
                 close_on_drop: false,
             })
     }
@@ -168,7 +202,7 @@ impl ConPtyMasterPty {
             inner: Arc::new(Mutex::new(Inner {
                 con,
                 readable,
-                writable,
+                writable: Some(writable),
                 writer_taken: false,
                 size,
             })),
@@ -196,9 +230,16 @@ impl MasterPty for ConPtyMasterPty {
         if inner.writer_taken {
             anyhow::bail!("writer already taken");
         }
-        let writer = inner.writable.try_clone()?;
+        let writer = inner
+            .writable
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("PTY writer is closed"))?
+            .try_clone()?;
         inner.writer_taken = true;
-        Ok(Box::new(writer))
+        Ok(Box::new(ConPtyWriter {
+            writer,
+            inner: Arc::downgrade(&self.inner),
+        }))
     }
 }
 

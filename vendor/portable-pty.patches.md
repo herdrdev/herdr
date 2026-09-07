@@ -158,6 +158,9 @@ Expose transactional transfer and adoption of the master PTY and exact child
 process handle. Query handoff support before creating a PTY so empty sessions
 can report the selected runtime's capability. Patch 0001 supplies bundled
 pseudo-console packing; the system ConPTY fallback remains unsupported.
+The retained input handle closes when the returned writer is dropped, preserving
+EOF behavior while the master remains alive. Failed adoption closes transferred
+handles even when the selected runtime has no packing capability.
 
 remove when: upstream `portable-pty` supports transactional cross-process
 transfer and adoption for the pinned bundled ConPTY runtime, including partial

@@ -231,6 +231,14 @@ mod tests {
                 .env(ROLE, "target")
                 .env(MODE, mode)
                 .env(EXPECTED_PID, expected_pid.to_string())
+                .env(
+                    "HERDR_WINDOWS_CONPTY",
+                    if mode == "unsupported" {
+                        "system"
+                    } else {
+                        "bundled"
+                    },
+                )
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
@@ -355,17 +363,24 @@ mod tests {
             .parse::<u32>()
             .map_err(std::io::Error::other)?;
         let mut handles = read_transferred_handles()?;
-        if mode == "partial" {
+        if mode == "partial" || mode == "unsupported" {
             let original = handles;
-            unsafe { drop(OwnedHandle::from_raw_handle(handles[0] as _)) };
-            handles[0] = 0;
+            let is_open = |handle| {
+                let mut flags = 0;
+                unsafe {
+                    windows_sys::Win32::Foundation::GetHandleInformation(handle as _, &mut flags)
+                        != 0
+                }
+            };
+            assert!(original.into_iter().all(is_open));
+            if mode == "partial" {
+                unsafe { drop(OwnedHandle::from_raw_handle(handles[0] as _)) };
+                handles[0] = 0;
+            }
             let handoff = unsafe { WindowsPtyHandoff::from_raw_handles(handles) };
             assert!(unsafe { adopt_windows_handoff(handoff, PtySize::default()) }.is_err());
-            let current = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
-            assert!(original.into_iter().all(|handle| {
-                crate::platform::duplicate_handle_into_process(handle, current as usize).is_err()
-            }));
-            println!("PARTIAL_CLEAN");
+            assert!(original.into_iter().all(|handle| !is_open(handle)));
+            println!("ADOPTION_CLEAN:{mode}");
             std::io::stdout().flush()?;
             return Ok(());
         }
@@ -447,10 +462,15 @@ mod tests {
         read_pty_until(reader.as_mut(), &format!("PANE_READY:{pid}"))?;
         write_and_expect(writer.as_mut(), reader.as_mut(), pid, "before-ü-🦀")?;
 
-        let mut partial = Target::spawn(pty.master.as_ref(), &pty.handoff_child, "partial", pid)?;
-        assert_eq!(partial.read("PARTIAL_CLEAN")?, "PARTIAL_CLEAN");
-        partial.finish()?;
-        write_and_expect(writer.as_mut(), reader.as_mut(), pid, "after-partial-ü-🦀")?;
+        for mode in ["partial", "unsupported"] {
+            let mut partial = Target::spawn(pty.master.as_ref(), &pty.handoff_child, mode, pid)?;
+            assert_eq!(
+                partial.read("ADOPTION_CLEAN:")?,
+                format!("ADOPTION_CLEAN:{mode}")
+            );
+            partial.finish()?;
+            write_and_expect(writer.as_mut(), reader.as_mut(), pid, "after-partial-ü-🦀")?;
+        }
 
         let mut rollback = Target::spawn(pty.master.as_ref(), &pty.handoff_child, "rollback", pid)?;
         assert_eq!(rollback.read("ADOPTED:")?, format!("ADOPTED:{pid}"));
@@ -477,7 +497,12 @@ mod tests {
             std::process::id()
         ));
         std::fs::copy(std::env::current_exe()?, &executable)?;
-        let statuses = [("system", "system"), ("source", "bundled")].map(|(role, backend)| {
+        let statuses = [
+            ("system", "system"),
+            ("writer-drop", "bundled"),
+            ("source", "bundled"),
+        ]
+        .map(|(role, backend)| {
             Command::new(&executable)
                 .args(["--ignored", "--exact", TEST_NAME, "--nocapture"])
                 .env(ROLE, role)
@@ -492,6 +517,37 @@ mod tests {
         Ok(())
     }
 
+    fn run_writer_drop() -> anyhow::Result<()> {
+        let mut command = CommandBuilder::new(std::env::current_exe()?);
+        command.args(["--ignored", "--exact", TEST_NAME, "--nocapture"]);
+        command.env(ROLE, "pane");
+        let mut pty = spawn_with_portable_pty(24, 80, command)?;
+        let pid = pty.child.process_id().expect("pane child PID");
+        let mut reader = pty.master.try_clone_reader()?;
+        let writer = pty.master.take_writer()?;
+        read_pty_until(reader.as_mut(), &format!("PANE_READY:{pid}"))?;
+        drop(writer);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let exited = loop {
+            if pty.child.try_wait()?.is_some() {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        if !exited {
+            pty.child.kill()?;
+            pty.child.wait()?;
+        }
+        anyhow::ensure!(
+            exited,
+            "dropping the writer must close input while the master is still alive"
+        );
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires HERDR_CONPTY_PACKAGE_DIR with the verified bundled runtime"]
     fn bundled_conpty_handoff_transfers_six_handles_between_processes() {
@@ -503,6 +559,7 @@ mod tests {
             Ok("pane") => run_pane_child(),
             Ok("target") => run_target(),
             Ok("source") => run_source(),
+            Ok("writer-drop") => run_writer_drop(),
             _ => run_coordinator(),
         };
         result.unwrap();

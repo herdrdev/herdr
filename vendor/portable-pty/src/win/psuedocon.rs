@@ -351,9 +351,6 @@ impl PsuedoCon {
     }
 
     pub(crate) unsafe fn from_handoff(handles: [usize; 3]) -> Result<Self, Error> {
-        let pack = CONPTY
-            .ConptyPackPseudoConsole
-            .ok_or_else(|| anyhow::anyhow!("system ConPTY cannot adopt transferred handles"))?;
         let [signal, reference, process] = handles.map(|handle| {
             ensure!(
                 handle != 0 && handle != INVALID_HANDLE_VALUE as usize,
@@ -364,6 +361,9 @@ impl PsuedoCon {
         let signal = signal?;
         let reference = reference?;
         let process = process?;
+        let pack = CONPTY
+            .ConptyPackPseudoConsole
+            .ok_or_else(|| anyhow::anyhow!("system ConPTY cannot adopt transferred handles"))?;
         let mut con = INVALID_HANDLE_VALUE;
         let result = pack(
             process.as_raw_handle() as _,

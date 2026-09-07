@@ -499,11 +499,15 @@ mod windows {
 
         pub(crate) fn shutdown(&self) {
             self.state.shutdown.store(true, Ordering::Release);
-            if let Ok(mut state) = self.state.state.lock() {
-                if *state != ActorState::Released {
-                    *state = ActorState::Shutdown;
-                }
+            let mut state = self
+                .state
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *state != ActorState::Released {
+                *state = ActorState::Shutdown;
             }
+            drop(state);
             self.state.resumed.notify_all();
             let _ = self.control_tx.send(PtyIoControlCommand::Shutdown);
         }
@@ -921,12 +925,11 @@ mod windows {
                 }
                 Err(err)
                     if err.raw_os_error()
-                        == Some(windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32)
-                        && *state
-                            .state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            == ActorState::Quiescing => {}
+                        == Some(windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32) =>
+                {
+                    // Cancellation can complete after a timed-out pause has rolled back.
+                    // Recheck the lifecycle state before reading again.
+                }
                 Err(err) => {
                     debug!(pane_id, err = %err, "windows pty reader failed");
                     return true;
@@ -1408,6 +1411,13 @@ mod windows {
                 reader_paused.recv_timeout(Duration::from_secs(1)).unwrap();
                 // Model release followed by Drop before paused workers reacquire the lock.
                 *handle.state.state.lock().unwrap() = terminal_state;
+                let poisoned = Arc::clone(&handle.state);
+                assert!(std::thread::spawn(move || {
+                    let _state = poisoned.state.lock().unwrap();
+                    panic!("a reader callback can poison the state lock");
+                })
+                .join()
+                .is_err());
                 handle.shutdown();
                 assert_eq!(
                     reader_done.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -1418,6 +1428,39 @@ mod windows {
                 reader_thread.join().unwrap();
                 input_thread.join().unwrap();
             }
+        }
+
+        #[test]
+        fn reader_retries_a_pause_cancellation_after_rollback() {
+            struct LateCancellation(std::io::Cursor<&'static [u8]>, bool);
+            impl Read for LateCancellation {
+                fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                    if !std::mem::replace(&mut self.1, true) {
+                        return Err(std::io::Error::from_raw_os_error(
+                            windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32,
+                        ));
+                    }
+                    self.0.read(bytes)
+                }
+            }
+            let mut reader = LateCancellation(std::io::Cursor::new(b"after rollback"), false);
+            let (write_tx, _write_rx) = std_mpsc::channel();
+            let (read_tx, read_rx) = std_mpsc::channel();
+            assert!(run_reader(
+                1,
+                &mut reader,
+                Box::new(move |bytes| {
+                    read_tx.send(bytes.to_vec()).unwrap();
+                    PtyReadResult {
+                        terminal_responses: Vec::new(),
+                    }
+                }),
+                write_tx,
+                Arc::new(Mutex::new(())),
+                Arc::new(SharedActorState::new(false)),
+                Arc::new(ReaderPause::default()),
+            ));
+            assert_eq!(read_rx.try_recv().unwrap(), b"after rollback");
         }
 
         #[test]
