@@ -907,7 +907,17 @@ fn windows_remote_install_prepare_command() -> String {
 fn windows_scp_target(target: &str, remote_path: &str) -> String {
     let remote_path = remote_path.replace('\\', "/");
     match target.strip_prefix("ssh://") {
-        Some(authority) => format!("scp://{authority}/{remote_path}"),
+        Some(authority) => {
+            let mut encoded = String::new();
+            for byte in remote_path.bytes() {
+                if byte.is_ascii_alphanumeric() || b"-_.~/:".contains(&byte) {
+                    encoded.push(char::from(byte));
+                } else {
+                    encoded.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            format!("scp://{authority}/{encoded}")
+        }
         None => format!("{target}:{remote_path}"),
     }
 }
@@ -1023,7 +1033,10 @@ fn apply_managed_scp_options(command: &mut Command, options: Option<&ManagedSshO
     if let Some(control_path) = &options.control_path {
         command
             .arg("-o")
-            .arg(format!("ControlPath={}", control_path.to_string_lossy()))
+            .arg(format!(
+                "ControlPath={}",
+                ssh_config_quote(&control_path.to_string_lossy())
+            ))
             .arg("-o")
             .arg("ControlMaster=auto")
             .arg("-o")
@@ -3380,7 +3393,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn remote_ssh_command_uses_managed_config_when_present() {
-        let managed_config = write_managed_ssh_config().expect("write managed config");
+        let mut managed_config = write_managed_ssh_config().expect("write managed config");
+        managed_config.options.control_path = Some(PathBuf::from("/tmp/herdr test/control"));
         let config_path = managed_config.options.config_path.clone();
         let control_path = managed_config
             .options
@@ -3427,7 +3441,7 @@ mod tests {
                 "-F".to_string(),
                 config_path.to_string_lossy().into_owned(),
                 "-o".to_string(),
-                format!("ControlPath={}", control_path.to_string_lossy()),
+                format!("ControlPath=\"{}\"", control_path.to_string_lossy()),
                 "-o".to_string(),
                 "ControlMaster=auto".to_string(),
                 "-o".to_string(),
@@ -3996,6 +4010,14 @@ mod tests {
 
     #[test]
     fn windows_install_commands_copy_zip_and_return_concrete_path() {
+        assert_eq!(
+            windows_scp_target("ssh://user@example:2222", r"C:\Temp\A+B%20 C\ü\install.ps1"),
+            "scp://user@example:2222/C:/Temp/A%2BB%2520%20C/%C3%BC/install.ps1"
+        );
+        assert_eq!(
+            windows_scp_target("example", r"C:\Temp\A+B%20 C\install.ps1"),
+            "example:C:/Temp/A+B%20 C/install.ps1"
+        );
         let remote_dir = r"C:\Temp\Herdr O'Brien\测试";
         assert_eq!(
             windows_scp_target(
