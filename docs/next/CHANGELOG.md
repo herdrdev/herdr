@@ -4,7 +4,7 @@
 
 ### Added
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
-- `ui.pane_borders` now accepts `"auto"`, `"always"`, and `"off"`; `"always"` draws pane borders even when a tab has a single pane. Existing boolean values keep working.
+- `ui.pane_borders` now accepts `"auto"`, `"always"`, and `"off"`; `"always"` also frames a single pane when `ui.pane_outer_borders` is enabled. Existing boolean values keep working.
 
 ### Fixed
 - Claude Code integration hooks now ignore Cursor CLI's Claude-compatible session events, preventing Cursor sessions from being stored as resumable Claude sessions. (#2832)

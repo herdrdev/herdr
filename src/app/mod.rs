@@ -1874,13 +1874,9 @@ mod tests {
         let original_pane_borders = app.state.pane_borders;
         // Pair the bad bounds with another `[ui]` field change to confirm the
         // entire section is treated as invalid (not just the bounds).
-        let target_pane_borders = !original_pane_borders;
         std::fs::write(
             &path,
-            format!(
-                "[ui]\nsidebar_min_width = 50\nsidebar_max_width = 30\npane_borders = {}\n",
-                target_pane_borders
-            ),
+            "[ui]\nsidebar_min_width = 50\nsidebar_max_width = 30\npane_borders = \"always\"\n",
         )
         .unwrap();
 
