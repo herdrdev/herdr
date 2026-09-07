@@ -32,7 +32,7 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 | Local persistent sessions | supported |
 | Native panes through ConPTY | supported |
 | Windows Terminal / PowerShell app attach | supported |
-| `herdr --remote` and saved SSH machines to Linux/macOS/Windows hosts | supported; Windows packages are installed or updated after confirmation when needed |
+| `herdr --remote` and saved SSH machines to Linux/macOS/Windows hosts | supported; interactive attach and saved-machine setup can install or update Windows packages after confirmation; background reconnect only discovers installed packages |
 | Remote clipboard images and image-file drops | supported |
 | `cmd.exe` panes | supported |
 | Native keyboard and mouse input | supported |
@@ -130,7 +130,7 @@ From Windows Terminal, use the same remote command as Linux and macOS:
 herdr --remote workbox
 ```
 
-The target host can run Linux, macOS, or Windows. On Windows hosts, remote attach reuses a compatible package from `PATH` or the active managed release. It prompts before installing or updating the complete package when needed. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
+The target host can run Linux, macOS, or Windows. On Windows hosts, remote attach reuses a compatible package from `PATH` or the active managed release. Interactive direct attach and saved-machine setup prompt before installing or updating the complete package when needed. Background saved reconnect only discovers installed packages and cannot prompt for installation or updates. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
 
 Windows updates run through the Windows installer and update the active versioned release path. New terminals and reconnected SSH sessions receive that path; start Herdr there to use the updated client. Compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
 
