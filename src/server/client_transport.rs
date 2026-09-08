@@ -41,6 +41,10 @@ const MIN_CLIENT_ROWS: u16 = 1;
 /// and cleanup overhead.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// Reliable messages are rare, but they must still be bounded when a writer
+/// is blocked behind a stalled peer.
+const MAX_CONTROL_QUEUE_BYTES: usize = 1024 * 1024;
+
 /// Maximum input payload size (bytes) for a single `ClientMessage::Input`.
 const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
 const MAX_CLIENT_SHELL_DIMENSION: u16 = 4096;
@@ -252,6 +256,7 @@ struct ClientWriterQueue {
 #[derive(Debug, Default)]
 struct ClientWriterQueueState {
     control: VecDeque<Vec<u8>>,
+    control_bytes: usize,
     ordered: VecDeque<Vec<u8>>,
     render: Option<Vec<u8>>,
     senders: usize,
@@ -291,6 +296,10 @@ impl ClientWriterQueue {
         if !state.writer_alive {
             return Err(SendError(data));
         }
+        if data.len() > MAX_CONTROL_QUEUE_BYTES.saturating_sub(state.control_bytes) {
+            return Err(SendError(data));
+        }
+        state.control_bytes = state.control_bytes.saturating_add(data.len());
         state.control.push_back(data);
         self.ready.notify_one();
         Ok(())
@@ -336,6 +345,7 @@ impl ClientWriterQueue {
         let mut state = self.lock_state();
         loop {
             if let Some(data) = state.control.pop_front() {
+                state.control_bytes = state.control_bytes.saturating_sub(data.len());
                 return Some(ClientWriteItem::Control(data));
             }
             if let Some(data) = state.ordered.pop_front() {
@@ -358,6 +368,8 @@ impl ClientWriterQueue {
     fn close_writer(&self) {
         let mut state = self.lock_state();
         state.writer_alive = false;
+        state.control.clear();
+        state.control_bytes = 0;
         state.render = None;
         state.ordered.clear();
         self.ready.notify_all();
@@ -1491,6 +1503,16 @@ mod tests {
             writer.render.try_send(second),
             Err(TrySendError::Full(_))
         ));
+    }
+
+    #[test]
+    fn client_writer_queue_rejects_control_backpressure() {
+        let (writer, _queue) = test_queue_writer();
+        writer
+            .control
+            .send(vec![b'x'; MAX_CONTROL_QUEUE_BYTES])
+            .expect("first control message fits exactly");
+        assert!(matches!(writer.control.send(vec![b'y']), Err(SendError(_))));
     }
 
     #[test]
