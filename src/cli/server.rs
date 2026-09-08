@@ -8,6 +8,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
     match subcommand {
         "stop" => server_stop(&args[1..]).map(Some),
         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
+        "handoff-all" => server_handoff_all(&args[1..]).map(Some),
         "--handoff-import" => Ok(None),
         "reload-config" => server_reload_config(&args[1..]).map(Some),
         "agent-manifests" => server_agent_manifests(&args[1..]).map(Some),
@@ -191,6 +192,36 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
             println!("  {warning}");
         }
     }
+}
+
+// Sweep every running server (default + named sessions) into a new
+// binary. `herdr server handoff-all [--import-exe <path>] [--dry-run]`;
+// import-exe defaults to this executable.
+fn server_handoff_all(args: &[String]) -> std::io::Result<i32> {
+    let mut import_exe: Option<std::path::PathBuf> = None;
+    let mut dry_run = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--import-exe" => match it.next() {
+                Some(p) => import_exe = Some(std::path::PathBuf::from(p)),
+                None => {
+                    eprintln!("usage: herdr server handoff-all [--import-exe <path>] [--dry-run]");
+                    return Ok(2);
+                }
+            },
+            "--dry-run" => dry_run = true,
+            _ => {
+                eprintln!("usage: herdr server handoff-all [--import-exe <path>] [--dry-run]");
+                return Ok(2);
+            }
+        }
+    }
+    let exe = match import_exe {
+        Some(p) => p,
+        None => std::env::current_exe()?,
+    };
+    Ok(crate::update::handoff_all_servers(&exe, dry_run))
 }
 
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {

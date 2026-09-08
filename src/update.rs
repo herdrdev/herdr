@@ -3816,3 +3816,101 @@ mod tests {
         }
     }
 }
+
+// ─── fleet-wide handoff ─────────────────────────────────────────────────
+// "Update the fleet" must mean every running server, not the ones the
+// operator remembers: a stale server keeps serving yesterday's bugs and the
+// confusion lands on whoever is attached to it (it did). One command sweeps
+// every discoverable server — default session and named sessions alike — and
+// hands each off to the given binary.
+#[cfg(not(windows))]
+pub(crate) fn handoff_all_servers(import_exe: &std::path::Path, dry_run: bool) -> i32 {
+    // Guard: the `herdr` on PATH is what gc's session provider shells out to.
+    // If it is not the same build as the binary we are deploying to the
+    // servers, every session launch fails with protocol_mismatch and the fleet
+    // silently stops spawning (2026-08-28). Refuse unless the two match.
+    if let Some(path_herdr) = which_on_path("herdr") {
+        match (std::fs::read(&path_herdr), std::fs::read(import_exe)) {
+            (Ok(a), Ok(b)) if a != b => {
+                eprintln!(
+                    "refusing: `herdr` on PATH ({}) is not the same build as {} — gc's \
+session provider would speak the wrong protocol. Install the same binary to both \
+(or set HERDR_ALLOW_MISMATCHED_CLIENT=1 to override).",
+                    path_herdr.display(),
+                    import_exe.display()
+                );
+                if !std::env::var("HERDR_ALLOW_MISMATCHED_CLIENT").is_ok_and(|v| v == "1") {
+                    return 2;
+                }
+            }
+            _ => {}
+        }
+    }
+    let targets = match running_update_targets() {
+        Ok(targets) => targets,
+        Err(err) => {
+            eprintln!("could not enumerate running servers: {err}");
+            return 2;
+        }
+    };
+
+    let mut failures = 0;
+    let mut seen = 0;
+    for target in targets {
+        let server = match crate::api::read_runtime_status_at(
+            &target.socket_path,
+            SERVER_STOP_RESPONSE_TIMEOUT,
+        ) {
+            Ok(Some(server)) => server,
+            Ok(None) => continue,
+            Err(err) => {
+                eprintln!("{}: status unreadable ({err}) — SKIPPED", target.label);
+                failures += 1;
+                continue;
+            }
+        };
+        seen += 1;
+        if !server_supports_live_handoff(&server) {
+            eprintln!("{}: server does not support live handoff — SKIPPED", target.label);
+            failures += 1;
+            continue;
+        }
+        if dry_run {
+            println!("{}: would hand off to {}", target.label, import_exe.display());
+            continue;
+        }
+        let params = crate::api::schema::ServerLiveHandoffParams {
+            import_exe: Some(import_exe.display().to_string()),
+            ..Default::default()
+        };
+        match send_server_update_method_at(
+            &target.socket_path,
+            SERVER_HANDOFF_REQUEST_TIMEOUT,
+            "cli:server:handoff-all",
+            crate::api::schema::Method::ServerLiveHandoff(params),
+            "server live handoff",
+        ) {
+            Ok(()) => println!("{}: handed off to {}", target.label, import_exe.display()),
+            Err(err) => {
+                eprintln!("{}: handoff FAILED: {err}", target.label);
+                failures += 1;
+            }
+        }
+    }
+    if seen == 0 {
+        println!("no running servers found");
+    }
+    if failures > 0 {
+        2
+    } else {
+        0
+    }
+}
+
+#[cfg(not(windows))]
+fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
