@@ -198,24 +198,34 @@ impl App {
         argv.extend(params.args);
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
-        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
         let timeout = Duration::from_millis(
             params
                 .timeout_ms
                 .unwrap_or(DEFAULT_AGENT_START_TIMEOUT.as_millis() as u64),
         );
+        // Reject before staging, so no rejected request leaves a payload behind.
         if timeout <= AGENT_START_SETTLE_DELAY || timeout > MAX_AGENT_START_TIMEOUT {
             return Err(AgentStartError::InvalidTimeout);
         }
+        // A composed agent command can carry a system prompt far longer than a
+        // terminal will accept on one line, so stage it rather than type it
+        // (refs #2862).
+        let staged = crate::app::command_delivery::stage(
+            &command,
+            &shell_name,
+            &format!("agent-{}", params.kind),
+        )
+        .map_err(|err| AgentStartError::InputFailed(err.to_string()))?;
+        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &staged.text);
 
         let now = Instant::now();
-        let terminal = self
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
+        let Some(terminal) = self.state.terminals.get_mut(&terminal_id) else {
+            staged.discard();
+            return Err(AgentStartError::TargetUnavailable(params.pane_id.clone()));
+        };
         terminal.begin_managed_agent(name.clone(), kind, now, AGENT_START_SETTLE_DELAY, timeout);
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
+            staged.discard();
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
         }

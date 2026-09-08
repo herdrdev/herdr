@@ -87,6 +87,25 @@ herdr
 
 停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
 
+## 窗格中显示 `. /…/staged-commands/…` 而不是命令
+
+当前台程序以规范模式 (canonical mode) 读取输入时，终端单行只能接受有限的字节数：
+macOS 为 1024，Linux 为 4096。超出部分会被内核静默丢弃，因此过长的命令只会被截断
+送达，而不会执行。
+
+为此，`herdr agent start` 会把超过 512 字节的命令写入一个私有文件，并输入一行短命
+令来运行它，这就是你在窗格中看到的内容。该文件在运行的那一刻即被删除。更短的命令
+会原样输入，所以只有 `--append-system-prompt` 这类长参数才会出现这种显示。
+
+只有 Herdr 知道如何加载的 shell 才会这样暂存：`sh`、`bash`、`dash`、`zsh`、`ksh`
+和 `mksh` 使用 `.`，`fish` 使用 `source`。在 `csh`、`tcsh`、`nu`、`elvish`、`xonsh`
+以及 Windows 上，命令会原样输入，并且仍受行长限制。
+
+通过 `herdr pane send-text`、`herdr pane run` 或粘贴发送到窗格的文本仍按字面逐字送
+达，因此依旧受终端行长限制。shell 处于规范模式的时间比看上去更多：`bash` 和 `zsh`
+在其运行的每条命令期间都会回到规范模式，而 Ubuntu 上作为 `/bin/sh` 的 `dash` 从不
+离开规范模式。文本较长时，请先写入文件再运行该文件。
+
 ## 找不到 `herdr` 命令
 
 重启终端以重新加载环境，然后确认 Herdr 安装目录位于 `PATH` 中。通过软件包管理器安装的 Herdr 必须通过该管理器更新并加入环境。见[安装 Herdr](/zh-cn/docs/install/#verify)。
