@@ -110,13 +110,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|veyyon|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|veyyon|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
         );
         return Ok(None);
     }
@@ -124,6 +124,7 @@ fn parse_integration_target(
     let parsed = match target {
         "pi" => IntegrationTarget::Pi,
         "omp" => IntegrationTarget::Omp,
+        "veyyon" => IntegrationTarget::Veyyon,
         "claude" => IntegrationTarget::Claude,
         "codex" => IntegrationTarget::Codex,
         "copilot" => IntegrationTarget::Copilot,
@@ -142,7 +143,7 @@ fn parse_integration_target(
         _ => {
             eprintln!("unknown integration target: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok"
+                "currently supported: pi, omp, veyyon, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok"
             );
             return Ok(None);
         }

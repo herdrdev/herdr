@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Install Herdr integrations for Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Cursor Agent CLI, MastraCode, Antigravity CLI, and Grok CLI.
+description: Install Herdr integrations for Pi, OMP, Veyyon, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Cursor Agent CLI, MastraCode, Antigravity CLI, and Grok CLI.
 ---
 
 Herdr detects supported agents automatically. Install official integrations when you want native agent session restore, direct lifecycle reports, or both. See [Agents](/docs/agents/) for the full status authority model.
@@ -12,6 +12,7 @@ Open settings inside Herdr and use the integrations tab to install recommended i
 ```bash
 herdr integration install pi
 herdr integration install omp
+herdr integration install veyyon
 herdr integration install claude
 herdr integration install codex
 herdr integration install copilot
@@ -34,6 +35,7 @@ herdr integration install grok
 ```bash
 herdr integration uninstall pi
 herdr integration uninstall omp
+herdr integration uninstall veyyon
 herdr integration uninstall claude
 herdr integration uninstall codex
 herdr integration uninstall copilot
@@ -57,7 +59,7 @@ Herdr uses integrations in two ways:
 
 | Integration type | Agents | Effect |
 | --- | --- | --- |
-| Lifecycle authority | Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
+| Lifecycle authority | Pi, OMP, Veyyon, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode | When installed and actively reporting for the pane, hook or plugin events author `idle`, `working`, and `blocked`. Herdr does not also use screen manifest fallback for that same lifecycle authority. |
 | Session identity | Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Qoder CLI, Qwen Code, Cursor Agent CLI, Hermes Agent, Antigravity CLI, Grok CLI | The integration reports native session references for restore. State still comes from Herdr's screen manifest detection. |
 
 Custom integrations can also report state that is not visible in the native terminal UI. They do not need to be built into Herdr or use a recognized agent executable.
@@ -89,9 +91,9 @@ Use `HERDR_BIN_PATH` and the CLI wrappers for portable integrations. Code that n
 
 [Prime Agent's built-in Herdr reporter](https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/src/core/extensions/builtin/herdr-agent-state.ts) is a real-world example. It activates only inside Herdr, maps agent events to `working`, `idle`, and `blocked`, preserves report ordering across sessions, and releases authority on exit.
 
-Some integrations report native agent session references. Herdr uses official session references to resume Claude Code, Codex, Devin CLI, Droid, Kimi Code CLI, Qoder CLI, Qwen Code, Cursor Agent CLI, Grok CLI, GitHub Copilot CLI, Pi, OMP, Hermes Agent, OpenCode, Kilo Code CLI, MastraCode, and Antigravity CLI panes after a Herdr server restart unless `[session] resume_agents_on_restore = false` disables it.
+Some integrations report native agent session references. Herdr uses official session references to resume Claude Code, Codex, Devin CLI, Droid, Kimi Code CLI, Qoder CLI, Qwen Code, Cursor Agent CLI, Grok CLI, GitHub Copilot CLI, Pi, OMP, Veyyon, Hermes Agent, OpenCode, Kilo Code CLI, MastraCode, and Antigravity CLI panes after a Herdr server restart unless `[session] resume_agents_on_restore = false` disables it.
 
-Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Qwen Code version `1`, Cursor Agent CLI version `1`, Grok CLI version `1`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `5`, MastraCode version `1`, or Antigravity CLI version `1`. Check installed versions with `herdr integration status`.
+Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Veyyon version `1`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Qwen Code version `1`, Cursor Agent CLI version `1`, Grok CLI version `1`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `5`, MastraCode version `1`, or Antigravity CLI version `1`. Check installed versions with `herdr integration status`.
 
 ## Pi
 
@@ -126,6 +128,18 @@ Herdr writes the bundled extension to:
 Herdr uses `PI_CODING_AGENT_DIR` as the complete agent directory when set. Otherwise, it uses `$HOME/$PI_CONFIG_DIR/agent` when `PI_CONFIG_DIR` is set, falling back to `~/.omp/agent`. If Pi and OMP resolve to the same extension directory, Herdr refuses the OMP install so the OMP extension cannot be loaded by Pi. Configure separate agent directories before installing both integrations. Herdr creates the extensions directory when the resolved OMP agent directory already exists. Uninstall removes only that extension file.
 
 The OMP integration reports `omp` as the agent label, lifecycle state, and native session identity through Herdr's socket API. It does not require native process detection for the `omp` executable, and Herdr can resume an OMP pane with `omp --resume=<session>` after a server restart.
+
+## Veyyon
+
+Install the Veyyon integration:
+
+```bash
+herdr integration install veyyon
+```
+
+Herdr writes the bundled extension to `~/.veyyon/profiles/default/agent/extensions/herdr-veyyon-agent-state.ts`. `VEYYON_CODING_AGENT_DIR` overrides the complete agent directory. Otherwise, `VEYYON_CONFIG_DIR` selects the config root and `VEYYON_PROFILE` selects the profile. Herdr creates the extensions directory when the resolved Veyyon agent directory already exists. Uninstall removes only that extension file.
+
+The extension reuses Veyyon's inherited Pi/OMP lifecycle events to report `working`, `blocked`, `idle`, and native session identity through Herdr's socket API. Without the extension, Herdr falls back to Veyyon's screen manifest. Herdr resumes stored sessions with `veyyon --resume <session>`.
 
 ## Claude Code
 

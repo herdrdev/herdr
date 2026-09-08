@@ -28,6 +28,9 @@ const PI_INTEGRATION_VERSION: u32 = 8;
 const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
 const OMP_INTEGRATION_VERSION: u32 = 9;
+const VEYYON_EXTENSION_INSTALL_NAME: &str = "herdr-veyyon-agent-state.ts";
+const VEYYON_EXTENSION_ASSET: &str = include_str!("assets/veyyon/herdr-agent-state.ts");
+const VEYYON_INTEGRATION_VERSION: u32 = 1;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {

@@ -50,6 +50,7 @@ pub enum Agent {
     Antigravity,
     Cline,
     Omp,
+    Veyyon,
     Mastracode,
     OpenCode,
     GithubCopilot,
@@ -67,7 +68,7 @@ pub enum Agent {
 }
 
 impl Agent {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -77,6 +78,7 @@ impl Agent {
         Self::Antigravity,
         Self::Cline,
         Self::Omp,
+        Self::Veyyon,
         Self::Mastracode,
         Self::OpenCode,
         Self::GithubCopilot,
@@ -93,7 +95,7 @@ impl Agent {
         Self::Muse,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -102,6 +104,7 @@ impl Agent {
         Self::Devin,
         Self::Antigravity,
         Self::Cline,
+        Self::Veyyon,
         Self::OpenCode,
         Self::GithubCopilot,
         Self::Kimi,
@@ -129,6 +132,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
         Agent::Omp => "omp",
+        Agent::Veyyon => "veyyon",
         Agent::Mastracode => "mastracode",
         Agent::OpenCode => "opencode",
         Agent::GithubCopilot => "copilot",
@@ -163,6 +167,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
         Agent::Omp => "omp",
+        Agent::Veyyon => "veyyon",
         Agent::Mastracode => "mastracode",
         Agent::OpenCode => "opencode",
         Agent::GithubCopilot => "copilot",
@@ -202,6 +207,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
         "cline" => Some(Agent::Cline),
         "omp" => Some(Agent::Omp),
+        "veyyon" => Some(Agent::Veyyon),
         "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
         "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
         "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
@@ -318,6 +324,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
         (source, agent_label),
         ("herdr:pi", "pi")
             | ("herdr:omp", "omp")
+            | ("herdr:veyyon", "veyyon")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
@@ -764,6 +771,42 @@ mod tests {
         assert!(detection.visible_working);
     }
 
+    #[test]
+    fn veyyon_manifest_classifies_interactive_states() {
+        let ask = detect_agent(
+            Some(Agent::Veyyon),
+            "╭─ Ask ─╮\nChoose a rollout target\nenter select  ·  esc cancel",
+        );
+        assert_eq!(ask.state, AgentState::Blocked);
+        assert!(ask.visible_blocker);
+
+        let approval = detect_agent(
+            Some(Agent::Veyyon),
+            "Apply this change?\nenter confirm  ·  esc cancel",
+        );
+        assert_eq!(approval.state, AgentState::Blocked);
+
+        let polling = detect_agent(
+            Some(Agent::Veyyon),
+            "▏ i waiting on 8 jobs\n▏ ├─ · reviewer 6m47s",
+        );
+        assert_eq!(polling.state, AgentState::Working);
+        assert!(polling.visible_working);
+
+        let working = detect_agent(
+            Some(Agent::Veyyon),
+            "escape interrupt  ·  ctrl+b background",
+        );
+        assert_eq!(working.state, AgentState::Working);
+
+        let idle = detect_agent(
+            Some(Agent::Veyyon),
+            "› Write a prompt\n\n◫ C:\\repo  ·  main  ·  Fable",
+        );
+        assert_eq!(idle.state, AgentState::Idle);
+        assert!(idle.visible_idle);
+    }
+
     // ---- Agent identification ----
 
     #[test]
@@ -781,6 +824,8 @@ mod tests {
         assert_eq!(identify_agent("antigravity-cli"), Some(Agent::Antigravity));
         assert_eq!(identify_agent("cline"), Some(Agent::Cline));
         assert_eq!(identify_agent("omp"), Some(Agent::Omp));
+        assert_eq!(identify_agent("veyyon"), Some(Agent::Veyyon));
+        assert_eq!(identify_agent("veyyon.exe"), Some(Agent::Veyyon));
         assert_eq!(identify_agent("mastracode"), Some(Agent::Mastracode));
         assert_eq!(identify_agent("mastra-code"), Some(Agent::Mastracode));
         assert_eq!(identify_agent("opencode"), Some(Agent::OpenCode));
@@ -826,6 +871,7 @@ mod tests {
         assert_eq!(parse_agent_label("agy"), Some(Agent::Antigravity));
         assert_eq!(parse_agent_label("antigravity"), Some(Agent::Antigravity));
         assert_eq!(parse_agent_label("omp"), Some(Agent::Omp));
+        assert_eq!(parse_agent_label("veyyon.exe"), Some(Agent::Veyyon));
         assert_eq!(parse_agent_label("mastracode"), Some(Agent::Mastracode));
         assert_eq!(parse_agent_label("mastra code"), Some(Agent::Mastracode));
         assert_eq!(parse_agent_label("opencode.exe"), Some(Agent::OpenCode));
@@ -872,6 +918,7 @@ mod tests {
             (Agent::Antigravity, "agy"),
             (Agent::Cline, "cline"),
             (Agent::Omp, "omp"),
+            (Agent::Veyyon, "veyyon"),
             (Agent::Mastracode, "mastracode"),
             (Agent::OpenCode, "opencode"),
             (Agent::GithubCopilot, "copilot"),
@@ -899,6 +946,15 @@ mod tests {
         assert_eq!(parse_canonical_agent_label("Pi"), None);
         assert_eq!(parse_canonical_agent_label(" pi "), None);
         assert_eq!(parse_canonical_agent_label("opencode.exe"), None);
+    }
+
+    #[test]
+    fn veyyon_uses_hooks_with_screen_fallback() {
+        assert!(full_lifecycle_hook_authority(
+            "herdr:veyyon",
+            "veyyon"
+        ));
+        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Veyyon));
     }
 
     #[test]

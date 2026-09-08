@@ -9,6 +9,7 @@ const originalCreateConnection = net.createConnection;
 const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
+  HERDR_VEYYON_IDLE_DEBOUNCE_MS: process.env.HERDR_VEYYON_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 };
@@ -46,6 +47,7 @@ afterEach(async () => {
 const integrations = [
   { name: "Pi", modulePath: "./pi/herdr-agent-state.ts" },
   { name: "Oh My Pi", modulePath: "./omp/herdr-agent-state.ts" },
+  { name: "Veyyon", modulePath: "./veyyon/herdr-agent-state.ts" },
 ] as const;
 
 const socketPlugins = [
@@ -228,6 +230,40 @@ for (const integration of integrations) {
     expect(reportedState()).toBe("working");
   });
 }
+
+test("Veyyon maps ask tool execution to blocked then working", async () => {
+  const requests = await startRecordingServer("veyyon-ask");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./veyyon/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    hasUI: true,
+    isIdle: () => true,
+    sessionManager: {
+      getSessionFile: () => "C:\\Users\\User\\.veyyon\\session.jsonl",
+      getSessionId: () => "veyyon-session",
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+
+  handlers.get("tool_execution_start")?.(
+    {
+      toolName: "ask",
+      args: { questions: [{ question: "Approve the change?" }] },
+    },
+    context,
+  );
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
+
+  handlers.get("tool_execution_end")?.({ toolName: "ask" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "working"]);
+});
 
 test("OMP accepts POSIX and Windows session paths", async () => {
   const { isAbsoluteSessionPath } = await importFresh("./omp/herdr-agent-state.ts");

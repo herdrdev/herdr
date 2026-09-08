@@ -32,6 +32,7 @@ pub struct IntegrationUninstallParams {
 pub enum IntegrationTarget {
     Pi,
     Omp,
+    Veyyon,
     Claude,
     Codex,
     Copilot,
@@ -50,9 +51,10 @@ pub enum IntegrationTarget {
 }
 
 impl IntegrationTarget {
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Pi,
         Self::Omp,
+        Self::Veyyon,
         Self::Claude,
         Self::Codex,
         Self::Copilot,

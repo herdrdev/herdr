@@ -11,6 +11,9 @@ pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
 pub(crate) const PI_CODING_AGENT_DIR_ENV_VAR: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const OMP_CONFIG_DIR_ENV_VAR: &str = "PI_CONFIG_DIR";
+pub(crate) const VEYYON_CODING_AGENT_DIR_ENV_VAR: &str = "VEYYON_CODING_AGENT_DIR";
+pub(crate) const VEYYON_CONFIG_DIR_ENV_VAR: &str = "VEYYON_CONFIG_DIR";
+pub(crate) const VEYYON_PROFILE_ENV_VAR: &str = "VEYYON_PROFILE";
 pub(crate) const CLAUDE_CONFIG_DIR_ENV_VAR: &str = "CLAUDE_CONFIG_DIR";
 pub(crate) const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 pub(crate) const KIMI_CODE_HOME_ENV_VAR: &str = "KIMI_CODE_HOME";
@@ -51,6 +54,36 @@ pub(crate) fn omp_extension_dir() -> io::Result<PathBuf> {
         .unwrap_or_else(|| ".omp".into());
     Ok(home_dir()?
         .join(config_dir)
+        .join("agent")
+        .join("extensions"))
+}
+
+pub(crate) fn veyyon_extension_dir() -> io::Result<PathBuf> {
+    if let Some(value) =
+        std::env::var_os(VEYYON_CODING_AGENT_DIR_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("extensions"));
+    }
+
+    let config_root = match std::env::var_os(VEYYON_CONFIG_DIR_ENV_VAR)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                home_dir()?.join(path)
+            }
+        }
+        None => home_dir()?.join(".veyyon"),
+    };
+    let profile = std::env::var_os(VEYYON_PROFILE_ENV_VAR)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default".into());
+    Ok(config_root
+        .join("profiles")
+        .join(profile)
         .join("agent")
         .join("extensions"))
 }

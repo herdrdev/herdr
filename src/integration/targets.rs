@@ -22,7 +22,7 @@ use super::config_edit::{
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
     grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
-    opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    opencode_dir, pi_extension_dir, qodercli_dir, qwen_dir, veyyon_extension_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -39,7 +39,7 @@ use super::types::{
     KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, MastracodeInstallPaths,
     MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
     OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
-    QwenInstallPaths, QwenUninstallResult,
+    QwenInstallPaths, QwenUninstallResult, VeyyonUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
@@ -58,7 +58,8 @@ use super::{
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
     OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
     QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
-    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME,
+    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME, VEYYON_EXTENSION_ASSET,
+    VEYYON_EXTENSION_INSTALL_NAME,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -80,6 +81,15 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
     fs::write(&path, PI_EXTENSION_ASSET)?;
+    Ok(path)
+}
+
+pub(crate) fn install_veyyon() -> io::Result<PathBuf> {
+    let dir = veyyon_extension_dir()?;
+    ensure_extension_dir(&dir, "veyyon")?;
+
+    let path = dir.join(VEYYON_EXTENSION_INSTALL_NAME);
+    fs::write(&path, VEYYON_EXTENSION_ASSET)?;
     Ok(path)
 }
 
@@ -546,6 +556,16 @@ pub(crate) fn uninstall_omp() -> io::Result<OmpUninstallResult> {
     let removed_extension = remove_file_if_exists(&extension_path)?;
 
     Ok(OmpUninstallResult {
+        extension_path,
+        removed_extension,
+    })
+}
+
+pub(crate) fn uninstall_veyyon() -> io::Result<VeyyonUninstallResult> {
+    let extension_path = veyyon_extension_dir()?.join(VEYYON_EXTENSION_INSTALL_NAME);
+    let removed_extension = remove_file_if_exists(&extension_path)?;
+
+    Ok(VeyyonUninstallResult {
         extension_path,
         removed_extension,
     })

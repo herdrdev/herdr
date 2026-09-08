@@ -10,6 +10,7 @@ pub(crate) fn integration_target_label(
     match target {
         crate::api::schema::IntegrationTarget::Pi => "pi",
         crate::api::schema::IntegrationTarget::Omp => "omp",
+        crate::api::schema::IntegrationTarget::Veyyon => "veyyon",
         crate::api::schema::IntegrationTarget::Claude => "claude",
         crate::api::schema::IntegrationTarget::Codex => "codex",
         crate::api::schema::IntegrationTarget::Copilot => "copilot",
@@ -40,6 +41,7 @@ pub(crate) fn integration_target_command_names(
     match target {
         crate::api::schema::IntegrationTarget::Pi => &["pi"],
         crate::api::schema::IntegrationTarget::Omp => &["omp"],
+        crate::api::schema::IntegrationTarget::Veyyon => &["veyyon"],
         crate::api::schema::IntegrationTarget::Claude => &["claude"],
         crate::api::schema::IntegrationTarget::Codex => &["codex"],
         crate::api::schema::IntegrationTarget::Copilot => &["copilot"],
@@ -70,6 +72,7 @@ pub(crate) fn integration_target_supported(target: crate::api::schema::Integrati
             crate::api::schema::IntegrationTarget::Pi
                 | crate::api::schema::IntegrationTarget::Omp
                 | crate::api::schema::IntegrationTarget::Claude
+                | crate::api::schema::IntegrationTarget::Veyyon
                 | crate::api::schema::IntegrationTarget::Codex
                 | crate::api::schema::IntegrationTarget::Copilot
                 | crate::api::schema::IntegrationTarget::Opencode
@@ -267,7 +270,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 17] {
+); 18] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -278,6 +281,11 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Omp,
             omp_extension_dir().map(|dir| dir.join(super::OMP_EXTENSION_INSTALL_NAME)),
             super::OMP_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Veyyon,
+            veyyon_extension_dir().map(|dir| dir.join(super::VEYYON_EXTENSION_INSTALL_NAME)),
+            super::VEYYON_INTEGRATION_VERSION,
         ),
         (
             crate::api::schema::IntegrationTarget::Claude,

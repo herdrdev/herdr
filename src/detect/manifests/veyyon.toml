@@ -1,0 +1,62 @@
+id = "veyyon"
+version = "2026.09.08.1"
+min_engine_version = 1
+updated_at = "2026-09-08T00:00:00Z"
+
+[[rules]]
+id = "ask_dialog_blocked"
+state = "blocked"
+priority = 1000
+region = "bottom_non_empty_lines(24)"
+visible_blocker = true
+line_regex = ['(?i)^.*\bAsk(?: \(\d+s\))?\b.*$']
+all = [
+  { contains = ["esc cancel"] },
+  { any = [
+    { contains = ["enter select"] },
+    { contains = ["enter toggle"] },
+    { contains = ["enter submit"] },
+  ] },
+]
+
+[[rules]]
+id = "waiting_for_input_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(16)"
+visible_blocker = true
+contains = ["esc cancel"]
+any = [
+  { contains = ["enter confirm"] },
+  { contains = ["enter select"] },
+  { contains = ["enter submit"] },
+  { contains = ["space toggle", "enter toggle"] },
+]
+
+[[rules]]
+id = "job_poll_working"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(24)"
+visible_working = true
+line_regex = ['(?i)^\s*[▏│]?\s*(?:[i…·]\s+)?waiting on [1-9]\d* jobs?\s*$']
+
+[[rules]]
+id = "active_turn_working"
+state = "working"
+priority = 850
+region = "bottom_non_empty_lines(10)"
+visible_working = true
+line_regex = ['(?i)^\s*(?:esc|escape|ctrl\+c)\s+interrupt(?:\s+·|\s*$)']
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+line_regex = ['^\s*›(?:\s|$)']
+not = [
+  { line_regex = ['(?i)^\s*(?:esc|escape|ctrl\+c)\s+interrupt(?:\s+·|\s*$)'] },
+  { contains = ["esc cancel"] },
+]

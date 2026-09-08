@@ -73,6 +73,10 @@ id = "pi"
 path = "pi.toml"
 
 [[agents]]
+id = "veyyon"
+path = "veyyon.toml"
+
+[[agents]]
 id = "qodercli"
 path = "qodercli.toml"
 

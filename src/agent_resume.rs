@@ -60,7 +60,7 @@ pub fn session_ref_from_report(
         return None;
     }
 
-    if agent == "pi" || agent == "omp" {
+    if matches!(agent, "pi" | "omp" | "veyyon") {
         return _agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
@@ -122,7 +122,7 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "omp" | "veyyon", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -176,6 +176,15 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
             // `--session` flag, unlike pi.
             vec!["omp".into(), format!("--resume={}", session_ref.value)]
         }
+        (
+            "herdr:veyyon",
+            "veyyon",
+            AgentSessionRefKind::Path | AgentSessionRefKind::Id,
+        ) => vec![
+            "veyyon".into(),
+            "--resume".into(),
+            session_ref.value.clone(),
+        ],
         ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
             vec![
                 "hermes".into(),
@@ -252,6 +261,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:droid", "droid")
             | ("herdr:kimi", "kimi")
             | ("herdr:omp", "omp")
+            | ("herdr:veyyon", "veyyon")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
             | ("herdr:hermes", "hermes")
@@ -515,6 +525,21 @@ mod tests {
             .unwrap()
             .argv,
             vec!["grok", "--resume", "grok-session"]
+        );
+    }
+
+    #[test]
+    fn planner_resumes_veyyon_session() {
+        let session = absolute_test_path("veyyon-session.jsonl");
+        assert_eq!(
+            plan(
+                "herdr:veyyon",
+                "veyyon",
+                &AgentSessionRef::path(&session).unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["veyyon", "--resume", session.as_str()]
         );
     }
 

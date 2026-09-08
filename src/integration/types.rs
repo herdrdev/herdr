@@ -179,6 +179,12 @@ pub(crate) struct OmpUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct VeyyonUninstallResult {
+    pub extension_path: PathBuf,
+    pub removed_extension: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct ClaudeUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,

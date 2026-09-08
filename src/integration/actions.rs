@@ -5,10 +5,11 @@ use super::targets::{
     install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
     install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
     install_mastracode, install_omp, install_opencode, install_pi, install_qodercli, install_qwen,
+    install_veyyon,
     uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
     uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
     uninstall_kilo, uninstall_kimi, uninstall_mastracode, uninstall_omp, uninstall_opencode,
-    uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    uninstall_pi, uninstall_qodercli, uninstall_qwen, uninstall_veyyon,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -57,6 +58,13 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 installed.extension_path.display()
             ));
             messages
+        }
+        crate::api::schema::IntegrationTarget::Veyyon => {
+            let path = install_veyyon()?;
+            vec![format!(
+                "installed veyyon integration to {}",
+                path.display()
+            )]
         }
         crate::api::schema::IntegrationTarget::Claude => {
             let installed = install_claude()?;
@@ -291,6 +299,20 @@ pub(crate) fn uninstall_target(
             } else {
                 vec![format!(
                     "no omp integration extension found at {}",
+                    result.extension_path.display()
+                )]
+            }
+        }
+        crate::api::schema::IntegrationTarget::Veyyon => {
+            let result = uninstall_veyyon()?;
+            if result.removed_extension {
+                vec![format!(
+                    "removed veyyon integration extension at {}",
+                    result.extension_path.display()
+                )]
+            } else {
+                vec![format!(
+                    "no veyyon integration extension found at {}",
                     result.extension_path.display()
                 )]
             }

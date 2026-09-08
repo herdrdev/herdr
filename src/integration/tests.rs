@@ -129,6 +129,9 @@ fn enforce_agent_version_accepts_current_version() {
 fn clear_integration_path_env() {
     std::env::remove_var(PI_CODING_AGENT_DIR_ENV_VAR);
     std::env::remove_var(OMP_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(VEYYON_CODING_AGENT_DIR_ENV_VAR);
+    std::env::remove_var(VEYYON_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(VEYYON_PROFILE_ENV_VAR);
     std::env::remove_var(CLAUDE_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(CODEX_HOME_ENV_VAR);
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
@@ -254,6 +257,7 @@ fn windows_supports_portable_integrations() {
 
     assert!(integration_target_supported(IntegrationTarget::Pi));
     assert!(integration_target_supported(IntegrationTarget::Omp));
+    assert!(integration_target_supported(IntegrationTarget::Veyyon));
     assert!(integration_target_supported(IntegrationTarget::Claude));
     assert!(integration_target_supported(IntegrationTarget::Codex));
     assert!(integration_target_supported(IntegrationTarget::Copilot));
@@ -279,6 +283,7 @@ fn windows_availability_includes_native_integrations() {
 
     fs::write(bin.join("pi.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("omp.cmd"), "@echo off\r\n").unwrap();
+    fs::write(bin.join("veyyon.exe"), "").unwrap();
     fs::write(bin.join("opencode.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("kilo.cmd"), "@echo off\r\n").unwrap();
     fs::write(bin.join("hermes.exe"), "").unwrap();
@@ -289,6 +294,7 @@ fn windows_availability_includes_native_integrations() {
 
     assert!(integration_target_available(IntegrationTarget::Pi));
     assert!(integration_target_available(IntegrationTarget::Omp));
+    assert!(integration_target_available(IntegrationTarget::Veyyon));
     assert!(integration_target_available(IntegrationTarget::Opencode));
     assert!(integration_target_available(IntegrationTarget::Kilo));
     assert!(integration_target_available(IntegrationTarget::Hermes));
@@ -605,6 +611,46 @@ fn install_pi_expands_tilde_in_pi_coding_agent_dir_env() {
 }
 
 #[test]
+fn install_veyyon_writes_asset_to_default_profile_extensions_dir() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let ext_dir = home.join(".veyyon/profiles/default/agent/extensions");
+    fs::create_dir_all(&ext_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let path = install_veyyon().unwrap();
+    let content = fs::read_to_string(&path).unwrap();
+
+    assert_eq!(path, ext_dir.join(VEYYON_EXTENSION_INSTALL_NAME));
+    assert_eq!(content, VEYYON_EXTENSION_ASSET);
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_veyyon_respects_config_root_and_profile() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let ext_dir = home.join("custom-veyyon/profiles/review/agent/extensions");
+    fs::create_dir_all(&ext_dir).unwrap();
+    std::env::set_var("HOME", &home);
+    std::env::set_var(VEYYON_CONFIG_DIR_ENV_VAR, "custom-veyyon");
+    std::env::set_var(VEYYON_PROFILE_ENV_VAR, "review");
+
+    let path = install_veyyon().unwrap();
+
+    assert_eq!(path, ext_dir.join(VEYYON_EXTENSION_INSTALL_NAME));
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn install_omp_writes_embedded_asset_to_omp_extensions_dir() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -810,6 +856,34 @@ fn uninstall_pi_removes_embedded_extension_when_present() {
     assert!(!result.extension_path.exists());
 
     std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_veyyon_removes_embedded_extension_when_present() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let ext_dir = home.join(".veyyon/profiles/default/agent/extensions");
+    fs::create_dir_all(&ext_dir).unwrap();
+    fs::write(
+        ext_dir.join(VEYYON_EXTENSION_INSTALL_NAME),
+        VEYYON_EXTENSION_ASSET,
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let result = uninstall_veyyon().unwrap();
+
+    assert_eq!(
+        result.extension_path,
+        ext_dir.join(VEYYON_EXTENSION_INSTALL_NAME)
+    );
+    assert!(result.removed_extension);
+    assert!(!result.extension_path.exists());
+
+    std::env::remove_var("HOME");
+    clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }
 
