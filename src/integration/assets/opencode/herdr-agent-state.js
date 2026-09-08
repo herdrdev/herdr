@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=11
+// HERDR_INTEGRATION_VERSION=12
 
 import net from "node:net";
 
@@ -198,4 +198,13 @@ export const HerdrAgentStatePlugin = async () => {
       }
     },
   };
+};
+
+// V1 (1.18.29+) calls server(). V2 calls setup() instead. Its shared server
+// cannot attribute sessions using its process environment: the pane-local TUI
+// owns both selection and lifecycle reporting there, including remote servers.
+export default {
+  id: "herdr.opencode",
+  server: HerdrAgentStatePlugin,
+  setup() {},
 };

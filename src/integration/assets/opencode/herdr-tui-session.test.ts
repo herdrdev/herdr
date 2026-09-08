@@ -4,6 +4,8 @@ const requests: unknown[] = [];
 const activeDisposers: Array<() => void> = [];
 const requestWaiters: Array<() => void> = [];
 let importCounter = 0;
+let holdConnections = false;
+const connections: Array<() => void> = [];
 
 mock.module("node:net", () => ({
   default: {
@@ -24,7 +26,8 @@ mock.module("node:net", () => ({
           handlers.get(event)?.();
         },
       };
-      queueMicrotask(onConnect);
+      if (holdConnections) connections.push(onConnect);
+      else queueMicrotask(onConnect);
       return client;
     },
   },
@@ -33,6 +36,8 @@ mock.module("node:net", () => ({
 beforeEach(() => {
   requests.length = 0;
   requestWaiters.length = 0;
+  holdConnections = false;
+  connections.length = 0;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
@@ -179,3 +184,151 @@ function requestParam(request: unknown, name: string): unknown {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
+
+function v2Api() {
+  const sessions = new Map([
+    ["a", { id: "a" }],
+    ["b", { id: "b" }],
+    ["child", { id: "child", parentID: "a" }],
+  ]);
+  let route = { type: "session", sessionID: "a" };
+  const listeners = new Set<(event: unknown) => void>();
+  const permissions = new Map<string, Array<{ id: string }> | undefined>();
+  const forms = new Map<string, Array<{ id: string }> | undefined>();
+  return {
+    api: {
+      ui: { router: { current: () => route } },
+      data: {
+        session: {
+          get: (id: string) => sessions.get(id),
+          family: () => [...sessions.keys()],
+          status: () => "idle",
+          permission: { list: (id: string) => permissions.get(id) },
+          form: { list: (id: string) => forms.get(id) },
+        },
+        listen: (handler: (event: unknown) => void) => {
+          listeners.add(handler);
+          return () => listeners.delete(handler);
+        },
+      },
+    },
+    select(sessionID: string) { route = { type: "session", sessionID }; },
+    home() { route = { type: "home", sessionID: "" }; },
+    emit(type: string, data: object) {
+      for (const listener of listeners) listener({ details: { type, data } });
+    },
+    listeners,
+    sessions,
+    permissions,
+    forms,
+  };
+}
+
+const flushReports = () => new Promise((resolve) => setTimeout(resolve, 10));
+const states = () => requests.filter((r) => requestParam(r, "state") !== undefined)
+  .map((r) => requestParam(r, "state"));
+
+test("V2 completes and interrupts without legacy idle events", async () => {
+  for (const terminal of ["succeeded", "interrupted", "failed"]) {
+    const plugin = await loadPlugin();
+    const tui = v2Api();
+    const dispose = await plugin.setup(tui.api);
+    activeDisposers.push(dispose);
+    await flushReports();
+    requests.length = 0;
+    tui.emit("session.execution.started", { sessionID: "a" });
+    tui.emit(`session.execution.${terminal}`, { sessionID: "a" });
+    await flushReports();
+    expect(states()).toEqual(["working", terminal === "failed" ? "blocked" : "idle"]);
+    dispose();
+  }
+});
+
+test("V2 aggregates root and child blockers and ignores other roots and child completion", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  requests.length = 0;
+  tui.emit("session.execution.started", { sessionID: "a" });
+  tui.emit("permission.asked", { sessionID: "a", id: "permission-a" });
+  tui.emit("form.created", { form: { sessionID: "child", id: "form-child" } });
+  tui.emit("permission.replied", { sessionID: "a", requestID: "permission-a" });
+  tui.emit("session.execution.succeeded", { sessionID: "child" });
+  tui.emit("session.execution.started", { sessionID: "b" });
+  tui.emit("permission.asked", { sessionID: "b", id: "other" });
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "a")).toBe(true);
+  tui.emit("form.cancelled", { sessionID: "child", id: "form-child" });
+  tui.emit("session.execution.succeeded", { sessionID: "a" });
+  await flushReports();
+  expect(states().slice(-2)).toEqual(["working", "idle"]);
+});
+
+test("V2 discards queued reports after selection changes and stops on disposal", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  requests.length = 0;
+  tui.emit("session.execution.started", { sessionID: "a" });
+  tui.select("b");
+  tui.emit("session.execution.started", { sessionID: "b" });
+  await flushReports();
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "b")).toBe(true);
+  requests.length = 0;
+  tui.emit("session.execution.succeeded", { sessionID: "b" });
+  tui.home();
+  await flushReports();
+  expect(requests).toHaveLength(0);
+  dispose();
+  expect(tui.listeners.size).toBe(0);
+  tui.select("a");
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(requests).toHaveLength(0);
+});
+
+test("V2 reconciles late blocker hydration without reviving an already-replied request", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  tui.permissions.set("child", [{ id: "late" }]);
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(states().at(-1)).toBe("blocked");
+  tui.emit("permission.replied", { sessionID: "child", requestID: "late" });
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(states().at(-1)).toBe("idle");
+  tui.permissions.set("child", []);
+  tui.forms.set("child", [{ id: "second" }]);
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  expect(states().at(-1)).toBe("blocked");
+  tui.sessions.delete("child");
+  tui.emit("session.deleted", { sessionID: "child" });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V2 never writes a delayed connection after disposal or a session switch", async () => {
+  for (const action of ["dispose", "switch"]) {
+    const plugin = await loadPlugin();
+    const tui = v2Api();
+    holdConnections = true;
+    requests.length = 0;
+    const dispose = await plugin.setup(tui.api);
+    activeDisposers.push(dispose);
+    await flushReports();
+    expect(connections.length).toBeGreaterThan(0);
+    if (action === "dispose") dispose();
+    else tui.select("b");
+    holdConnections = false;
+    for (const connect of connections.splice(0)) connect();
+    await flushReports();
+    expect(requests).toHaveLength(0);
+    dispose();
+  }
+});
