@@ -24,6 +24,25 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
+pub(crate) struct RemoteBridgeWake;
+
+impl RemoteBridgeWake {
+    pub(crate) fn new() -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    pub(crate) fn cancel(&self) -> std::io::Result<()> {
+        // The named-pipe reader checks its cancellation flag between peeks.
+        Ok(())
+    }
+
+    pub(crate) fn wait(&self, _stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+        // Synchronous named pipes still use peek-before-read polling on Windows.
+        std::thread::sleep(Duration::from_millis(1));
+        Ok(())
+    }
+}
+
 pub(crate) fn wait_client_stream_readable(
     _stream: &crate::ipc::LocalStream,
 ) -> std::io::Result<()> {

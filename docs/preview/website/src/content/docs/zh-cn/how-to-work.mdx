@@ -77,7 +77,7 @@ herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
-你本地的 Herdr 充当瘦客户端。它通过 SSH 连接,启动或连接远程 Herdr 服务器,并把 UI 流式传回你的本地终端。
+远程服务器保持窗格运行，并通过 SSH 发送终端内容和会话状态。本地 Herdr 使用本地主题和显示设置绘制 UI。
 
 想让远程会话用起来像本地时,用这条路径。客户端运行在你的机器上,所以图像剪贴板粘贴等本地桌面功能可以桥接到远程服务器。如果你先 SSH 再在服务器上运行 `herdr`,Herdr 就完全运行在那台服务器上,无法读取你本地桌面的剪贴板。
 
@@ -98,6 +98,6 @@ herdr --remote workbox
 
 ## 该用哪条路径
 
-本地工作用 `herdr`。想让 Herdr 在远程 shell 上表现得像 tmux,或者在用手机 SSH 客户端时,用 `ssh you@server` 再 `herdr`。想要一个连接远程会话的本地瘦客户端 (包括本地剪贴板图像粘贴桥接) 时,用 `herdr --remote <host>`。
+本地工作用 `herdr`。想让 Herdr 在远程 shell 上表现得像 tmux,或者在用手机 SSH 客户端时,用 `ssh you@server` 再 `herdr`。需要通过本地 UI 操作一个远程会话并粘贴本地剪贴板图像时，使用 `herdr --remote <host>`。要在同一窗口使用 Local 和多台 SSH 机器，可通过 `herdr machine add <host> --label <label>` 保存目标；参见[连接机器](/zh-cn/docs/connecting-machines/)。
 
 关于远程引导细节、命名远程会话、自定义二进制和直接终端附加,参见[持久化与远程访问](/zh-cn/docs/persistence-remote/)。

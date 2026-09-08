@@ -11,19 +11,21 @@ Herdr 的 CLI 通过与集成和智能体相同的本地 socket API 与运行中
 
 ```bash
 herdr                         # 启动或连接默认会话
-herdr --session work          # 启动或连接命名会话
 herdr --remote workbox        # 通过 SSH 连接,使用本地按键绑定
-herdr --remote workbox --remote-keybindings server
-herdr --remote workbox --handoff
 herdr --default-config        # 打印默认配置
 herdr update                  # 从配置的通道下载并安装
-herdr update --handoff        # 对受支持的运行中服务器启用实时交接
 herdr completion zsh          # 生成 zsh 补全脚本
 herdr channel show            # 打印 stable 或 preview
 herdr channel set preview     # 启用预览构建
 herdr channel set stable      # 把直接安装切回稳定版
 herdr --version               # 打印版本
 ```
+
+可选的启动和更新设置：
+
+- 需要命名会话而非默认会话时，添加 `--session <name>`。
+- 远程连接要使用服务器按键绑定而非本地绑定时，添加 `--remote-keybindings server`。
+- 实验性实时交接需要在 `herdr --remote` 或 `herdr update` 中明确添加 `--handoff`，不是正常设置或连接流程；参见[更新](/zh-cn/docs/install/)。
 
 状态命令:
 
@@ -46,19 +48,23 @@ herdr api schema --output herdr-api.schema.json
 ## 已保存的 SSH 机器
 
 ```bash
-herdr machine list [--json]
-herdr machine add workbox --label "Build machine" [--remote-session agents]
+herdr machine list
+herdr machine add workbox --label "Build machine"
 herdr machine rename <profile-id> --label "New name"
 herdr machine disable <profile-id>
 herdr machine enable <profile-id>
 herdr machine remove <profile-id>
 ```
 
-`machine add` 会检查远程 Herdr 是否具备所需能力，仅在必要时征得批准后安装或更新，并在保存配置前启动指定会话的后台服务器。只要兼容，发行版本不必一致。需要批准安装或重启时，请在交互式终端中运行；设置失败或取消时不会保存配置。
+`machine add` 默认使用远程默认会话。只有需要命名会话时才添加 `--remote-session <name>`。`machine list` 支持可选的 `--json` 供脚本使用。完整流程见[连接机器](/zh-cn/docs/connecting-machines/)。
+
+`machine add` 会检查远程 Herdr 是否具备所需能力，仅在必要时征得批准后安装或更新，并在保存配置前启动指定会话的后台服务器。只要兼容，发行版本不必一致。需要批准安装或重启时，请在交互式终端中运行；设置失败或取消时不会保存配置。替换运行中的服务器需要明确批准，默认回答为 No；停止服务器会结束其窗格进程。`machine add` 不会隐式启用实验性实时交接。
 
 更改会自动应用到已打开的本地 Herdr 客户端，通常在一秒内生效。新增或启用的机器在后台连接；重命名不会重新连接。移除或禁用只会断开该机器，远程会话仍会继续运行。移除正在查看的机器会返回 Local；如果 Local 不可用，则显示不可用状态，直到重新连接。每份配置在客户端状态文件中保存一个不透明 ID、标签、SSH 目标、明确的远程会话名和启用状态。Herdr 不保存密码、私钥或其他 SSH 凭据。
 
-自动连接和重连均为非交互式。如果主机密钥、密码、密钥口令、MFA、安装、更新或重启需要批准，机器会显示 Attention，而不会打开隐藏的提示。请运行 Herdr 显示的独立连接命令，例如 `herdr --remote workbox --session agents --handoff`，在前台完成设置后重启客户端。
+自动连接和重连均为非交互式。如果主机密钥、密码、密钥口令、MFA、安装、更新或重启需要批准，机器会显示 Attention，而不会打开隐藏的提示。请运行 Herdr 显示的独立连接命令，例如 `herdr --remote workbox`，在前台完成设置后重启客户端。仅当配置指向命名会话时，才加上 `--session <name>`。
+
+工作区、标签页、窗格 ID 和智能体名称仅在所属服务器内有效。在 UI 中选择机器不会改变已有窗格中命令继承的会话或 socket。远程自动化应在目标主机上针对目标会话运行 CLI，并从那里获取 ID。
 
 ## Shell 补全
 
@@ -307,9 +313,9 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
-`agent prompt` 遵循当前的 bracketed paste 模式,即使智能体处于 working 也会先发送文本,短暂延迟后再发送编码后的 Enter。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
+`agent prompt` 遵循当前的 bracketed paste 模式，即使智能体处于 working，也会将文本和延迟的 Enter 作为一次有序提交写入。不带 `--wait` 时，成功只确认写入完成，不代表轮次已经开始。Windows 上 Codex 的延迟随提示大小增加；调用方的超时包含提交时间。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在提交后的最多五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 
-`idle` 表示智能体在等待输入,且其标签页已在聚焦的 Herdr 界面中显示。`done` 是相同的底层 idle 状态,用于未查看的后台工作完成后。聚焦该标签页或用 `pane focus` / `agent focus` 指向它会标记为已查看;仅通过 CLI 读取不会改变它。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
+`idle` 和 `done` 都表示可以接受输入。CLI/API 使用服务器的已查看状态：`done` 表示尚未标记为已查看的 idle；显式 `pane focus` / `agent focus` 会标记目标，读取不会。每个 TUI 客户端独立记录它已显示的完成状态，因此其 Done 标记可能与 CLI 或其他客户端不同。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
 `agent send-keys` 发送 `enter`、`up`、`esc`、`ctrl+c` 等逻辑按键。Herdr 会在写入任何字节前验证所有按键。`agent read` 读取解析出的终端流,`agent rename` 为已检测到的智能体命名。
 
@@ -339,6 +345,8 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 普通命令和服务器用 `pane wait-output`。编程智能体用 `agent wait`。
 
 `pane wait-output` 会立即检查所选快照,所以已经存在的输出也能匹配。默认来源名是 `recent`;匹配时会把最近 80 个已渲染终端行作为未折行输出处理。`--lines` 可以修改这个行数限制。`--match` 在单行中查找字面子串;`--regex` 使用 Rust 正则表达式语法并逐行匹配。
+
+超时或 `agent_prompt_stalled` 并不代表未发送提示。重试前请先检查智能体。
 
 `pane wait-output` 和 `agent wait` 在省略 `--timeout` 时会无限等待。对于 `agent prompt --wait`，观察到活动后，或提示开始时已处于 `working`，等待稳定状态的过程不会超时；如果提示从 non-working 状态开始且未观察到活动，五秒后仍会返回 `agent_prompt_stalled`。超时或服务器错误以 JSON 写到 stderr,退出状态为 1。CLI 用法错误的退出状态为 2。
 

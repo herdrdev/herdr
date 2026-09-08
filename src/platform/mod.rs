@@ -264,7 +264,9 @@ pub(crate) struct RemoteSshConfigPaths {
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
-pub(crate) use unix_common::{begin_cli_output, end_cli_output, forward_remote_bridge_stdio};
+pub(crate) use unix_common::{
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+};
 
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};

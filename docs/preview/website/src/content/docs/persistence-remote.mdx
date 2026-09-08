@@ -37,53 +37,20 @@ herdr session delete side-project --json
 
 ## Saved SSH machines
 
-Save repeat targets to work across several machines from one Herdr client:
-
-```bash
-herdr machine add workbox --label "Build machine" --remote-session agents
-herdr machine add ssh://you@server:2222 --label "Production" --remote-session operations
-herdr machine list
-```
-
-`machine add` prepares Herdr on the remote machine and starts the requested session's background server before saving the profile. It checks the running server separately from the installed binary and keeps compatible servers, even when their release versions differ from your client. If the running server needs an upgrade, setup uses live handoff when supported to preserve pane processes; otherwise it asks before stopping the server. Missing or incompatible installations use the same approval-based setup as `--remote`; run the command in an interactive terminal when approval is needed. Cancelling setup leaves the profile unsaved. The remote server keeps running after setup exits.
-
-Saved-machine changes apply to open local Herdr clients automatically, normally within a second. An in-progress machine switch finishes before the change is applied. Added or enabled SSH machines appear with Local in the machine sidebar and connect in the background without changing your selection. Select a machine or one of its workspaces to switch to it. Herdr keeps metadata, agent state, and notifications from connected machines available, but streams pane surfaces, input, geometry, and graphics only for the selected machine. Workspace, tab, pane, agent, and graphics identities stay scoped to their machine even when two servers happen to use the same internal ID.
-
-Local opens directly on startup, without waiting for saved SSH machines or showing a connection badge. With enabled saved machines, the client can also open if Local actually fails, and stopping or restarting Local does not close healthy SSH connections. Local reconnects when its server returns, without taking selection away from the machine you are using. A stalled machine cannot block another machine's input or connection handling.
-
-Herdr checks connected SSH machines for application-level activity and uses a lightweight health probe while they are quiet. Local relies on its native connection closing or failing, not remote health probes. After sleep, a network interruption, or SSH failure, an unhealthy machine changes to Reconnecting and retries with bounded backoff. Its last workspace, agent, and selected pane state remains visible but dimmed and frozen; input and navigation into that cached state stay disabled until a fresh connection and coherent surface arrive. Reconnects never answer prompts or install, update, restart, or hand off a remote server. A target that needs host-key approval, authentication, or a compatible Herdr install shows Attention while Local and other machines keep working. Run the profile's explicit standalone command in a terminal to finish setup, for example:
-
-```bash
-herdr --remote workbox --session agents --handoff
-```
-
-If the machine shows Attention, restart the client after setup to retry its connection. Rename, disable, or remove profiles by their opaque ID:
-
-```bash
-herdr machine rename <profile-id> --label "New name"
-herdr machine disable <profile-id>
-herdr machine enable <profile-id>
-herdr machine remove <profile-id>
-```
-
-Renaming updates the label without reconnecting. Removing or disabling a machine disconnects only that machine from the client; its remote sessions keep running, even if the machine is unreachable. If you remove or disable the machine you are viewing, the client returns to Local. If Local is unavailable, it shows that and reconnects rather than selecting another remote. An unreadable or invalid saved-machine file leaves current connections unchanged and shows a notice; the client retries reading it automatically.
-
-Saved profiles contain only the opaque ID, label, SSH target, explicit remote session, and enabled state. Passwords, private keys, agent tickets, and SSH control sockets are never stored in the machine catalog.
-
-The client uses local keybindings by default. Custom commands advertised by the selected machine still execute on that machine. Herdr does not copy local command plugins, configuration, executables, or secrets to SSH hosts; a missing remote command or plugin fails visibly.
+To keep Local and several SSH machines in one Herdr window, see [Connecting machines](/docs/connecting-machines/). That guide covers setup, switching, reconnects, settings, and remote automation. Removing a saved machine only disconnects the client; it does not stop that machine's sessions.
 
 ## Remote attach over SSH
 
-Herdr supports two remote modes. [How to work with Herdr](/docs/how-to-work/) compares them. SSH to the server and run `herdr` there for the tmux-style path, use saved SSH machines for persistent multi-machine work, or attach through SSH from your local machine:
+[How to work with Herdr](/docs/how-to-work/) compares the connection paths. SSH to the server and run `herdr` there for the tmux-style path, use [saved SSH machines](/docs/connecting-machines/) for multi-machine work, or attach through SSH from your local machine:
 
 ```bash
 herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
-In this mode, your local Herdr is a thin client. It connects over SSH, starts or attaches to the remote Herdr server, and streams the UI back to your local terminal. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
+In this mode, the remote server owns the running panes and sends their terminal content and session state over SSH. Your local Herdr draws the UI, including its sidebar, menus, and theme. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
 
-By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. The local keybindings are a snapshot from attach time; detach and reattach after editing local keybindings. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
+By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. After editing local keybindings, use the UI's `reload config` action to apply them without detaching. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
 
 For repeat targets, use your SSH config:
 
@@ -113,7 +80,7 @@ herdr --remote workbox
 
 For any remote authentication failure, verify plain SSH access first with `ssh workbox`, then run `herdr --remote workbox` again.
 
-A version difference alone does not replace or restart a running remote server. Remote attach uses the restart/stop flow only for a server that predates the stable endpoint generation or the detached-daemon baseline. To opt into experimental live handoff when that one-time upgrade is needed, pass `--handoff`:
+A version difference alone does not replace or restart a running remote server. Remote attach asks before stopping a server that lacks required compatibility or detached-daemon support. For saved machines, this also includes the surface and health-check capabilities described in [Connecting machines](/docs/connecting-machines/#updates-and-saved-data). The default answer is No; stopping the server ends its pane processes. To opt into experimental live handoff when that one-time upgrade is needed, pass `--handoff`:
 
 ```bash
 herdr --remote workbox --handoff
@@ -141,7 +108,7 @@ herdr --remote workbox --session agents
 
 Full Herdr attach opens the whole workspace UI. Direct attach opens one server-owned terminal in your current terminal.
 
-Direct terminal attach is Unix-only on Windows.
+Direct terminal attach is available on Linux and macOS, not native Windows.
 
 Attach by agent target:
 

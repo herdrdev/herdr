@@ -11,7 +11,15 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 // No real SSH connection or server is started. Stop at startup after recording setup actions.
 const SSH: &str = r#"#!/bin/sh
-for arg do last=$arg; done
+for arg do
+    last=$arg
+    if [ "$arg" = 'StrictHostKeyChecking=yes' ]; then strict_host_key_check=yes; fi
+done
+if [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ] && [ "$strict_host_key_check" = yes ]; then
+    echo 'No RSA host key is known for fake-host and you have requested strict checking.' >&2
+    echo 'Host key verification failed.' >&2
+    exit 255
+fi
 if [ "$last" = 'command -v herdr' ]; then
     echo /home/remote/.local/bin/herdr
     exit 0
@@ -36,6 +44,8 @@ case "$script" in
     *'status server --json'*)
         if [ -f "$FAKE_ROOT/stopped" ]; then
             echo '{"running":false}'
+        elif [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ]; then
+            echo '{"running":true,"version":"0.8.2","capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}'
         else
             echo '{"running":true,"version":"0.8.2","capabilities":{"live_handoff":true,"detached_server_daemon":true}}'
         fi ;;
@@ -53,15 +63,26 @@ struct SetupResult {
     output: String,
     actions: String,
     prompts: usize,
+    success: bool,
 }
 
 fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
+    setup_with_strict_host_key_failure(installed, answer, handoff, false)
+}
+
+fn setup_with_strict_host_key_failure(
+    installed: &str,
+    answer: &str,
+    handoff: bool,
+    strict_host_key_failure: bool,
+) -> SetupResult {
     let root = std::path::PathBuf::from(format!(
-        "/var/tmp/herdr-machine-setup-{}-{}-{}-{}",
+        "/var/tmp/herdr-machine-setup-{}-{}-{}-{}-{}",
         std::process::id(),
         installed,
         answer.trim().is_empty(),
-        handoff
+        handoff,
+        strict_host_key_failure
     ));
     let app = if cfg!(debug_assertions) {
         "herdr-dev"
@@ -100,6 +121,10 @@ fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
     command.env("XDG_RUNTIME_DIR", &root);
     command.env("FAKE_ROOT", &root);
     command.env("FAKE_INSTALLED", installed);
+    command.env(
+        "FAKE_STRICT_HOST_KEY_FAILURE",
+        if strict_host_key_failure { "yes" } else { "no" },
+    );
     command.env(
         "FAKE_CLIENT_STATUS",
         String::from_utf8(status.stdout).unwrap(),
@@ -155,7 +180,7 @@ fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
             }
         }
     }
-    child.wait().unwrap();
+    let status = child.wait().unwrap();
     drop(writer);
     drop(pair.master);
     reading.join().unwrap();
@@ -176,7 +201,33 @@ fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
         output,
         actions,
         prompts,
+        success: status.success(),
     }
+}
+
+#[test]
+fn machine_add_reports_strict_host_key_failure() {
+    let result = setup_with_strict_host_key_failure("new", "", false, true);
+    assert!(!result.success, "{}", result.output);
+    assert_eq!(result.prompts, 0, "{}", result.output);
+    assert!(result.actions.is_empty(), "{}", result.output);
+    assert!(
+        result.output.contains("Host key verification failed"),
+        "{}",
+        result.output
+    );
+    assert!(
+        result
+            .output
+            .contains("saved machines use strict host-key checking"),
+        "{}",
+        result.output
+    );
+    assert!(
+        !result.output.contains("lost connection to server"),
+        "{}",
+        result.output
+    );
 }
 
 #[test]

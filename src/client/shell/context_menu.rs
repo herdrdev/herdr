@@ -106,8 +106,9 @@ impl ClientShellState {
                     .count()
                     >= 2
         });
-        let collapsed =
-            worktree.is_some_and(|worktree| self.collapsed_groups.contains(&worktree.key));
+        let collapsed = worktree.is_some_and(|worktree| {
+            self.group_is_collapsed(&self.active_endpoint_id, &worktree.key)
+        });
         self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Workspace {
                 workspace_id,
@@ -279,9 +280,8 @@ impl ClientShellState {
                         .map(|worktree| worktree.key.clone())
                 });
                 if let Some(key) = key {
-                    if !self.collapsed_groups.remove(&key) {
-                        self.collapsed_groups.insert(key);
-                    }
+                    let endpoint_id = self.active_endpoint_id.clone();
+                    self.toggle_collapsed_group(&endpoint_id, key);
                     self.persist_chrome_preferences(outcome);
                 }
             }

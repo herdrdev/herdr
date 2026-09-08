@@ -59,6 +59,50 @@ fn copy_flush<R: std::io::Read, W: std::io::Write>(
     }
 }
 
+pub(crate) struct RemoteBridgeWake {
+    reader: std::os::unix::net::UnixStream,
+    writer: std::os::unix::net::UnixStream,
+}
+
+impl RemoteBridgeWake {
+    pub(crate) fn new() -> std::io::Result<Self> {
+        let (reader, writer) = std::os::unix::net::UnixStream::pair()?;
+        Ok(Self { reader, writer })
+    }
+
+    pub(crate) fn cancel(&self) -> std::io::Result<()> {
+        // EOF stays readable, including when cancellation precedes the wait.
+        self.writer.shutdown(std::net::Shutdown::Write)
+    }
+
+    pub(crate) fn wait(&self, stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let crate::ipc::LocalStream::UdSocket(stream) = stream;
+        let mut descriptors = [
+            libc::pollfd {
+                fd: stream.as_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: self.reader.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        loop {
+            // SAFETY: both descriptors remain borrowed and the array has two entries.
+            if unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) } >= 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+}
+
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::window_size().map(|size| (size.columns, size.rows))
 }

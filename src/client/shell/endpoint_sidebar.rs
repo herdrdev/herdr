@@ -1,6 +1,17 @@
 use super::render::{display_width, put_right_text, put_text, ShellRenderState};
 use super::*;
 
+fn collapsed_groups_for_endpoint<'a>(
+    state: &'a ShellRenderState<'_>,
+    endpoint_id: &ClientEndpointId,
+) -> Option<&'a HashSet<String>> {
+    if endpoint_id.is_local() {
+        Some(state.collapsed_groups)
+    } else {
+        state.remote_collapsed_groups.get(endpoint_id)
+    }
+}
+
 pub(super) fn render_collapsed(
     buffer: &mut Buffer,
     area: Rect,
@@ -46,6 +57,7 @@ pub(super) fn render_collapsed(
         }
         hits.machines.push(MachineHit {
             rect,
+            collapse_toggle: Rect::new(rect.x, rect.y, u16::from(rect.width > 1), 1),
             endpoint_id: endpoint.endpoint_id.clone(),
         });
         y = y.saturating_add(1);
@@ -178,6 +190,8 @@ pub(super) fn render_expanded(
             .add_modifier(Modifier::BOLD),
     );
 
+    let empty_collapsed_groups = HashSet::new();
+
     enum Row {
         Endpoint(usize),
         Workspace {
@@ -192,8 +206,10 @@ pub(super) fn render_expanded(
             continue;
         }
         if let Some(snapshot) = endpoint.snapshot.as_deref() {
+            let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
+                .unwrap_or(&empty_collapsed_groups);
             rows.extend(
-                super::sidebar::workspace_entries(snapshot, &HashSet::new())
+                super::sidebar::workspace_entries(snapshot, collapsed_groups)
                     .into_iter()
                     .map(|entry| Row::Workspace {
                         endpoint: endpoint_index,
@@ -215,22 +231,33 @@ pub(super) fn render_expanded(
         .iter()
         .map(|row| match row {
             Row::Endpoint(_) => 1,
-            Row::Workspace { endpoint, entry } => state.endpoints[*endpoint]
-                .snapshot
-                .as_deref()
-                .and_then(|snapshot| snapshot.workspaces.get(entry.index))
-                .map(|workspace| {
-                    super::sidebar::workspace_rows(
-                        workspace,
-                        workspace.agent_status,
-                        entry.indented,
-                        &config.spaces,
-                    )
-                    .len()
-                    .max(1)
-                    .min(u16::MAX as usize) as u16
-                })
-                .unwrap_or(1),
+            Row::Workspace { endpoint, entry } => {
+                let endpoint = &state.endpoints[*endpoint];
+                let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
+                    .unwrap_or(&empty_collapsed_groups);
+                endpoint
+                    .snapshot
+                    .as_deref()
+                    .and_then(|snapshot| {
+                        let workspace = snapshot.workspaces.get(entry.index)?;
+                        Some(
+                            super::sidebar::workspace_rows(
+                                workspace,
+                                super::sidebar::displayed_workspace_status(
+                                    snapshot,
+                                    workspace,
+                                    collapsed_groups,
+                                ),
+                                entry.indented,
+                                &config.spaces,
+                            )
+                            .len()
+                            .max(1)
+                            .min(u16::MAX as usize) as u16,
+                        )
+                    })
+                    .unwrap_or(1)
+            }
         })
         .collect::<Vec<_>>();
     let gaps = vec![0; rows.len()];
@@ -268,6 +295,12 @@ pub(super) fn render_expanded(
                 );
                 hits.machines.push(MachineHit {
                     rect,
+                    collapse_toggle: Rect::new(
+                        rect.x.saturating_add(1),
+                        rect.y,
+                        u16::from(rect.width > 1),
+                        1,
+                    ),
                     endpoint_id: endpoint.endpoint_id.clone(),
                 });
                 y = y.saturating_add(1);
@@ -280,9 +313,16 @@ pub(super) fn render_expanded(
                 let Some(workspace) = snapshot.workspaces.get(entry.index) else {
                     continue;
                 };
+                let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
+                    .unwrap_or(&empty_collapsed_groups);
+                let status = super::sidebar::displayed_workspace_status(
+                    snapshot,
+                    workspace,
+                    collapsed_groups,
+                );
                 let tokens = super::sidebar::workspace_rows(
                     workspace,
-                    workspace.agent_status,
+                    status,
                     entry.indented,
                     &config.spaces,
                 );
@@ -302,7 +342,7 @@ pub(super) fn render_expanded(
                     buffer,
                     nested,
                     workspace,
-                    workspace.agent_status,
+                    status,
                     config.status_indicators,
                     entry,
                     tokens,
@@ -319,12 +359,20 @@ pub(super) fn render_expanded(
                             .add_modifier(Modifier::DIM),
                     );
                 }
+                let group_toggle = super::sidebar::render_parent_group_toggle(
+                    buffer,
+                    rect,
+                    snapshot,
+                    entry.index,
+                    collapsed_groups,
+                    palette,
+                );
                 hits.workspaces.push(WorkspaceHit {
                     rect,
                     endpoint_id: endpoint.endpoint_id.clone(),
                     workspace_id: workspace.workspace_id.clone(),
                     indented: entry.indented,
-                    group_toggle: None,
+                    group_toggle,
                 });
                 y = y.saturating_add(height);
             }

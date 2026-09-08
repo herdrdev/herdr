@@ -11,19 +11,21 @@ Herdr の CLI は、インテグレーションやエージェントが使うの
 
 ```bash
 herdr                         # デフォルトセッションを起動またはアタッチ
-herdr --session work          # 名前付きセッションを起動またはアタッチ
 herdr --remote workbox        # SSH 越しにアタッチ (ローカルのキーバインドを使用)
-herdr --remote workbox --remote-keybindings server
-herdr --remote workbox --handoff
 herdr --default-config        # デフォルト設定を表示
 herdr update                  # 設定済みチャンネルからダウンロードしてインストール
-herdr update --handoff        # 対応する実行中サーバーでライブハンドオフにオプトイン
 herdr completion zsh          # zsh 補完スクリプトを生成
 herdr channel show            # stable または preview を表示
 herdr channel set preview     # プレビュービルドにオプトイン
 herdr channel set stable      # 直接インストールを安定版に戻す
 herdr --version               # バージョンを表示
 ```
+
+起動と更新の任意オプション:
+
+- デフォルトではなく名前付きセッションを使う場合は `--session <name>` を追加します。
+- リモート接続でサーバーのキーバインドを使う場合は `--remote-keybindings server` を追加します。
+- 実験的なライブハンドオフには、`herdr --remote` または `herdr update` で明示的な `--handoff` が必要です。通常のセットアップや接続には使いません。[更新](/ja/docs/install/)を参照してください。
 
 ステータスコマンド:
 
@@ -46,19 +48,23 @@ herdr api schema --output herdr-api.schema.json
 ## 保存済み SSH マシン
 
 ```bash
-herdr machine list [--json]
-herdr machine add workbox --label "Build machine" [--remote-session agents]
+herdr machine list
+herdr machine add workbox --label "Build machine"
 herdr machine rename <profile-id> --label "New name"
 herdr machine disable <profile-id>
 herdr machine enable <profile-id>
 herdr machine remove <profile-id>
 ```
 
-`machine add` はリモート側の Herdr が必要な機能を備えているか確認し、必要な場合だけ承認を得てインストールまたは更新します。指定したセッションのバックグラウンドサーバーを起動してからプロファイルを保存します。互換性があればリリースバージョンは一致しなくてもかまいません。インストールや再起動の承認が必要な場合は、対話型ターミナルで実行してください。セットアップが失敗またはキャンセルされた場合、プロファイルは保存されません。
+`machine add` はリモートのデフォルトセッションを使います。名前付きセッションを使う場合だけ `--remote-session <name>` を追加します。スクリプトでは `machine list` に `--json` を追加できます。詳しくは[マシンへの接続](/ja/docs/connecting-machines/)を参照してください。
+
+`machine add` はリモート側の Herdr が必要な機能を備えているか確認し、必要な場合だけ承認を得てインストールまたは更新します。指定したセッションのバックグラウンドサーバーを起動してからプロファイルを保存します。互換性があればリリースバージョンは一致しなくてもかまいません。インストールや再起動の承認が必要な場合は、対話型ターミナルで実行してください。セットアップが失敗またはキャンセルされた場合、プロファイルは保存されません。実行中サーバーの置き換えには明示的な承認が必要で、デフォルトの回答は No です。停止するとペインのプロセスも終了します。`machine add` は実験的なハンドオフを暗黙に有効にしません。
 
 変更は、開いているローカルの Herdr クライアントに通常 1 秒以内に自動反映されます。追加または有効化したマシンにはバックグラウンドで接続し、名前の変更では再接続しません。削除または無効化すると、そのマシンだけが切断され、リモートセッションは動き続けます。表示中のマシンを削除すると Local に戻ります。Local に接続できない場合は、再接続するまで利用不可と表示します。各プロファイルは、不透明な ID、ラベル、SSH 接続先、明示的なリモートセッション名、有効状態をクライアントの状態ファイルに保存します。パスワード、秘密鍵、その他の SSH 認証情報は保存しません。
 
-自動接続と再接続は非対話型です。ホスト鍵、パスワード、鍵のパスフレーズ、MFA、インストール、更新、再起動に承認が必要な場合、隠れたプロンプトを開くのではなく Attention と表示します。`herdr --remote workbox --session agents --handoff` など、Herdr が表示する単独接続用のコマンドを実行してフォアグラウンドでセットアップを完了し、クライアントを再起動してください。
+自動接続と再接続は非対話型です。ホスト鍵、パスワード、鍵のパスフレーズ、MFA、インストール、更新、再起動に承認が必要な場合、隠れたプロンプトを開くのではなく Attention と表示します。`herdr --remote workbox` など、Herdr が表示する単独接続用のコマンドを実行してフォアグラウンドでセットアップを完了し、クライアントを再起動してください。名前付きセッションを選んだプロファイルにだけ `--session <name>` を追加します。
+
+ワークスペース、タブ、ペインの ID とエージェント名は、1 つのサーバー内だけで有効です。UI でマシンを選んでも、既存ペイン内のコマンドが継承するセッションやソケットは変わりません。リモート自動化では対象ホスト上の対象セッションに対して CLI を実行し、そこで ID を取得してください。
 
 ## シェル補完
 
@@ -307,9 +313,9 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 成功した start は、期待したエージェントが同じターミナルを所有し、対話入力の準備ができてから返ります。起動中の検出状態が `blocked` の場合、コマンドは直ちに `agent_not_ready` を返します。名前は `agent read` と `agent send-keys` で引き続き使用でき、検出状態が `idle` になるとプロンプトを送信できるようになります。デフォルトの起動タイムアウトは 30000 ミリ秒で、明示する値は 3000 より大きく 300000 以下でなければなりません。
 
-`agent prompt` は現在の bracketed paste モードを尊重し、working 中でもテキストを送信してから短い遅延の後にエンコード済み Enter を送信します。エージェントがすでに `blocked` の場合は、入力を送信せずに `agent_blocked` を返します。`--wait` を使う場合、別の non-working 状態から受け付けたプロンプトでは、5 秒以内に `working` または `blocked` が観測される必要があります。観測できなければ Herdr は `agent_prompt_stalled` を返し、呼び出し側のタイムアウトが先に切れた場合は通常の `timeout` エラーを返します。これにより、無関係な `idle`、`done`、またはセッションの変化によって待機が誤って完了することを防ぎます。活動を観測した後、要求された最初の安定状態を待ちます。個々のターンは追跡しません。すでに working の場合、進行中ターンの完了が待機を満たすことがあります。`--until` は一致状態を絞り込み、`--wait` なしでは拒否されます。単独の `agent wait` は現在の状態が一致すれば即座に返ります。どちらもデフォルトは `idle`、`done`、`blocked` です。
+`agent prompt` は現在の bracketed paste モードを尊重し、working 中でもテキストと遅延した Enter を順序付きの 1 回の送信として書き込みます。`--wait` なしの成功は書き込みの完了を示し、ターンの開始を保証しません。Windows の Codex では、プロンプトのサイズに応じて遅延が長くなります。呼び出し側のタイムアウトには送信時間も含まれます。エージェントがすでに `blocked` の場合は、入力を送信せずに `agent_blocked` を返します。`--wait` を使う場合、別の non-working 状態から受け付けたプロンプトでは、送信後の最大 5 秒間に `working` または `blocked` が観測される必要があります。観測できなければ Herdr は `agent_prompt_stalled` を返し、呼び出し側のタイムアウトが先に切れた場合は通常の `timeout` エラーを返します。これにより、無関係な `idle`、`done`、またはセッションの変化によって待機が誤って完了することを防ぎます。活動を観測した後、要求された最初の安定状態を待ちます。個々のターンは追跡しません。すでに working の場合、進行中ターンの完了が待機を満たすことがあります。`--until` は一致状態を絞り込み、`--wait` なしでは拒否されます。単独の `agent wait` は現在の状態が一致すれば即座に返ります。どちらもデフォルトは `idle`、`done`、`blocked` です。
 
-`idle` は入力待ちで、そのタブがフォーカス中の Herdr UI ですでに表示済みの状態です。`done` は同じ基礎的な idle 状態ですが、表示していないバックグラウンド作業が完了したときに使われます。そのタブをフォーカスするか `pane focus` / `agent focus` で対象にすると表示済みになりますが、CLI で読み取るだけでは変わりません。`blocked` は承認または質問 UI を Herdr が認識した状態です。`unknown` はエージェントが存在するものの確実に分類できない状態で、作業の成功を意味しません。
+`idle` と `done` はどちらも入力可能な状態です。CLI/API はサーバーの既読状態を使い、未確認の idle を `done` とします。明示的な `pane focus` / `agent focus` は対象を既読にしますが、読み取りでは変わりません。各 TUI クライアントは表示済みの完了を独立して管理するため、Done バッジが CLI やほかのクライアントと異なる場合があります。`blocked` は承認または質問 UI を Herdr が認識した状態です。`unknown` はエージェントが存在するものの確実に分類できない状態で、作業の成功を意味しません。
 
 `agent send-keys` は `enter`、`up`、`esc`、`ctrl+c` などの論理キーを送ります。Herdr は 1 バイトも書き込む前に全キーを検証します。`agent read` は解決されたターミナルストリームを読み、`agent rename` は検出済みエージェントに名前を付けます。
 
@@ -339,6 +345,8 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 通常のコマンドやサーバーには `pane wait-output` を使います。コーディングエージェントには `agent wait` を使います。
 
 `pane wait-output` は選択したスナップショットを最初にすぐ検索するため、すでに存在する出力も一致します。デフォルトのソース名は `recent` で、直近 80 行の描画済みターミナル行を折り返し前の出力として扱います。`--lines` でその行数を変更できます。`--match` は 1 行内のリテラル部分文字列を検索し、`--regex` は Rust の正規表現構文で 1 行ずつ一致します。
+
+タイムアウトや `agent_prompt_stalled` は未送信を保証しません。再試行前にエージェントを確認してください。
 
 `pane wait-output` と `agent wait` は、`--timeout` を省略すると無期限に待ちます。`agent prompt --wait` では、活動を観測した後、またはプロンプト開始時に `working` だった場合の安定状態待機は無期限です。non-working 状態から開始して活動を観測できない場合は、5 秒後に `agent_prompt_stalled` を返します。タイムアウトまたはサーバーエラーは JSON として stderr に出力され、終了コード 1 になります。CLI 使用法のエラーは終了コード 2 です。
 

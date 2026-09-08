@@ -911,6 +911,7 @@ pub(crate) struct ClientShellState {
     pub(super) workspace_press: Option<ClientWorkspacePress>,
     pub(super) tab_press: Option<ClientTabPress>,
     pub(super) collapsed_groups: HashSet<String>,
+    pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) tab_scroll: usize,
@@ -1031,6 +1032,16 @@ impl ClientShellState {
         if let Some(sort) = preferences.agent_panel_sort {
             config.agent_panel_sort = sort;
         }
+        let mut remote_collapsed_groups = HashMap::<ClientEndpointId, HashSet<String>>::new();
+        for saved in preferences.remote_collapsed_groups {
+            let Ok(profile_id) = crate::client::endpoint::ProfileId::parse(saved.profile_id) else {
+                continue;
+            };
+            remote_collapsed_groups
+                .entry(ClientEndpointId::Ssh(profile_id))
+                .or_default()
+                .extend(saved.collapsed_groups);
+        }
         Self {
             config,
             snapshot: None,
@@ -1054,6 +1065,7 @@ impl ClientShellState {
             workspace_press: None,
             tab_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
+            remote_collapsed_groups,
             workspace_scroll: 0,
             agent_scroll: 0,
             tab_scroll: 0,
@@ -1141,14 +1153,48 @@ impl ClientShellState {
             .is_some_and(|(cols, rows)| !self.layout(cols, rows).mobile_header.is_empty())
     }
 
+    pub(super) fn collapsed_groups_for_endpoint(
+        &self,
+        endpoint_id: &ClientEndpointId,
+    ) -> Option<&HashSet<String>> {
+        if endpoint_id.is_local() {
+            Some(&self.collapsed_groups)
+        } else {
+            self.remote_collapsed_groups.get(endpoint_id)
+        }
+    }
+
+    pub(super) fn group_is_collapsed(&self, endpoint_id: &ClientEndpointId, key: &str) -> bool {
+        self.collapsed_groups_for_endpoint(endpoint_id)
+            .is_some_and(|groups| groups.contains(key))
+    }
+
+    pub(super) fn toggle_collapsed_group(&mut self, endpoint_id: &ClientEndpointId, key: String) {
+        let groups = if endpoint_id.is_local() {
+            &mut self.collapsed_groups
+        } else {
+            self.remote_collapsed_groups
+                .entry(endpoint_id.clone())
+                .or_default()
+        };
+        if !groups.remove(&key) {
+            groups.insert(key);
+        }
+    }
+
     pub(super) fn navigation_workspace_entries(
         &self,
         snapshot: &ClientShellSnapshot,
     ) -> Vec<WorkspaceEntry> {
+        let empty_collapsed_groups = HashSet::new();
         if self.mobile_layout_active() {
-            render::workspace_entries(snapshot, &HashSet::new())
+            render::workspace_entries(snapshot, &empty_collapsed_groups)
         } else {
-            render::workspace_entries(snapshot, &self.collapsed_groups)
+            render::workspace_entries(
+                snapshot,
+                self.collapsed_groups_for_endpoint(&self.active_endpoint_id)
+                    .unwrap_or(&empty_collapsed_groups),
+            )
         }
     }
 

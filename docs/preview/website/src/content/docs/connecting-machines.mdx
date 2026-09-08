@@ -43,8 +43,6 @@ Run `herdr` to open the UI. If a local client is already open, added and enabled
 
 Choose a machine or one of its workspaces in the sidebar. The selected machine receives your pane input and terminal size, and supplies the visible terminal content and graphics. Other connected machines keep updating their workspace information, agent states, and notifications without streaming their pane screens.
 
-Click the arrow beside any machine to collapse or expand its workspace list without switching away from your current workspace. This also works while that machine is reconnecting.
-
 Local opens immediately on startup without waiting for SSH connections. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
 
 When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.

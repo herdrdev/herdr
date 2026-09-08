@@ -144,7 +144,7 @@ fn add(args: &[String]) -> std::io::Result<i32> {
     }
     if let Err(error) = crate::remote::prepare_saved_ssh(target, &session) {
         eprintln!("error: {error}; machine was not saved");
-        crate::remote::print_remote_error_hint(&error, target);
+        crate::remote::print_saved_ssh_error_hint(&error, target);
         return Ok(1);
     }
     // Setup can wait for human approval. Do not overwrite catalog edits made meanwhile.
