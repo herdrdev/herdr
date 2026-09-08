@@ -14,7 +14,11 @@ Publish only to `trungnt13/herdr`. Use `herdrdev/herdr` as the read-only upstrea
 - Check that repository policy permits fork publication. If inherited upstream-only rules still prohibit it, report the conflict and obtain approval to update those rules rather than bypassing them.
 - Verify recipes and CI support `MAJOR.MINOR.PATCH+fork.N` end to end: Cargo and lockfile, changelog parsing, tag validation, binaries, release assets, and version display. Ensure CI runs for this fork and publication, issue automation, manifests, and update destinations cannot affect upstream services.
 - SemVer build metadata does not affect version precedence. Do not claim automatic updates between fork revisions work unless fork-aware comparison and update sources have been implemented and validated.
-- Known migration blockers: the inherited `release-prepare` and `release-publish` recipes accept only three-part versions, and release CI contains `herdrdev/herdr` repository gates. Recheck these each time. If unresolved, stop before version edits, commits, tags, or pushes; request a separate tooling migration. Do not silently substitute a version or manually bypass the recipes.
+- Tooling now accepts strict `BASE+fork.N`, verifies origin fetch/all push destinations, authenticated `trungnt13`, API identity/write permission, and remote tag/release/draft reservations before mutations. CI publishes four Linux/macOS binaries and `SHA256SUMS` through a staged GitHub prerelease, without upstream promotion. Recheck these contracts after each upstream integration.
+- A user request to release this fork also authorizes tooling changes needed to resolve release blockers; do not request separate migration approval. Implement and validate those changes before preparing the release. Do not silently substitute a version or manually bypass the recipes. Repository-policy changes, commit alignment, and final publication confirmation remain subject to their separate requirements.
+- Remaining release prerequisites are fresh upstream integration, matching Cargo/latest-upstream-stable base, all release checks, and explicit commit/publication approval. The current migration does not bump Cargo or integrate upstream. The known release-docs check failure is the unpublished bundled `muse` manifest; resolve it separately, never weaken the check.
+- Fork runtime updater independence is deferred, not a publication prerequisite for manually installed prereleases. Every release must visibly warn: updater still targets upstream; do not run `herdr update` for this fork; fork automatic updates are unsupported.
+
 
 ## Include the latest upstream changes
 
@@ -34,8 +38,10 @@ Publish only to `trungnt13/herdr`. Use `herdrdev/herdr` as the read-only upstrea
 ## Validate and publish
 
 1. Follow `../herdr-pre-release-audit/SKILL.md` where applicable to this fork. Finalize release notes and docs for the complete candidate, including unreleased upstream changes. Do not modify CI-owned snapshots manually.
-2. Run `just check` and `just pre-release-check`; inspect benchmark results. Align `skills/herdr/SKILL.md` with the release as required by repository policy. Resolve failures without weakening checks.
+2. Run `just check` and `just pre-release-check`; inspect benchmark results. Keep `skills/herdr/SKILL.md` at upstream stable under the fork override. Resolve failures without weakening checks.
 3. Propose messages and obtain alignment before any commits. Use the supported repository recipes for finalization and release; keep unrelated changes out.
 4. Immediately before publication, show the destination `trungnt13/herdr`, branch, upstream stable tag and master commit, current→target version, proposed `release: v<TARGET>` commit, and `v<TARGET>` tag. Explain that `just release <TARGET>` prepares a commit, pushes master, creates an annotated tag, and pushes it. Require explicit confirmation.
 5. Run `just release <TARGET>` only after all tooling blockers are resolved. On failure, preserve state and report the exact completed and failed steps; do not blindly retry publication.
 6. Verify the remote master contains the release commit and the remote tag resolves to it. Monitor release CI to completion and verify the GitHub Release and expected assets belong to `trungnt13/herdr`. Report failures or pending external dependencies; never describe a pushed tag alone as a completed release.
+
+Expected assets: `herdr-linux-x86_64`, `herdr-linux-aarch64`, `herdr-macos-x86_64`, `herdr-macos-aarch64`, and deterministic `SHA256SUMS`. Verify all four hashes, prerelease status, and that the release is not latest. No Windows, upstream issue closing, website, channel, Homebrew or Nix promotion. A failed upload may leave a draft: inspect it and obtain alignment before deleting or retrying; never blindly reuse a reserved tag.

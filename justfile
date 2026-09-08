@@ -11,7 +11,7 @@ test:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_fork_release scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 [unix]
@@ -152,42 +152,34 @@ pre-release-check:
     just bench-render-scale
     just bench-release-smoke
     @echo "release review required: investigate material render-scaling regressions before publishing."
-    @echo "release review required: update skills/herdr/SKILL.md for this stable release so it matches the current CLI, IDs, agent lifecycle semantics, and safety guidance."
-    @echo "release policy: do not update skills/herdr/SKILL.md between stable releases; preview builds keep the latest stable skill."
+    @echo "fork release policy: keep skills/herdr/SKILL.md at upstream stable; fork prereleases do not publish docs or update channels."
 
-# Prepare the release commit without tagging or pushing (usage: just release-prepare 0.1.1)
-release-prepare version:
-    @printf '%s\n' '{{version}}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { \
-        echo "error: version must look like 0.6.6 without a v prefix"; \
-        exit 1; \
-    }
-    @if ! git diff --quiet -- . ':(exclude)skills/herdr/SKILL.md' || \
-        ! git diff --cached --quiet -- . ':(exclude)skills/herdr/SKILL.md' || \
-        [ -n "$(git ls-files --others --exclude-standard)" ]; then \
-        echo "error: commit all changes except skills/herdr/SKILL.md first"; \
+# Prepare the release commit without tagging or pushing (usage: just release-prepare BASE+fork.N)
+release-prepare $version:
+    @python3 scripts/fork_release.py prepare "$version"
+    @test "$(git branch --show-current)" = master || { echo "error: release-prepare must run from master"; exit 1; }
+    @if [ -n "$(git status --porcelain)" ]; then \
+        echo "error: working tree must be clean before preparing a release"; \
         exit 1; \
     fi
     @git fetch origin master --tags
-    @if git rev-parse "v{{version}}" >/dev/null 2>&1; then \
-        echo "error: tag v{{version}} already exists"; \
+    @if git rev-parse "v$version" >/dev/null 2>&1; then \
+        echo "error: tag v$version already exists"; \
         exit 1; \
     fi
     just pre-release-check
-    python3 scripts/changelog.py prepare --version {{version}}
+    python3 scripts/changelog.py prepare --version "$version"
     cp CHANGELOG.md docs/next/CHANGELOG.md
-    sed -i.bak 's/^version = ".*"/version = "{{version}}"/' Cargo.toml && rm -f Cargo.toml.bak
+    sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml && rm -f Cargo.toml.bak
     cargo update -p herdr --offline
     just check
-    git add CHANGELOG.md docs/next/CHANGELOG.md Cargo.toml Cargo.lock skills/herdr/SKILL.md
-    git diff --cached --quiet || git commit -m "release: v{{version}}"
-    @echo "v{{version}} release commit prepared. Review it, then run: just release-publish {{version}}"
+    git add CHANGELOG.md docs/next/CHANGELOG.md Cargo.toml Cargo.lock
+    git diff --cached --quiet || git commit -m "release: v$version"
+    @echo "v$version release commit prepared. Review it, then run: just release-publish $version"
 
-# Tag and push an already-prepared release commit (usage: just release-publish 0.1.1)
-release-publish version:
-    @printf '%s\n' '{{version}}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { \
-        echo "error: version must look like 0.6.6 without a v prefix"; \
-        exit 1; \
-    }
+# Tag and push an already-prepared release commit (usage: just release-publish BASE+fork.N)
+release-publish $version:
+    @python3 scripts/fork_release.py publish "$version"
     @if [ -n "$(git status --porcelain)" ]; then \
         echo "error: working tree must be clean before publishing"; \
         exit 1; \
@@ -198,17 +190,17 @@ release-publish version:
         exit 1; \
     fi
     @git fetch origin master --tags
-    @if git rev-parse "v{{version}}" >/dev/null 2>&1; then \
-        echo "error: tag v{{version}} already exists"; \
+    @if git rev-parse "v$version" >/dev/null 2>&1; then \
+        echo "error: tag v$version already exists"; \
         exit 1; \
     fi
     @cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"; \
-    if [ "$cargo_version" != "{{version}}" ]; then \
-        echo "error: Cargo.toml version $cargo_version does not match {{version}}"; \
+    if [ "$cargo_version" != "$version" ]; then \
+        echo "error: Cargo.toml version $cargo_version does not match $version"; \
         exit 1; \
     fi
     just release-docs-check
-    python3 scripts/changelog.py extract --version {{version}} --output /tmp/herdr-release-notes-check.md
+    python3 scripts/changelog.py extract --version "$version" --output /tmp/herdr-release-notes-check.md
     rm -f /tmp/herdr-release-notes-check.md
     @local_head="$(git rev-parse HEAD)"; \
     remote_head="$(git rev-parse origin/master)"; \
@@ -220,14 +212,14 @@ release-publish version:
         echo "pushing release commit to origin/master"; \
         git push origin HEAD:master; \
     fi
-    git tag -a v{{version}} -m "v{{version}}"
-    git push origin v{{version}}
-    @echo "v{{version}} released — GitHub Actions building binaries and updating distribution/latest.json"
+    git tag -a "v$version" -m "v$version"
+    git push origin "v$version"
+    @echo "v$version tag pushed — GitHub Actions building four binaries and checksums for a fork prerelease"
 
-# Prepare, verify, tag, push, and trigger the GitHub Release workflow (usage: just release 0.1.1)
-release version:
-    just release-prepare {{version}}
-    just release-publish {{version}}
+# Prepare, verify, tag, push, and trigger the GitHub Release workflow (usage: just release BASE+fork.N)
+release $version:
+    just release-prepare "$version"
+    just release-publish "$version"
 
 # Print default config
 default-config:

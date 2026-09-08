@@ -90,7 +90,7 @@ jobs:
 
       - name: Set Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Remove Zig caches
         run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
@@ -153,10 +153,11 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
           targets: ${{ matrix.target }}
 
-      - name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.15.2
+      - name: Install patched Zig on macOS
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
+          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
+          test "$("$(brew --prefix zig@0.15)/bin/zig" version)" = 0.15.2
 
       - name: Install macOS build tools
         run: brew install cmake ninja

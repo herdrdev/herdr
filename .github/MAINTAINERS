@@ -1,5 +1,5 @@
 # GitHub usernames with Herdr maintainer authority, one per line.
-# Maintainers must also use the canonical repository and have write access.
+# Authority is repository-scoped; see AGENTS.md for upstream and fork verification.
 ogulcancelik
 Pimpmuckl
 kangal-bot

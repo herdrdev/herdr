@@ -12,9 +12,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RUST_TOOLCHAIN_VERSION: 1.96.1
 
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   flake-check:
-    if: github.repository == 'herdrdev/herdr'
+    if: github.repository == 'trungnt13/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,6 +27,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+
+      - name: Validate fork release tag
+        run: python3 scripts/fork_release.py ci
 
       - name: Install Nix
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
@@ -37,7 +44,7 @@ jobs:
           nix flake check --all-systems --no-build --print-build-logs
 
   build:
-    if: github.repository == 'herdrdev/herdr'
+    if: github.repository == 'trungnt13/herdr'
     permissions:
       contents: read
     strategy:
@@ -63,12 +70,6 @@ jobs:
             name: herdr-macos-aarch64
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
-          - target: x86_64-pc-windows-msvc
-            os: windows-2022
-            name: herdr-windows-x86_64.zip
-            libghostty_vt_optimize: ReleaseFast
-            libghostty_vt_simd: 'true'
-
     runs-on: ${{ matrix.os }}
     env:
       LIBGHOSTTY_VT_OPTIMIZE: ${{ matrix.libghostty_vt_optimize }}
@@ -79,15 +80,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Verify tag matches Cargo.toml version
-        shell: bash
-        run: |
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
-            echo "error: tag $GITHUB_REF_NAME doesn't match Cargo.toml version $CARGO_VERSION"
-            exit 1
-          fi
+      - name: Validate fork release tag
+        run: python3 scripts/fork_release.py ci
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
@@ -115,7 +109,7 @@ jobs:
         run: |
           HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
           echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
-          "$(brew --prefix zig@0.15)/bin/zig" version
+          test "$("$(brew --prefix zig@0.15)/bin/zig" version)" = 0.15.2
 
       - name: Prefer official Ubuntu mirrors over Azure
         if: runner.os == 'Linux'
@@ -139,7 +133,7 @@ jobs:
 
       - name: Set Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -154,36 +148,18 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package artifact
-        if: runner.os != 'Windows'
         shell: bash
         run: cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
-
-      - name: Package artifact
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
-          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
-          .\scripts\package_windows_conpty.ps1 `
-            -HerdrExe target\${{ matrix.target }}\release\herdr.exe `
-            -PackagePath $package `
-            -StageDir $stage `
-            -OutputPath ${{ matrix.name }}
-          $version = (& (Join-Path $stage "herdr.exe") --version | Out-String).Trim()
-          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
-          if ($version -notmatch [regex]::Escape($tagVersion) -or $version -match "preview") {
-            throw "Packaged Windows binary has unexpected version identity: $version"
-          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
+          if-no-files-found: error
 
   validate-release-inputs:
-    if: github.repository == 'herdrdev/herdr'
+    if: github.repository == 'trungnt13/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -193,6 +169,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate fork release tag
+        run: python3 scripts/fork_release.py ci
 
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -212,7 +191,7 @@ jobs:
 
   release:
     needs: [build, flake-check, validate-release-inputs]
-    if: github.repository == 'herdrdev/herdr'
+    if: github.repository == 'trungnt13/herdr'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -221,226 +200,65 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+
+      - name: Validate fork release tag
+        run: python3 scripts/fork_release.py ci
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
 
-      - name: Extract release notes from changelog
-        run: python3 scripts/changelog.py extract --version "${GITHUB_REF_NAME#v}" --output RELEASE_NOTES.md
-
-      - name: Create release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
-        with:
-          files: |
-            herdr-linux-x86_64/herdr-linux-x86_64
-            herdr-linux-aarch64/herdr-linux-aarch64
-            herdr-macos-x86_64/herdr-macos-x86_64
-            herdr-macos-aarch64/herdr-macos-aarch64
-            herdr-windows-x86_64.zip/herdr-windows-x86_64.zip
-          body_path: RELEASE_NOTES.md
-
-  close-released-issues:
-    needs: release
-    if: github.repository == 'herdrdev/herdr'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      contents: read
-      issues: write
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Close issues referenced by released commits
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.KANGAL_GITHUB_TOKEN }}
-          NEXT_RELEASE_LABEL: pending-release
-          LEGACY_NEXT_RELEASE_LABEL: included-in-next-release
-          PREVIEW_RELEASED_LABEL: preview-released
+      - name: Extract release notes and warn about upstream updates
         run: |
-          set -euo pipefail
+          python3 scripts/changelog.py extract --version "${GITHUB_REF_NAME#v}" --output RELEASE_NOTES.md
+          cat >> RELEASE_NOTES.md <<'EOF'
 
-          echo "Using GitHub token for $(gh api user --jq .login)."
+          **Fork prerelease: manual installation only.** The updater still targets upstream
+          Herdr. Do not run `herdr update` to install or upgrade this fork. Fork automatic
+          updates are not supported; `+fork.N` does not affect SemVer precedence.
+          EOF
 
-          VERSION="${GITHUB_REF_NAME#v}"
-          CURRENT_COMMIT="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
-          PREVIOUS_TAG="$(git describe --first-parent --tags --match 'v[0-9]*' --abbrev=0 "${CURRENT_COMMIT}^" 2>/dev/null || true)"
-
-          if [ -z "$PREVIOUS_TAG" ]; then
-            echo "No previous release tag found; skipping issue close."
-            exit 0
-          fi
-
-          echo "Scanning released commits in $PREVIOUS_TAG..$GITHUB_REF_NAME for refs #<issue> mentions."
-          mapfile -t ISSUES < <(
-            git log --format='%s%n%b' "$PREVIOUS_TAG..$CURRENT_COMMIT" \
-              | perl -ne 'print "$1\n" if /\brefs\s+#([0-9]+)\b/i' \
-              | sort -nu
-          )
-
-          if [ "${#ISSUES[@]}" -eq 0 ]; then
-            echo "No released issue refs found."
-            exit 0
-          fi
-
-          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}"
-          RELEASE_COMMENT_MARKER="<!-- herdr:released:v${VERSION} -->"
-          RELEASE_COMMENT="${RELEASE_COMMENT_MARKER}"$'\n'"Released in [v${VERSION}](${RELEASE_URL})."
-
-          issue_has_comment_marker() {
-            local issue="$1"
-            local marker="$2"
-            local comments
-            if ! comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments?per_page=100" --jq '.[].body')"; then
-              echo "::warning::Could not read comments for issue #$issue."
-              return 2
-            fi
-            grep -F -- "$marker" >/dev/null <<<"$comments"
-          }
-
-          for issue in "${ISSUES[@]}"; do
-            echo "Checking #$issue"
-            if ! data="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}")"; then
-              echo "::warning::Could not read issue #$issue; skipping."
-              continue
-            fi
-
-            if jq -e 'has("pull_request")' <<<"$data" >/dev/null; then
-              echo "Skipping #$issue because it is a pull request."
-              continue
-            fi
-
-            HAS_NEXT_RELEASE_LABEL="$(jq -r --arg label "$NEXT_RELEASE_LABEL" 'any(.labels[].name; . == $label)' <<<"$data")"
-            HAS_LEGACY_NEXT_RELEASE_LABEL="$(jq -r --arg label "$LEGACY_NEXT_RELEASE_LABEL" 'any(.labels[].name; . == $label)' <<<"$data")"
-            HAS_PREVIEW_RELEASED_LABEL="$(jq -r --arg label "$PREVIEW_RELEASED_LABEL" 'any(.labels[].name; . == $label)' <<<"$data")"
-            HAS_RELEASE_TRACKING_LABEL="false"
-            if [ "$HAS_NEXT_RELEASE_LABEL" = "true" ] || [ "$HAS_LEGACY_NEXT_RELEASE_LABEL" = "true" ] || [ "$HAS_PREVIEW_RELEASED_LABEL" = "true" ]; then
-              HAS_RELEASE_TRACKING_LABEL="true"
-            fi
-            MARKER_STATUS=0
-            issue_has_comment_marker "$issue" "$RELEASE_COMMENT_MARKER" || MARKER_STATUS="$?"
-            if [ "$MARKER_STATUS" -eq 2 ]; then
-              continue
-            fi
-            HAS_RELEASE_COMMENT="false"
-            if [ "$MARKER_STATUS" -eq 0 ]; then
-              HAS_RELEASE_COMMENT="true"
-            fi
-
-            if [ "$(jq -r '.state' <<<"$data")" = "open" ]; then
-              if [ "$HAS_RELEASE_COMMENT" = "true" ]; then
-                if ! gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed; then
-                  echo "::warning::Could not close issue #$issue."
-                  continue
-                fi
-              elif ! gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "$RELEASE_COMMENT"; then
-                echo "::warning::Could not close issue #$issue."
-                continue
-              fi
-            elif [ "$HAS_RELEASE_TRACKING_LABEL" = "true" ]; then
-              if [ "$HAS_RELEASE_COMMENT" != "true" ]; then
-                if ! gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$RELEASE_COMMENT"; then
-                  echo "::warning::Could not comment on issue #$issue."
-                  continue
-                fi
-              else
-                echo "Skipping release comment for #$issue because it already exists."
-              fi
-            else
-              echo "Skipping release comment for #$issue because it is closed and has no release tracking label."
-            fi
-
-            if [ "$HAS_NEXT_RELEASE_LABEL" = "true" ]; then
-              if ! gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --remove-label "$NEXT_RELEASE_LABEL"; then
-                echo "::warning::Could not remove $NEXT_RELEASE_LABEL from issue #$issue."
-                continue
-              fi
-            fi
-
-            if [ "$HAS_LEGACY_NEXT_RELEASE_LABEL" = "true" ]; then
-              if ! gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --remove-label "$LEGACY_NEXT_RELEASE_LABEL"; then
-                echo "::warning::Could not remove $LEGACY_NEXT_RELEASE_LABEL from issue #$issue."
-                continue
-              fi
-            fi
-
-            if [ "$HAS_PREVIEW_RELEASED_LABEL" = "true" ]; then
-              if ! gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --remove-label "$PREVIEW_RELEASED_LABEL"; then
-                echo "::warning::Could not remove $PREVIEW_RELEASED_LABEL from issue #$issue."
-                continue
-              fi
-            fi
+      - name: Verify four artifacts and generate checksums
+        run: |
+          mkdir release-assets
+          for name in herdr-linux-aarch64 herdr-linux-x86_64 herdr-macos-aarch64 herdr-macos-x86_64; do
+            test -s "$name/$name"
+            test "$(find "$name" -type f | wc -l)" -eq 1
+            cp "$name/$name" release-assets/
           done
+          cd release-assets
+          sha256sum herdr-linux-aarch64 herdr-linux-x86_64 herdr-macos-aarch64 herdr-macos-x86_64 > SHA256SUMS
+          sha256sum --check SHA256SUMS
 
-  update-latest-json:
-    needs: release
-    if: github.repository == 'herdrdev/herdr'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: docs-publish-master
-      cancel-in-progress: false
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: master
-          fetch-depth: 0
-          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
-
-      - name: Publish tagged documentation and update distribution manifest
+      - name: Reject existing releases and draft reservations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          node scripts/docs/versions.mjs publish "$GITHUB_REF_NAME"
-          ANNOUNCEMENT_PATH="$RUNNER_TEMP/product-announcement.json"
-          ANNOUNCEMENT_ORIGINAL_PATH="$RUNNER_TEMP/product-announcement-original.json"
-          git show "${GITHUB_REF_NAME}:docs/next/product-announcement.json" > "$ANNOUNCEMENT_PATH"
-          cp "$ANNOUNCEMENT_PATH" "$ANNOUNCEMENT_ORIGINAL_PATH"
-          python3 scripts/changelog.py validate-product-announcement --path "$ANNOUNCEMENT_PATH"
-          RELEASE_PROTOCOL=$(git show "${GITHUB_REF_NAME}:src/protocol/wire.rs" | python3 -c 'import re, sys; match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", sys.stdin.read()); sys.exit(1) if match is None else print(match.group(1))')
+          gh api --hostname github.com --paginate --jq '.[].tag_name' 'repos/trungnt13/herdr/releases?per_page=100' > "$RUNNER_TEMP/fork-release-tags.txt"
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          tags = (Path(os.environ["RUNNER_TEMP"]) / "fork-release-tags.txt").read_text().splitlines()
+          if os.environ["GITHUB_REF_NAME"] in tags:
+              raise SystemExit("Release or draft already exists; inspect it before any explicitly approved cleanup or retry")
+          PYTHON
 
-          DOCS_CURRENT=$(node scripts/docs/versions.mjs current)
-          if [ "$DOCS_CURRENT" != "$VERSION" ]; then
-            echo "Archived v$VERSION documentation without moving current docs backward from v$DOCS_CURRENT"
-            exit 0
-          fi
-          CURRENT_VERSION=$(python3 -c 'import json; print(json.load(open("distribution/latest.json")).get("version", ""))')
-          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
-            echo "distribution/latest.json is already at v$VERSION"
-            exit 0
-          fi
-          python3 scripts/changelog.py sync-latest-json --version "$VERSION" --output distribution/latest.json --announcement "$ANNOUNCEMENT_PATH" --protocol "$RELEASE_PROTOCOL"
-          if cmp -s "$ANNOUNCEMENT_ORIGINAL_PATH" docs/next/product-announcement.json; then
-            printf 'null\n' > docs/next/product-announcement.json
-          else
-            echo "::warning::docs/next/product-announcement.json changed after $GITHUB_REF_NAME; leaving it unchanged."
-          fi
+      - name: Stage draft prerelease
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        with:
+          files: |
+            release-assets/herdr-linux-x86_64
+            release-assets/herdr-linux-aarch64
+            release-assets/herdr-macos-x86_64
+            release-assets/herdr-macos-aarch64
+            release-assets/SHA256SUMS
+          body_path: RELEASE_NOTES.md
+          draft: true
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          overwrite_files: false
 
-      - name: Commit release distribution
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A README.md README.zh-CN.md docs/versions distribution/latest.json docs/next/product-announcement.json
-          git diff --cached --quiet || git commit -m "docs: publish release distribution for v$VERSION"
-          for attempt in 1 2 3; do
-            git pull --rebase origin master
-            node scripts/docs/versions.mjs check
-            node scripts/docs/preview.mjs check
-            if git push origin master; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "master changed during release publishing; retrying ($attempt/3)"
-              sleep $((attempt * 2))
-            fi
-          done
-          echo "failed to publish release documentation after 3 attempts" >&2
-          exit 1
+      - name: Publish completed prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo trungnt13/herdr --draft=false --prerelease --latest=false

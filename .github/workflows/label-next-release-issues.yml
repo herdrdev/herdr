@@ -13,6 +13,7 @@ env:
 
 jobs:
   close:
+    if: github.repository == 'herdrdev/herdr'
     runs-on: ubuntu-latest
 
     steps:

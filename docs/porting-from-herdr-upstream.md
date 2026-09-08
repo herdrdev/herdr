@@ -25,11 +25,14 @@ after a complete upstream rebase and all required validation succeed.
 | `.agents/skills/herdr-release/SKILL.md` | Adds the fork release workflow. |
 | `.agents/skills/rebase-upstream-master/SKILL.md` | Adds the safe upstream rebase workflow. |
 | `.github/MAINTAINERS` | Adds `trungnt13`. |
-| `AGENTS.md` | Removes the Maintainer Workflow heading and scope text, and removes the external contributor guardrail. |
+| `AGENTS.md` | Recognizes verified fork maintainer authority and limits releases to manually installed GitHub prereleases; preserves universal runtime rules. |
+| `justfile`, `scripts/fork_release.py`, `scripts/test_fork_release.py` | Strict fork versions, verified publication destination, reservation checks and focused maintenance tests. |
+| `.github/workflows/release.yml` | Four Linux/macOS builds, patched macOS Zig, checksums and staged prereleases; removes upstream promotion jobs. |
+| `.github/workflows/build-artifacts-manual.yml` | Uses patched Homebrew Zig 0.15.2 on macOS; preserves Windows builds. |
+| `.github/workflows/website-deploy.yml`, `.github/workflows/label-next-release-issues.yml` | Restricts upstream automation to `herdrdev/herdr`. |
 | `docs/porting-from-herdr-upstream.md` | Records fork deltas, unresolved decisions, and completed rebase results. |
 
-No product source, build logic, public user documentation, or CI workflow delta
-has been identified in the comparison against this marker.
+No product runtime, Cargo version, update destination or published docs changes are part of this tooling migration.
 
 ## Release intent
 
@@ -37,20 +40,30 @@ Fork releases contain the latest `upstream/master` changes. Without an explicit
 version, use the latest upstream stable version plus the next `+fork.N` suffix,
 for example `0.8.2+fork.1`, then `0.8.2+fork.2`.
 
-Release recipes, upstream-only CI gates, and updater version handling have not
-yet been migrated. Do not publish a fork release until those blockers are
-resolved.
+## Resolved tooling and governance
 
-## Unresolved governance decision
+The release recipes accept strict `BASE+fork.N` and verify fork identity,
+write access and reserved versions. Fork maintainer authority is scoped to
+`trungnt13/herdr`; it grants no upstream permission. Release CI stages four
+Linux/macOS binaries and deterministic checksums, then publishes a prerelease
+without moving latest or promoting upstream services.
 
-Upstream policy recognizes maintainers only when the account is listed in
-`.github/MAINTAINERS`, the remote is canonical `herdrdev/herdr`, and write access
-is verified. Adding `trungnt13` to the file does not grant upstream authority,
-while this fork removes the external-contributor guardrail.
+## Remaining release prerequisites
 
-Do not resolve this implicitly during a rebase. The owner must choose whether
-the fork retains upstream governance, defines fork-specific authority, or
-restores the guardrail.
+Fresh upstream integration and explicit approval are still required before
+release commits or publication. At migration review, upstream stable is `v0.9.0`
+while fork Cargo remains `0.8.2`; no version is selected or bumped here. Requery
+upstream stable and master immediately before release, integrate them, and
+reconcile the Cargo base before selecting the next fork revision.
+
+The existing release-docs check fails because the distribution catalog lacks
+the bundled `muse` agent. Resolve release readiness separately; do not weaken
+checks. Cross-platform builds and actual upload/publication require CI validation.
+
+Updater independence is deferred: runtime updates still target upstream and
+SemVer metadata does not order fork revisions. Releases must warn users not to
+run `herdr update` for this fork and to install GitHub prerelease assets manually.
+No upstream website, issue, channel, Homebrew or Nix promotion is authorized.
 
 ## Completed rebase reviews
 

@@ -11,8 +11,11 @@ These instructions are layered.
 - Universal project rules apply to every agent working on Herdr, including forks.
 - Maintainer accounts are listed in `.github/MAINTAINERS`. Treat the acting
   account as a verified maintainer only when its username is listed there, the
-  configured remote is the canonical `herdrdev/herdr` repository, and the
-  authenticated account has write access to that repository. If any condition
+  configured origin is `herdrdev/herdr` and the authenticated account has write
+  access there. In this fork, authenticated `trungnt13`, listed in that file,
+  is a fork maintainer only when origin fetch and all push URLs target
+  `trungnt13/herdr` and GitHub confirms write access to that repository.
+  Fork authority does not grant upstream authority. If any condition
   cannot be verified, skip maintainer workflow and follow the external
   contributor guardrail instead.
 - Local Can machine workflow applies only on Can's own workstation or Windows
@@ -20,7 +23,7 @@ These instructions are layered.
   `windows-wirt` SSH alias exists. If those facts are not true, skip local
   machine workflow.
 - External contributor guardrail applies whenever the acting GitHub account is
-  not a verified maintainer, the work is happening in a fork, or the account
+  not a verified upstream or fork maintainer, or the account
   cannot be determined.
 
 ## Universal Project Rules
@@ -120,7 +123,7 @@ When the current pull request head is green and both bot reviews are complete, r
 
 If the current session is already inside an isolated task worktree, keep using it. Do not create nested worktrees.
 
-Before committing, propose the commit message and get alignment.
+Before committing, propose the commit message and get alignment with async request.
 
 After Can confirms the change is integrated, update the shared checkout, remove the task worktree, and delete the task branch locally and remotely.
 
@@ -217,7 +220,7 @@ Put local PRDs, planning notes, and exploratory specs under `.local/prd/`; `.loc
 
 Use lowercase conventional commits, no emojis, and no AI co-author lines. Commit subjects feed preview release notes, so keep them descriptive.
 
-Before committing, propose the commit message and get alignment.
+Before committing, propose the commit message and get alignment with async request.
 
 When a normal feature or fix commit relates to a GitHub issue, add a commit body line `refs #<issue-number>` after the subject:
 
@@ -237,7 +240,30 @@ Do not use GitHub closing keywords like `fixes #<issue-number>`, `closes #<issue
 - Integration asset versions (`HERDR_INTEGRATION_VERSION` markers and matching `*_INTEGRATION_VERSION` constants) are migration versions relative to the latest released tag, not per-commit counters on `master`. If an integration asset changes multiple times between releases, bump it once from the version in the latest release.
 - When changing the server/client wire protocol, compare `src/protocol/wire.rs::PROTOCOL_VERSION` against protocols published in both stable and preview releases. Bump it when the current source protocol has already been published in either channel and the wire format changes incompatibly. Do not bump it again for multiple incompatible changes before that protocol is published. Update hardcoded protocol expectations and manual protocol fixtures in tests.
 
-## Release Channels
+## Fork Release Override
+
+For `trungnt13/herdr`, this section overrides upstream release and documentation
+promotion instructions below. Require explicit owner approval before release
+commits, tags, pushes or publication. Recheck origin fetch and every push URL,
+authenticated `trungnt13`, API repository identity and write permission before
+release mutations; never rewrite remotes automatically.
+
+Use `just release BASE+fork.N` from clean `master`, with positive increasing `N`
+and the Cargo base version. Before publication, integrate fresh upstream master
+and verify the latest upstream stable base as described in the fork release skill.
+Run the existing release checks; do not bypass failures. Fork releases publish
+only Linux and macOS x86_64/ARM64 binaries plus `SHA256SUMS` as GitHub prereleases,
+never latest releases. No Windows fork release, upstream issue automation,
+website/docs/channel promotion, Homebrew or Nix promotion is authorized.
+Keep `skills/herdr/SKILL.md` at upstream stable; fork release preparation does not
+update it. Changelog preparation remains local release-note input, not a docs
+publication step.
+
+The runtime updater still targets upstream. Release notes must warn users not
+to run `herdr update` for this fork; fork automatic updates are unsupported and
+`+fork.N` does not affect SemVer precedence.
+
+## Release Channels (Upstream Only)
 
 This section is maintainer-only for release actions. If the acting GitHub
 account is not a verified maintainer, do not run release commands, push release
