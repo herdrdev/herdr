@@ -20,8 +20,9 @@ pub(super) fn render_collapsed(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    super::render::render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
+    super::render::render_sidebar_background(buffer, area, palette, config.sidebar_position);
+    let (workspace_area, divider_y, detail_area) =
+        super::sidebar::collapsed_sidebar_sections(config.sidebar_position.sidebar_content(area));
     let mut total_rows = 0usize;
     let mut selected_row = None;
     let reveal = std::mem::take(state.reveal_navigation_workspace);
@@ -209,7 +210,7 @@ pub(super) fn render_collapsed(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "»",
+        config.sidebar_position.sidebar_toggle_glyph(true),
         Style::default().fg(palette.overlay0),
     );
 }
@@ -219,20 +220,21 @@ pub(super) fn render_expanded(
     area: Rect,
     active_snapshot: Option<&ClientShellSnapshot>,
     config: &ClientShellConfig,
+    position: SidebarPositionConfig,
     state: &mut ShellRenderState<'_>,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    super::render::render_sidebar_background(buffer, area, palette);
-    hits.sidebar_divider = if area.is_empty() {
-        Rect::default()
-    } else {
-        Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
-    };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    super::render::render_sidebar_background(buffer, area, palette, position);
+    hits.sidebar_divider = position.sidebar_divider(area);
+    let (workspace_area, detail_area) = crate::ui::expanded_sidebar_sections(
+        position.sidebar_content(area),
+        state.sidebar_section_split,
+    );
+    hits.sidebar_section_divider = crate::ui::sidebar_section_divider_rect(
+        position.sidebar_content(area),
+        state.sidebar_section_split,
+    );
     put_text(
         buffer,
         workspace_area.x,
@@ -518,7 +520,10 @@ pub(super) fn render_expanded(
         hits,
     );
     hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
+        match position {
+            SidebarPositionConfig::Left => area.right().saturating_sub(2),
+            SidebarPositionConfig::Right => position.sidebar_content(area).x,
+        },
         area.bottom().saturating_sub(1),
         u16::from(area.width > 1),
         u16::from(area.height > 0),
@@ -528,7 +533,7 @@ pub(super) fn render_expanded(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "«",
+        position.sidebar_toggle_glyph(false),
         Style::default().fg(palette.overlay0),
     );
 }

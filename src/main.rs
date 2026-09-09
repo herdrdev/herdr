@@ -228,6 +228,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # directory = "~/.herdr/worktrees"
 
 [ui]
+# Desktop sidebar edge: "left" or "right"
+# sidebar_position = "left"
+
 # Sidebar width (auto-scaled based on workspace names, this sets the default)
 # sidebar_width = 26
 

@@ -50,8 +50,8 @@ use unicode_width::UnicodeWidthStr;
 use super::endpoint::{ClientEndpointId, ClientEndpointStatus, SavedSshEndpoint};
 use crate::app::state::Palette;
 use crate::config::{
-    Config, LiveKeybindConfig, SidebarCollapsedModeConfig, SpacesSidebarConfig,
-    TabBarPositionConfig,
+    Config, LiveKeybindConfig, SidebarCollapsedModeConfig, SidebarPositionConfig,
+    SpacesSidebarConfig, TabBarPositionConfig,
 };
 use crate::protocol::{
     ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot, ClientShellTab,

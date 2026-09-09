@@ -5,12 +5,25 @@ const SELECTION_AUTOSCROLL_INTERVAL: std::time::Duration = std::time::Duration::
 
 impl ClientShellState {
     fn set_sidebar_width_from_column(&mut self, column: u16, outcome: &mut ClientShellInput) {
+        // A desktop drag can continue after the window switches to the full-width mobile layout.
+        if self.mobile_layout_active() {
+            return;
+        }
         let (min, max) = crate::config::validated_sidebar_bounds(
             self.config.sidebar_min_width,
             self.config.sidebar_max_width,
         )
         .unwrap_or((18, 36));
-        let width = column.saturating_add(1).clamp(min, max);
+        let width = match self.config.sidebar_position {
+            SidebarPositionConfig::Left => column.saturating_add(1),
+            SidebarPositionConfig::Right => {
+                let Some((cols, _)) = self.last_composed_size else {
+                    return;
+                };
+                cols.saturating_sub(column)
+            }
+        }
+        .clamp(min, max);
         if self.sidebar_width != width {
             self.sidebar_width = width;
             self.sidebar_width_manual = true;
@@ -1838,6 +1851,7 @@ impl ClientShellState {
                 self.tab_press = None;
                 self.chrome_drag = None;
                 if super::contains(self.hits.sidebar_divider, point)
+                    && !self.mobile_layout_active()
                     && !super::contains(self.hits.sidebar_toggle, point)
                 {
                     let now = std::time::Instant::now();

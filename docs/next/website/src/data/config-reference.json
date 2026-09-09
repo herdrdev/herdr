@@ -994,6 +994,16 @@
           "description": "Hide the tab row when the workspace has one tab."
         },
         {
+          "key": "ui.sidebar_position",
+          "type": "enum",
+          "default": "\"left\"",
+          "description": "Place the desktop sidebar on the left or right edge. Mobile layout is unchanged.",
+          "values": [
+            "left",
+            "right"
+          ]
+        },
+        {
           "key": "ui.tab_bar_position",
           "type": "enum",
           "default": "\"top\"",

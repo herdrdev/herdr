@@ -384,3 +384,58 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
             if params.workspace_id == "ws_1" && params.close_group
     ));
 }
+
+#[test]
+fn right_sidebar_draws_inner_divider_and_resizes_from_right_edge() {
+    let mut config = Config::default();
+    config.ui.sidebar_position = crate::config::SidebarPositionConfig::Right;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("right sidebar");
+    assert_eq!(state.hits.sidebar_divider, Rect::new(80, 0, 1, 30));
+    assert_eq!(frame.cells[80].symbol, "│");
+    assert!(state.hits.workspaces.iter().all(|hit| hit.rect.x > 80));
+    assert!(state.hits.agents.iter().all(|(rect, _)| rect.x > 80));
+    let toggle = state.hits.sidebar_toggle;
+    assert_eq!(toggle.x, 81);
+    assert_eq!(
+        frame.cells[usize::from(toggle.y) * 106 + usize::from(toggle.x)].symbol,
+        "»"
+    );
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), 80),
+        (MouseEventKind::Drag(MouseButton::Left), 74),
+        (MouseEventKind::Up(MouseButton::Left), 74),
+    ] {
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row: 2,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    }
+    assert_eq!(state.sidebar_width, 32);
+    assert!(state.sidebar_width_manual);
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("resized sidebar");
+    assert_eq!(state.hits.sidebar_divider.x, 74);
+    let toggle = state.hits.sidebar_toggle;
+    let outcome =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: toggle.x,
+            row: toggle.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(state.sidebar_collapsed);
+    assert!(outcome.resize);
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("compact sidebar");
+    assert_eq!(frame.cells[102].symbol, "│");
+    let toggle = state.hits.sidebar_toggle;
+    assert_eq!(
+        frame.cells[usize::from(toggle.y) * 106 + usize::from(toggle.x)].symbol,
+        "«"
+    );
+}

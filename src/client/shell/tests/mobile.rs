@@ -647,3 +647,130 @@ fn mobile_switcher_scroll_close_and_width_transition_clear_mobile_hits() {
     assert!(state.hits.mobile_close.is_empty());
     assert!(state.hits.mobile_targets.is_empty());
 }
+
+#[test]
+fn unavailable_mobile_layout_ignores_desktop_sidebar_position() {
+    for status in [
+        ClientEndpointStatus::Connecting,
+        ClientEndpointStatus::Reconnecting,
+    ] {
+        let mut left = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut right = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        right.config.sidebar_position = crate::config::SidebarPositionConfig::Right;
+        left.set_endpoint_status(&ClientEndpointId::Local, status);
+        right.set_endpoint_status(&ClientEndpointId::Local, status);
+        for cols in [20, 44] {
+            let left_frame = left.compose(cols, 20).expect("left mobile fallback");
+            let right_frame = right.compose(cols, 20).expect("right mobile fallback");
+            assert_eq!(left_frame.cells, right_frame.cells);
+            assert_eq!(left.hits.sidebar_divider, right.hits.sidebar_divider);
+            assert_eq!(left.hits.sidebar_toggle, right.hits.sidebar_toggle);
+            assert_eq!(left.hits.workspace_body, right.hits.workspace_body);
+        }
+        right.compose(106, 20).expect("desktop fallback");
+        assert_eq!(right.hits.sidebar_divider.x, 80);
+        assert_eq!(
+            right.config.sidebar_position,
+            crate::config::SidebarPositionConfig::Right
+        );
+    }
+}
+
+#[test]
+fn mobile_fallback_clicks_and_drags_preserve_desktop_sidebar_width() {
+    for position in [
+        crate::config::SidebarPositionConfig::Left,
+        crate::config::SidebarPositionConfig::Right,
+    ] {
+        for manual in [false, true] {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.config.sidebar_position = position;
+            state.sidebar_width = 31;
+            state.sidebar_width_manual = manual;
+            state.compose(44, 20).expect("mobile fallback");
+            let divider = state.hits.sidebar_divider;
+            // Include a second click to cover the double-click reset path.
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Drag(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+            ] {
+                let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(
+                    crossterm::event::MouseEvent {
+                        kind,
+                        column: divider.x,
+                        row: divider.y + 2,
+                        modifiers: KeyModifiers::empty(),
+                    },
+                )]);
+                assert_eq!(state.sidebar_width, 31);
+                assert_eq!(state.sidebar_width_manual, manual);
+                assert!(!outcome.resize);
+                assert!(state.chrome_drag.is_none());
+            }
+            assert!(state.last_sidebar_divider_click.is_none());
+            // The section divider still needs the full sidebar height for its ratio.
+            let section = state.hits.sidebar_section_divider;
+            for (kind, row) in [
+                (MouseEventKind::Down(MouseButton::Left), section.y),
+                (MouseEventKind::Drag(MouseButton::Left), 15),
+                (MouseEventKind::Up(MouseButton::Left), 15),
+            ] {
+                state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                    kind,
+                    column: section.x + 2,
+                    row,
+                    modifiers: KeyModifiers::empty(),
+                })]);
+            }
+            assert!(state.sidebar_section_split > 0.7);
+            assert_eq!(state.sidebar_width, 31);
+            assert_eq!(state.sidebar_width_manual, manual);
+        }
+    }
+}
+
+#[test]
+fn sidebar_width_drag_stops_changing_width_when_window_becomes_mobile() {
+    for position in [
+        crate::config::SidebarPositionConfig::Left,
+        crate::config::SidebarPositionConfig::Right,
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.config.sidebar_position = position;
+        state.compose(106, 20).expect("desktop fallback");
+        let divider = state.hits.sidebar_divider;
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: divider.x,
+            row: 2,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(matches!(
+            state.chrome_drag,
+            Some(ClientChromeDrag::SidebarWidth)
+        ));
+        state.compose(44, 20).expect("mobile fallback during drag");
+        for kind in [
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let outcome =
+                state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                    kind,
+                    column: 10,
+                    row: 2,
+                    modifiers: KeyModifiers::empty(),
+                })]);
+            assert_eq!(state.sidebar_width, 26);
+            assert!(!state.sidebar_width_manual);
+            assert!(!outcome.resize);
+        }
+        assert!(state.chrome_drag.is_none());
+        state.compose(106, 20).expect("desktop fallback after drag");
+        assert_eq!(state.hits.sidebar_divider, divider);
+    }
+}

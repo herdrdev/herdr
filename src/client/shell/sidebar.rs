@@ -5,9 +5,8 @@ use ratatui::{
 };
 
 pub(in crate::client::shell) fn collapsed_sidebar_sections(
-    area: Rect,
+    content: Rect,
 ) -> (Rect, Option<u16>, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.is_empty() {
         return (Rect::default(), None, Rect::default());
     }
@@ -33,8 +32,9 @@ pub(crate) fn render_collapsed_sidebar(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = collapsed_sidebar_sections(area);
+    render_sidebar_background(buffer, area, palette, config.sidebar_position);
+    let (workspace_area, divider_y, detail_area) =
+        collapsed_sidebar_sections(config.sidebar_position.sidebar_content(area));
     for (index, workspace) in snapshot
         .workspaces
         .iter()
@@ -169,7 +169,7 @@ pub(crate) fn render_collapsed_sidebar(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "»",
+        config.sidebar_position.sidebar_toggle_glyph(true),
         if super::super::global_menu::global_menu_attention(snapshot) {
             Style::default()
                 .fg(palette.accent)
@@ -189,16 +189,16 @@ pub(crate) fn render_sidebar(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    render_sidebar_background(buffer, area, palette);
-    hits.sidebar_divider = if area.is_empty() {
-        Rect::default()
-    } else {
-        Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
-    };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    render_sidebar_background(buffer, area, palette, config.sidebar_position);
+    hits.sidebar_divider = config.sidebar_position.sidebar_divider(area);
+    let (workspace_area, detail_area) = crate::ui::expanded_sidebar_sections(
+        config.sidebar_position.sidebar_content(area),
+        state.sidebar_section_split,
+    );
+    hits.sidebar_section_divider = crate::ui::sidebar_section_divider_rect(
+        config.sidebar_position.sidebar_content(area),
+        state.sidebar_section_split,
+    );
     put_text(
         buffer,
         workspace_area.x,
@@ -424,7 +424,10 @@ pub(crate) fn render_sidebar(
     );
 
     hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
+        match config.sidebar_position {
+            SidebarPositionConfig::Left => area.right().saturating_sub(2),
+            SidebarPositionConfig::Right => config.sidebar_position.sidebar_content(area).x,
+        },
         area.bottom().saturating_sub(1),
         u16::from(area.width > 1),
         u16::from(area.height > 0),
@@ -434,7 +437,7 @@ pub(crate) fn render_sidebar(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "«",
+        config.sidebar_position.sidebar_toggle_glyph(false),
         Style::default().fg(palette.overlay0),
     );
 }

@@ -844,6 +844,14 @@ pub enum TabBarPositionConfig {
     Bottom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarPositionConfig {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaneBordersConfig {
     #[default]
@@ -901,6 +909,8 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Desktop sidebar edge. Default: left.
+    pub sidebar_position: SidebarPositionConfig,
     pub sidebar_width: u16,
     /// Minimum sidebar width (columns) when expanded. Default: 18.
     pub sidebar_min_width: u16,
@@ -1158,6 +1168,7 @@ impl Default for WorktreesConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
+            sidebar_position: SidebarPositionConfig::Left,
             sidebar_width: 26,
             sidebar_min_width: 18,
             sidebar_max_width: 36,

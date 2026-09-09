@@ -1466,3 +1466,26 @@ fn navigator_foreign_tab_selection_keeps_the_tab_target() {
         }] if activated == &endpoint_id && tab_id == "tab_1"
     ));
 }
+
+#[test]
+fn right_sidebar_places_machine_hits_and_compact_controls_inside_right_edge() {
+    let (mut state, _) = state_with_remote();
+    state.config.sidebar_position = crate::config::SidebarPositionConfig::Right;
+    let frame = state.compose(106, 30).expect("right machine sidebar");
+    assert_eq!(state.hits.sidebar_divider, Rect::new(80, 0, 1, 30));
+    assert_eq!(frame.cells[80].symbol, "│");
+    assert_eq!(state.hits.machines.len(), 2);
+    assert!(state.hits.machines.iter().all(|hit| hit.rect.x > 80));
+    assert!(state.hits.workspaces.iter().all(|hit| hit.rect.x > 80));
+    assert_eq!(state.hits.sidebar_toggle.x, 81);
+    state.sidebar_collapsed = true;
+    let frame = state.compose(106, 30).expect("compact machine sidebar");
+    assert_eq!(frame.cells[102].symbol, "│");
+    assert!(state.hits.machines.iter().all(|hit| hit.rect.x > 102));
+    assert!(state.hits.workspaces.iter().all(|hit| hit.rect.x > 102));
+    let toggle = state.hits.sidebar_toggle;
+    assert_eq!(
+        frame.cells[usize::from(toggle.y) * 106 + usize::from(toggle.x)].symbol,
+        "«"
+    );
+}

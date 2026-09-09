@@ -45,6 +45,12 @@ impl ClientShellState {
             sidebar,
             self.snapshot.as_deref(),
             &self.config,
+            // The full-width mobile fallback keeps its existing layout on either desktop edge.
+            if cols <= self.config.mobile_width_threshold {
+                SidebarPositionConfig::Left
+            } else {
+                self.config.sidebar_position
+            },
             &mut render::ShellRenderState {
                 endpoints: &self.endpoints,
                 active_endpoint_id: &self.active_endpoint_id,

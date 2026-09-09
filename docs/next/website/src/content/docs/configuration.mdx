@@ -298,6 +298,8 @@ The active palette is applied in this order: built-in theme, `[theme.custom]`, t
 
 ## UI and sidebar
 
+Set `sidebar_position = "right"` under `[ui]` to place the desktop sidebar on the right. The default is `"left"`. This applies to expanded and compact sidebars; mobile layout is unchanged. Reload config to apply it.
+
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
 `ui.pane_borders` accepts `"auto"` (the default, borders only for split panes), `"always"` (also frame a single pane), or `"off"`. A single-pane frame requires `ui.pane_outer_borders = true`, because all its edges are outer edges. Existing boolean values remain valid: `true` means `"auto"` and `false` means `"off"`.

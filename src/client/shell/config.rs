@@ -109,10 +109,41 @@ impl ClientShellState {
     }
 }
 
+impl SidebarPositionConfig {
+    pub(super) fn sidebar_content(&self, area: Rect) -> Rect {
+        let inset = u16::from(area.width > 0 && *self == SidebarPositionConfig::Right);
+        Rect::new(
+            area.x + inset,
+            area.y,
+            area.width.saturating_sub(1),
+            area.height,
+        )
+    }
+
+    pub(super) fn sidebar_divider(&self, area: Rect) -> Rect {
+        if area.is_empty() {
+            return Rect::default();
+        }
+        let x = match *self {
+            SidebarPositionConfig::Left => area.right() - 1,
+            SidebarPositionConfig::Right => area.x,
+        };
+        Rect::new(x, area.y, 1, area.height)
+    }
+
+    pub(super) fn sidebar_toggle_glyph(&self, collapsed: bool) -> &'static str {
+        match (*self, collapsed) {
+            (SidebarPositionConfig::Left, false) | (SidebarPositionConfig::Right, true) => "«",
+            _ => "»",
+        }
+    }
+}
+
 impl ClientShellConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
         Self {
+            sidebar_position: config.ui.sidebar_position,
             sidebar_width: config.ui.sidebar_width,
             sidebar_min_width: config.ui.sidebar_min_width,
             sidebar_max_width: config.ui.sidebar_max_width,
@@ -316,6 +347,7 @@ impl ClientShellConfig {
             } else {
                 let ui = &config.ui;
                 diagnostics.extend(ui.sound.diagnostics());
+                self.sidebar_position = ui.sidebar_position;
                 self.sidebar_width = ui.sidebar_width;
                 self.sidebar_min_width = ui.sidebar_min_width;
                 self.sidebar_max_width = ui.sidebar_max_width;
@@ -389,7 +421,12 @@ impl ClientShellConfig {
             sidebar_width.clamp(min, max)
         }
         .min(cols.saturating_sub(1));
-        let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
+        let main_width = cols.saturating_sub(sidebar_width);
+        let (sidebar_x, main_x) = match self.sidebar_position {
+            SidebarPositionConfig::Left => (0, sidebar_width),
+            SidebarPositionConfig::Right => (main_width, 0),
+        };
+        let main = Rect::new(main_x, 0, main_width, rows);
         let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
         let tab_height = u16::from(show_tab_bar);
         let (tab_bar, pane_surface) = match self.tab_bar_position {
@@ -414,7 +451,7 @@ impl ClientShellConfig {
         };
 
         ClientShellLayout {
-            sidebar: Rect::new(0, 0, sidebar_width, rows),
+            sidebar: Rect::new(sidebar_x, 0, sidebar_width, rows),
             tab_bar,
             mobile_header: Rect::default(),
             pane_surface,
@@ -451,9 +488,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sidebar_position_config_and_layout() {
+        assert_eq!(
+            Config::default().ui.sidebar_position,
+            SidebarPositionConfig::Left
+        );
+        assert!(toml::from_str::<Config>("[ui]\nsidebar_position = 'top'").is_err());
+        for position in ["left", "right"] {
+            let config: Config =
+                toml::from_str(&format!("[ui]\nsidebar_position = '{position}'")).unwrap();
+            let mut shell = ClientShellConfig::from_config(&config);
+            for tab_position in [TabBarPositionConfig::Top, TabBarPositionConfig::Bottom] {
+                shell.tab_bar_position = tab_position;
+                for collapsed_mode in [
+                    SidebarCollapsedModeConfig::Compact,
+                    SidebarCollapsedModeConfig::Hidden,
+                ] {
+                    shell.sidebar_collapsed_mode = collapsed_mode;
+                    for collapsed in [false, true] {
+                        let layout = shell.layout(106, 30, collapsed, 2, 26);
+                        let width = if !collapsed {
+                            26
+                        } else if collapsed_mode == SidebarCollapsedModeConfig::Compact {
+                            4
+                        } else {
+                            0
+                        };
+                        assert_eq!(layout.sidebar.width, width);
+                        assert_eq!(
+                            layout.sidebar.x,
+                            if position == "left" { 0 } else { 106 - width }
+                        );
+                        assert_eq!(
+                            layout.pane_surface.x,
+                            if position == "left" { width } else { 0 }
+                        );
+                        assert_eq!(layout.pane_surface.width, 106 - width);
+                        assert_eq!(layout.tab_bar.x, layout.pane_surface.x);
+                        assert_eq!(layout.tab_bar.width, layout.pane_surface.width);
+                        assert_eq!(
+                            layout.tab_bar.y,
+                            if tab_position == TabBarPositionConfig::Top {
+                                0
+                            } else {
+                                29
+                            }
+                        );
+                    }
+                }
+            }
+            let mobile = shell.layout(20, 10, false, 2, 26);
+            assert!(mobile.sidebar.is_empty());
+            assert_eq!(mobile.pane_surface, Rect::new(0, 2, 20, 8));
+        }
+    }
+
+    #[test]
     fn live_reload_applies_client_owned_sections() {
         let mut shell = ClientShellConfig::from_config(&Config::default());
         let mut next = Config::default();
+        next.ui.sidebar_position = SidebarPositionConfig::Right;
         next.ui.sidebar_width = 31;
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
@@ -464,6 +558,7 @@ mod tests {
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
 
         assert!(diagnostics.is_empty());
+        assert_eq!(shell.sidebar_position, SidebarPositionConfig::Right);
         assert_eq!(shell.sidebar_width, 31);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(
