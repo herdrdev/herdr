@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=9
 // @ts-nocheck
 
 import net from "node:net";
@@ -178,6 +178,9 @@ export default function (pi) {
   }
 
   let agentActive = false;
+  // Work that extensions run outside the agent loop, such as background
+  // workflows whose sub-agents keep going after the root turn settles.
+  let extensionWorkCount = 0;
   let blockedCount = 0;
   let blockedMessage: string | undefined;
   let lastState: AgentState | undefined;
@@ -188,7 +191,7 @@ export default function (pi) {
     if (blockedCount > 0) {
       return { state: "blocked" as const, message: blockedMessage };
     }
-    if (agentActive) {
+    if (agentActive || extensionWorkCount > 0) {
       return { state: "working" as const, message: undefined };
     }
     return { state: "idle" as const, message: undefined };
@@ -203,6 +206,24 @@ export default function (pi) {
     lastMessage = next.message;
     queueState(next.state, next.message);
   }
+
+  function onExtensionWork(data) {
+    if (!rootSession) {
+      return;
+    }
+    if (!data?.active) {
+      extensionWorkCount = Math.max(0, extensionWorkCount - 1);
+      publishState();
+      return;
+    }
+
+    extensionWorkCount += 1;
+    publishState();
+  }
+
+  // pi-subagents emits herdr:busy; pi-extensible-workflows emits herdr:working.
+  pi.events.on("herdr:busy", onExtensionWork);
+  pi.events.on("herdr:working", onExtensionWork);
 
   pi.events.on("herdr:blocked", (data) => {
     if (!rootSession) {

@@ -109,6 +109,15 @@ Herdr writes the bundled extension to:
 
 If `PI_CODING_AGENT_DIR` is set, Herdr writes to `$PI_CODING_AGENT_DIR/extensions/herdr-agent-state.ts` instead. Herdr creates the extensions directory when the Pi agent directory already exists. Uninstall removes only that extension file.
 
+The extension reports `working` while Pi's agent loop is running a turn. Other Pi extensions can fold activity that happens outside that loop into the same pane state by emitting events on `pi.events`:
+
+| Event | Payload | Effect |
+| --- | --- | --- |
+| `herdr:busy`, `herdr:working` | `{ active: boolean }` | While at least one activation is outstanding, the pane stays `working` after the agent turn settles. Sub-agent and workflow extensions whose children keep running use this; both names count into the same total. |
+| `herdr:blocked` | `{ active: boolean, label?: string }` | While at least one activation is outstanding, the pane reports `blocked` with the label as its message. Confirmation prompts use this. |
+
+Each `active: true` must be paired with a later `active: false`. Blocked takes precedence over working. Events emitted before Pi's `session_start` are ignored.
+
 ## OMP
 
 Install the OMP integration:
