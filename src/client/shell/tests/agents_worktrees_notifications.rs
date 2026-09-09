@@ -1294,3 +1294,81 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
 }
+
+#[test]
+fn agent_sidebar_labels_null_named_agents_by_pane_and_hides_stale_records() {
+    let mut projected = snapshot();
+    let mut labeled_pane = projected.panes[0].clone();
+    labeled_pane.pane_id = "pane_2".into();
+    labeled_pane.label = Some("shoplite".into());
+    labeled_pane.focused = false;
+    projected.panes.push(labeled_pane);
+    projected.agents = vec![
+        // Null-named agent: the row label must fall back to the pane label
+        // (callsign), never the bare detected kind "pi".
+        ClientShellAgent {
+            pane_id: "pane_2".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: None,
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Working,
+            state_change_seq: 1,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: false,
+        },
+        // Stale record with no live pane in the snapshot: hidden instead of
+        // rendered as a dead row.
+        ClientShellAgent {
+            pane_id: "pane_ghost".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some("ghost".into()),
+            display_agent: None,
+            agent: Some("pi".into()),
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: AgentStatus::Blocked,
+            state_change_seq: 2,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: false,
+        },
+    ];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("shoplite"), "frame: {text}");
+    assert!(!text.contains("ghost"), "frame: {text}");
+    assert!(
+        !text.lines().any(|line| line.trim() == "pi"),
+        "frame: {text}"
+    );
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pane_2"]
+    );
+}

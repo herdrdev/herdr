@@ -251,10 +251,13 @@ pub(super) fn agent_rows(
                 .iter()
                 .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
             let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
+            // A pane-less agent record is stale (restored from an old session
+            // or a skewed snapshot): it cannot be focused, so hide the row
+            // instead of showing a dead entry.
             let pane = snapshot
                 .panes
                 .iter()
-                .find(|pane| pane.pane_id == agent.pane_id);
+                .find(|pane| pane.pane_id == agent.pane_id)?;
             let tab_count = snapshot
                 .tabs
                 .iter()
@@ -263,12 +266,18 @@ pub(super) fn agent_rows(
             let tab_label = tab
                 .filter(|tab| tab_count > 1 || tab.custom_label)
                 .map(|tab| tab.label.as_str());
+            // Identify agents by the most human-meaningful label available:
+            // the pane-provided display agent, then the callsign, then the
+            // pane title/manual label. The detected kind ("pi") is only a last
+            // resort so null-named agents never collapse into rows that all
+            // read "pi".
             let agent_label = agent
                 .display_agent
                 .as_deref()
                 .or(agent.name.as_deref())
-                .or(agent.agent.as_deref())
-                .or(agent.title.as_deref());
+                .or(agent.title.as_deref())
+                .or(pane.label.as_deref())
+                .or(agent.agent.as_deref());
             let labels = agent
                 .state_labels
                 .iter()
@@ -289,10 +298,7 @@ pub(super) fn agent_rows(
                     machine,
                     workspace: &workspace.label,
                     tab: tab_label,
-                    pane: agent
-                        .title
-                        .as_deref()
-                        .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+                    pane: agent.title.as_deref().or(pane.label.as_deref()),
                     agent_label,
                     terminal_title: agent.terminal_title.as_deref(),
                     terminal_title_stripped: agent.terminal_title_stripped.as_deref(),

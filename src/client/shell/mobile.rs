@@ -644,10 +644,20 @@ fn mobile_items(
                 .tabs
                 .iter()
                 .find(|tab| tab.tab_id == agent.tab_id);
+            // Same precedence as the desktop sidebar: human-meaningful labels
+            // first, the detected kind ("pi") only as a last resort.
+            let pane_label = endpoint
+                .snapshot
+                .panes
+                .iter()
+                .find(|pane| pane.pane_id == agent.pane_id)
+                .and_then(|pane| pane.label.as_deref());
             let agent_label = agent
                 .display_agent
                 .as_deref()
                 .or(agent.name.as_deref())
+                .or(agent.title.as_deref())
+                .or(pane_label)
                 .or(agent.agent.as_deref())
                 .unwrap_or("agent");
             let primary = workspace
