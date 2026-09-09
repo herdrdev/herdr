@@ -821,6 +821,13 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         other => panic!("expected pane surface, got {other:?}"),
     };
 
+    let baseline = server.clients[&7]
+        .render_state
+        .last_pane_surface()
+        .expect("initial baseline");
+    let cells_ptr = baseline.frame.cells.as_ptr();
+    let untouched_symbol_ptr = baseline.frame.cells.last().unwrap().symbol.as_ptr();
+
     server
         .app
         .state
@@ -846,6 +853,15 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         }
         other => panic!("expected pane surface patch, got {other:?}"),
     }
+    let patched = server.clients[&7].render_state.last_pane_surface().unwrap();
+    assert_eq!(
+        (
+            patched.frame.cells.as_ptr(),
+            patched.frame.cells.last().unwrap().symbol.as_ptr()
+        ),
+        (cells_ptr, untouched_symbol_ptr),
+        "a text patch must preserve the frame and unchanged cell storage"
+    );
     server
         .app
         .state
@@ -855,6 +871,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     assert!(server.render_retained_pane_surface_and_stream(&sources));
     match read_server_message(render_rx.recv().expect("metadata-only pane surface patch")) {
         ServerMessage::PaneSurfacePatch(patch) => {
+            assert!(patch.rows.is_empty(), "mouse modes only change metadata");
             assert_eq!(patch.panes.len(), 1);
             assert!(!patch.panes[0].mouse_reporting);
             assert!(!patch.panes[0].sgr_pixel_mouse);
@@ -864,8 +881,14 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     let retained = server.clients[&7]
         .render_state
         .last_pane_surface()
-        .expect("committed retained surface")
-        .clone();
+        .expect("committed retained surface");
+    assert_eq!(retained.frame.cells.as_ptr(), cells_ptr);
+    assert_eq!(
+        retained.frame.cells.last().unwrap().symbol.as_ptr(),
+        untouched_symbol_ptr,
+        "retained updates must not copy unchanged screen cells"
+    );
+    let retained = retained.clone();
     server
         .clients
         .get_mut(&7)
@@ -1135,6 +1158,47 @@ async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
 }
 
 #[tokio::test]
+async fn late_retained_fallback_leaves_all_client_baselines_unchanged() {
+    let mut server = test_headless_server();
+    let pane_id = install_shared_view_test_runtime(&mut server);
+    let (_first_control, first_render) = connect_matching_test_shell(&mut server, 7);
+    let (_second_control, second_render) = connect_matching_test_shell(&mut server, 8);
+    server.render_and_stream();
+    let _ = recv_pane_surface(&first_render, "first baseline");
+    let _ = recv_pane_surface(&second_render, "second baseline");
+
+    // Foreground renders last. Its old hyperlink forces a fallback after the first plan.
+    server.foreground_client_id = Some(8);
+    let crate::server::render_stream::ClientRenderState::Semantic { last_surface, .. } =
+        &mut server.clients.get_mut(&8).unwrap().render_state
+    else {
+        panic!("semantic client");
+    };
+    let linked = last_surface.as_mut().unwrap();
+    linked.frame.hyperlinks.push("https://example.com".into());
+    linked.frame.cells[0].hyperlink = Some(0);
+    let before = [7, 8].map(|id| {
+        server.clients[&id]
+            .render_state
+            .last_pane_surface()
+            .unwrap()
+            .clone()
+    });
+
+    write_shared_test_pane(&mut server, pane_id, b"\rNEXT\x1b[?1003h");
+    assert!(!server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    assert!(first_render.try_recv().is_err());
+    assert!(second_render.try_recv().is_err());
+    for (id, expected) in [7, 8].into_iter().zip(before) {
+        assert_eq!(
+            server.clients[&id].render_state.last_pane_surface(),
+            Some(&expected)
+        );
+    }
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_peer() {
     let mut server = test_headless_server();
     let pane_id = install_shared_view_test_runtime(&mut server);
@@ -1156,13 +1220,23 @@ async fn backpressured_shell_does_not_disable_retained_patches_for_responsive_pe
         ServerMessage::PaneSurfacePatch(_)
     ));
 
-    write_shared_test_pane(&mut server, pane_id, b"\rTWO");
+    let slow_baseline = server.clients[&8]
+        .render_state
+        .last_pane_surface()
+        .unwrap()
+        .clone();
+    write_shared_test_pane(&mut server, pane_id, b"\rTWO\x1b[?1003h");
     assert!(server.render_retained_pane_surface_and_stream(&sources));
     assert!(matches!(
         read_server_message(responsive_render.recv().expect("responsive second patch")),
         ServerMessage::PaneSurfacePatch(_)
     ));
     assert_eq!(server.clients[&8].deferred_render(), DeferredRender::Full);
+    assert_eq!(
+        server.clients[&8].render_state.last_pane_surface(),
+        Some(&slow_baseline),
+        "queue-full must not advance cells, metadata, cursor, or revision"
+    );
 
     write_shared_test_pane(&mut server, pane_id, b"\rTHREE");
     assert!(server.render_retained_pane_surface_and_stream(&sources));
