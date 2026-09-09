@@ -895,10 +895,10 @@ impl HeadlessServer {
         if reconcile || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }
+        let focus_after = self.shell_focus_target(client_id);
         if let Some(all_focus_before) = all_focus_before {
             self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
         } else {
-            let focus_after = self.shell_focus_target(client_id);
             let focused_tabs_after = self.focused_shell_tabs();
             self.app.accept_current_focus_without_events();
             self.send_shell_navigation_focus_events(
@@ -907,6 +907,12 @@ impl HeadlessServer {
                 &focused_tabs_before,
                 &focused_tabs_after,
             );
+        }
+        if focus_before != focus_after {
+            if let Some(target) = focus_after {
+                self.app
+                    .emit_focus_api_events(target.workspace_index, target.pane_id);
+            }
         }
         let geometry_changed = method_claims_geometry
             && if reconcile {

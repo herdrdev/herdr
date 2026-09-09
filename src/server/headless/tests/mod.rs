@@ -1595,6 +1595,119 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
 }
 
 #[tokio::test]
+async fn client_local_navigation_emits_pane_focused_only_when_that_client_moves() {
+    use api::schema::{EventData, Method, PaneTarget, TabTarget};
+
+    let event_hub = api::EventHub::default();
+    let mut server = test_headless_server_with_event_hub(event_hub.clone());
+    let mut workspace = crate::workspace::Workspace::test_new("plugin-focus-events");
+    let first_pane = workspace.tabs[0].root_pane;
+    let second_tab = workspace.test_add_tab(Some("second"));
+    let second_pane = workspace.tabs[second_tab].root_pane;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+    let first_pane_id = server.app.public_pane_id(0, first_pane).unwrap();
+    let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
+    let workspace_id = server.app.public_workspace_id(0);
+
+    let (first_control, _) = connect_matching_test_shell(&mut server, 61);
+    let (second_control, _) = connect_matching_test_shell(&mut server, 62);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+
+    let first_tab = TabTarget {
+        tab_id: first_tab_id,
+    };
+    let second_tab = TabTarget {
+        tab_id: second_tab_id,
+    };
+    let cases = [
+        (
+            61,
+            Method::TabFocus(second_tab.clone()),
+            Some(&second_pane_id),
+        ),
+        // Both clients selecting the same destination must each notify plugins.
+        (
+            62,
+            Method::TabFocus(second_tab.clone()),
+            Some(&second_pane_id),
+        ),
+        (61, Method::TabFocus(second_tab.clone()), None),
+        (61, Method::TabFocus(first_tab), Some(&first_pane_id)),
+        // Switching the server's default to this client's unchanged tab is not navigation.
+        (
+            62,
+            Method::PaneFocus(PaneTarget {
+                pane_id: second_pane_id.clone(),
+            }),
+            None,
+        ),
+        (
+            62,
+            Method::PaneFocus(PaneTarget {
+                pane_id: first_pane_id.clone(),
+            }),
+            Some(&first_pane_id),
+        ),
+        (
+            61,
+            Method::TabFocus(second_tab.clone()),
+            Some(&second_pane_id),
+        ),
+        (61, Method::TabClose(second_tab), Some(&first_pane_id)),
+    ];
+    for (client_id, method, expected_pane) in cases {
+        let other_client = if client_id == 61 { 62 } else { 61 };
+        let other_focus = server.shell_focus_target(other_client);
+        let sequence = event_hub.current_sequence();
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        server.handle_client_shell_api_request(
+            client_id,
+            api::ApiRequestMessage {
+                request: api::schema::Request {
+                    id: "navigate".into(),
+                    method,
+                },
+                respond_to,
+                response_write_complete: None,
+                stream_active: None,
+            },
+        );
+        let response = response_rx.recv().expect("navigation response");
+        assert!(
+            serde_json::from_str::<api::schema::SuccessResponse>(&response).is_ok(),
+            "{response}"
+        );
+        server.app.sync_focus_events();
+
+        let focused = event_hub
+            .events_after(sequence)
+            .into_iter()
+            .filter_map(|(_, event)| match event.data {
+                EventData::PaneFocused {
+                    pane_id,
+                    workspace_id,
+                } => Some((pane_id, workspace_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let expected = expected_pane
+            .map(|pane_id| (pane_id.clone(), workspace_id.clone()))
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(focused, expected, "client {client_id}");
+        assert_eq!(server.shell_focus_target(other_client), other_focus);
+    }
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn public_focus_moves_shell_focus_between_tabs() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("public-focus-events");

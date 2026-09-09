@@ -821,6 +821,9 @@ that workspace.
 Pane event subscriptions include `pane.created`, `pane.updated`, `pane.closed`, `pane.focused`,
 `pane.moved`, `pane.exited`, `pane.agent_detected`,
 `pane.output_matched`, `pane.agent_status_changed`, and `pane.scroll_changed`.
+`pane.focused` also reports manual pane selection changes from any client attached
+to this server. It does not move other clients' views, and its payload does not
+identify the client. Selecting an already-selected pane does not emit it again.
 Terminal-title changes can emit `pane.updated`, but spinner-only raw-title changes do not emit it when `terminal_title_stripped` is unchanged.
 `pane.scroll_changed` is scoped to one `pane_id` and emits `pane_id`,
 `workspace_id`, and the current `scroll` metrics whenever Herdr observes a
