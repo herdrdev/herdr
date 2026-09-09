@@ -1220,7 +1220,7 @@ fn url_spans(cells: &[TextCell]) -> Vec<CellSpan> {
             || starts_with_chars(&cells[start..], "https://")
         {
             let mut end = start;
-            while end + 1 < cells.len() && !cells[end + 1].ch.is_whitespace() {
+            while end + 1 < cells.len() && !is_url_boundary_char(cells[end + 1].ch) {
                 end += 1;
             }
             if let Some(span) = trim_url_edges(cells, CellSpan { start, end }) {
@@ -1377,7 +1377,7 @@ fn url_span_at_column(cells: &[TextCell], clicked_idx: usize) -> Option<CellSpan
             || starts_with_chars(&cells[start..], "https://")
         {
             let mut end = start;
-            while end + 1 < cells.len() && !cells[end + 1].ch.is_whitespace() {
+            while end + 1 < cells.len() && !is_url_boundary_char(cells[end + 1].ch) {
                 end += 1;
             }
             if clicked_idx >= start && clicked_idx <= end {
@@ -1404,7 +1404,17 @@ fn trim_url_edges(cells: &[TextCell], span: CellSpan) -> Option<CellSpan> {
     (start <= end).then_some(CellSpan { start, end })
 }
 
+/// Cells that end a URL span: whitespace, plus the box-drawing and block glyphs
+/// pane apps draw as panel borders. Those borders can sit right after a link once
+/// the unwritten padding cells between them are dropped from the extracted row.
+fn is_url_boundary_char(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '\u{2500}'..='\u{259F}')
+}
+
 fn should_trim_trailing_url_cell(cells: &[TextCell], start: usize, end: usize) -> bool {
+    if is_url_boundary_char(cells[end].ch) {
+        return true;
+    }
     match cells[end].ch {
         '"' | '\'' | '`' | '.' | ',' | ';' | ':' | '!' | '?' => true,
         ')' => !trailing_url_closer_is_balanced(cells, start, end, '(', ')'),
@@ -2486,6 +2496,27 @@ mod tests {
             None
         );
         assert_eq!(selected_url("open file:///tmp/report", "file"), None);
+    }
+
+    #[test]
+    fn url_at_column_stops_at_box_drawing_border_cells() {
+        // A bordered panel row whose blank padding was dropped on extraction
+        // leaves the right border glyphs directly after the link.
+        assert_eq!(
+            selected_url(
+                "│ Draft PR is up: https://example.com/pull/721││ next",
+                "example"
+            ),
+            Some("https://example.com/pull/721")
+        );
+        assert_eq!(
+            selected_url("┃https://example.com/docs┃", "example"),
+            Some("https://example.com/docs")
+        );
+        assert_eq!(
+            selected_url("https://example.com/a▌", "example"),
+            Some("https://example.com/a")
+        );
     }
 
     #[test]
