@@ -485,7 +485,7 @@ test "lz4 differential light" {
 test "lz4 differential exhaustive" {
     // Slow. Enable explicitly, ideally together with a test filter:
     //   GHOSTTY_LZ4_SLOW=1 zig build test -Dtest-filter="lz4 differential"
-    if (!std.process.hasEnvVarConstant("GHOSTTY_LZ4_SLOW"))
+    if (!std.testing.environ.containsConstant("GHOSTTY_LZ4_SLOW"))
         return error.SkipZigTest;
 
     // Several independent seeds; the suite is deterministic per seed.

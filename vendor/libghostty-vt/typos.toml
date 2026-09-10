@@ -28,6 +28,8 @@ extend-exclude = [
   "valgrind.supp",
   # Fuzz corpus (binary test inputs)
   "test/fuzz-libghostty/corpus/*",
+  # Annotated binary snapshot fixtures
+  "src/terminal/snapshot/testdata/*.hex",
   # Other
   "*.pdf",
   "*.data",
@@ -57,6 +59,7 @@ extend-ignore-re = [
 Pn = "Pn"
 thr = "thr"
 # Swift oddities
+Datas = "Datas"
 Requestor = "Requestor"
 iterm = "iterm"
 ACCES = "ACCES"
@@ -78,6 +81,9 @@ rin = "rin"
 ower = "ower"
 # OpenType table names
 loca = "loca"
+# TinyIo
+tio = "tio"
+WRONLY = "WRONLY"
 
 [type.po]
 extend-glob = ["*.po"]

@@ -146,12 +146,12 @@ pub const MOD_CTRL: u16 = ffi::GHOSTTY_MODS_CTRL as u16;
 pub const MOD_ALT: u16 = ffi::GHOSTTY_MODS_ALT as u16;
 pub const MOD_SUPER: u16 = ffi::GHOSTTY_MODS_SUPER as u16;
 
-pub const KEY_ENTER: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ENTER;
-pub const KEY_UP: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP;
-pub const KEY_DOWN: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_DOWN;
-pub const KEY_LEFT: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_LEFT;
-pub const KEY_RIGHT: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_RIGHT;
-pub const KEY_A: u32 = ffi::GhosttyKey_GHOSTTY_KEY_A;
+pub const KEY_ENTER: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_ENTER;
+pub const KEY_UP: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP;
+pub const KEY_DOWN: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_DOWN;
+pub const KEY_LEFT: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_LEFT;
+pub const KEY_RIGHT: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_RIGHT;
+pub const KEY_A: ffi::GhosttyKey = ffi::GhosttyKey_GHOSTTY_KEY_A;
 
 pub const MOUSE_ACTION_PRESS: ffi::GhosttyMouseAction =
     ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS;
@@ -343,6 +343,14 @@ pub struct CursorViewport {
     pub x: u16,
     pub y: u16,
     pub wide_tail: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderCursor {
+    pub viewport: Option<CursorViewport>,
+    pub visible: bool,
+    pub blinking: bool,
+    pub visual_style: CursorVisualStyle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -557,12 +565,25 @@ unsafe extern "C" fn clipboard_write_trampoline(
     _terminal: ffi::GhosttyTerminal,
     userdata: *mut c_void,
     write: *const ffi::GhosttyClipboardWrite,
-) -> ffi::GhosttyClipboardWriteResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+) {
+    if write.is_null() || unsafe { (*write).size } < mem::size_of::<ffi::GhosttyClipboardWrite>() {
+        return;
+    }
+    // The reply and request are borrowed only until this callback returns.
+    let Some(reply) = (unsafe { (*write).reply }) else {
+        return;
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // SAFETY: libghostty-vt owns these values for the synchronous callback.
         unsafe { capture_clipboard_write(userdata, write) }
     }))
-    .unwrap_or(ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA)
+    .unwrap_or(ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA);
+    let response = ffi::GhosttyClipboardWriteReply {
+        size: mem::size_of::<ffi::GhosttyClipboardWriteReply>(),
+        result,
+        remember: false,
+    };
+    unsafe { reply(write, &response) };
 }
 
 unsafe fn capture_clipboard_write(
@@ -798,14 +819,9 @@ pub struct Terminal {
 impl Terminal {
     pub fn new(cols: u16, rows: u16, max_scrollback: usize) -> Result<Self, Error> {
         let mut raw = ptr::null_mut();
-        let options = ffi::GhosttyTerminalOptions {
-            cols,
-            rows,
-            max_scrollback,
-        };
-        // SAFETY: valid out pointer and options, null allocator means default allocator.
+        // SAFETY: valid out pointer, null allocator means default allocator.
         unsafe {
-            ffi::ghostty_terminal_new(ptr::null(), &mut raw, options).into_result()?;
+            ffi::ghostty_terminal_new(ptr::null(), &mut raw, cols, rows).into_result()?;
         }
 
         let mut terminal = Self {
@@ -826,7 +842,35 @@ impl Terminal {
         };
         let userdata = (&mut *terminal.callback_state as *mut TerminalCallbackState).cast();
         let glyph_protocol = false;
+        let terminfo_name = ffi::GhosttyString {
+            ptr: crate::pane::PANE_TERM.as_ptr().cast(),
+            len: crate::pane::PANE_TERM.len(),
+        };
+        let grapheme_default = ffi::GhosttyTerminalModeConfig {
+            mode: MODE_GRAPHEME_CLUSTER,
+            value: true,
+        };
+        let clipboard_callback: ffi::GhosttyTerminalClipboardWriteFn =
+            Some(clipboard_write_trampoline);
         unsafe {
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
+                (&terminfo_name as *const ffi::GhosttyString).cast(),
+            )
+            .into_result()?;
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                (&max_scrollback as *const usize).cast(),
+            )
+            .into_result()?;
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
+                (&grapheme_default as *const ffi::GhosttyTerminalModeConfig).cast(),
+            )
+            .into_result()?;
             ffi::ghostty_terminal_set(
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_USERDATA,
@@ -854,7 +898,7 @@ impl Terminal {
             ffi::ghostty_terminal_set(
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
-                (clipboard_write_trampoline as *const ()).cast(),
+                clipboard_callback.map_or(ptr::null(), |callback| (callback as *const ()).cast()),
             )
             .into_result()?;
             ffi::ghostty_terminal_set(
@@ -978,6 +1022,12 @@ impl Terminal {
         install_png_decoder_once();
         let storage_limit = KITTY_IMAGE_STORAGE_LIMIT_BYTES;
         let enable_medium = true;
+        let temp_dir = std::env::temp_dir();
+        let temp_dir = temp_dir.to_string_lossy();
+        let temp_dir = ffi::GhosttyString {
+            ptr: temp_dir.as_ptr().cast(),
+            len: temp_dir.len(),
+        };
         unsafe {
             ffi::ghostty_terminal_set(
                 self.raw,
@@ -994,7 +1044,7 @@ impl Terminal {
             ffi::ghostty_terminal_set(
                 self.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE,
-                (&enable_medium as *const bool).cast(),
+                (&temp_dir as *const ffi::GhosttyString).cast(),
             )
             .into_result()?;
             ffi::ghostty_terminal_set(
@@ -1052,13 +1102,28 @@ impl Terminal {
     }
 
     pub fn mode_get(&self, mode: u16) -> Result<bool, Error> {
-        let mut out = false;
-        unsafe { ffi::ghostty_terminal_mode_get(self.raw, mode, &mut out).into_result()? };
-        Ok(out)
+        let mut config = ffi::GhosttyTerminalModeConfig { mode, value: false };
+        unsafe {
+            ffi::ghostty_terminal_get(
+                self.raw,
+                ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_MODE,
+                (&mut config as *mut ffi::GhosttyTerminalModeConfig).cast(),
+            )
+            .into_result()?;
+        }
+        Ok(config.value)
     }
 
     pub fn mode_set(&mut self, mode: u16, value: bool) -> Result<(), Error> {
-        unsafe { ffi::ghostty_terminal_mode_set(self.raw, mode, value).into_result() }
+        let config = ffi::GhosttyTerminalModeConfig { mode, value };
+        unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MODE,
+                (&config as *const ffi::GhosttyTerminalModeConfig).cast(),
+            )
+            .into_result()
+        }
     }
 
     pub fn kitty_keyboard_flags(&self) -> Result<u8, Error> {
@@ -1280,64 +1345,6 @@ impl Terminal {
             unwrap,
             true,
         )
-    }
-
-    pub fn keyboard_state_ansi(&self) -> Result<String, Error> {
-        self.format_keyboard_state_ansi(false)
-    }
-
-    pub fn kitty_keyboard_state_ansi(&self) -> Result<String, Error> {
-        self.format_keyboard_state_ansi(true)
-    }
-
-    fn format_keyboard_state_ansi(&self, kitty_keyboard: bool) -> Result<String, Error> {
-        let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
-        let options = ffi::GhosttyFormatterTerminalOptions {
-            size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-            emit: FormatterFormat::Vt.as_raw(),
-            unwrap: false,
-            trim: false,
-            extra: ffi::GhosttyFormatterTerminalExtra {
-                size: mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-                keyboard: true,
-                screen: ffi::GhosttyFormatterScreenExtra {
-                    size: mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                    kitty_keyboard,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            selection: ptr::null(),
-        };
-        unsafe {
-            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
-                .into_result()?;
-        }
-
-        let mut out_ptr = ptr::null_mut();
-        let mut out_len = 0usize;
-        let result = unsafe {
-            ffi::ghostty_formatter_format_alloc(formatter, ptr::null(), &mut out_ptr, &mut out_len)
-        };
-        unsafe {
-            ffi::ghostty_formatter_free(formatter);
-        }
-        result.into_result()?;
-
-        let text = if out_len == 0 {
-            String::new()
-        } else {
-            let bytes = unsafe { slice::from_raw_parts(out_ptr.cast_const(), out_len) };
-            String::from_utf8_lossy(bytes).into_owned()
-        };
-
-        if !out_ptr.is_null() {
-            unsafe {
-                ffi::ghostty_free(ptr::null(), out_ptr, out_len);
-            }
-        }
-
-        Ok(text)
     }
 
     fn read_formatted_selection(
@@ -2494,43 +2501,34 @@ impl RenderState {
         Ok(Dirty::from_raw(out))
     }
 
-    pub fn cursor_visible(&self) -> Result<bool, Error> {
-        self.get_bool(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE)
-    }
-
-    pub fn cursor_blinking(&self) -> Result<bool, Error> {
-        self.get_bool(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING)
-    }
-
-    pub fn cursor_visual_style(&self) -> Result<CursorVisualStyle, Error> {
-        let mut out: ffi::GhosttyRenderStateCursorVisualStyle = 0;
-        // SAFETY: out points to the matching enum storage for the requested data kind.
+    pub fn cursor(&self) -> Result<RenderCursor, Error> {
+        let mut cursor = ffi::GhosttyRenderStateCursor {
+            size: mem::size_of::<ffi::GhosttyRenderStateCursor>(),
+            ..Default::default()
+        };
         unsafe {
             ffi::ghostty_render_state_get(
                 self.raw,
-                ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE,
-                (&mut out as *mut ffi::GhosttyRenderStateCursorVisualStyle).cast(),
+                ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR,
+                (&mut cursor as *mut ffi::GhosttyRenderStateCursor).cast(),
             )
             .into_result()?;
         }
-        Ok(CursorVisualStyle::from_raw(out))
-    }
-
-    pub fn cursor_viewport(&self) -> Result<Option<CursorViewport>, Error> {
-        if !self.get_bool(
-            ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
-        )? {
-            return Ok(None);
-        }
-        Ok(Some(CursorViewport {
-            x: self
-                .get_u16(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X)?,
-            y: self
-                .get_u16(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y)?,
-            wide_tail: self.get_bool(
-                ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_WIDE_TAIL,
-            )?,
-        }))
+        Ok(RenderCursor {
+            // Upstream leaves these fields undefined when the cursor is offscreen.
+            viewport: if cursor.viewport_has_value {
+                Some(CursorViewport {
+                    x: cursor.viewport_x,
+                    y: cursor.viewport_y,
+                    wide_tail: cursor.wide_tail,
+                })
+            } else {
+                None
+            },
+            visible: cursor.visible,
+            blinking: cursor.blinking,
+            visual_style: CursorVisualStyle::from_raw(cursor.visual_style),
+        })
     }
 
     pub fn colors(&self) -> Result<RenderColors, Error> {
@@ -2539,13 +2537,22 @@ impl RenderState {
             ..Default::default()
         };
         unsafe {
-            ffi::ghostty_render_state_colors_get(self.raw, &mut colors).into_result()?;
+            ffi::ghostty_render_state_get(
+                self.raw,
+                ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_COLORS,
+                (&mut colors as *mut ffi::GhosttyRenderStateColors).cast(),
+            )
+            .into_result()?;
         }
         Ok(RenderColors {
             background: colors.background.into(),
             foreground: colors.foreground.into(),
             palette: colors.palette.map(Into::into),
         })
+    }
+
+    pub fn clean(&mut self) -> Result<(), Error> {
+        unsafe { ffi::ghostty_render_state_clean(self.raw).into_result() }
     }
 
     pub fn set_dirty(&mut self, dirty: Dirty) -> Result<(), Error> {
@@ -2589,15 +2596,6 @@ impl RenderState {
         }
         Ok(out)
     }
-
-    fn get_bool(&self, data: ffi::GhosttyRenderStateData) -> Result<bool, Error> {
-        let mut out = false;
-        unsafe {
-            ffi::ghostty_render_state_get(self.raw, data, (&mut out as *mut bool).cast())
-                .into_result()?;
-        }
-        Ok(out)
-    }
 }
 
 // SAFETY: these opaque handles are only used behind external synchronization in pane runtime.
@@ -2627,7 +2625,7 @@ impl KeyEvent {
         unsafe { ffi::ghostty_key_event_set_action(self.raw, action) }
     }
 
-    pub fn set_key(&mut self, key: u32) {
+    pub fn set_key(&mut self, key: ffi::GhosttyKey) {
         unsafe { ffi::ghostty_key_event_set_key(self.raw, key) }
     }
 
@@ -2844,6 +2842,14 @@ impl<'a> RowIter<'a> {
     pub fn next(&mut self) -> bool {
         // SAFETY: iterator handle is valid while self is alive.
         unsafe { ffi::ghostty_render_state_row_iterator_next(self.iterator.raw) }
+    }
+
+    pub fn next_dirty(&mut self) -> Option<u16> {
+        let mut y = 0u16;
+        // SAFETY: iterator is live and y matches the viewport-coordinate output type.
+        let advanced =
+            unsafe { ffi::ghostty_render_state_row_iterator_next_dirty(self.iterator.raw, &mut y) };
+        advanced.then_some(y)
     }
 
     pub fn dirty(&self) -> Result<bool, Error> {
@@ -3294,6 +3300,7 @@ impl<'a> RowCellIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn write_numbered_lines(terminal: &mut Terminal, count: usize) {
         for i in 0..count {
@@ -3413,8 +3420,8 @@ mod tests {
             .generation;
         assert_ne!(first_generation, 0);
 
-        // Same id and size, different pixels.
-        terminal.write(b"\x1b_Ga=t,f=32,t=d,i=7,s=1,v=1,q=2;AAAAAA==\x1b\\");
+        // Retransmission removes old placements; transmit-and-display replaces it.
+        terminal.write(b"\x1b[H\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;AAAAAA==\x1b\\");
         let second = terminal
             .kitty_image_placements_with_data_filter(|_| true)
             .unwrap();
@@ -3486,7 +3493,11 @@ mod tests {
         terminal.scroll_viewport_row(0);
         assert_eq!(terminal.kitty_image_placements().unwrap().len(), 1);
 
+        // Delete-visible must preserve images in scrollback, even while viewed.
         terminal.write(b"\x1b_Ga=d,d=A\x1b\\");
+        assert_eq!(terminal.kitty_graphics_generation().unwrap(), placed);
+        assert_eq!(terminal.kitty_image_placements().unwrap().len(), 1);
+        terminal.write(b"\x1b_Ga=d,d=I,i=1\x1b\\");
         let deleted = terminal.kitty_graphics_generation().unwrap();
         assert_ne!(deleted, placed);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
@@ -3540,9 +3551,20 @@ mod tests {
         assert!(terminal
             .get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_FILE)
             .unwrap());
-        assert!(terminal
-            .get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE)
-            .unwrap());
+        let mut temp_dir = ffi::GhosttyString::default();
+        unsafe {
+            ffi::ghostty_terminal_get(
+                terminal.raw,
+                ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_TEMP_FILE,
+                (&mut temp_dir as *mut ffi::GhosttyString).cast(),
+            )
+            .into_result()
+            .unwrap();
+            assert_eq!(
+                borrowed_bytes(temp_dir).unwrap(),
+                std::env::temp_dir().to_string_lossy().as_bytes()
+            );
+        }
         assert!(terminal
             .get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_MEDIUM_SHARED_MEM)
             .unwrap());
@@ -3874,6 +3896,59 @@ mod tests {
     }
 
     #[test]
+    fn raw_resize_preserves_content_without_replaying_terminal_effects() {
+        let mut terminal = Terminal::new(20, 6, 100_000).unwrap();
+        terminal.write(b"header\r\n\x1b[6;1Htail\x1b[6;18H");
+        for (cols, rows) in [(10, 3), (30, 8), (8, 4), (20, 6)] {
+            terminal.resize(cols, rows, 8, 16).unwrap();
+            terminal.write(b"X");
+            let text = terminal
+                .read_text_screen(
+                    (0, 0),
+                    (cols - 1, terminal.total_rows().unwrap() as u32 - 1),
+                    false,
+                )
+                .unwrap();
+            assert!(
+                text.contains("tail"),
+                "lost tail after {cols}x{rows}: {text:?}"
+            );
+            assert_eq!(text.matches("tail").count(), 1);
+            assert!(terminal.cursor_y().unwrap() < rows);
+        }
+        terminal.write(b"\x1b[2J\x1b[H");
+        terminal.resize(12, 3, 8, 16).unwrap();
+        assert!(terminal
+            .read_text_viewport((0, 0), (11, 2), false)
+            .unwrap()
+            .trim()
+            .is_empty());
+    }
+
+    #[test]
+    fn clipboard_queries_never_disclose_contents_and_split_writes_complete_once() {
+        for suffix in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let bytes = [b"\x1b]52;c;YQBi".as_slice(), suffix].concat();
+            for split in 0..=bytes.len() {
+                let mut terminal = Terminal::new(10, 3, 0).unwrap();
+                let replies = Arc::new(Mutex::new(Vec::new()));
+                let captured = Arc::clone(&replies);
+                terminal
+                    .set_write_pty_callback(move |bytes| {
+                        captured.lock().unwrap().extend_from_slice(bytes)
+                    })
+                    .unwrap();
+                terminal.write(&bytes[..split]);
+                terminal.write(&bytes[split..]);
+                assert_eq!(terminal.take_clipboard_writes(), vec![b"a\0b".to_vec()]);
+                terminal.write(b"\x1b]52;c;?\x07\x1b]52;p;YQBi\x07");
+                assert!(terminal.take_clipboard_writes().is_empty());
+                assert!(replies.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn active_screen_and_cursor_visibility_contract() {
         let mut terminal = Terminal::new(12, 3, 0).unwrap();
         let mut render_state = RenderState::new().unwrap();
@@ -3886,10 +3961,10 @@ mod tests {
         );
 
         render_state.update(&terminal).unwrap();
-        assert!(render_state.cursor_visible().unwrap());
+        assert!(render_state.cursor().unwrap().visible);
         terminal.write(b"\x1b[?25l");
         render_state.update(&terminal).unwrap();
-        assert!(!render_state.cursor_visible().unwrap());
+        assert!(!render_state.cursor().unwrap().visible);
 
         terminal.write(b"\x1b[?1049h\x1b[HALT");
         assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Alternate);
@@ -3972,6 +4047,8 @@ mod tests {
     fn grapheme_cluster_mode_is_default_and_survives_full_reset() {
         let mut terminal = Terminal::new(80, 3, 100).unwrap();
         assert!(terminal.mode_get(MODE_GRAPHEME_CLUSTER).unwrap());
+        terminal.mode_set(MODE_GRAPHEME_CLUSTER, false).unwrap();
+        assert!(!terminal.mode_get(MODE_GRAPHEME_CLUSTER).unwrap());
 
         terminal.write(b"\x1bc");
 
@@ -4013,8 +4090,21 @@ mod tests {
                 assert!(!rows.dirty().unwrap());
             }
         }
+        {
+            let mut iterator = RowIterator::new().unwrap();
+            let mut rows = render_state.populate_row_iterator(&mut iterator).unwrap();
+            assert_eq!(rows.next_dirty(), Some(0));
+            assert_eq!(rows.next_dirty(), Some(1));
+            assert_eq!(rows.next_dirty(), Some(2));
+            assert_eq!(rows.next_dirty(), None);
+        }
         render_state.set_dirty(Dirty::Clean).unwrap();
         assert_eq!(render_state.dirty().unwrap(), Dirty::Clean);
+        {
+            let mut iterator = RowIterator::new().unwrap();
+            let mut rows = render_state.populate_row_iterator(&mut iterator).unwrap();
+            assert_eq!(rows.next_dirty(), None);
+        }
 
         terminal.write(b"A");
         render_state.update(&terminal).unwrap();
@@ -4026,12 +4116,12 @@ mod tests {
             let mut rows = render_state
                 .populate_row_iterator(&mut row_iterator)
                 .unwrap();
-            while rows.next() {
-                if rows.dirty().unwrap() {
-                    dirty_rows += 1;
-                    rows.clear_dirty().unwrap();
-                    assert!(!rows.dirty().unwrap());
-                }
+            while let Some(y) = rows.next_dirty() {
+                assert_eq!(y, 0);
+                assert!(rows.dirty().unwrap());
+                dirty_rows += 1;
+                rows.clear_dirty().unwrap();
+                assert!(!rows.dirty().unwrap());
             }
         }
         assert_eq!(dirty_rows, 1);
@@ -4073,20 +4163,45 @@ mod tests {
         contents: &[ffi::GhosttyClipboardContent],
         size: usize,
     ) -> ffi::GhosttyClipboardWriteResult {
+        unsafe extern "C" fn reply(
+            request: *const ffi::GhosttyClipboardWrite,
+            response: *const ffi::GhosttyClipboardWriteReply,
+        ) {
+            let state = unsafe {
+                &mut *((*request).ctx as *mut (ffi::GhosttyClipboardWriteResult, bool, usize))
+            };
+            state.0 = unsafe { (*response).result };
+            state.1 = unsafe { (*response).remember };
+            state.2 += 1;
+        }
+        let mut response = (
+            ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA,
+            false,
+            0usize,
+        );
         let request = ffi::GhosttyClipboardWrite {
             size,
             location: ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
             contents: contents.as_ptr(),
             contents_len: contents.len(),
+            ctx: (&mut response as *mut (ffi::GhosttyClipboardWriteResult, bool, usize)).cast(),
+            reply: Some(reply),
+            ..Default::default()
         };
-        // SAFETY: the request and its borrowed content live through this call.
+        // SAFETY: the request, reply state and borrowed content live through this call.
         unsafe {
             clipboard_write_trampoline(
                 terminal.raw,
                 (&mut *terminal.callback_state as *mut TerminalCallbackState).cast(),
                 &request,
-            )
+            );
         }
+        assert_eq!(
+            response.2,
+            usize::from(size >= mem::size_of::<ffi::GhosttyClipboardWrite>())
+        );
+        assert!(!response.1, "migration must not create clipboard grants");
+        response.0
     }
 
     #[test]

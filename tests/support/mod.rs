@@ -444,9 +444,13 @@ pub fn wait_for_message_variants(
     timeout: Duration,
     variants: &[u32],
 ) -> Result<bool, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
+    let read_timeout = Some(Duration::from_millis(200));
+    // Darwin can reject resetting the timeout after peer closure with queued data.
+    if stream.read_timeout().map_err(|e| e.to_string())? != read_timeout {
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(|e| e.to_string())?;
+    }
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match read_server_message(stream) {

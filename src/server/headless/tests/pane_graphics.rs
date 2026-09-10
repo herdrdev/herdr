@@ -221,11 +221,24 @@ async fn retained_unicode_image_arrives_after_fragmented_upload_without_reupload
     };
     assert_eq!(surface.graphics.placements.len(), 1);
     assert_eq!(surface.graphics.assets[0].data, [255, 0, 0, 255]);
-    // Replacing pixels under the same image ID must invalidate the delivered asset.
+    // Retransmission removes placements; recreating the virtual placement must
+    // invalidate the delivered asset without needing another text update.
     write_shared_test_pane(
         &mut server,
         pane_id,
         b"\x1b_Ga=t,f=32,t=d,i=1193046,s=1,v=1,q=2;AP8A/w==\x1b\\",
+    );
+    assert!(server.render_retained_pane_surface_and_stream(&sources));
+    let ServerMessage::PaneSurface(removed) =
+        read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
+    else {
+        panic!("retransmission must remove the virtual placement");
+    };
+    assert!(removed.graphics.placements.is_empty());
+    write_shared_test_pane(
+        &mut server,
+        pane_id,
+        b"\x1b_Ga=p,U=1,i=1193046,c=1,r=1,q=2\x1b\\",
     );
     assert!(server.render_retained_pane_surface_and_stream(&sources));
     let ServerMessage::PaneSurface(replaced) =

@@ -19,6 +19,7 @@ const Benchmark = @import("Benchmark.zig");
 const options = @import("options.zig");
 const Terminal = terminalpkg.Terminal;
 const Stream = terminalpkg.TerminalStream;
+const global = @import("../global.zig");
 
 const log = std.log.scoped(.@"terminal-stream-bench");
 
@@ -27,7 +28,7 @@ terminal: Terminal,
 stream: Stream,
 
 /// The file, opened in the setup function.
-data_f: ?std.fs.File = null,
+data_f: ?std.Io.File = null,
 
 pub const Options = struct {
     /// The size of the terminal. This affects benchmarking when
@@ -36,7 +37,13 @@ pub const Options = struct {
     @"terminal-rows": u16 = 80,
     @"terminal-cols": u16 = 120,
 
-    /// The data to read as a filepath. If this is "-" then
+    /// Enable opt-in continuation tracking on the stream.
+    @"continuation-enabled": bool = false,
+
+    /// Maximum continuation suffix retained when tracking is enabled.
+    @"continuation-max-bytes": usize = 1024 * 1024,
+
+    /// Pre-generated data from ghostty-gen. If this is "-" then
     /// we will read stdin. If this is unset, then we will
     /// do nothing (benchmark is a noop). It'd be more unixy to
     /// use stdin by default but I find that a hanging CLI command
@@ -54,13 +61,21 @@ pub fn create(
 
     ptr.* = .{
         .opts = opts,
-        .terminal = try .init(alloc, .{
+        .terminal = try .init(global.io(), alloc, .{
             .rows = opts.@"terminal-rows",
             .cols = opts.@"terminal-cols",
         }),
         .stream = undefined,
     };
-    ptr.stream = .initAlloc(alloc, .init(&ptr.terminal));
+    errdefer ptr.terminal.deinit(alloc);
+    ptr.stream = .init(.{
+        .allocator = alloc,
+        .handler = .init(&ptr.terminal),
+        .continuation_max_bytes = if (opts.@"continuation-enabled")
+            opts.@"continuation-max-bytes"
+        else
+            null,
+    });
 
     return ptr;
 }
@@ -85,8 +100,8 @@ fn setup(ptr: *anyopaque) Benchmark.Error!void {
     // Always reset our terminal state
     self.terminal.fullReset();
 
-    // Open our data file to prepare for reading. We can do more
-    // validation here eventually.
+    // Open our data file to prepare for reading. We can do more validation
+    // here eventually.
     assert(self.data_f == null);
     self.data_f = options.dataFile(self.opts.data) catch |err| {
         log.warn("error opening data file err={}", .{err});
@@ -97,7 +112,7 @@ fn setup(ptr: *anyopaque) Benchmark.Error!void {
 fn teardown(ptr: *anyopaque) void {
     const self: *TerminalStream = @ptrCast(@alignCast(ptr));
     if (self.data_f) |f| {
-        f.close();
+        f.close(global.io());
         self.data_f = null;
     }
 }
@@ -112,8 +127,10 @@ fn step(ptr: *anyopaque) Benchmark.Error!void {
     // aren't currently IO bound.
     const f = self.data_f orelse return;
 
-    var read_buf: [64 * 1024]u8 align(std.atomic.cache_line) = undefined;
-    var f_reader = f.reader(&read_buf);
+    // Unbuffered: readSliceShort below reads directly into `buf`,
+    // avoiding a per-chunk memcpy through an intermediate reader
+    // buffer that would pollute the measurement.
+    var f_reader = f.reader(global.io(), &.{});
     const r = &f_reader.interface;
 
     // This buffer size matches the read buffer size used by the
@@ -139,4 +156,12 @@ test TerminalStream {
 
     const bench = impl.benchmark();
     _ = try bench.run(.once);
+
+    const tracked: *TerminalStream = try .create(alloc, .{
+        .@"continuation-enabled" = true,
+    });
+    defer tracked.destroy(alloc);
+
+    const tracked_bench = tracked.benchmark();
+    _ = try tracked_bench.run(.once);
 }

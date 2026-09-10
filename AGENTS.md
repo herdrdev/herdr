@@ -140,6 +140,12 @@ just check              # formatting check + cargo nextest + maintenance script 
 
 Run `just check` before committing unless Can explicitly accepts narrower validation. Do not bypass failing checks; fix the failure or explain exactly why a narrower check is enough.
 
+Windows MSVC cross-compilation from Unix requires SDK/CRT headers and libraries.
+Set `LIBGHOSTTY_VT_WINDOWS_LIBC` to a Zig libc configuration file whose directories
+point to that SDK (the format is shown by `zig libc` on Windows). `just windows-lint`
+and the Windows stage of `just check` use this configuration. Native Windows builds
+auto-detect their installed SDK and do not require the override.
+
 Unit tests live next to the code (`#[cfg(test)] mod tests`). New `AppState` or `Workspace` behavior should be testable with `AppState::test_new()` and `Workspace::test_new()` without PTYs.
 
 For broad refactors or release-risk regressions, classify the risk before editing. Treat changes as refactor-risk when they touch two or more core surfaces, persisted state, protocol/API IDs, workspace/tab/pane identity, restore/handoff, agent detection authority, or UI/input state projection. Before moving code, identify the protected behavior and add or name characterization tests. Identity/state refactors should use the test-only invariants `AppState::assert_invariants_for_test()` or `Workspace::assert_invariants_for_test()` with adversarial state from `AppState::test_with_adversarial_identity_state()` or `Workspace::test_adversarial_identity_state()`. Run a roundtable for broad refactors and release-risk regressions, not for routine local fixes.
@@ -173,8 +179,8 @@ Before validating a fix on Windows, sync or apply the Linux worktree changes
 into `C:\work\repo`, then run the needed Windows build or test commands there.
 Reuse the shared Rust caches under `C:\Users\herdr\.cargo` and
 `C:\Users\herdr\.rustup`. Do not use WSL on the VM. The VM may have a newer
-Zig on `PATH`; Herdr currently requires Zig 0.15.2, so set
-`$env:ZIG = "C:\Users\herdr\zig-0.15.2\zig.exe"` before running Cargo commands
+Zig on `PATH`; Herdr currently requires Zig 0.16.0, so set
+`$env:ZIG = "C:\Users\herdr\zig-0.16.0\zig.exe"` before running Cargo commands
 that build the vendored libghostty-vt.
 
 After validation, leave `C:\work\repo` clean. Remove temporary files and delete

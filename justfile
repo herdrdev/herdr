@@ -88,6 +88,10 @@ integration-assets-test:
     bun test src/integration/assets/opencode/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-tui-session.test.ts
 
+# Regenerate the C API bindings with bindgen-cli 0.72.1
+libghostty-bindings *clang_args:
+    bash scripts/generate_libghostty_bindings.sh {{clang_args}}
+
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:
     scripts/build_vendored_libghostty_vt.sh

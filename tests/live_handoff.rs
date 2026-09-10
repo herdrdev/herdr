@@ -985,7 +985,6 @@ fn live_handoff_preserves_pane_process_io() {
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
-    drop(spawned);
     assert!(
         wait_for_message_variant(
             &mut client_stream,
@@ -995,6 +994,7 @@ fn live_handoff_preserves_pane_process_io() {
         .unwrap(),
         "connected client shell should receive live-handoff shutdown"
     );
+    drop(spawned);
     thread::sleep(Duration::from_millis(300));
     wait_for_api(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(5));
@@ -1359,7 +1359,7 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n/bin/sleep 30\n:\n",
             started_marker.display()
         ),
     )

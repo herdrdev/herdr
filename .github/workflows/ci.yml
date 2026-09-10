@@ -86,38 +86,25 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install Zig
-        if: runner.os != 'macOS'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: ${{ matrix.kind != 'windows' }}
 
-      - name: Restore Homebrew Zig cache
-        if: runner.os == 'macOS'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/Library/Caches/Homebrew/downloads
-          key: homebrew-zig-0.15-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: |
-            homebrew-zig-0.15-${{ runner.os }}-
-
-      - name: Install patched Zig on macOS
+      - name: Configure Zig cache on macOS
         if: runner.os == 'macOS'
         run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install zig@0.15
-          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
           echo "ZIG_GLOBAL_CACHE_DIR=$GITHUB_WORKSPACE/.zig-cache" >> "$GITHUB_ENV"
           echo "ZIG_LOCAL_CACHE_DIR=$GITHUB_WORKSPACE/.zig-cache" >> "$GITHUB_ENV"
-          "$(brew --prefix zig@0.15)/bin/zig" version
 
       - name: Restore Zig build cache
         if: runner.os == 'macOS' || matrix.kind == 'windows'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .zig-cache
-          key: zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.15.2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.15.2-
+            zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'
@@ -132,6 +119,13 @@ jobs:
       - name: Run checks
         if: matrix.kind == 'unix'
         run: just ci '${{ matrix.nextest_filter }}'
+
+      - name: Check scalar libghostty with runtime safety
+        if: runner.os == 'Linux'
+        env:
+          LIBGHOSTTY_VT_SIMD: "false"
+          LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
+        run: just test-one ghostty
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'
@@ -165,7 +159,7 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: false
 
       - name: Restore Cargo cache
