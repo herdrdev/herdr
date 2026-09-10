@@ -93,7 +93,7 @@ The UI uses the client's local theme, sidebar settings, and keybindings by defau
 
 Default agent rows show a `machine` token when multiple machines are present. Existing custom rows are preserved; add `machine` explicitly if you want that label in your layout. [Sidebar row layouts](/docs/configuration/#sidebar-row-layouts) also support conditional colors for machine labels.
 
-Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines may both contain `w1:p1` or an agent named `reviewer`. Selecting a machine in the UI does not retarget CLI commands running in an existing pane: they still use that pane's inherited session and socket. For remote automation, run commands on the intended host against the intended session and read its IDs there.
+Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines may both contain `w1:p1` or an agent named `reviewer`. Selecting a machine in the UI does not retarget CLI commands running in an existing pane: they still use that pane's inherited session and socket. For remote automation, use `herdr --machine <label-or-id> agent list`, then pass the same prefix when controlling those remote IDs. The CLI uses the saved profile's SSH target and session directly; it does not need an open TUI. Without `--machine`, existing session/socket routing is unchanged. See [CLI reference](/docs/cli-reference/#saved-ssh-machines) for supported commands, update requirements, and remote path rules.
 
 ## Updates and saved data
 

@@ -10,6 +10,32 @@ pub(crate) use attach::*;
 pub(crate) use host::run_remote_client_bridge;
 pub(crate) use saved::*;
 
+pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
+    match args {
+        [] => {
+            let path = crate::api::socket_path();
+            let stream = crate::ipc::connect_local_stream(&path).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to connect to remote Herdr API socket {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            crate::platform::forward_remote_bridge_stdio(stream)
+        }
+        [flag] if flag == "--check" => {
+            println!("herdr-api-bridge-v1");
+            Ok(())
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: herdr remote-api-bridge [--check]",
+        )),
+    }
+}
+
 pub(crate) fn print_saved_ssh_error_hint(err: &std::io::Error, target: &str) {
     if is_remote_host_key_error(err) {
         eprintln!(
