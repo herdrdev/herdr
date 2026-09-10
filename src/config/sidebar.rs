@@ -139,10 +139,10 @@ pub enum SpaceSidebarToken {
 }
 
 impl AgentSidebarToken {
-    pub(crate) fn style_for_value(&self, value: &str) -> SidebarTokenStyle {
+    pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
         match self {
             Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
-            _ => SidebarTokenStyle::default(),
+            _ => Some(SidebarTokenStyle::default()),
         }
     }
 
@@ -155,10 +155,10 @@ impl AgentSidebarToken {
 }
 
 impl SpaceSidebarToken {
-    pub(crate) fn style_for_value(&self, value: &str) -> SidebarTokenStyle {
+    pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
         match self {
             Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
-            _ => SidebarTokenStyle::default(),
+            _ => Some(SidebarTokenStyle::default()),
         }
     }
 

@@ -415,7 +415,7 @@ rows = [
 ]
 ```
 
-The first matching rule wins. Its specified style fields override the occurrence's defaults; unspecified fields inherit them. If no rule matches, the defaults remain. Matching uses the full token value before display truncation and does not change its text, separators, or visibility. A rule with no style fields stops matching and keeps the defaults.
+The first matching rule wins. Its specified style fields override the occurrence's defaults; unspecified fields inherit them. If no rule matches, the defaults remain. Matching uses the full token value before display truncation. Set `hide = true` on a rule to remove the matching token and its separator; rows with no remaining tokens also disappear. For example, `{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }` hides the machine token when its label is exactly `Local`. This compares the label, not the connection type. With `hide = false` or omitted, the token stays visible. A rule with no overrides still stops matching and keeps the defaults.
 
 `equals`, `contains`, and `starts_with` take strings and are case-sensitive. Add `ignore_case = true` for ASCII case-insensitive matching; non-ASCII characters remain case-sensitive. Empty strings follow ordinary string matching: empty `equals` matches only an empty value, while empty `contains` or `starts_with` matches any present value.
 

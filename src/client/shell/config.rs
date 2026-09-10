@@ -476,7 +476,10 @@ mod tests {
         );
         assert_eq!(shell.agents.row_gap, 2);
         assert_eq!(
-            shell.agents.rows[0][0].style_for_value("Local").bold,
+            shell.agents.rows[0][0]
+                .style_for_value("Local")
+                .unwrap()
+                .bold,
             Some(true)
         );
         let previous = shell.agents.clone();
