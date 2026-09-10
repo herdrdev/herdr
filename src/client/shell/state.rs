@@ -922,6 +922,8 @@ pub(crate) struct ClientShellState {
     pub(super) reveal_focused_tab: bool,
     pub(super) last_tab_bar_width: Option<u16>,
     pub(super) last_composed_size: Option<(u16, u16)>,
+    pub(super) last_composed_at: Option<std::time::Instant>,
+    pub(super) selection_repaint_deadline: Option<std::time::Instant>,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
@@ -1078,6 +1080,8 @@ impl ClientShellState {
             reveal_focused_tab: true,
             last_tab_bar_width: None,
             last_composed_size: None,
+            last_composed_at: None,
+            selection_repaint_deadline: None,
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,
@@ -1258,6 +1262,8 @@ impl ClientShellState {
         self.reveal_focused_tab = true;
         self.last_tab_bar_width = None;
         self.last_composed_size = None;
+        self.last_composed_at = None;
+        self.selection_repaint_deadline = None;
         self.pending_requests.clear();
         self.pane_scroll_in_flight.clear();
         self.pane_scroll_queued.clear();
@@ -1823,6 +1829,9 @@ impl ClientShellState {
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
         let default = std::time::Duration::from_millis(100);
         self.selection_autoscroll_deadline
+            .into_iter()
+            .chain(self.selection_repaint_deadline)
+            .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
     }

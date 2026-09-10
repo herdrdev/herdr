@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn selection_repaint_cadence_keeps_one_deadline_and_flushes_when_input_stops() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let now = std::time::Instant::now();
+    let ms = std::time::Duration::from_millis;
+    state.last_composed_at = Some(now);
+    for elapsed in [1, 4, 8, 12, 15] {
+        assert!(!state.request_selection_drag_repaint(now + ms(elapsed)));
+        assert_eq!(state.selection_repaint_deadline, Some(now + ms(16)));
+    }
+    assert_eq!(state.timer_delay(now + ms(8)), ms(8));
+    assert!(!state.tick_selection_autoscroll(now + ms(15)).repaint);
+    assert!(state.tick_selection_autoscroll(now + ms(16)).repaint);
+    assert!(state.selection_repaint_deadline.is_none());
+    assert!(!state.tick_selection_autoscroll(now + ms(17)).repaint);
+}
+
+#[test]
+fn selection_repaint_cadence_allows_immediate_paint_when_due() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let now = std::time::Instant::now();
+    assert!(state.request_selection_drag_repaint(now));
+    state.last_composed_at = Some(now);
+    assert!(state.request_selection_drag_repaint(now + std::time::Duration::from_millis(16)));
+    assert!(state.selection_repaint_deadline.is_none());
+}
+
+#[test]
+fn selection_repaint_cadence_does_not_leave_work_after_another_composition() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let now = std::time::Instant::now();
+    state.selection_repaint_deadline = Some(now);
+    state.compose(106, 20).expect("frame");
+    assert!(state.selection_repaint_deadline.is_none());
+    assert!(!state.tick_selection_autoscroll(now).repaint);
+}
+
+#[test]
+fn selection_release_copies_latest_position_before_deferred_paint() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("pane frame");
+    let pane = state.hits.panes[0].clone();
+    let mut mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    mouse.kind = MouseEventKind::Drag(MouseButton::Left);
+    mouse.column += 2;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    state.selection_repaint_deadline = Some(std::time::Instant::now());
+    mouse.kind = MouseEventKind::Up(MouseButton::Left);
+    let release = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(release.repaint);
+    assert!(matches!(
+        &release.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method,
+                crate::api::schema::Method::PaneSelectionRead(params)
+                    if params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 2 })
+    ));
+    state.compose(106, 20).expect("release frame");
+    assert!(state.selection_repaint_deadline.is_none());
+}
+
+#[test]
 fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -397,7 +466,7 @@ fn pane_content_updates_preserve_active_selection_only_when_selected_cells_stay_
         pane.inner_rect.y + 1,
     )]);
 
-    assert!(drag.repaint);
+    assert!(drag.repaint || state.selection_repaint_deadline.is_some());
     let selection = state.selection.as_ref().expect("visible selection");
     assert!(selection.is_visible());
     assert_eq!(selection.ordered_cells(), ((12, 0), (12, 1)));

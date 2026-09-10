@@ -162,7 +162,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
         row: pane.inner_rect.y,
         modifiers: KeyModifiers::empty(),
     })]);
-    assert!(drag.repaint);
+    assert!(drag.repaint || state.selection_repaint_deadline.is_some());
     assert!(state
         .selection
         .as_ref()
