@@ -832,7 +832,15 @@ fn render_navigator_overlay(
         let current = if r.current { "◆ " } else { "" };
         let status = r.status.map(status_dot).unwrap_or_default();
         let status_separator = if status.is_empty() { "" } else { " " };
-        let label = format!(" {tree} {current}{status}{status_separator}{}", r.label);
+        let agent = r
+            .agent
+            .as_deref()
+            .map(|agent| format!("[{agent}] "))
+            .unwrap_or_default();
+        let label = format!(
+            " {tree} {current}{status}{status_separator}{agent}{}",
+            r.label
+        );
         put_text(b, rect.x, rect.y, rect.width, &label, st);
         if let Some(status) = r.status {
             let prefix = format!(" {tree} {current}");
@@ -895,7 +903,15 @@ fn render_navigator_overlay(
             i.x,
             dy,
             i.width,
-            &format!(" {} · {}", r.label, r.meta),
+            &format!(
+                " {}{} · {}",
+                r.agent
+                    .as_deref()
+                    .map(|agent| format!("[{agent}] "))
+                    .unwrap_or_default(),
+                r.label,
+                r.meta
+            ),
             Style::default().fg(p.overlay0).bg(p.panel_bg),
         )
     }

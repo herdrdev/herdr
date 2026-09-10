@@ -152,6 +152,9 @@ pub(super) fn navigator_rows(
                             .or_else(|| agent.and_then(|agent| agent.display_agent.clone()))
                             .or_else(|| agent.and_then(|agent| agent.title.clone()))
                             .unwrap_or_else(|| format!("pane {}", index + 1));
+                        let agent_label = agent
+                            .and_then(|agent| agent.agent.as_deref())
+                            .map(navigator_agent_label);
                         let meta = pane
                             .foreground_cwd
                             .clone()
@@ -159,11 +162,15 @@ pub(super) fn navigator_rows(
                             .unwrap_or_default();
                         if !filtering
                             || filter(status)
-                                && (endpoint_query_matches || text(&label) || text(&meta))
+                                && (endpoint_query_matches
+                                    || text(&label)
+                                    || text(&meta)
+                                    || agent_label.as_deref().is_some_and(|agent| text(agent)))
                         {
                             panes.push(ClientNavigatorRow {
                                 depth: 2 + depth_offset,
                                 label,
+                                agent: agent_label,
                                 meta,
                                 status: Some(status),
                                 stale,
@@ -183,6 +190,7 @@ pub(super) fn navigator_rows(
                         children.push(ClientNavigatorRow {
                             depth: 1 + depth_offset,
                             label: tab.label.clone(),
+                            agent: None,
                             meta: format!(
                                 "{} panes",
                                 snapshot
@@ -209,6 +217,7 @@ pub(super) fn navigator_rows(
                     endpoint_rows.push(ClientNavigatorRow {
                         depth: depth_offset,
                         label: workspace.label.clone(),
+                        agent: None,
                         meta: workspace_meta,
                         status: None,
                         stale,
@@ -229,6 +238,7 @@ pub(super) fn navigator_rows(
                 rows.push(ClientNavigatorRow {
                     depth: 0,
                     label: endpoint.label.to_owned(),
+                    agent: None,
                     meta: String::new(),
                     status: None,
                     stale,
@@ -242,6 +252,36 @@ pub(super) fn navigator_rows(
         }
     }
     rows
+}
+
+fn navigator_agent_label(agent: &str) -> String {
+    match agent {
+        "agy" => "Antigravity".to_owned(),
+        "claude" => "Claude Code".to_owned(),
+        "copilot" => "GitHub Copilot".to_owned(),
+        "omp" => "OMP".to_owned(),
+        "opencode" => "OpenCode".to_owned(),
+        value => {
+            let mut label = value.to_owned();
+            if let Some(first) = label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            label
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::navigator_agent_label;
+
+    #[test]
+    fn navigator_agent_labels_are_readable() {
+        assert_eq!(navigator_agent_label("codex"), "Codex");
+        assert_eq!(navigator_agent_label("claude"), "Claude Code");
+        assert_eq!(navigator_agent_label("omp"), "OMP");
+        assert_eq!(navigator_agent_label("opencode"), "OpenCode");
+    }
 }
 
 pub(super) fn navigator_selected_index(

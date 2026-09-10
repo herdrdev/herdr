@@ -407,6 +407,7 @@ pub(super) enum ClientNavigatorTarget {
 pub(super) struct ClientNavigatorRow {
     pub(super) depth: u8,
     pub(super) label: String,
+    pub(super) agent: Option<String>,
     pub(super) meta: String,
     pub(super) status: Option<crate::api::schema::AgentStatus>,
     pub(super) stale: bool,
