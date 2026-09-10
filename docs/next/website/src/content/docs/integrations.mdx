@@ -109,6 +109,8 @@ Herdr writes the bundled extension to:
 
 If `PI_CODING_AGENT_DIR` is set, Herdr writes to `$PI_CODING_AGENT_DIR/extensions/herdr-agent-state.ts` instead. Herdr creates the extensions directory when the Pi agent directory already exists. Uninstall removes only that extension file.
 
+Pi extensions can emit `herdr:busy` while background work continues. Herdr keeps the pane `working` until every active busy report is released; an active `herdr:blocked` report still takes precedence.
+
 ## OMP
 
 Install the OMP integration:

@@ -311,6 +311,117 @@ test("Pi ignores RPC sessions even when UI APIs are available", async () => {
   expect(requests).toEqual([]);
 });
 
+test("Pi busy state holds working after the root agent settles", async () => {
+  const requests = await startRecordingServer("pi-settled-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  eventHandlers.get("herdr:busy")?.({ active: true }, context);
+
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
+});
+
+test("Pi releases overlapping busy owners only after the final inactive event", async () => {
+  const requests = await startRecordingServer("pi-overlapping-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = piContext(() => true);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  eventHandlers.get("herdr:busy")?.({ active: true, label: "first" }, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  eventHandlers.get("herdr:busy")?.({ active: true, label: "second" }, context);
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
+});
+
+test("Pi blocked state overrides busy and restores working when released", async () => {
+  const requests = await startRecordingServer("pi-blocked-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = piContext(() => true);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  eventHandlers.get("herdr:busy")?.({ active: true }, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  eventHandlers.get("herdr:blocked")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "working"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 5);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "working", "idle"]);
+});
+
+test("Pi ignores unmatched busy inactive events", async () => {
+  const requests = await startRecordingServer("pi-unmatched-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = piContext(() => true);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: true }, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
+});
+
+test("Pi replays busy events received before the root session starts", async () => {
+  const requests = await startRecordingServer("pi-pre-root-busy");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = piContext(() => true);
+  eventHandlers.get("herdr:busy")?.({ active: true }, context);
+  expect(requestStates(requests)).toEqual([]);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  expect(requestStates(requests)).toEqual(["working"]);
+
+  eventHandlers.get("herdr:busy")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
+
 test("Pi settlement preserves explicit blocked-state precedence", async () => {
   const requests = await startRecordingServer("pi-settled-blocked");
   const { eventHandlers, handlers, pi } = createExtensionHarness();
@@ -372,7 +483,7 @@ test("Pi reports the session replacement source", async () => {
     .toBe("new");
 });
 
-test("Pi waits for a replacement session report before publishing state", async () => {
+test("Pi buffers busy state until a replacement session report is acknowledged", async () => {
   const recordingSocketPath = join(tmpdir(), `herdr-pi-session-order-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
@@ -404,7 +515,7 @@ test("Pi waits for a replacement session report before publishing state", async 
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
-  const { handlers, pi } = createExtensionHarness();
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
   install(pi);
 
@@ -415,7 +526,7 @@ test("Pi waits for a replacement session report before publishing state", async 
     {
       hasUI: true,
       mode: "tui",
-      isIdle: () => false,
+      isIdle: () => true,
       sessionManager: {
         getSessionFile: () => "/tmp/pi-new.jsonl",
         getSessionId: () => "pi-new",
@@ -428,9 +539,11 @@ test("Pi waits for a replacement session report before publishing state", async 
     await Bun.sleep(5);
   }
   expect(acknowledgeSessionReport).toBeDefined();
-  expect(
-    requests.some((request) => isRecord(request) && request.method === "pane.report_agent"),
-  ).toBe(false);
+  eventHandlers.get("herdr:busy")?.({ active: true });
+  await Bun.sleep(25);
+  expect(requests.map((request) => (isRecord(request) ? request.method : undefined))).toEqual([
+    "pane.report_agent_session",
+  ]);
 
   acknowledgeSessionReport?.();
   await sessionStartResult;
@@ -446,6 +559,7 @@ test("Pi waits for a replacement session report before publishing state", async 
     "pane.report_agent_session",
     "pane.report_agent",
   ]);
+  expect(requestState(requests[1])).toBe("working");
 });
 
 async function startDroppedFirstResponseServer(name: string) {
