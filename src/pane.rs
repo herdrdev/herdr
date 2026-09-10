@@ -52,6 +52,16 @@ pub use self::{
     terminal::{ScrollMetrics, TerminalCursorState},
 };
 
+pub(crate) struct TerminalDirtyPatchSnapshot {
+    pub patch: TerminalDirtyPatchOutcome,
+    pub content_revision: u64,
+    pub scroll_metrics: Option<ScrollMetrics>,
+    pub mouse_reporting: bool,
+    pub sgr_pixel_mouse: bool,
+    pub alternate_screen_active: bool,
+    pub graphics_may_have_placements: bool,
+}
+
 const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const TERMINAL_COMPRESSION_IDLE: std::time::Duration = std::time::Duration::from_millis(250);
 const TERMINAL_COMPRESSION_STEP: std::time::Duration = std::time::Duration::from_millis(1);
@@ -3087,12 +3097,36 @@ impl PaneRuntime {
         self.terminal.render(frame, area, show_cursor);
     }
 
-    pub(crate) fn collect_dirty_patch(
+    pub(crate) fn collect_dirty_patch_snapshot(
         &self,
         area_width: u16,
         area_height: u16,
-    ) -> TerminalDirtyPatchOutcome {
-        self.terminal.collect_dirty_patch(area_width, area_height)
+    ) -> Option<TerminalDirtyPatchSnapshot> {
+        // PTY/resize writers announce changes before locking the terminal core.
+        // Exclude them until rows and metadata have been paired with their revision.
+        let _content_guard = self
+            .content_write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let revision = self.content_seq();
+        if !revision.is_multiple_of(2) {
+            return None;
+        }
+        let patch = self.terminal.collect_dirty_patch(area_width, area_height);
+        if matches!(patch, TerminalDirtyPatchOutcome::Fallback) {
+            return None;
+        }
+        let snapshot = TerminalDirtyPatchSnapshot {
+            patch,
+            content_revision: revision,
+            scroll_metrics: self.scroll_metrics(),
+            mouse_reporting: self.mouse_reporting_enabled(),
+            sgr_pixel_mouse: self.sgr_pixel_mouse_enabled(),
+            alternate_screen_active: self.alternate_screen_active(),
+            graphics_may_have_placements: crate::kitty_graphics::is_enabled()
+                && self.kitty_graphics_may_have_placements(),
+        };
+        (self.content_seq() == revision).then_some(snapshot)
     }
 
     pub fn visible_hyperlinks(&self, area: Rect) -> Vec<((u16, u16), String, String)> {
@@ -3329,6 +3363,60 @@ impl PaneRuntime {
         Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
     }
 
+    pub(crate) fn test_contend_during_dirty_collection(
+        &self,
+        bytes: Vec<u8>,
+    ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<bool>) {
+        let terminal = self.terminal.clone();
+        let sequence = self.content_seq.clone();
+        let write_lock = self.content_write_lock.clone();
+        let pane_id = self.pane_id;
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        self.terminal
+            .ghostty
+            .core
+            .lock()
+            .unwrap()
+            .dirty_collection_hook = Some(Box::new(move || {
+            start_tx.send(()).unwrap();
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }));
+        let writer = std::thread::spawn(move || {
+            start_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let guard = match write_lock.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(std::sync::TryLockError::WouldBlock) => None,
+                Err(error) => panic!("poisoned content lock: {error}"),
+            };
+            let announced = guard.is_some();
+            if announced {
+                sequence.fetch_add(1, Ordering::AcqRel);
+                assert!(matches!(
+                    terminal.ghostty.core.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+            }
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            let _guard = guard.unwrap_or_else(|| {
+                let guard = write_lock.lock().unwrap();
+                sequence.fetch_add(1, Ordering::AcqRel);
+                guard
+            });
+            let (tx, _rx) = mpsc::channel(1);
+            let _ = terminal.process_pty_bytes(pane_id, 0, &bytes, &tx);
+            sequence.fetch_add(1, Ordering::Release);
+            announced
+        });
+        (release_tx, writer)
+    }
+
     pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
         let _content_write_guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
@@ -3399,6 +3487,63 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dirty_patch_snapshot_keeps_clean_metadata_and_terminal_fallback() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(20, 4);
+        runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("initial snapshot");
+        runtime.test_process_pty_bytes(b"\x1b[?1003h\x1b[?1016h");
+        let snapshot = runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("mode snapshot");
+        assert!(matches!(snapshot.patch, TerminalDirtyPatchOutcome::Clean));
+        assert_eq!(snapshot.content_revision, runtime.content_seq());
+        assert!(snapshot.content_revision.is_multiple_of(2));
+        assert!(snapshot.mouse_reporting);
+        assert!(snapshot.sgr_pixel_mouse);
+        assert!(!snapshot.alternate_screen_active);
+
+        runtime.test_process_pty_bytes(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\");
+        assert!(runtime.collect_dirty_patch_snapshot(20, 4).is_none());
+        assert!(runtime.content_write_lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn dirty_patch_snapshot_tracks_serialized_scroll_and_resize() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            20,
+            4,
+            100_000,
+            b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix",
+        );
+        runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("live snapshot");
+        runtime.scroll_up(1);
+        let scrolled = runtime
+            .collect_dirty_patch_snapshot(20, 4)
+            .expect("scrolled snapshot");
+        assert_eq!(
+            scrolled.scroll_metrics.expect("metrics").offset_from_bottom,
+            1
+        );
+        runtime.scroll_reset();
+        runtime.resize(5, 24, 0, 0);
+        let resized = runtime
+            .collect_dirty_patch_snapshot(24, 5)
+            .expect("resized snapshot");
+        let metrics = resized.scroll_metrics.expect("resized metrics");
+        assert_eq!(metrics.offset_from_bottom, 0);
+        assert_eq!(metrics.viewport_rows, 5);
+        assert!(resized.content_revision.is_multiple_of(2));
+        let TerminalDirtyPatchOutcome::Patch(patch) = resized.patch else {
+            panic!("resize must dirty the viewport");
+        };
+        assert_eq!(patch.rows.len(), 5);
+        assert!(patch.rows.iter().all(|(_, cells)| cells.len() == 24));
+    }
 
     #[test]
     fn pane_launch_env_removes_outer_codex_thread_id() {

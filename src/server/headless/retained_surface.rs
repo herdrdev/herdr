@@ -317,11 +317,10 @@ impl HeadlessServer {
             ) else {
                 fallback!("runtime_missing");
             };
-            let revision_before = runtime.content_seq();
-            if !revision_before.is_multiple_of(2) {
-                fallback!("unstable_content");
-            }
-            let patch = match runtime.collect_dirty_patch(width, height) {
+            let Some(snapshot) = runtime.collect_dirty_patch_snapshot(width, height) else {
+                fallback!("terminal_snapshot");
+            };
+            let patch = match snapshot.patch {
                 crate::pane::TerminalDirtyPatchOutcome::Clean => {
                     crate::render_prof::event("retained_surface.pane_clean");
                     crate::pane::TerminalDirtyPatch { rows: Vec::new() }
@@ -331,21 +330,15 @@ impl HeadlessServer {
                     fallback!("terminal_patch");
                 }
             };
-            let graphics_may_have_placements =
-                crate::kitty_graphics::is_enabled() && runtime.kitty_graphics_may_have_placements();
-            let revision = runtime.content_seq();
-            if revision != revision_before || !revision.is_multiple_of(2) {
-                fallback!("content_changed");
-            }
             collected.push(CollectedPanePatch {
                 pane_id: public_pane_id,
                 patch,
-                content_revision: revision,
-                scroll_metrics: runtime.scroll_metrics(),
-                mouse_reporting: runtime.mouse_reporting_enabled(),
-                sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
-                alternate_screen_active: runtime.alternate_screen_active(),
-                graphics_may_have_placements,
+                content_revision: snapshot.content_revision,
+                scroll_metrics: snapshot.scroll_metrics,
+                mouse_reporting: snapshot.mouse_reporting,
+                sgr_pixel_mouse: snapshot.sgr_pixel_mouse,
+                alternate_screen_active: snapshot.alternate_screen_active,
+                graphics_may_have_placements: snapshot.graphics_may_have_placements,
             });
         }
 

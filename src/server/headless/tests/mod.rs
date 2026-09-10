@@ -1001,6 +1001,62 @@ fn recv_pane_surface_patch(
 }
 
 #[tokio::test]
+async fn retained_snapshot_survives_a_writer_waiting_for_the_terminal_core() {
+    let mut server = test_headless_server();
+    let pane_id = install_shared_view_test_runtime(&mut server);
+    let (control, render) = connect_matching_test_shell(&mut server, 7);
+    let _ = control.recv().expect("snapshot");
+    server.render_and_stream();
+    let _ = recv_pane_surface(&render, "initial surface");
+
+    let (release, writer, revision) = {
+        let runtime = server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .expect("runtime");
+        runtime.test_process_pty_bytes(b"\rAAAA\x1b[?1003h");
+        let revision = runtime.content_seq();
+        let (release, writer) =
+            runtime.test_contend_during_dirty_collection(b"\rBBBB\x1b[?1003l".to_vec());
+        (release, writer, revision)
+    };
+    let retained = server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id]));
+    release.send(()).expect("release waiting writer");
+    let announced = writer.join().expect("writer completed");
+
+    assert!(
+        retained,
+        "a waiting writer must not invalidate the collected snapshot"
+    );
+    assert!(
+        !announced,
+        "writer must wait before announcing a new revision"
+    );
+    let patch = recv_pane_surface_patch(&render, "snapshot before waiting write");
+    assert_eq!(patch.panes[0].content_revision, revision);
+    assert!(revision.is_multiple_of(2));
+    assert!(patch.panes[0].mouse_reporting);
+    let surface = server.clients[&7]
+        .render_state
+        .last_pane_surface()
+        .expect("surface");
+    assert!(frame_text(&surface.frame).contains("AAAA"));
+    assert!(!frame_text(&surface.frame).contains("BBBB"));
+
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    let next = recv_pane_surface_patch(&render, "waiting write remains dirty");
+    assert_eq!(next.panes[0].content_revision, revision + 2);
+    assert!(!next.panes[0].mouse_reporting);
+    let surface = server.clients[&7]
+        .render_state
+        .last_pane_surface()
+        .expect("next surface");
+    assert!(frame_text(&surface.frame).contains("BBBB"));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_collection() {
     let mut server = test_headless_server();
     let pane_id = install_shared_view_test_runtime(&mut server);
