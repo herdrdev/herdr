@@ -267,15 +267,21 @@ impl ClientShellState {
                 RawInputEvent::HostDefaultColor {
                     kind: crate::terminal_theme::DefaultColorKind::Background,
                     color,
-                } if !self.host_appearance_explicit => {
-                    let appearance = color.inferred_appearance();
-                    self.host_appearance = Some(appearance);
-                    if self.config.theme_runtime.auto_switch {
-                        self.config.palette = crate::app::client_palette_for_appearance(
-                            &self.config.theme_runtime,
-                            appearance,
-                        );
+                } => {
+                    if self.host_background != Some(color) {
+                        self.host_background = Some(color);
                         outcome.repaint = true;
+                    }
+                    if !self.host_appearance_explicit {
+                        let appearance = color.inferred_appearance();
+                        self.host_appearance = Some(appearance);
+                        if self.config.theme_runtime.auto_switch {
+                            self.config.palette = crate::app::client_palette_for_appearance(
+                                &self.config.theme_runtime,
+                                appearance,
+                            );
+                            outcome.repaint = true;
+                        }
                     }
                 }
                 RawInputEvent::HostDefaultColor { .. }

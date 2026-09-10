@@ -351,7 +351,10 @@ impl ClientShellState {
                         hit.inner_rect,
                         hit.scroll,
                         &self.config.palette,
-                        crate::terminal_theme::TerminalTheme::default(),
+                        crate::terminal_theme::TerminalTheme {
+                            background: self.host_background,
+                            ..Default::default()
+                        },
                     );
                 }
                 if copy_surface_coherent {

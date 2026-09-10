@@ -52,6 +52,84 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
 }
 
 #[test]
+fn client_selection_uses_host_background_and_repaints_when_it_changes() {
+    use crate::terminal_theme::{DefaultColorKind, HostAppearance, RgbColor};
+    use ratatui::style::Color;
+
+    for explicit_appearance in [false, true] {
+        let mut config = ClientShellConfig::from_config(&Config::default());
+        config.palette = Palette::terminal();
+        config.theme_runtime.auto_switch = false;
+        let mut state = ClientShellState::new(config);
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.compose(106, 20).expect("composed frame");
+        let pane = state.hits.panes[0].clone();
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), pane.inner_rect.x),
+            (
+                MouseEventKind::Drag(MouseButton::Left),
+                pane.inner_rect.x + 2,
+            ),
+        ] {
+            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                kind,
+                column,
+                row: pane.inner_rect.y,
+                modifiers: KeyModifiers::empty(),
+            })]);
+        }
+        let cell_index = usize::from(pane.inner_rect.y) * 106 + usize::from(pane.inner_rect.x);
+        let fallback = state.compose(106, 20).expect("fallback frame");
+        assert_eq!(
+            fallback.cells[cell_index].bg,
+            crate::protocol::color_to_u32(Color::DarkGray)
+        );
+        if explicit_appearance {
+            state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+                HostAppearance::Light,
+            )]);
+        }
+        for (background, selected_bg, selected_fg) in [
+            ((237, 237, 234), (171, 171, 168), (0, 0, 0)),
+            ((26, 27, 38), (90, 91, 99), (255, 255, 255)),
+        ] {
+            let (r, g, b) = background;
+            let outcome = state.handle_raw_events(vec![RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Background,
+                color: RgbColor { r, g, b },
+            }]);
+            assert!(outcome
+                .requests
+                .iter()
+                .any(|request| matches!(request, ClientMessage::ClientShellHostTheme { .. })));
+            let frame = state.compose(106, 20).expect("host-colored selection");
+            let cell = &frame.cells[cell_index];
+            assert_eq!(
+                cell.bg,
+                crate::protocol::color_to_u32(Color::Rgb(
+                    selected_bg.0,
+                    selected_bg.1,
+                    selected_bg.2
+                ))
+            );
+            assert_eq!(
+                cell.fg,
+                crate::protocol::color_to_u32(Color::Rgb(
+                    selected_fg.0,
+                    selected_fg.1,
+                    selected_fg.2
+                ))
+            );
+            assert!(
+                outcome.repaint,
+                "host background changes must repaint selection"
+            );
+        }
+    }
+}
+
+#[test]
 fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
