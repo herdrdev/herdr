@@ -208,3 +208,33 @@ export default {
   server: HerdrAgentStatePlugin,
   setup() {},
 };
+
+// opencode2 compatibility: plugin loader expects a default export definition
+// with an id and setup/effect function.
+export default {
+  id: "herdr-agent-state",
+  async setup(ctx) {
+    const handlers = await HerdrAgentStatePlugin();
+
+    if (!ctx || typeof ctx.on !== "function") {
+      // Fail softly if host API shape differs.
+      return;
+    }
+
+    const disposers = [];
+
+    if (typeof handlers?.["chat.message"] === "function") {
+      disposers.push(ctx.on("chat.message", handlers["chat.message"]));
+    }
+
+    if (typeof handlers?.event === "function") {
+      disposers.push(ctx.on("event", handlers.event));
+    }
+
+    return () => {
+      for (const dispose of disposers) {
+        if (typeof dispose === "function") dispose();
+      }
+    };
+  },
+};
