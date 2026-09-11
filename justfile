@@ -36,10 +36,6 @@ lint:
 
 # Run PR CI checks
 ci filter='all()': lint
-    just ci-tests "{{filter}}"
-
-# Run the test portion separately when CI schedules lint on another runner.
-ci-tests filter='all()':
     cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test

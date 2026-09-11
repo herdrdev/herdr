@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("lint", "check", "test")]
+    [ValidateSet("lint", "check")]
     [string]$Mode = "check"
 )
 
@@ -29,17 +29,15 @@ function Invoke-CargoWithZigCacheRecovery {
     Invoke-Checked cargo $Arguments
 }
 
-if ($Mode -ne "test") {
-    Invoke-Checked cargo @("fmt", "--check")
-    Invoke-CargoWithZigCacheRecovery @(
-        "clippy",
-        "--all-targets",
-        "--locked",
-        "--",
-        "-D",
-        "warnings"
-    )
-}
+Invoke-Checked cargo @("fmt", "--check")
+Invoke-CargoWithZigCacheRecovery @(
+    "clippy",
+    "--all-targets",
+    "--locked",
+    "--",
+    "-D",
+    "warnings"
+)
 
 if ($Mode -eq "lint") {
     return
