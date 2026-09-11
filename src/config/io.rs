@@ -93,9 +93,33 @@ fn platform_state_dir() -> PathBuf {
     }
 }
 
-fn read_optional_config(path: &Path) -> std::io::Result<Option<String>> {
+/// Remove UTF-8 byte-order marks from config text.
+///
+/// TOML tolerates a BOM only at the very start of the document. Windows editors
+/// commonly add one, and a line-oriented config edit can otherwise move it to
+/// the start of a later line, where the TOML parser rejects the whole file.
+/// Dropping BOMs at the start of the file and of each line keeps both loading
+/// and editing working, and repairs files that were already corrupted.
+fn strip_utf8_bom(content: &str) -> String {
+    if !content.contains('\u{feff}') {
+        return content.to_owned();
+    }
+
+    let mut normalized = String::with_capacity(content.len());
+    let mut at_line_start = true;
+    for character in content.chars() {
+        if character == '\u{feff}' && at_line_start {
+            continue;
+        }
+        at_line_start = character == '\n';
+        normalized.push(character);
+    }
+    normalized
+}
+
+pub(super) fn read_optional_config(path: &Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
-        Ok(content) => Ok(Some(content)),
+        Ok(content) => Ok(Some(strip_utf8_bom(&content))),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
     }
@@ -1107,5 +1131,44 @@ mouse_capture = false
         let (updated, removed) = remove_keybinding_config_sections(content);
         assert!(!removed);
         assert_eq!(updated, content);
+    }
+
+    #[test]
+    fn strip_utf8_bom_removes_leading_and_line_start_boms() {
+        let content =
+            "\u{feff}onboarding = false\n\u{feff}[terminal]\ndefault_shell = \"pwsh.exe\"\n";
+        assert_eq!(
+            strip_utf8_bom(content),
+            "onboarding = false\n[terminal]\ndefault_shell = \"pwsh.exe\"\n"
+        );
+    }
+
+    #[test]
+    fn strip_utf8_bom_preserves_boms_inside_values() {
+        let content = "default_shell = \"\u{feff}pwsh.exe\"\n";
+        assert_eq!(strip_utf8_bom(content), content);
+    }
+
+    #[test]
+    fn config_load_recovers_from_a_mid_file_bom() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "herdr-config-mid-file-bom-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            b"onboarding = false\n\xEF\xBB\xBF[terminal]\ndefault_shell = \"pwsh.exe\"\n",
+        )
+        .unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
+
+        let loaded = Config::load();
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_file(path);
+
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert_eq!(loaded.config.terminal.default_shell, "pwsh.exe");
     }
 }
