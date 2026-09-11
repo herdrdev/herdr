@@ -100,7 +100,9 @@ fn main() {
         });
     assert!(
         status.success(),
-        "zig build for vendored libghostty-vt failed: {status}"
+        "zig build for vendored libghostty-vt failed: {status}. \
+         Building Herdr requires Zig 0.16.0; check `zig version` \
+         or set ZIG to the path of a Zig 0.16.0 binary, then retry"
     );
 
     let lib_dir = vendored_dir.join("zig-out/lib");
