@@ -975,6 +975,52 @@ fn graphics_scope_qualifies_colliding_boot_ids_by_endpoint() {
     assert!(remote_scope.starts_with("ssh:0123456789abcdef0123456789abcdef:"));
 }
 
+#[cfg(unix)]
+#[test]
+fn local_direct_graphics_accept_server_ids_across_endpoint_switches_and_restarts() {
+    use crate::kitty_graphics::surface::{direct_upload_control, host_image_id};
+    use crate::protocol::{SurfaceGraphicsAssetKey, SurfaceGraphicsFormat, SurfaceGraphicsSource};
+
+    let (mut state, remote_id) = state_with_remote();
+    let asset = SurfaceGraphicsAssetKey {
+        source: SurfaceGraphicsSource::PaneLayer {
+            pane_id: "pane_1".into(),
+            layer_id: "primary".into(),
+        },
+        image_width: 2,
+        image_height: 2,
+        format: SurfaceGraphicsFormat::Rgba,
+        data_len: 16,
+        data_fingerprint: 17,
+    };
+    let (server_image_id, _) = direct_upload_control("boot-1", &asset);
+    assert_eq!(
+        host_image_id(state.graphics_scope(), &asset),
+        server_image_id
+    );
+    assert!(state.trust_direct_graphics_asset(&asset, server_image_id));
+    assert!(!state.trust_direct_graphics_asset(&asset, server_image_id + 1));
+
+    let mut remote = snapshot();
+    remote.boot_id = "boot-1".into();
+    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
+    assert!(state.activate_endpoint_projection(&remote_id));
+    assert!(!state.trust_direct_graphics_asset(&asset, server_image_id));
+    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
+    assert!(state.trust_direct_graphics_asset(&asset, server_image_id));
+
+    let mut restarted = snapshot();
+    restarted.boot_id = "replacement-boot".into();
+    state.set_snapshot(Box::new(restarted));
+    let (restarted_image_id, _) = direct_upload_control("replacement-boot", &asset);
+    assert!(!state.trust_direct_graphics_asset(&asset, server_image_id));
+    assert_eq!(
+        host_image_id(state.graphics_scope(), &asset),
+        restarted_image_id
+    );
+    assert!(state.trust_direct_graphics_asset(&asset, restarted_image_id));
+}
+
 #[test]
 fn navigator_uses_machine_parents_only_for_federated_clients() {
     let (mut state, _) = state_with_remote();
