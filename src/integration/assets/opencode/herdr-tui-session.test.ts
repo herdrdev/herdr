@@ -3,8 +3,10 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 const requests: unknown[] = [];
 const activeDisposers: Array<() => void> = [];
 const requestWaiters: Array<() => void> = [];
+const stateWaiters: Array<() => void> = [];
 let importCounter = 0;
 let holdConnections = false;
+let failConnections = false;
 const connections: Array<() => void> = [];
 
 mock.module("node:net", () => ({
@@ -12,8 +14,14 @@ mock.module("node:net", () => ({
     createConnection(_path: string, onConnect: () => void) {
       const handlers = new Map<string, () => void>();
       const client = {
+        destroyed: false,
         write(input: string) {
-          requests.push(JSON.parse(input.trim()));
+          if (client.destroyed) return;
+          const request = JSON.parse(input.trim());
+          requests.push(request);
+          if (isRecord(request) && isRecord(request.params) && request.params.state !== undefined) {
+            stateWaiters.shift()?.();
+          }
           requestWaiters.shift()?.();
           queueMicrotask(() => client.emit("data"));
         },
@@ -21,12 +29,15 @@ mock.module("node:net", () => ({
         on(event: string, handler: () => void) {
           handlers.set(event, handler);
         },
-        destroy() {},
+        destroy() {
+          client.destroyed = true;
+        },
         emit(event: string) {
           handlers.get(event)?.();
         },
       };
       if (holdConnections) connections.push(onConnect);
+      else if (failConnections) queueMicrotask(() => client.emit("error"));
       else queueMicrotask(onConnect);
       return client;
     },
@@ -36,7 +47,9 @@ mock.module("node:net", () => ({
 beforeEach(() => {
   requests.length = 0;
   requestWaiters.length = 0;
+  stateWaiters.length = 0;
   holdConnections = false;
+  failConnections = false;
   connections.length = 0;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
@@ -96,6 +109,10 @@ function fakeApi() {
 
 function waitForNextRequest(): Promise<void> {
   return new Promise((resolve) => requestWaiters.push(resolve));
+}
+
+function waitForStateReport(): Promise<void> {
+  return new Promise((resolve) => stateWaiters.push(resolve));
 }
 
 test("reports a root session when only the local route changes", async () => {
@@ -300,7 +317,7 @@ test("V2 discards queued reports after selection changes and stops on disposal",
   dispose();
   expect(tui.listeners.size).toBe(0);
   tui.select("a");
-  await new Promise((resolve) => setTimeout(resolve, 125));
+  await new Promise((resolve) => setTimeout(resolve, 250));
   expect(requests).toHaveLength(0);
 });
 
@@ -311,14 +328,14 @@ test("V2 reconciles late blocker hydration without reviving an already-replied r
   activeDisposers.push(dispose);
   await flushReports();
   tui.permissions.set("child", [{ id: "late" }]);
-  await new Promise((resolve) => setTimeout(resolve, 125));
+  await waitForStateReport();
   expect(states().at(-1)).toBe("blocked");
   tui.emit("permission.replied", { sessionID: "child", requestID: "late" });
-  await new Promise((resolve) => setTimeout(resolve, 125));
+  await waitForStateReport();
   expect(states().at(-1)).toBe("idle");
   tui.permissions.set("child", []);
   tui.forms.set("child", [{ id: "second" }]);
-  await new Promise((resolve) => setTimeout(resolve, 125));
+  await waitForStateReport();
   expect(states().at(-1)).toBe("blocked");
   tui.sessions.delete("child");
   tui.emit("session.deleted", { sessionID: "child" });
@@ -344,4 +361,39 @@ test("V2 never writes a delayed connection after disposal or a session switch", 
     expect(requests).toHaveLength(0);
     dispose();
   }
+});
+
+test("V2 settles a connection that never completes", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  holdConnections = true;
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  const started = Date.now();
+  while (connections.length <= 1 && Date.now() - started < 2_000) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  expect(connections.length).toBeGreaterThan(1);
+  dispose();
+});
+
+test("V2 resends the latest state after a failed delivery", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  // Exhaust the selection retry schedule so only the event report remains.
+  await new Promise((resolve) => setTimeout(resolve, 1_600));
+  requests.length = 0;
+  tui.emit("session.execution.started", { sessionID: "a" });
+  await flushReports();
+  failConnections = true;
+  tui.emit("session.execution.succeeded", { sessionID: "a" });
+  const resend = waitForStateReport();
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  failConnections = false;
+  await resend;
+  expect(states().at(-1)).toBe("idle");
+  dispose();
 });

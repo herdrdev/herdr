@@ -38,14 +38,25 @@ pub(crate) fn add_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result
     add_plugin(tui_config_path(config_dir), "plugin", plugin_spec)
 }
 
-pub(crate) fn add_cli_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result<Option<PathBuf>> {
+pub(crate) fn add_cli_plugin(
+    config_dir: &Path,
+    state_dir: &Path,
+    plugin_spec: &str,
+) -> io::Result<Option<PathBuf>> {
     let path = config_dir.join("cli.json");
-    // OpenCode owns first-start migration of V1 preferences. Creating this file
-    // ourselves would suppress it, even if we only wrote a plugin registration.
-    if !path.is_file() {
+    // OpenCode imports V1 TUI preferences (`tui.json`, `kv.json`) into cli.json on
+    // its first V2 start, but only while cli.json is absent. Defer registration
+    // while those sources still exist so we do not skip the migration; otherwise
+    // create cli.json ourselves, since OpenCode will never do it for a fresh V2
+    // install with nothing to migrate.
+    if !path.is_file() && cli_migration_pending(config_dir, state_dir) {
         return Ok(None);
     }
     add_plugin(path, "plugins", plugin_spec).map(Some)
+}
+
+fn cli_migration_pending(config_dir: &Path, state_dir: &Path) -> bool {
+    config_dir.join("tui.json").is_file() || state_dir.join("kv.json").is_file()
 }
 
 fn add_plugin(config_path: PathBuf, key: &str, plugin_spec: &str) -> io::Result<PathBuf> {
@@ -331,30 +342,62 @@ mod tests {
     #[test]
     fn cli_registration_preserves_options_and_other_preferences() {
         let dir = unique_dir();
+        let state = unique_dir();
         let path = dir.join("cli.json");
         fs::write(&path, r#"{"theme":{"name":"catppuccin"},"plugins":[{"package":"./herdr-opencode","options":{"custom":true}},"example"]}"#).unwrap();
-        add_cli_plugin(&dir, "./herdr-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
         assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
         assert_eq!(parse_config(&path)["plugins"].as_array().unwrap().len(), 2);
         assert_eq!(parse_config(&path)["plugins"][0]["options"]["custom"], true);
         assert!(remove_cli_plugin(&dir, "./herdr-opencode").unwrap());
         assert_eq!(parse_config(&path)["plugins"], json!(["example"]));
         assert_eq!(parse_config(&path)["theme"]["name"], "catppuccin");
-        add_cli_plugin(&dir, "./herdr-opencode").unwrap();
-        add_cli_plugin(&dir, "./herdr-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
         assert_eq!(
             parse_config(&path)["plugins"],
             json!(["example", "./herdr-opencode"])
         );
         fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
-    fn cli_registration_does_not_suppress_first_start_migration() {
+    fn cli_registration_creates_missing_config_when_no_migration_pending() {
         let dir = unique_dir();
-        assert!(add_cli_plugin(&dir, "./herdr-opencode").unwrap().is_none());
-        assert!(!dir.join("cli.json").exists());
+        let state = unique_dir();
+        let path = add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .expect("cli.json should be created when OpenCode has nothing to migrate");
+        assert_eq!(path, dir.join("cli.json"));
+        assert_eq!(
+            parse_config(&path),
+            json!({ "plugins": ["./herdr-opencode"] })
+        );
+        assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
         fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn cli_registration_defers_while_migration_pending() {
+        let dir = unique_dir();
+        let state = unique_dir();
+        fs::write(dir.join("tui.json"), "{}").unwrap();
+        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .is_none());
+        assert!(!dir.join("cli.json").exists());
+
+        fs::remove_file(dir.join("tui.json")).unwrap();
+        fs::write(state.join("kv.json"), "{}").unwrap();
+        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .is_none());
+        assert!(!dir.join("cli.json").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

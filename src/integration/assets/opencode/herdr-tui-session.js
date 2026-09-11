@@ -14,7 +14,7 @@ function requestOnce(sessionID, state, seq, isCurrent = () => true) {
   const paneId = process.env.HERDR_PANE_ID;
   const socketPath = process.env.HERDR_SOCKET_PATH;
   if (!paneId || !socketPath) {
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
 
   const socketEndpoint =
@@ -34,23 +34,31 @@ function requestOnce(sessionID, state, seq, isCurrent = () => true) {
   };
 
   return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const settle = (delivered) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      client.destroy();
+      resolve(delivered);
+    };
     const client = net.createConnection(socketEndpoint, () => {
       if (!isCurrent()) {
-        finish();
+        settle(false);
         return;
       }
       client.write(`${JSON.stringify(request)}\n`);
     });
-    const finish = () => {
-      client.destroy();
-      resolve();
-    };
 
-    client.setTimeout(500, finish);
-    client.on("data", finish);
-    client.on("error", finish);
-    client.on("end", finish);
-    client.on("close", resolve);
+    // A plain timer, not socket.setTimeout, so a connection that never finishes
+    // connecting still settles and cannot block later reports behind the queue.
+    timer = setTimeout(() => settle(false), 500);
+    timer.unref?.();
+    client.on("data", () => settle(true));
+    client.on("error", () => settle(false));
+    client.on("end", () => settle(false));
+    client.on("close", () => settle(false));
   });
 }
 
@@ -130,8 +138,9 @@ function setup(api) {
   let retryIndex = 0;
   let nextSelectionAt = 0;
   let state = "idle";
+  let retryTimer;
   const sessions = new Map();
-  const blockers = new Map();
+  let blockers = new Map();
   // Event callbacks may precede cache updates. Retain each delta until the
   // cache reflects it, so late hydration cannot undo a reply or lose an ask.
   const blockerChanges = new Map();
@@ -160,8 +169,21 @@ function setup(api) {
     const isCurrent = () => !disposed && revision === generation && !!sessionID && current() === sessionID;
     chain = chain.then(async () => {
       if (!isCurrent()) return;
-      await requestOnce(sessionID, value, value === undefined ? undefined : ++sequence, isCurrent);
+      const delivered = await requestOnce(sessionID, value, value === undefined ? undefined : ++sequence, isCurrent);
+      if (!delivered) scheduleStateRetry();
     }).catch(() => {});
+  }
+
+  // A dropped report must not strand the pane on a stale state once the
+  // selection retry schedule has run out: resend the latest state until the
+  // socket accepts it or the selection is no longer current.
+  function scheduleStateRetry() {
+    if (disposed || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      publish();
+    }, 500);
+    retryTimer.unref?.();
   }
 
   function publish() {
@@ -204,8 +226,7 @@ function setup(api) {
       }
     }
     const changed = (blockers.size > 0) !== (next.size > 0);
-    blockers.clear();
-    for (const [key, owner] of next) blockers.set(key, owner);
+    blockers = next;
     return changed;
   }
 
@@ -297,6 +318,7 @@ function setup(api) {
   return () => {
     disposed = true;
     generation += 1;
+    clearTimeout(retryTimer);
     clearInterval(poll);
     unsubscribe();
     sessions.clear();
