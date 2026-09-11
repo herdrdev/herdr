@@ -20,8 +20,8 @@ class WindowsCrossTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch()
             contents = windows_cross.libc_contents(root)
-            self.assertIn(f"include_dir={root}/sdk/include/ucrt\n", contents)
-            self.assertIn(f"msvc_lib_dir={root}/crt/lib/x86_64\n", contents)
+            self.assertIn(f"include_dir={root / 'sdk/include/ucrt'}\n", contents)
+            self.assertIn(f"msvc_lib_dir={root / 'crt/lib/x86_64'}\n", contents)
             self.assertTrue(contents.endswith("gcc_dir=\n"))
             (root / "crt/include/vcruntime.h").unlink()
             with self.assertRaisesRegex(ValueError, "missing .*vcruntime.h"):
@@ -35,9 +35,9 @@ class WindowsCrossTests(unittest.TestCase):
             default.touch()
             override.touch()
             with patch.object(windows_cross, "SDK_ROOT", root), patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(windows_cross.libc_path(), default)
+                self.assertEqual(windows_cross.libc_path(), default.resolve())
                 with patch.dict(os.environ, {windows_cross.LIBC_ENV: str(override)}):
-                    self.assertEqual(windows_cross.libc_path(), override)
+                    self.assertEqual(windows_cross.libc_path(), override.resolve())
                     override.unlink()
                     with self.assertRaisesRegex(ValueError, "just setup-windows-cross"):
                         windows_cross.libc_path()
@@ -59,7 +59,7 @@ class WindowsCrossTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
             cargo = run.call_args
             self.assertEqual(cargo.args[0][:2], ["cargo", "clippy"])
-            self.assertEqual(cargo.kwargs["env"][windows_cross.LIBC_ENV], "/sdk/libc.txt")
+            self.assertEqual(cargo.kwargs["env"][windows_cross.LIBC_ENV], str(Path("/sdk/libc.txt")))
             self.assertEqual(cargo.kwargs["env"]["KEEP_ME"], "yes")
             self.assertNotIn(windows_cross.LIBC_ENV, os.environ)
 
