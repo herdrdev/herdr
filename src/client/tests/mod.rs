@@ -392,11 +392,30 @@ fn write_host_color_scheme_report_mode_emits_mode_sequences() {
 }
 
 #[test]
-fn color_scheme_change_event_requests_host_theme_query() {
-    let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
+fn color_scheme_report_requests_host_theme_query_only_on_change() {
+    let dark = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
+    let light = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;2n");
 
-    assert!(crate::raw_input::events_require_host_terminal_theme_query(
-        &events
+    let mut last_appearance = None;
+    // The first report establishes the scheme, so it needs a full theme query.
+    assert!(crate::client::direct_host_theme_query_required(
+        &mut last_appearance,
+        &dark
+    ));
+    // A repeated report with the same scheme (for example the reply to the
+    // focus-gain appearance query) must not re-query the theme.
+    assert!(!crate::client::direct_host_theme_query_required(
+        &mut last_appearance,
+        &dark
+    ));
+    // A genuine scheme change re-queries the theme again.
+    assert!(crate::client::direct_host_theme_query_required(
+        &mut last_appearance,
+        &light
+    ));
+    assert!(!crate::client::direct_host_theme_query_required(
+        &mut last_appearance,
+        &light
     ));
 }
 

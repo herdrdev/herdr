@@ -253,10 +253,16 @@ impl ClientShellState {
                         .push(ClientMessage::ClientShellFocus { focused: false });
                 }
                 RawInputEvent::HostColorSchemeChanged(appearance) => {
+                    // Focus gain re-arms an appearance query whose reply reports the
+                    // current scheme even when nothing changed. Re-querying the full
+                    // theme then makes the host terminal answer hundreds of palette
+                    // queries, which stalls its display for seconds. Only re-query
+                    // when the scheme actually changed (or was unknown).
+                    let appearance_changed = self.host_appearance != Some(appearance);
                     self.host_appearance = Some(appearance);
                     self.host_appearance_explicit = true;
-                    outcome.query_host_theme = true;
-                    if self.config.theme_runtime.auto_switch {
+                    outcome.query_host_theme = appearance_changed;
+                    if appearance_changed && self.config.theme_runtime.auto_switch {
                         self.config.palette = crate::app::client_palette_for_appearance(
                             &self.config.theme_runtime,
                             appearance,

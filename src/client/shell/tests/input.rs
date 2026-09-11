@@ -105,6 +105,37 @@ fn full_host_palette_response_is_sent_as_one_theme_update() {
 }
 
 #[test]
+fn host_color_scheme_report_requeries_theme_only_on_change() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.theme_runtime.auto_switch = true;
+
+    // First report establishes the scheme: full theme query follows.
+    let initial = state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+        crate::terminal_theme::HostAppearance::Dark,
+    )]);
+    assert!(initial.query_host_theme);
+
+    // The reply to the focus-gain appearance query repeats the current scheme
+    // and must not re-trigger the full theme (palette) query or a repaint.
+    let repeated = state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+        crate::terminal_theme::HostAppearance::Dark,
+    )]);
+    assert!(!repeated.query_host_theme);
+    assert!(!repeated.repaint);
+
+    // A genuine scheme change re-queries the theme and repaints.
+    let changed = state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+        crate::terminal_theme::HostAppearance::Light,
+    )]);
+    assert!(changed.query_host_theme);
+    assert!(changed.repaint);
+    assert_eq!(
+        state.host_appearance,
+        Some(crate::terminal_theme::HostAppearance::Light)
+    );
+}
+
+#[test]
 fn modal_paste_shortcut_modifiers_are_platform_specific() {
     let key = |code, modifiers| crate::input::TerminalKey::new(code, modifiers);
 

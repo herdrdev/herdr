@@ -401,6 +401,8 @@ async fn run_client_loop(
         mouse_scroll_lines: config.mouse_scroll_lines,
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
+        #[cfg(any(unix, test))]
+        direct_host_appearance: None,
         repaint_pending: false,
         presentation_frozen: false,
         draw_host_cursor,
@@ -846,7 +848,8 @@ async fn run_client_loop(
                     if crate::raw_input::events_require_host_terminal_appearance_query(&events) {
                         query_host_terminal_appearance();
                     }
-                    if crate::raw_input::events_require_host_terminal_theme_query(&events) {
+                    if direct_host_theme_query_required(&mut state.direct_host_appearance, &events)
+                    {
                         query_host_terminal_theme();
                     }
                     if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
@@ -2053,6 +2056,28 @@ async fn run_client_loop(
     let _ = io::stdout().flush();
 
     Ok(())
+}
+
+/// A direct attach re-queries the host theme only when a scheme report carries
+/// an appearance that differs from the last reported one. The appearance query
+/// sent on focus gain is answered with the current scheme even when nothing
+/// changed; re-querying the full theme then makes the host terminal answer
+/// hundreds of palette queries, which stalls its display for seconds.
+#[cfg(any(not(windows), test))]
+fn direct_host_theme_query_required(
+    last_appearance: &mut Option<crate::terminal_theme::HostAppearance>,
+    events: &[crate::raw_input::RawInputEvent],
+) -> bool {
+    let mut required = false;
+    for event in events {
+        if let crate::raw_input::RawInputEvent::HostColorSchemeChanged(appearance) = event {
+            if *last_appearance != Some(*appearance) {
+                *last_appearance = Some(*appearance);
+                required = true;
+            }
+        }
+    }
+    required
 }
 
 #[cfg(test)]

@@ -34,6 +34,9 @@ pub(super) struct ClientState {
     pub(super) remote_image_paste_key:
         Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     pub(super) redraw_on_focus_gained: bool,
+    /// Last host color scheme reported during a direct terminal attach.
+    #[cfg(any(unix, test))]
+    pub(super) direct_host_appearance: Option<crate::terminal_theme::HostAppearance>,
     pub(super) repaint_pending: bool,
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
     /// an acknowledged target snapshot/surface pair commits.

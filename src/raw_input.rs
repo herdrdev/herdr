@@ -542,13 +542,6 @@ pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEv
         .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
 }
 
-#[cfg(any(not(windows), test))]
-pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::HostColorSchemeChanged(_)))
-}
-
 fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
     if buffer.is_empty() {
         return None;
@@ -1330,7 +1323,6 @@ mod tests {
         assert!(!events_require_host_terminal_appearance_query(
             &scheme_report
         ));
-        assert!(events_require_host_terminal_theme_query(&scheme_report));
     }
 
     #[test]
@@ -1345,7 +1337,6 @@ mod tests {
                 events[0],
                 RawInputEvent::HostColorSchemeChanged(HostAppearance::Dark | HostAppearance::Light)
             ));
-            assert!(events_require_host_terminal_theme_query(&events));
         }
     }
 
@@ -1359,7 +1350,6 @@ mod tests {
             let events = parse_raw_input_bytes_sync(bytes);
             assert_eq!(events.len(), 1, "bytes: {bytes:?}");
             assert!(matches!(events[0], RawInputEvent::Unsupported));
-            assert!(!events_require_host_terminal_theme_query(&events));
         }
     }
 
