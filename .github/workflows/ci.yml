@@ -56,7 +56,7 @@ jobs:
           - os: windows-latest
             kind: windows
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -96,6 +96,24 @@ jobs:
           # Linux builds both SIMD/ReleaseFast and scalar/ReleaseSafe variants.
           cache-size-limit: 4096
 
+      - name: Stabilize Zig installation path on Unix
+        if: matrix.kind == 'unix'
+        run: |
+          stable_zig="$RUNNER_TEMP/herdr-zig-0.16.0"
+          mv "$(dirname "$(command -v zig)")" "$stable_zig"
+          echo "$stable_zig" >> "$GITHUB_PATH"
+          echo "ZIG=$stable_zig/zig" >> "$GITHUB_ENV"
+
+      - name: Stabilize Zig installation path on Windows
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $source = Split-Path (Get-Command zig).Source
+          $stable = Join-Path $env:RUNNER_TEMP "herdr-zig-0.16.0"
+          Move-Item -LiteralPath $source -Destination $stable
+          $stable | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "ZIG=$(Join-Path $stable 'zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure Zig cache on macOS
         if: runner.os == 'macOS'
         run: |
@@ -123,7 +141,10 @@ jobs:
 
       - name: Check scalar libghostty with runtime safety
         if: runner.os == 'Linux'
-        run: just test-ghostty-scalar
+        env:
+          LIBGHOSTTY_VT_SIMD: "false"
+          LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
+        run: just test-one ghostty
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'
@@ -137,10 +158,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           $exe = Join-Path $PWD "target\debug\herdr.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-
-      - name: Compare scalar target scopes on the same Linux runner
-        if: runner.os == 'Linux'
-        run: bash scripts/ci_scalar_scope_probe.sh
 
   windows-conpty-package:
     name: Windows ConPTY package
@@ -163,6 +180,15 @@ jobs:
         with:
           version: 0.16.0
           use-cache: false
+
+      - name: Stabilize Zig installation path
+        shell: pwsh
+        run: |
+          $source = Split-Path (Get-Command zig).Source
+          $stable = Join-Path $env:RUNNER_TEMP "herdr-zig-0.16.0"
+          Move-Item -LiteralPath $source -Destination $stable
+          $stable | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "ZIG=$(Join-Path $stable 'zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore Zig build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
