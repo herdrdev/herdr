@@ -19,9 +19,9 @@ use crate::terminal_theme::{
 };
 
 const ESC: u8 = 0x1b;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS: i32 = 10;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS: i32 = 150;
 pub(crate) const GHOSTTY_COLOR_SCHEME_DARK_REPORT: &[u8] = b"\x1b[?997;1n";
 pub(crate) const GHOSTTY_COLOR_SCHEME_LIGHT_REPORT: &[u8] = b"\x1b[?997;2n";
@@ -207,12 +207,12 @@ impl RawInputByteFramer {
         !self.buffer.is_empty()
     }
 
-    #[cfg(any(not(windows), test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_lone_escape(&self) -> bool {
         self.buffer.as_slice() == [ESC]
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
             || starts_with_incomplete_default_mouse_sequence(&self.buffer)

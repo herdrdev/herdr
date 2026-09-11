@@ -32,8 +32,7 @@ function Invoke-CargoWithZigCacheRecovery {
 Invoke-Checked cargo @("fmt", "--check")
 Invoke-CargoWithZigCacheRecovery @(
     "clippy",
-    "--bin",
-    "herdr",
+    "--all-targets",
     "--locked",
     "--",
     "-D",

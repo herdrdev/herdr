@@ -3125,7 +3125,8 @@ mod tests {
 
         let parent_pid = std::process::id().to_string();
         let test_exe = std::env::current_exe().expect("resolve test executable");
-        let configurations: [(&str, fn(&mut Command)); 2] = [
+        type ConfigureCommand = fn(&mut Command);
+        let configurations: [(&str, ConfigureCommand); 2] = [
             ("background", super::configure_background_command_platform),
             ("server daemon", super::detach_server_daemon_command),
         ];
@@ -3172,7 +3173,7 @@ mod tests {
     }
 
     fn argv_strings(argv: &[std::ffi::OsString]) -> Vec<String> {
-        argv.into_iter()
+        argv.iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
     }

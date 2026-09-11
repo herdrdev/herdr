@@ -40,7 +40,7 @@ use self::agent_detection::{
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
 };
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub use self::terminal::InputState;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{
@@ -1075,7 +1075,7 @@ impl TerminalCompressionWake {
 /// Drives libghostty-vt's caller-owned compression after terminal activity settles.
 struct TerminalCompressionTask {
     wake: TerminalCompressionWake,
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     completed_passes: Arc<AtomicU64>,
     handle: tokio::task::AbortHandle,
 }
@@ -1094,9 +1094,9 @@ impl TerminalCompressionTask {
         };
         let task_notify = wake.notify.clone();
         let task_generation = wake.generation.clone();
-        #[cfg(test)]
+        #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
         let completed_passes = Arc::new(AtomicU64::new(0));
-        #[cfg(test)]
+        #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
         let task_completed_passes = completed_passes.clone();
         let handle = tokio::spawn(async move {
             run_terminal_compression_task(
@@ -1104,7 +1104,7 @@ impl TerminalCompressionTask {
                 terminal,
                 task_notify,
                 task_generation,
-                #[cfg(test)]
+                #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
                 task_completed_passes,
             )
             .await;
@@ -1112,7 +1112,7 @@ impl TerminalCompressionTask {
         .abort_handle();
         Self {
             wake,
-            #[cfg(test)]
+            #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
             completed_passes,
             handle,
         }
@@ -1130,7 +1130,7 @@ impl TerminalCompressionTask {
         self.handle.abort();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     fn completed_passes(&self) -> u64 {
         self.completed_passes.load(Ordering::Acquire)
     }
@@ -1141,7 +1141,9 @@ async fn run_terminal_compression_task(
     terminal: Arc<PaneTerminal>,
     notify: Arc<Notify>,
     generation: Arc<AtomicU64>,
-    #[cfg(test)] completed_passes: Arc<AtomicU64>,
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))] completed_passes: Arc<
+        AtomicU64,
+    >,
 ) {
     let mut observed_generation = generation.load(Ordering::Acquire);
     let mut activity = loop {
@@ -1224,7 +1226,7 @@ async fn run_terminal_compression_task(
                 TerminalCompressionStep::Compressed(
                     crate::ghostty::TerminalCompressionResult::Complete,
                 ) => {
-                    #[cfg(test)]
+                    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
                     completed_passes.fetch_add(1, Ordering::Release);
                     loop {
                         notify.notified().await;
@@ -2979,7 +2981,7 @@ impl PaneRuntime {
         result
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(unix)]
     pub fn input_state(&self) -> Option<InputState> {
         self.terminal.input_state()
     }
