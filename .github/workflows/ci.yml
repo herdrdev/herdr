@@ -56,7 +56,7 @@ jobs:
           - os: windows-latest
             kind: windows
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -153,6 +153,11 @@ jobs:
           $ErrorActionPreference = "Stop"
           $exe = Join-Path $PWD "target\debug\herdr.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Compare Windows linkers on the same runner
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: ./scripts/ci_linker_probe.ps1
 
   windows-conpty-package:
     name: Windows ConPTY package
