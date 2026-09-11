@@ -98,23 +98,23 @@ fn platform_state_dir() -> PathBuf {
 /// TOML tolerates a single BOM at the very start of the document, but a BOM at
 /// the start of a later line makes the parser reject the whole file. A
 /// line-oriented edit can displace a leading BOM into the middle of the file,
-/// so drop such line-start BOMs when the document no longer parses. When the
-/// document is valid, a line-start BOM can only be string data inside a
-/// multiline value, which is preserved.
+/// so drop line-start BOMs that the TOML parser actually rejects. A U+FEFF that
+/// is valid string data is kept, because its parse error would not point at it.
 fn normalize_utf8_bom(content: &str) -> String {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    if !content.contains("\n\u{feff}") || content.parse::<toml::Value>().is_ok() {
+    if !content.contains('\u{feff}') {
         return content.to_owned();
     }
 
-    let mut normalized = String::with_capacity(content.len());
-    let mut at_line_start = true;
-    for character in content.chars() {
-        if character == '\u{feff}' && at_line_start {
-            continue;
+    let mut normalized = content.to_owned();
+    while let Err(error) = normalized.parse::<toml::Value>() {
+        let Some(span) = error.span() else {
+            break;
+        };
+        if normalized.get(span.clone()) != Some("\u{feff}") {
+            break;
         }
-        at_line_start = character == '\n';
-        normalized.push(character);
+        normalized.replace_range(span, "");
     }
     normalized
 }
@@ -1166,6 +1166,13 @@ mouse_capture = false
     fn normalize_utf8_bom_preserves_boms_in_multiline_literal_strings() {
         let content = "[theme]\nname = '''\nfirst\n\u{feff}second\n'''\n";
         assert!(content.parse::<toml::Value>().is_ok());
+        assert_eq!(normalize_utf8_bom(content), content);
+    }
+
+    #[test]
+    fn normalize_utf8_bom_preserves_string_boms_despite_other_errors() {
+        let content = "[theme]\nname = \"\"\"\nfirst\n\u{feff}second\n\"\"\"\nbroken = \n";
+        assert!(content.parse::<toml::Value>().is_err());
         assert_eq!(normalize_utf8_bom(content), content);
     }
 
