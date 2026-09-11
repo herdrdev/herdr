@@ -127,10 +127,7 @@ jobs:
 
       - name: Check scalar libghostty with runtime safety
         if: runner.os == 'Linux'
-        env:
-          LIBGHOSTTY_VT_SIMD: "false"
-          LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
-        run: just test-one ghostty
+        run: just test-ghostty-scalar
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'

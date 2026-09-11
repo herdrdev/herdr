@@ -19,6 +19,11 @@ maintenance-test:
 test-one filter:
     cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
 
+# Exercise scalar libghostty with runtime safety without building unrelated integration binaries.
+[unix]
+test-ghostty-scalar:
+    LIBGHOSTTY_VT_SIMD=false LIBGHOSTTY_VT_OPTIMIZE=ReleaseSafe cargo nextest run --locked --bin herdr ghostty --status-level fail --final-status-level fail --failure-output final --success-output never
+
 # Enforce deterministic UI hot-path architecture boundaries
 ui-hot-path-architecture-test:
     {{python}} -m unittest scripts.test_ui_hot_path_architecture
