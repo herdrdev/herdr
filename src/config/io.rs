@@ -93,15 +93,17 @@ fn platform_state_dir() -> PathBuf {
     }
 }
 
-/// Remove UTF-8 byte-order marks from config text.
+/// Normalize UTF-8 byte-order marks in config text.
 ///
-/// TOML tolerates a BOM only at the very start of the document. Windows editors
-/// commonly add one, and a line-oriented config edit can otherwise move it to
-/// the start of a later line, where the TOML parser rejects the whole file.
-/// Dropping BOMs at the start of the file and of each line keeps both loading
-/// and editing working, and repairs files that were already corrupted.
-fn strip_utf8_bom(content: &str) -> String {
-    if !content.contains('\u{feff}') {
+/// TOML tolerates a single BOM at the very start of the document, but a BOM at
+/// the start of a later line makes the parser reject the whole file. A
+/// line-oriented edit can displace a leading BOM into the middle of the file,
+/// so drop such line-start BOMs when the document no longer parses. When the
+/// document is valid, a line-start BOM can only be string data inside a
+/// multiline value, which is preserved.
+fn normalize_utf8_bom(content: &str) -> String {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    if !content.contains("\n\u{feff}") || content.parse::<toml::Value>().is_ok() {
         return content.to_owned();
     }
 
@@ -119,7 +121,7 @@ fn strip_utf8_bom(content: &str) -> String {
 
 pub(super) fn read_optional_config(path: &Path) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
-        Ok(content) => Ok(Some(strip_utf8_bom(&content))),
+        Ok(content) => Ok(Some(normalize_utf8_bom(&content))),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
     }
@@ -1134,19 +1136,37 @@ mouse_capture = false
     }
 
     #[test]
-    fn strip_utf8_bom_removes_leading_and_line_start_boms() {
-        let content =
-            "\u{feff}onboarding = false\n\u{feff}[terminal]\ndefault_shell = \"pwsh.exe\"\n";
+    fn normalize_utf8_bom_removes_a_leading_bom() {
+        let content = "\u{feff}onboarding = false\n[terminal]\n";
         assert_eq!(
-            strip_utf8_bom(content),
-            "onboarding = false\n[terminal]\ndefault_shell = \"pwsh.exe\"\n"
+            normalize_utf8_bom(content),
+            "onboarding = false\n[terminal]\n"
         );
     }
 
     #[test]
-    fn strip_utf8_bom_preserves_boms_inside_values() {
-        let content = "default_shell = \"\u{feff}pwsh.exe\"\n";
-        assert_eq!(strip_utf8_bom(content), content);
+    fn normalize_utf8_bom_recovers_from_a_displaced_mid_file_bom() {
+        let content = "onboarding = false\n\u{feff}[terminal]\ndefault_shell = \"pwsh.exe\"\n";
+        let normalized = normalize_utf8_bom(content);
+        assert_eq!(
+            normalized,
+            "onboarding = false\n[terminal]\ndefault_shell = \"pwsh.exe\"\n"
+        );
+        assert!(normalized.parse::<toml::Value>().is_ok());
+    }
+
+    #[test]
+    fn normalize_utf8_bom_preserves_boms_in_multiline_basic_strings() {
+        let content = "[theme]\nname = \"\"\"\nfirst\n\u{feff}second\n\"\"\"\n";
+        assert!(content.parse::<toml::Value>().is_ok());
+        assert_eq!(normalize_utf8_bom(content), content);
+    }
+
+    #[test]
+    fn normalize_utf8_bom_preserves_boms_in_multiline_literal_strings() {
+        let content = "[theme]\nname = '''\nfirst\n\u{feff}second\n'''\n";
+        assert!(content.parse::<toml::Value>().is_ok());
+        assert_eq!(normalize_utf8_bom(content), content);
     }
 
     #[test]
