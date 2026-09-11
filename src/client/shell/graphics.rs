@@ -2,6 +2,11 @@ use super::*;
 
 impl ClientShellState {
     #[cfg(unix)]
+    pub(crate) fn set_graphics_png_supported(&mut self, supported: bool) {
+        self.graphics.set_png_supported(supported);
+    }
+
+    #[cfg(unix)]
     pub(crate) fn graphics_scope(&self) -> &str {
         self.graphics.scope()
     }

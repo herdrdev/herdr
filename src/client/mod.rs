@@ -486,6 +486,16 @@ async fn run_client_loop(
         query_host_cell_size();
     }
 
+    // Invisible 1x1 RGB PNG query; raw forwarding remains enabled until OK.
+    #[cfg(unix)]
+    let mut png_probe_pending = state.kitty_graphics_enabled
+        && state.attach_escape.is_none()
+        && state.shell.is_some()
+        && io::stdout().write_all(concat!(
+            "\x1b_Ga=q,t=d,f=100,q=0,i=4294967294;",
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC\x1b\\"
+        ).as_bytes()).and_then(|()| io::stdout().flush()).is_ok();
+
     // Spawn the resize poller thread.
     let resize_quit = should_quit.clone();
     let resize_tx = event_tx.clone();
@@ -720,6 +730,15 @@ async fn run_client_loop(
             ClientLoopEvent::EndpointCatalog(reload) => pending_catalog = Some(reload),
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
+                if let Some(reply) = data.strip_prefix(b"\x1b_Gi=4294967294;") {
+                    if png_probe_pending {
+                        if let Some(shell) = state.shell.as_mut() {
+                            shell.set_graphics_png_supported(reply == b"OK\x1b\\");
+                        }
+                        png_probe_pending = false;
+                    }
+                    continue;
+                }
                 let image_bridge_active = endpoint_accepts_local_images(
                     is_remote_client,
                     write_stream.active_id(),

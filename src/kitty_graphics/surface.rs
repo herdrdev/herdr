@@ -50,6 +50,11 @@ pub(crate) struct ClientState {
 }
 
 impl ClientState {
+    #[cfg(unix)]
+    pub(crate) fn set_png_supported(&mut self, supported: bool) {
+        self.host.png_supported = supported;
+    }
+
     pub(crate) fn scope(&self) -> &str {
         &self.scope
     }

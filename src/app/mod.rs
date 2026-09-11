@@ -35,7 +35,8 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
+// Local high-refresh graphics candidate: permit presentation above 60 Hz.
+const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(8);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);

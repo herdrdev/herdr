@@ -105,6 +105,7 @@ struct ClippedPlacement {
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct HostGraphicsCache {
+    png_supported: bool,
     images: HashMap<u32, ImageSignature>,
     placements: HashMap<(u32, u32), PlacementSignature>,
     /// Host image currently backing each (pane, source image id) pair.
@@ -210,9 +211,9 @@ fn encode_placement_update(
                 &mut bytes,
                 placement,
                 clipped,
-                format_code,
                 host_id,
                 placement_id,
+                cache.png_supported,
             ) {
                 return None;
             }
@@ -223,7 +224,7 @@ fn encode_placement_update(
                 cache.placements.retain(|(id, _), _| *id != host_id);
                 cache.replayed_placements.retain(|(id, _)| *id != host_id);
             }
-            if !encode_upload_image(&mut bytes, placement, format_code, host_id) {
+            if !encode_upload_image(&mut bytes, placement, host_id, cache.png_supported) {
                 return None;
             }
         }
@@ -768,18 +769,18 @@ fn encode_delete_placement(out: &mut Vec<u8>, host_id: u32, host_placement_id: u
 fn encode_upload_image(
     out: &mut Vec<u8>,
     placement: &HostPlacement,
-    format_code: u32,
     host_id: u32,
+    png_supported: bool,
 ) -> bool {
     if placement.placement.data.is_empty() {
         return false;
     }
 
     let control = format!(
-        "a=t,t=d,f={format_code},s={},v={},i={host_id},q=2",
+        "a=t,t=d,s={},v={},i={host_id},q=2",
         placement.placement.image_width, placement.placement.image_height,
     );
-    encode_kitty_data(out, &control, &placement.placement.data);
+    encode_kitty_data(out, &control, &placement.placement, png_supported);
     true
 }
 
@@ -787,16 +788,16 @@ fn encode_transmit_and_display(
     out: &mut Vec<u8>,
     placement: &HostPlacement,
     clipped: ClippedPlacement,
-    format_code: u32,
     host_id: u32,
     host_placement_id: u32,
+    png_supported: bool,
 ) -> bool {
     if placement.placement.data.is_empty() {
         return false;
     }
     let _ = write!(out, "\x1b[{};{}H", clipped.y + 1, clipped.x + 1);
     let mut control = format!(
-        "a=T,t=d,f={format_code},s={},v={},i={host_id},p={host_placement_id},c={},r={},z={},C=1,q=2",
+        "a=T,t=d,s={},v={},i={host_id},p={host_placement_id},c={},r={},z={},C=1,q=2",
         placement.placement.image_width,
         placement.placement.image_height,
         clipped.cols,
@@ -804,7 +805,7 @@ fn encode_transmit_and_display(
         placement.placement.z,
     );
     append_placement_controls(&mut control, clipped);
-    encode_kitty_data(out, &control, &placement.placement.data);
+    encode_kitty_data(out, &control, &placement.placement, png_supported);
     true
 }
 
@@ -1055,7 +1056,38 @@ fn kitty_format_code(format: KittyImageFormat) -> u32 {
     }
 }
 
-fn encode_kitty_data(out: &mut Vec<u8>, control: &str, data: &[u8]) {
+fn encode_forward_png(image: &KittyImagePlacement) -> Option<Vec<u8>> {
+    let color = match image.format {
+        KittyImageFormat::Rgb => png::ColorType::Rgb,
+        KittyImageFormat::Rgba => png::ColorType::Rgba,
+        _ => return None,
+    };
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.image_width, image.image_height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::FilterType::Sub);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&image.data).ok()?;
+        writer.finish().ok()?;
+    }
+    Some(bytes)
+}
+
+fn encode_kitty_data(
+    out: &mut Vec<u8>,
+    control: &str,
+    image: &KittyImagePlacement,
+    png_supported: bool,
+) {
+    let format_code = kitty_format_code(image.format);
+    let png = png_supported.then(|| encode_forward_png(image)).flatten();
+    let (format_code, data) = png
+        .as_deref()
+        .map_or((format_code, image.data.as_slice()), |bytes| (100, bytes));
+    let control = format!("{control},f={format_code}");
     let mut chunks = data.chunks(KITTY_CHUNK_BYTES).peekable();
     let Some(first) = chunks.next() else {
         return;
@@ -1486,15 +1518,15 @@ mod tests {
         placement.placement.image_height = 1;
         placement.placement.data = vec![1_u8; crate::api::schema::PANE_GRAPHICS_STREAM_MAX_BYTES];
         placement.placement.data_len = placement.placement.data.len();
-        let (clipped, format_code) = clipped_placement(&placement).expect("visible placement");
+        let (clipped, _) = clipped_placement(&placement).expect("visible placement");
         let host_id = host_image_id(placement.pane_id, &placement.placement);
         let mut encoded = Vec::new();
 
         assert!(encode_upload_image(
             &mut encoded,
             &placement,
-            format_code,
             host_id,
+            false,
         ));
         encode_display_placement(&mut encoded, clipped, host_id, 1, 0);
 
