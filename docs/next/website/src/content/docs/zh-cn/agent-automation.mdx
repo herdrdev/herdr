@@ -73,7 +73,7 @@ herdr agent rename w1:p2 reviewer
 
 窗格输入直接指定终端,不关心当前进程。智能体输入会解析实时智能体;如果该智能体已不再控制此窗格,操作会被拒绝。
 
-如果智能体已经是 `blocked`，`agent prompt --wait` 会返回 `agent_blocked`，不会发送输入或开始等待。否则，它会将提示文本和延迟的 Enter 作为一次有序提交写入，然后等待状态。Windows 上 Codex 的提交延迟随提示大小增加；调用方的超时包含提交时间。如果提示从其他非 working 状态开始，提交后最多等待五秒来观察 `working` 或 `blocked`。如果没有观察到，Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。独立的 `agent wait` 会观察当前智能体；如果状态已经匹配，就会立即返回。两者默认匹配 `idle`、`done` 或 `blocked`。可以重复使用 `--until` 接受多个精确状态，例如 `--until idle --until done`；需要 `unknown` 时请明确使用 `--until unknown`。在 `agent prompt` 中，`--until` 必须与 `--wait` 一起使用。
+如果智能体已经是 `blocked`，`agent prompt --wait` 会返回 `agent_blocked`，不会发送输入或开始等待。否则，它会将提示文本和延迟的 Enter 作为一次有序提交写入，然后等待状态。在 Windows 上，Codex 在 Enter 前会收到粘贴边界，因此提交不依赖提示大小；调用方的超时包含提交时间。如果提示从其他非 working 状态开始，提交后最多等待五秒来观察 `working` 或 `blocked`。如果没有观察到，Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。独立的 `agent wait` 会观察当前智能体；如果状态已经匹配，就会立即返回。两者默认匹配 `idle`、`done` 或 `blocked`。可以重复使用 `--until` 接受多个精确状态，例如 `--until idle --until done`；需要 `unknown` 时请明确使用 `--until unknown`。在 `agent prompt` 中，`--until` 必须与 `--wait` 一起使用。
 
 `idle` 和 `done` 都表示可以接受输入。CLI/API 使用服务器的已查看状态：`done` 表示尚未标记为已查看的 idle；显式 `pane focus` / `agent focus` 会标记目标，读取不会。每个 TUI 客户端独立记录它已显示的完成状态，因此其 Done 标记可能与 CLI 或其他客户端不同。`blocked` 表示 Herdr 识别到了审批或提问界面。`unknown` 表示智能体存在,但 Herdr 无法可靠判断其生命周期;它不代表工作成功完成。区别重要时,请指定精确的 `--until` 状态。
 

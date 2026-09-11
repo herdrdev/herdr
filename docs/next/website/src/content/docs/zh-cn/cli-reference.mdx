@@ -328,7 +328,7 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
 
-`agent prompt` 遵循当前的 bracketed paste 模式，即使智能体处于 working，也会将文本和延迟的 Enter 作为一次有序提交写入。不带 `--wait` 时，成功只确认写入完成，不代表轮次已经开始。Windows 上 Codex 的延迟随提示大小增加；调用方的超时包含提交时间。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在提交后的最多五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
+`agent prompt` 遵循当前的 bracketed paste 模式，即使智能体处于 working，也会将文本和延迟的 Enter 作为一次有序提交写入。不带 `--wait` 时，成功只确认写入完成，不代表轮次已经开始。在 Windows 上，Codex 在 Enter 前会收到粘贴边界，因此提交不依赖提示大小；调用方的超时包含提交时间。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在提交后的最多五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 
 `idle` 和 `done` 都表示可以接受输入。CLI/API 使用服务器的已查看状态：`done` 表示尚未标记为已查看的 idle；显式 `pane focus` / `agent focus` 会标记目标，读取不会。每个 TUI 客户端独立记录它已显示的完成状态，因此其 Done 标记可能与 CLI 或其他客户端不同。`blocked` 表示 Herdr 识别到审批或提问界面。`unknown` 表示智能体存在但无法可靠分类,不代表工作成功。
 
