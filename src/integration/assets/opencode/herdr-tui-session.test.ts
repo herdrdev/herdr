@@ -214,7 +214,7 @@ function v2Api() {
     },
     select(sessionID: string) { route = { type: "session", sessionID }; },
     home() { route = { type: "home", sessionID: "" }; },
-    emit(type: string, data: object) {
+    emit(type: string, data?: object) {
       for (const listener of listeners) listener({ details: { type, data } });
     },
     listeners,
@@ -227,6 +227,19 @@ function v2Api() {
 const flushReports = () => new Promise((resolve) => setTimeout(resolve, 10));
 const states = () => requests.filter((r) => requestParam(r, "state") !== undefined)
   .map((r) => requestParam(r, "state"));
+
+test("V2 ignores events without data", async () => {
+  const plugin = await loadPlugin();
+  const tui = v2Api();
+  const dispose = await plugin.setup(tui.api);
+  activeDisposers.push(dispose);
+  await flushReports();
+  requests.length = 0;
+  expect(() => tui.emit("legacy.event")).not.toThrow();
+  tui.emit("session.execution.started", { sessionID: "a" });
+  await flushReports();
+  expect(states()).toEqual(["working"]);
+});
 
 test("V2 completes and interrupts without legacy idle events", async () => {
   for (const terminal of ["succeeded", "interrupted", "failed"]) {

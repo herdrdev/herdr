@@ -238,6 +238,7 @@ function setup(api) {
   function receive({ details: event }) {
     if (disposed) return;
     const data = event.data;
+    if (data == null) return;
     if (event.type === "session.created") {
       sessions.set(data.sessionID, { id: data.sessionID, parentID: data.parentID });
     }
