@@ -111,10 +111,6 @@ jobs:
           restore-keys: |
             zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-
 
-      - name: Install macOS build tools
-        if: runner.os == 'macOS'
-        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja
-
       - name: Restore cargo cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -142,10 +138,9 @@ jobs:
           $exe = Join-Path $PWD "target\debug\herdr.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
-      - name: Compare debug profiles on the same Windows runner
-        if: matrix.kind == 'windows'
-        shell: pwsh
-        run: ./scripts/ci_debug_profile_probe.ps1
+      - name: Compare scalar target scopes on the same Linux runner
+        if: runner.os == 'Linux'
+        run: bash scripts/ci_scalar_scope_probe.sh
 
   windows-conpty-package:
     name: Windows ConPTY package
