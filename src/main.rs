@@ -7,7 +7,7 @@ fn ci_incremental_probe() {
         .expect("CI probe expectation")
         .parse::<u32>()
         .expect("numeric CI probe expectation");
-    assert_eq!(std::hint::black_box(1u32) + 2, expected);
+    assert_eq!(std::hint::black_box(2u32) + 2, expected);
 }
 
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";

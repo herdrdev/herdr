@@ -14,7 +14,7 @@ env:
   # Keep file/line backtraces without generating type and variable debug information.
   CARGO_PROFILE_DEV_DEBUG: "1"
   CARGO_PROFILE_TEST_DEBUG: "1"
-  HERDR_CI_PROBE_EXPECTED: "3"
+  HERDR_CI_PROBE_EXPECTED: "4"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
