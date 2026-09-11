@@ -10,6 +10,7 @@ pub(crate) struct Package {
     pub(crate) process: Option<ProcessDefinition>,
     pub(crate) resume: Option<ResumeDefinition>,
     pub(crate) integration: Option<IntegrationDefinition>,
+    pub(crate) assets: BTreeMap<String, String>,
     pub(crate) detection: Option<String>,
 }
 
@@ -441,11 +442,17 @@ pub(crate) fn load_packages(files: &[(&str, &str)]) -> Result<Vec<Package>, Stri
                 Ok::<_, String>((*text).to_owned())
             })
             .transpose()?;
+        let assets = files
+            .iter()
+            .filter(|(path, _)| path.starts_with("assets/"))
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect();
         packages.push(Package {
             identity,
             process,
             resume,
             integration,
+            assets,
             detection,
         });
     }
@@ -649,7 +656,7 @@ fn validate_integration(
     Ok(())
 }
 
-fn markers<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
+pub(super) fn markers<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
     text.lines()
         .filter_map(|line| {
             let line = line.trim();

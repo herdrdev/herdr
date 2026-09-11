@@ -1,7 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::antigravity_cli_dir;
 use crate::integration::{install_antigravity_cli, uninstall_antigravity_cli};
 
@@ -12,12 +12,12 @@ pub(crate) const HOOK_INSTALL_NAME: &str = if cfg!(windows) {
 } else {
     HOOK_INSTALL_NAME_UNIX
 };
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 pub(crate) const HOOK_ASSET: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vendor/agent-registry/agents/agy/assets/herdr-agent-state.ps1"
 ));
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 pub(crate) const HOOK_ASSET: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vendor/agent-registry/agents/agy/assets/herdr-agent-state.sh"
@@ -40,8 +40,8 @@ pub(crate) const HOOK_EVENTS: [(&str, &str); 1] = [("PreInvocation", "session")]
 pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let installed = install_antigravity_cli()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_antigravity_cli(profile)?;
     Ok(vec![
         format!(
             "installed antigravity-cli integration hook to {}",

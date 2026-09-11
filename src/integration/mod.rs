@@ -47,6 +47,11 @@ use crate::integration::builtin::kimi::{
     HOOK_EVENTS as KIMI_HOOK_EVENTS,
 };
 
+use crate::integration::builtin::opencode::{
+    V2_TUI_PLUGIN_DIR as OPENCODE_V2_TUI_PLUGIN_DIR,
+    V2_TUI_PLUGIN_SPEC as OPENCODE_V2_TUI_PLUGIN_SPEC,
+};
+
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

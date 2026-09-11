@@ -69,7 +69,8 @@ use crate::integration::builtin::opencode::{
     PLUGIN_ASSET as OPENCODE_PLUGIN_ASSET, PLUGIN_INSTALL_NAME as OPENCODE_PLUGIN_INSTALL_NAME,
     TUI_PLUGIN_ASSET as OPENCODE_TUI_PLUGIN_ASSET,
     TUI_PLUGIN_INSTALL_NAME as OPENCODE_TUI_PLUGIN_INSTALL_NAME,
-    TUI_PLUGIN_SPEC as OPENCODE_TUI_PLUGIN_SPEC,
+    TUI_PLUGIN_SPEC as OPENCODE_TUI_PLUGIN_SPEC, V2_TUI_PLUGIN_DIR as OPENCODE_V2_TUI_PLUGIN_DIR,
+    V2_TUI_PLUGIN_SPEC as OPENCODE_V2_TUI_PLUGIN_SPEC,
 };
 use crate::integration::builtin::pi::{
     EXTENSION_ASSET as PI_EXTENSION_ASSET, EXTENSION_INSTALL_NAME as PI_EXTENSION_INSTALL_NAME,
@@ -95,6 +96,34 @@ fn integration_profile(
         .and_then(|profile| profile.integration())
         .cloned()
         .expect("integration target profile")
+}
+
+macro_rules! bundled_installers {
+    ($($install:ident, $target:ident, $result:ty);+ $(;)?) => {$ (
+        fn $install() -> std::io::Result<$result> {
+            super::targets::$install(&integration_profile(crate::api::schema::IntegrationTarget::$target))
+        }
+    )+};
+}
+
+bundled_installers! {
+    install_pi, Pi, PathBuf;
+    install_omp, Omp, OmpInstallPaths;
+    install_claude, Claude, ClaudeInstallPaths;
+    install_codex, Codex, CodexInstallPaths;
+    install_copilot, Copilot, CopilotInstallPaths;
+    install_devin, Devin, DevinInstallPaths;
+    install_droid, Droid, DroidInstallPaths;
+    install_kimi, Kimi, KimiInstallPaths;
+    install_opencode, Opencode, OpenCodeInstallPaths;
+    install_kilo, Kilo, KiloInstallPaths;
+    install_hermes, Hermes, HermesInstallPaths;
+    install_qodercli, Qodercli, QodercliInstallPaths;
+    install_qwen, Qwen, QwenInstallPaths;
+    install_cursor, Cursor, CursorInstallPaths;
+    install_mastracode, Mastracode, MastracodeInstallPaths;
+    install_antigravity_cli, AntigravityCli, AntigravityCliInstallPaths;
+    install_grok, Grok, GrokInstallPaths;
 }
 
 fn expected_integration_version(target: crate::api::schema::IntegrationTarget) -> u32 {
@@ -180,6 +209,7 @@ fn builtin_contract_packages() -> Vec<crate::agents::source::Package> {
                 ),
                 process: None,
                 resume: None,
+                assets: Default::default(),
                 detection: None,
             }
         };
@@ -843,6 +873,181 @@ fn integration_recommendation_installs_available_or_outdated_targets() {
     recommendation.available = true;
     recommendation.state = IntegrationStatusKind::Current;
     assert!(!recommendation.needs_install());
+}
+
+fn newer_integration_files(id: &str) -> Vec<(String, String)> {
+    let root = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry"
+    ));
+    let mut files = crate::agents::files::read_source(root).unwrap();
+    files.retain(|(path, _)| path.starts_with(&format!("agents/{id}/")));
+    let metadata = files
+        .iter_mut()
+        .find(|(path, _)| path.ends_with("/integration.toml"))
+        .unwrap();
+    let mut definition: toml::Value = toml::from_str(&metadata.1).unwrap();
+    let previous = definition["versions"]["unix"].as_integer().unwrap();
+    assert_eq!(
+        definition["versions"]["windows"].as_integer(),
+        Some(previous)
+    );
+    definition["versions"]["unix"] = (previous + 1).into();
+    definition["versions"]["windows"] = (previous + 1).into();
+    metadata.1 = toml::to_string(&definition).unwrap();
+    for (path, text) in &mut files {
+        if path.contains("/assets/") {
+            *text = text.replace(
+                &format!("HERDR_INTEGRATION_VERSION={previous}"),
+                &format!("HERDR_INTEGRATION_VERSION={}", previous + 1),
+            );
+        }
+    }
+    files
+}
+
+#[test]
+fn registry_refresh_exposes_pi_update_without_installing_until_explicit_application() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".pi/agent/extensions")).unwrap();
+    std::env::set_var("HOME", &home);
+    let old = integration_profile(crate::api::schema::IntegrationTarget::Pi);
+    let path = super::targets::install_pi(&old).unwrap();
+    let previous = fs::read_to_string(&path).unwrap();
+    let store = crate::agents::store::RegistryStore::new(
+        newer_integration_files("pi"),
+        base.join("active.json"),
+    )
+    .unwrap();
+    let current = store.snapshot();
+    let selected = current.profile_by_id("pi").unwrap().integration().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), previous);
+    let recommendation = integration_recommendations_with_registry(&current)
+        .pop()
+        .unwrap();
+    assert_eq!(recommendation.state, IntegrationStatusKind::Outdated);
+    selected.adapter().install(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        selected.asset(PI_EXTENSION_INSTALL_NAME).unwrap()
+    );
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Current
+    );
+    assert_eq!(old.asset(PI_EXTENSION_INSTALL_NAME).unwrap(), previous);
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn selected_claude_assets_preserve_unrelated_settings_and_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".claude");
+    fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let settings_path = dir.join("settings.json");
+    let settings = json!({"model":"user-choice", "hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"}]}]}});
+    fs::write(&settings_path, serde_json::to_string(&settings).unwrap()).unwrap();
+    let current =
+        crate::agents::store::snapshot_for_test(newer_integration_files("claude"), 2).unwrap();
+    let selected = current
+        .profile_by_id("claude")
+        .unwrap()
+        .integration()
+        .unwrap();
+    let installed = super::targets::install_claude(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.hook_path).unwrap(),
+        selected.asset(CLAUDE_HOOK_INSTALL_NAME).unwrap()
+    );
+    let actual: Value = serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(actual["model"], "user-choice");
+    assert!(actual["hooks"]["Stop"]
+        .as_array()
+        .unwrap()
+        .contains(&settings["hooks"]["Stop"][0]));
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn selected_opencode_update_keeps_v2_entrypoint_on_the_selected_version() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("cli.json"), r#"{"plugins":["other"]}"#).unwrap();
+    std::env::set_var("HOME", &home);
+    install_opencode().unwrap();
+    let current =
+        crate::agents::store::snapshot_for_test(newer_integration_files("opencode"), 2).unwrap();
+    let selected = current
+        .profile_by_id("opencode")
+        .unwrap()
+        .integration()
+        .unwrap();
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Outdated
+    );
+    let installed = super::targets::install_opencode(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.plugin_path).unwrap(),
+        selected.asset(OPENCODE_PLUGIN_INSTALL_NAME).unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(installed.tui_plugin_path).unwrap(),
+        selected.asset(OPENCODE_TUI_PLUGIN_INSTALL_NAME).unwrap()
+    );
+    let entry = fs::read_to_string(dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js")).unwrap();
+    assert_eq!(
+        parse_integration_version(&entry),
+        Some(selected.expected_version())
+    );
+    assert!(entry.contains("export { default } from \"../herdr-tui-session.js\";"));
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Current
+    );
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn missing_companion_asset_fails_before_any_opencode_install_mutation() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::env::set_var("HOME", &home);
+    let plugin_path = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, "previous plugin").unwrap();
+    let files = newer_integration_files("opencode");
+    let borrowed: Vec<_> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let mut packages = crate::agents::validate_packages(&borrowed).unwrap();
+    packages[0].assets.remove("assets/herdr-tui-session.js");
+    let registry = crate::agents::AgentRegistry::from_packages(packages).unwrap();
+    let selected = registry
+        .profile_by_id("opencode")
+        .unwrap()
+        .integration()
+        .unwrap();
+    assert!(super::targets::install_opencode(selected).is_err());
+    assert_eq!(fs::read_to_string(&plugin_path).unwrap(), "previous plugin");
+    assert!(!dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME).exists());
+    assert!(!dir.join("tui.json").exists());
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
 }
 
 #[test]
@@ -2679,6 +2884,10 @@ fn opencode_install_defers_v2_registration_while_migration_pending() {
 
 #[test]
 fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
+    assert_eq!(
+        crate::integration::builtin::opencode::v2_tui_entrypoint(12),
+        include_str!("assets/opencode/tui.js")
+    );
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -2697,7 +2906,12 @@ fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
         integration_status_at(
             crate::api::schema::IntegrationTarget::Opencode,
             installed.plugin_path.clone(),
-            OPENCODE_INTEGRATION_VERSION,
+            crate::agents::registry()
+                .profile_by_agent(crate::detect::Agent::OpenCode)
+                .unwrap()
+                .integration()
+                .unwrap()
+                .expected_version(),
         )
         .state
     };
@@ -2705,7 +2919,14 @@ fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
     let entry = dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js");
     assert_eq!(
         fs::read_to_string(&entry).unwrap(),
-        OPENCODE_V2_TUI_PLUGIN_ASSET
+        crate::integration::builtin::opencode::v2_tui_entrypoint(
+            crate::agents::registry()
+                .profile_by_agent(crate::detect::Agent::OpenCode)
+                .unwrap()
+                .integration()
+                .unwrap()
+                .expected_version()
+        )
     );
     fs::remove_file(&entry).unwrap();
     assert_eq!(status(), IntegrationStatusKind::Outdated);

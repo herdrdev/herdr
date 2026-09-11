@@ -1242,8 +1242,8 @@ fn select_pane_foreground_job_cached(
             |shell| process_is_git_bash(shell.pid),
             |entry| process_runtime_marker(entry.pid),
             |entry| {
-                ProcessIdentity::open(entry.pid).is_some_and(|identity| {
-                    identity.running() && identity.creation_time() == entry.command().creation_time
+                process_identity(entry.pid).is_some_and(|identity| {
+                    Some(identity.birth_token) == entry.command().creation_time
                 })
             },
         ) {

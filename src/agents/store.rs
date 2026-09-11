@@ -385,6 +385,7 @@ impl RegistryStore {
             } else {
                 read_candidate(source, active.generation)?
             };
+            validate_integration_revisions(&active, &candidate)?;
             candidate.accepted_remote = active.accepted_remote.clone();
             if candidate.digest != active.digest {
                 candidate.generation = next_generation(active.generation)?;
@@ -520,6 +521,7 @@ impl RegistryStore {
         {
             return Err("registry changed during download; retry the update".into());
         }
+        validate_integration_revisions(&active, &candidate)?;
         if active.digest == candidate.digest {
             candidate.registry = active.registry.clone();
             candidate.manifests = active.manifests.clone();
@@ -603,6 +605,7 @@ fn remote_candidate(
         next_generation(active.generation)?
     };
     let mut candidate = build_snapshot(verified.files, None, generation)?;
+    validate_integration_revisions(active, &candidate)?;
     if candidate.digest != verified.content_sha256 || revision.commit != verified.commit {
         return Err("registry snapshot provenance/content changed before activation".into());
     }
@@ -697,7 +700,7 @@ fn build_snapshot(
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     let packages = super::validate_packages(&borrowed)?;
-    validate_compiled_integrations(&packages, &borrowed)?;
+    validate_integration_baseline(&packages)?;
     let registry = Arc::new(AgentRegistry::from_packages(packages)?);
     let mut manifests = manifest::build_manifest_cache(&registry);
     manifest::apply_registry_provenance(&mut manifests, source.as_deref(), None);
@@ -713,12 +716,10 @@ fn build_snapshot(
     })
 }
 
-// Activation-only boundary. Offline validation/sync must accept future source
-// versions, but the fixed installers still write their include_str! assets. Do
-// not advertise a version or payload that this binary cannot actually install.
-pub(crate) fn validate_compiled_integrations(
+// The compiled installer layout is validated separately. Its bundled version is
+// the compatibility floor; newer versioned payloads use that same installer.
+pub(crate) fn validate_integration_baseline(
     packages: &[super::source::Package],
-    files: &[(&str, &str)],
 ) -> Result<(), String> {
     for package in packages {
         let Some(integration) = &package.integration else {
@@ -726,40 +727,109 @@ pub(crate) fn validate_compiled_integrations(
         };
         let id = &package.identity.id;
         if crate::integration::builtin::binding(Agent::parse(id)?).is_none() {
-            continue; // Parsed unknown integration metadata grants no installer.
+            continue;
         }
-        let rejected = |detail: &str| {
-            format!(
-            "{id}: {detail} differs from the bundled compiled integration; rebuild Herdr with the updated registry to activate it"
-        )
-        };
+        for asset in &integration.assets {
+            if asset.role == "manifest" {
+                continue;
+            }
+            let text = package
+                .assets
+                .get(&asset.path)
+                .ok_or_else(|| format!("{id}: missing integration asset {}", asset.path))?;
+            if super::source::markers(text, "HERDR_INTEGRATION_ID=").len() != 1
+                || super::source::markers(text, "HERDR_INTEGRATION_VERSION=").len() != 1
+            {
+                return Err(format!(
+                    "{id}: integration asset {} requires identity and version markers",
+                    asset.path
+                ));
+            }
+        }
         let metadata_path = format!("agents/{id}/integration.toml");
         let metadata = bundled::FILES
             .iter()
             .find(|(path, _)| *path == metadata_path)
             .map(|(_, text)| *text)
-            .ok_or_else(|| rejected("integration definition"))?;
+            .ok_or_else(|| format!("missing bundled integration definition for {id}"))?;
         let baseline: super::source::IntegrationDefinition = toml::from_str(metadata)
             .map_err(|error| format!("invalid bundled integration {id}: {error}"))?;
-        if integration.versions.unix != baseline.versions.unix
-            || integration.versions.windows != baseline.versions.windows
-        {
-            return Err(rejected("integration version"));
+        for (platform, version, minimum) in [
+            ("unix", integration.versions.unix, baseline.versions.unix),
+            (
+                "windows",
+                integration.versions.windows,
+                baseline.versions.windows,
+            ),
+        ] {
+            if version < minimum {
+                return Err(format!("{id}: integration version {version} on {platform} is older than this installer's minimum {minimum}"));
+            }
+            if version == minimum {
+                validate_same_version_assets(id, platform, integration, |path| {
+                    let full_path = format!("agents/{id}/{path}");
+                    let baseline = bundled::FILES
+                        .iter()
+                        .find(|(name, _)| *name == full_path)
+                        .map(|(_, text)| *text);
+                    package.assets.get(path).map(String::as_str) == baseline
+                })?;
+            }
         }
-        // The preceding semantic adapter-contract check fixes asset paths/roles
-        // for both platforms. Compare exact bytes, not only version markers.
-        for asset in &integration.assets {
-            let path = format!("agents/{id}/{}", asset.path);
-            let candidate = files
-                .iter()
-                .find(|(name, _)| *name == path)
-                .map(|(_, text)| *text);
-            let compiled = bundled::FILES
-                .iter()
-                .find(|(name, _)| *name == path)
-                .map(|(_, text)| *text);
-            if candidate.is_none() || compiled.is_none() || candidate != compiled {
-                return Err(rejected(&format!("integration asset {}", asset.path)));
+    }
+    Ok(())
+}
+
+fn validate_same_version_assets(
+    id: &str,
+    platform: &str,
+    definition: &super::source::IntegrationDefinition,
+    unchanged: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    for asset in &definition.assets {
+        if (asset.platform == "all" || asset.platform == platform) && !unchanged(&asset.path) {
+            return Err(format!(
+                "{id}: integration asset {} changed on {platform} without changing its version",
+                asset.path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_integration_revisions(
+    previous: &AgentRegistry,
+    candidate: &AgentRegistry,
+) -> Result<(), String> {
+    for profile in candidate.integration_capable_profiles() {
+        let Some(next) = profile.integration() else {
+            continue;
+        };
+        let Some(old) = previous
+            .profile_by_id(profile.canonical_id())
+            .and_then(|profile| profile.integration())
+        else {
+            continue;
+        };
+        for (platform, version, previous_version) in [
+            (
+                "unix",
+                next.definition.versions.unix,
+                old.definition.versions.unix,
+            ),
+            (
+                "windows",
+                next.definition.versions.windows,
+                old.definition.versions.windows,
+            ),
+        ] {
+            if version == previous_version {
+                validate_same_version_assets(
+                    profile.canonical_id(),
+                    platform,
+                    &next.definition,
+                    |path| next.assets.get(path) == old.assets.get(path),
+                )?;
             }
         }
     }
@@ -1815,7 +1885,7 @@ mod tests {
             .status()
             .last_error
             .unwrap()
-            .contains("rebuild Herdr"));
+            .contains("without changing its version"));
         assert!(
             recovered.snapshot().source.is_none(),
             "active fallback is bundled, not local"
@@ -1873,7 +1943,7 @@ mod tests {
             .status()
             .last_error
             .unwrap()
-            .contains("rebuild Herdr"));
+            .contains("without changing its version"));
         assert!(
             recovered.snapshot().remote.is_none(),
             "do not label bundled bytes as remote"
@@ -1920,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_integration_version_update_is_offline_valid_but_cannot_activate() {
+    fn versioned_integration_update_activates_and_survives_restart_without_installing() {
         let fixture = Fixture::new();
         let (store, source) = compiled_integration_source(&fixture);
         let old = store.snapshot();
@@ -1963,14 +2033,47 @@ mod tests {
             super::super::validate_packages(&borrowed).is_ok(),
             "offline extraction must accept new assets/versions"
         );
-        let error = store.reload(None).unwrap_err();
-        assert!(error.contains("integration version") && error.contains("rebuild Herdr"));
-        assert!(Arc::ptr_eq(&old, &store.snapshot()));
-        assert_eq!(fs::read(fixture.journal()).unwrap(), journal);
+        let status = store.reload(None).unwrap();
+        assert!(status.generation > old.generation);
+        assert_ne!(fs::read(fixture.journal()).unwrap(), journal);
+        let restarted = RegistryStore::startup(None, fixture.journal());
+        let current = restarted.snapshot();
+        let profile = current
+            .profile_by_id("claude")
+            .unwrap()
+            .integration()
+            .unwrap();
+        assert_eq!(profile.expected_version(), next);
+        let asset = profile
+            .asset(crate::integration::builtin::claude::HOOK_INSTALL_NAME)
+            .unwrap();
         assert_eq!(
-            read_journal(&fixture.journal()).unwrap().unwrap().digest,
-            old.digest
+            crate::integration::parse_integration_version(asset),
+            Some(next)
         );
+        assert_eq!(
+            old.profile_by_id("claude")
+                .unwrap()
+                .integration()
+                .unwrap()
+                .expected_version(),
+            previous
+        );
+        let untouched = fs::read(fixture.journal()).unwrap();
+        let asset_path = source.join("agents/claude/assets/herdr-agent-state.ps1");
+        fs::write(
+            &asset_path,
+            format!(
+                "{}\n# reused hot version",
+                fs::read_to_string(&asset_path).unwrap()
+            ),
+        )
+        .unwrap();
+        assert!(store
+            .reload(None)
+            .unwrap_err()
+            .contains("without changing its version"));
+        assert_eq!(fs::read(fixture.journal()).unwrap(), untouched);
     }
 
     #[test]
@@ -1991,9 +2094,43 @@ mod tests {
             .collect();
         assert!(super::super::validate_packages(&borrowed).is_ok());
         let error = store.reload(None).unwrap_err();
-        assert!(error.contains("integration asset") && error.contains("rebuild Herdr"));
+        assert!(
+            error.contains("integration asset") && error.contains("without changing its version")
+        );
         assert!(Arc::ptr_eq(&old, &store.snapshot()));
         assert_eq!(fs::read(fixture.journal()).unwrap(), journal);
+    }
+
+    #[test]
+    fn newer_integration_assets_still_require_identity_and_version_markers() {
+        let mut packages = super::super::validate_packages(bundled::FILES).unwrap();
+        packages.retain(|package| package.identity.id == "pi");
+        let definition = packages[0].integration.as_mut().unwrap();
+        let previous = definition.versions.unix;
+        definition.versions.unix += 1;
+        definition.versions.windows += 1;
+        for text in packages[0].assets.values_mut() {
+            *text = text.replace(
+                &format!("HERDR_INTEGRATION_VERSION={previous}"),
+                &format!("HERDR_INTEGRATION_VERSION={}", previous + 1),
+            );
+        }
+        assert!(validate_integration_baseline(&packages).is_ok());
+        for marker in ["HERDR_INTEGRATION_ID=", "HERDR_INTEGRATION_VERSION="] {
+            let mut missing = packages.clone();
+            let text = missing[0]
+                .assets
+                .get_mut("assets/herdr-agent-state.ts")
+                .unwrap();
+            *text = text
+                .lines()
+                .filter(|line| !line.contains(marker))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(validate_integration_baseline(&missing)
+                .unwrap_err()
+                .contains("requires identity and version markers"));
+        }
     }
 
     #[test]

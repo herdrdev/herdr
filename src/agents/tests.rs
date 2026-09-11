@@ -604,8 +604,8 @@ const EXPECTED_INTEGRATION_PROFILES: [ExpectedIntegrationProfile; 17] = [
         &[],
         &["opencode"],
         &["opencode"],
-        11,
-        11,
+        12,
+        12,
     ),
     (
         IntegrationTarget::Kilo,

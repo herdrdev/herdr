@@ -25,7 +25,8 @@ use super::env::{
     opencode_dir, opencode_state_dir, pi_extension_dir, qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
-    make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
+    atomic_replace_asset, remove_dir_all_if_exists, remove_file_if_exists,
+    remove_legacy_bash_hook_file,
 };
 use super::opencode_config::{
     add_cli_plugin, add_tui_plugin, remove_cli_plugin, remove_tui_plugin, tui_config_path,
@@ -43,77 +44,53 @@ use super::types::{
     QwenInstallPaths, QwenUninstallResult,
 };
 use crate::integration::builtin::agy::{
-    HOOK_ASSET as ANTIGRAVITY_CLI_HOOK_ASSET, HOOK_BLOCK_NAME as ANTIGRAVITY_CLI_HOOK_BLOCK_NAME,
-    HOOK_EVENTS as ANTIGRAVITY_CLI_HOOK_EVENTS,
+    HOOK_BLOCK_NAME as ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, HOOK_EVENTS as ANTIGRAVITY_CLI_HOOK_EVENTS,
     HOOK_INSTALL_NAME as ANTIGRAVITY_CLI_HOOK_INSTALL_NAME,
     HOOK_TIMEOUT_SEC as ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
 };
-use crate::integration::builtin::claude::{
-    HOOK_ASSET as CLAUDE_HOOK_ASSET, HOOK_INSTALL_NAME as CLAUDE_HOOK_INSTALL_NAME,
-};
-use crate::integration::builtin::codex::{
-    HOOK_ASSET as CODEX_HOOK_ASSET, HOOK_INSTALL_NAME as CODEX_HOOK_INSTALL_NAME,
-};
+use crate::integration::builtin::claude::HOOK_INSTALL_NAME as CLAUDE_HOOK_INSTALL_NAME;
+use crate::integration::builtin::codex::HOOK_INSTALL_NAME as CODEX_HOOK_INSTALL_NAME;
 use crate::integration::builtin::copilot::{
-    HOOK_ASSET as COPILOT_HOOK_ASSET, HOOK_EVENTS as COPILOT_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as COPILOT_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as COPILOT_HOOK_EVENTS, HOOK_INSTALL_NAME as COPILOT_HOOK_INSTALL_NAME,
     REMOVED_LIFECYCLE_HOOK_EVENTS as COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
-use crate::integration::builtin::cursor::{
-    HOOK_ASSET as CURSOR_HOOK_ASSET, HOOK_INSTALL_NAME as CURSOR_HOOK_INSTALL_NAME,
-};
+use crate::integration::builtin::cursor::HOOK_INSTALL_NAME as CURSOR_HOOK_INSTALL_NAME;
 use crate::integration::builtin::devin::{
-    HOOK_ASSET as DEVIN_HOOK_ASSET, HOOK_EVENTS as DEVIN_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as DEVIN_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as DEVIN_HOOK_EVENTS, HOOK_INSTALL_NAME as DEVIN_HOOK_INSTALL_NAME,
     REMOVED_LIFECYCLE_HOOK_EVENTS as DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 use crate::integration::builtin::droid::{
-    HOOK_ASSET as DROID_HOOK_ASSET, HOOK_EVENTS as DROID_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as DROID_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as DROID_HOOK_EVENTS, HOOK_INSTALL_NAME as DROID_HOOK_INSTALL_NAME,
     REMOVED_LIFECYCLE_HOOK_EVENTS as DROID_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 use crate::integration::builtin::grok::{
-    HOOK_ASSET as GROK_HOOK_ASSET, HOOK_CONFIG_INSTALL_NAME as GROK_HOOK_CONFIG_INSTALL_NAME,
+    HOOK_CONFIG_INSTALL_NAME as GROK_HOOK_CONFIG_INSTALL_NAME,
     HOOK_INSTALL_NAME as GROK_HOOK_INSTALL_NAME,
 };
 use crate::integration::builtin::hermes::{
-    PLUGIN_INIT_ASSET as HERMES_PLUGIN_INIT_ASSET,
     PLUGIN_INIT_INSTALL_NAME as HERMES_PLUGIN_INIT_INSTALL_NAME,
-    PLUGIN_MANIFEST_ASSET as HERMES_PLUGIN_MANIFEST_ASSET,
     PLUGIN_MANIFEST_INSTALL_NAME as HERMES_PLUGIN_MANIFEST_INSTALL_NAME,
 };
-use crate::integration::builtin::kilo::{
-    PLUGIN_ASSET as KILO_PLUGIN_ASSET, PLUGIN_INSTALL_NAME as KILO_PLUGIN_INSTALL_NAME,
-};
-use crate::integration::builtin::kimi::{
-    HOOK_ASSET as KIMI_HOOK_ASSET, HOOK_INSTALL_NAME as KIMI_HOOK_INSTALL_NAME,
-};
+use crate::integration::builtin::kilo::PLUGIN_INSTALL_NAME as KILO_PLUGIN_INSTALL_NAME;
+use crate::integration::builtin::kimi::HOOK_INSTALL_NAME as KIMI_HOOK_INSTALL_NAME;
 use crate::integration::builtin::mastracode::{
-    HOOK_ASSET as MASTRACODE_HOOK_ASSET, HOOK_EVENTS as MASTRACODE_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as MASTRACODE_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as MASTRACODE_HOOK_EVENTS, HOOK_INSTALL_NAME as MASTRACODE_HOOK_INSTALL_NAME,
     HOOK_TIMEOUT_MS as MASTRACODE_HOOK_TIMEOUT_MS,
     REMOVED_HOOK_EVENTS as MASTRACODE_REMOVED_HOOK_EVENTS,
 };
-use crate::integration::builtin::omp::{
-    EXTENSION_ASSET as OMP_EXTENSION_ASSET, EXTENSION_INSTALL_NAME as OMP_EXTENSION_INSTALL_NAME,
-};
+use crate::integration::builtin::omp::EXTENSION_INSTALL_NAME as OMP_EXTENSION_INSTALL_NAME;
 use crate::integration::builtin::opencode::{
-    PLUGIN_ASSET as OPENCODE_PLUGIN_ASSET, PLUGIN_INSTALL_NAME as OPENCODE_PLUGIN_INSTALL_NAME,
-    TUI_PLUGIN_ASSET as OPENCODE_TUI_PLUGIN_ASSET,
+    PLUGIN_INSTALL_NAME as OPENCODE_PLUGIN_INSTALL_NAME,
     TUI_PLUGIN_INSTALL_NAME as OPENCODE_TUI_PLUGIN_INSTALL_NAME,
     TUI_PLUGIN_SPEC as OPENCODE_TUI_PLUGIN_SPEC,
 };
-use crate::integration::builtin::pi::{
-    EXTENSION_ASSET as PI_EXTENSION_ASSET, EXTENSION_INSTALL_NAME as PI_EXTENSION_INSTALL_NAME,
-};
+use crate::integration::builtin::pi::EXTENSION_INSTALL_NAME as PI_EXTENSION_INSTALL_NAME;
 use crate::integration::builtin::qodercli::{
-    HOOK_ASSET as QODERCLI_HOOK_ASSET, HOOK_EVENTS as QODERCLI_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as QODERCLI_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as QODERCLI_HOOK_EVENTS, HOOK_INSTALL_NAME as QODERCLI_HOOK_INSTALL_NAME,
     REMOVED_LIFECYCLE_HOOK_EVENTS as QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
 };
 use crate::integration::builtin::qwen::{
-    HOOK_ASSET as QWEN_HOOK_ASSET, HOOK_EVENTS as QWEN_HOOK_EVENTS,
-    HOOK_INSTALL_NAME as QWEN_HOOK_INSTALL_NAME,
+    HOOK_EVENTS as QWEN_HOOK_EVENTS, HOOK_INSTALL_NAME as QWEN_HOOK_INSTALL_NAME,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -129,16 +106,22 @@ fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
     )))
 }
 
-pub(crate) fn install_pi() -> io::Result<PathBuf> {
+pub(crate) fn install_pi(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<PathBuf> {
+    let asset = profile.asset(PI_EXTENSION_INSTALL_NAME)?;
     let dir = pi_extension_dir()?;
     ensure_extension_dir(&dir, "pi")?;
 
     let path = dir.join(PI_EXTENSION_INSTALL_NAME);
-    fs::write(&path, PI_EXTENSION_ASSET)?;
+    atomic_replace_asset(&path, asset, false)?;
     Ok(path)
 }
 
-pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
+pub(crate) fn install_omp(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<OmpInstallPaths> {
+    let asset = profile.asset(OMP_EXTENSION_INSTALL_NAME)?;
     let dir = omp_extension_dir()?;
     let pi_dir = pi_extension_dir()?;
     if dir == pi_dir {
@@ -151,7 +134,7 @@ pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
 
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;
     let extension_path = dir.join(OMP_EXTENSION_INSTALL_NAME);
-    fs::write(&extension_path, OMP_EXTENSION_ASSET)?;
+    atomic_replace_asset(&extension_path, asset, false)?;
     Ok(OmpInstallPaths {
         extension_path,
         removed_legacy_pi_extension,
@@ -173,7 +156,10 @@ pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<
     Ok(false)
 }
 
-pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
+pub(crate) fn install_claude(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<ClaudeInstallPaths> {
+    let asset = profile.asset(CLAUDE_HOOK_INSTALL_NAME)?;
     let dir = claude_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -186,8 +172,7 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CLAUDE_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let settings_path = dir.join("settings.json");
     let existing_settings = if settings_path.is_file() {
@@ -208,7 +193,10 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     })
 }
 
-pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
+pub(crate) fn install_codex(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<CodexInstallPaths> {
+    let asset = profile.asset(CODEX_HOOK_INSTALL_NAME)?;
     let dir = codex_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -218,8 +206,7 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     }
 
     let hook_path = dir.join(CODEX_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CODEX_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let hooks_path = dir.join("hooks.json");
     let mut hooks_file = if hooks_path.is_file() {
@@ -271,7 +258,10 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     })
 }
 
-pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
+pub(crate) fn install_kimi(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<KimiInstallPaths> {
+    let asset = profile.asset(KIMI_HOOK_INSTALL_NAME)?;
     let dir = kimi_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -284,8 +274,7 @@ pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(KIMI_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, KIMI_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let config_path = dir.join("config.toml");
     let existing_config = if config_path.is_file() {
@@ -305,7 +294,10 @@ pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
     })
 }
 
-pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
+pub(crate) fn install_copilot(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<CopilotInstallPaths> {
+    let asset = profile.asset(COPILOT_HOOK_INSTALL_NAME)?;
     let dir = copilot_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -318,8 +310,7 @@ pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, COPILOT_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let settings_path = dir.join("settings.json");
     let mut settings = if settings_path.is_file() {
@@ -359,7 +350,10 @@ pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
     })
 }
 
-pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
+pub(crate) fn install_devin(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<DevinInstallPaths> {
+    let asset = profile.asset(DEVIN_HOOK_INSTALL_NAME)?;
     let dir = devin_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -369,8 +363,7 @@ pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
     }
 
     let hook_path = dir.join(DEVIN_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, DEVIN_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let settings_path = dir.join("config.json");
     let mut settings = if settings_path.is_file() {
@@ -415,7 +408,10 @@ pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
     })
 }
 
-pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
+pub(crate) fn install_droid(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<DroidInstallPaths> {
+    let asset = profile.asset(DROID_HOOK_INSTALL_NAME)?;
     let dir = droid_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -428,8 +424,7 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(DROID_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, DROID_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let settings_path = dir.join("settings.json");
     let mut settings = if settings_path.is_file() {
@@ -505,7 +500,11 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
     })
 }
 
-pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
+pub(crate) fn install_opencode(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<OpenCodeInstallPaths> {
+    let plugin = profile.asset(OPENCODE_PLUGIN_INSTALL_NAME)?;
+    let tui_plugin = profile.asset(OPENCODE_TUI_PLUGIN_INSTALL_NAME)?;
     let dir = opencode_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -519,13 +518,17 @@ pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
     fs::create_dir_all(&plugins_dir)?;
 
     let plugin_path = plugins_dir.join(OPENCODE_PLUGIN_INSTALL_NAME);
-    fs::write(&plugin_path, OPENCODE_PLUGIN_ASSET)?;
+    atomic_replace_asset(&plugin_path, plugin, false)?;
     let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
-    fs::write(&tui_plugin_path, OPENCODE_TUI_PLUGIN_ASSET)?;
+    atomic_replace_asset(&tui_plugin_path, tui_plugin, false)?;
     let tui_config_path = add_tui_plugin(&dir, OPENCODE_TUI_PLUGIN_SPEC)?;
     let v2_dir = dir.join(super::OPENCODE_V2_TUI_PLUGIN_DIR);
     fs::create_dir_all(&v2_dir)?;
-    fs::write(v2_dir.join("tui.js"), super::OPENCODE_V2_TUI_PLUGIN_ASSET)?;
+    atomic_replace_asset(
+        &v2_dir.join("tui.js"),
+        &crate::integration::builtin::opencode::v2_tui_entrypoint(profile.expected_version()),
+        false,
+    )?;
     let cli_config_path = add_cli_plugin(
         &dir,
         &opencode_state_dir()?,
@@ -540,7 +543,10 @@ pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
     })
 }
 
-pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
+pub(crate) fn install_kilo(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<KiloInstallPaths> {
+    let asset = profile.asset(KILO_PLUGIN_INSTALL_NAME)?;
     let dir = kilo_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -553,12 +559,16 @@ pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
     fs::create_dir_all(&plugins_dir)?;
 
     let plugin_path = plugins_dir.join(KILO_PLUGIN_INSTALL_NAME);
-    fs::write(&plugin_path, KILO_PLUGIN_ASSET)?;
+    atomic_replace_asset(&plugin_path, asset, false)?;
 
     Ok(KiloInstallPaths { plugin_path })
 }
 
-pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
+pub(crate) fn install_hermes(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<HermesInstallPaths> {
+    let manifest = profile.asset(HERMES_PLUGIN_MANIFEST_INSTALL_NAME)?;
+    let plugin = profile.asset(HERMES_PLUGIN_INIT_INSTALL_NAME)?;
     let dir = hermes_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -569,13 +579,15 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
 
     let plugin_dir = hermes_plugin_dir()?;
     fs::create_dir_all(&plugin_dir)?;
-    fs::write(
-        plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME),
-        HERMES_PLUGIN_MANIFEST_ASSET,
+    atomic_replace_asset(
+        &plugin_dir.join(HERMES_PLUGIN_MANIFEST_INSTALL_NAME),
+        manifest,
+        false,
     )?;
-    fs::write(
-        plugin_dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME),
-        HERMES_PLUGIN_INIT_ASSET,
+    atomic_replace_asset(
+        &plugin_dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME),
+        plugin,
+        false,
     )?;
 
     let config_path = dir.join("config.yaml");
@@ -958,7 +970,10 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
     })
 }
 
-pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
+pub(crate) fn install_qodercli(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<QodercliInstallPaths> {
+    let asset = profile.asset(QODERCLI_HOOK_INSTALL_NAME)?;
     let dir = qodercli_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -971,8 +986,7 @@ pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(QODERCLI_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, QODERCLI_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     // Register the hook in ~/.qoder/settings.json. The schema mirrors claude
     // settings.json (per https://docs.qoder.com/zh/cli/hooks): a top-level
@@ -1022,7 +1036,10 @@ pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
     })
 }
 
-pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
+pub(crate) fn install_qwen(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<QwenInstallPaths> {
+    let asset = profile.asset(QWEN_HOOK_INSTALL_NAME)?;
     let dir = qwen_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -1035,8 +1052,7 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(QWEN_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, QWEN_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let settings_path = dir.join("settings.json");
     let mut settings = if settings_path.is_file() {
@@ -1075,7 +1091,10 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     })
 }
 
-pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
+pub(crate) fn install_cursor(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<CursorInstallPaths> {
+    let asset = profile.asset(CURSOR_HOOK_INSTALL_NAME)?;
     let dir = cursor_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -1085,8 +1104,7 @@ pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
     }
 
     let hook_path = dir.join(CURSOR_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, CURSOR_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let hooks_path = dir.join("hooks.json");
     let mut hooks_file = if hooks_path.is_file() {
@@ -1273,14 +1291,16 @@ pub(crate) fn mastracode_hook_command(hook_path: &Path, action: &str) -> String 
     }
 }
 
-pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
+pub(crate) fn install_mastracode(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<MastracodeInstallPaths> {
+    let asset = profile.asset(MASTRACODE_HOOK_INSTALL_NAME)?;
     let mastracode_home = mastracode_dir()?;
     let hook_dir = mastracode_home.join("hooks");
     fs::create_dir_all(&hook_dir)?;
 
     let hook_path = hook_dir.join(MASTRACODE_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, MASTRACODE_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let hooks_path = mastracode_home.join("hooks.json");
     let mut hooks_file = if hooks_path.is_file() {
@@ -1368,7 +1388,10 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
     })
 }
 
-pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths> {
+pub(crate) fn install_antigravity_cli(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<AntigravityCliInstallPaths> {
+    let asset = profile.asset(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME)?;
     let dir = antigravity_cli_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -1381,8 +1404,7 @@ pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, ANTIGRAVITY_CLI_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let hooks_path = dir.join("hooks.json");
     let mut hooks_file = if hooks_path.is_file() {
@@ -1514,7 +1536,10 @@ pub(crate) fn grok_hook_config(hook_path: &Path) -> Value {
     })
 }
 
-pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
+pub(crate) fn install_grok(
+    profile: &crate::agents::integration::IntegrationProfile,
+) -> io::Result<GrokInstallPaths> {
+    let asset = profile.asset(GROK_HOOK_INSTALL_NAME)?;
     let dir = grok_dir()?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
@@ -1530,8 +1555,7 @@ pub(crate) fn install_grok() -> io::Result<GrokInstallPaths> {
     fs::create_dir_all(&hooks_dir)?;
 
     let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
-    fs::write(&hook_path, GROK_HOOK_ASSET)?;
-    make_executable(&hook_path)?;
+    atomic_replace_asset(&hook_path, asset, true)?;
 
     let config_path = hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME);
     fs::write(

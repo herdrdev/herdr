@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::codex_dir;
 use crate::integration::executable_file_exists;
 use crate::integration::{install_codex, uninstall_codex};
@@ -14,6 +14,7 @@ pub(crate) const HOOK_INSTALL_NAME: &str = if cfg!(windows) {
 } else {
     HOOK_INSTALL_NAME_UNIX
 };
+#[cfg(test)]
 pub(crate) const HOOK_ASSET: &str = if cfg!(windows) {
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -30,8 +31,8 @@ pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path)
         .with_install_layout_probe(standalone_binary_available);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let installed = install_codex()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_codex(profile)?;
     Ok(vec![
         format!(
             "installed codex integration hook to {}",

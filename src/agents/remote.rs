@@ -192,7 +192,7 @@ pub(crate) fn validate_snapshot(bytes: &[u8]) -> Result<VerifiedSnapshot, String
         || snapshot.compatibility.registry_api != 1
         || snapshot.compatibility.min_detection_engine == 0
         || snapshot.compatibility.min_detection_engine
-            > crate::detect::manifest_update::MANIFEST_ENGINE_VERSION
+            > crate::detect::manifest_version::MANIFEST_ENGINE_VERSION
     {
         return Err(
             "registry snapshot requires an unsupported registry API or detection engine".into(),

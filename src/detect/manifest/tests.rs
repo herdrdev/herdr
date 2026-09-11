@@ -214,7 +214,7 @@ fn historical_website_cache_and_status_are_ignored_and_preserved() {
             std::fs::read_to_string(&status_path).unwrap(),
             historical_status
         );
-        let status = crate::detect::manifest_update::load_status();
+        let status = crate::detect::manifest_compat::load_status();
         assert_eq!(status.last_check_unix, None);
         assert_eq!(
             status.last_result.as_deref(),

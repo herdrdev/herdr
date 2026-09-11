@@ -1,5 +1,6 @@
 //! Loaded integration metadata bound to a trusted, compiled installer.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,7 @@ pub(crate) struct AgentVersionRequirement {
     pub min_version: &'static str,
 }
 
+type InstallAction = fn(&IntegrationProfile) -> io::Result<Vec<String>>;
 type Action = fn() -> io::Result<Vec<String>>;
 type PathResolver = fn() -> io::Result<PathBuf>;
 type AvailabilityProbe = fn() -> bool;
@@ -21,7 +23,7 @@ type ExtraValidator = fn(&Path, u32) -> bool;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IntegrationAdapter {
-    install_action: Action,
+    install_action: InstallAction,
     uninstall_action: Action,
     primary_path_resolver: PathResolver,
     install_layout_probe: Option<AvailabilityProbe>,
@@ -31,7 +33,7 @@ pub(crate) struct IntegrationAdapter {
 
 impl IntegrationAdapter {
     pub(crate) const fn new(
-        install_action: Action,
+        install_action: InstallAction,
         uninstall_action: Action,
         primary_path_resolver: PathResolver,
     ) -> Self {
@@ -66,8 +68,8 @@ impl IntegrationAdapter {
         self
     }
 
-    pub(crate) fn install(self) -> io::Result<Vec<String>> {
-        (self.install_action)()
+    pub(crate) fn install(self, profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+        (self.install_action)(profile)
     }
 
     pub(crate) fn uninstall(self) -> io::Result<Vec<String>> {
@@ -96,6 +98,7 @@ impl IntegrationAdapter {
 pub(crate) struct IntegrationProfile {
     pub(super) target: IntegrationTarget,
     pub(super) definition: IntegrationDefinition,
+    pub(super) assets: BTreeMap<String, String>,
     pub(super) adapter: IntegrationAdapter,
 }
 
@@ -135,6 +138,18 @@ impl IntegrationProfile {
     #[cfg(windows)]
     pub(crate) fn expected_version(&self) -> u32 {
         self.definition.versions.windows
+    }
+
+    pub(crate) fn asset(&self, install_name: &str) -> io::Result<&str> {
+        let platform = if cfg!(windows) { "windows" } else { "unix" };
+        let definition = self.definition.assets.iter().find(|asset| {
+            asset.install_name == install_name
+                && (asset.platform == "all" || asset.platform == platform)
+        });
+        definition
+            .and_then(|asset| self.assets.get(&asset.path))
+            .map(String::as_str)
+            .ok_or_else(|| io::Error::other(format!("missing integration asset {install_name}")))
     }
 
     pub(crate) fn adapter(&self) -> IntegrationAdapter {

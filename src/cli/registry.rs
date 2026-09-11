@@ -206,7 +206,7 @@ fn validate_snapshot(path: &Path, runtime_compatible: bool) -> Result<String, St
             .map(|(p, t)| (p.as_str(), t.as_str()))
             .collect();
         let packages = crate::agents::validate_packages(&borrowed)?;
-        crate::agents::store::validate_compiled_integrations(&packages, &borrowed)?;
+        crate::agents::store::validate_integration_baseline(&packages)?;
     }
     Ok(snapshot.content_sha256)
 }

@@ -1,7 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::hermes_plugin_dir;
 #[cfg(windows)]
 use crate::integration::{executable_file_exists, hermes_dir};
@@ -10,10 +10,12 @@ use crate::integration::{install_hermes, uninstall_hermes};
 pub(crate) const PLUGIN_INSTALL_NAME: &str = "herdr-agent-state";
 pub(crate) const PLUGIN_MANIFEST_INSTALL_NAME: &str = "plugin.yaml";
 pub(crate) const PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
+#[cfg(test)]
 pub(crate) const PLUGIN_MANIFEST_ASSET: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vendor/agent-registry/agents/hermes/assets/plugin.yaml"
 ));
+#[cfg(test)]
 pub(crate) const PLUGIN_INIT_ASSET: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vendor/agent-registry/agents/hermes/assets/__init__.py"
@@ -23,8 +25,8 @@ pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path)
         .with_install_layout_probe(install_layout_available);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let installed = install_hermes()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_hermes(profile)?;
     Ok(vec![
         format!(
             "installed hermes integration plugin to {}",

@@ -97,11 +97,13 @@ impl AgentRegistry {
         let mut profiles = Vec::new();
         for mut definition in packages {
             let agent = Agent::parse(&definition.identity.id)?;
+            let definition_assets = std::mem::take(&mut definition.assets);
             let integration = definition.integration.take().and_then(|definition| {
                 crate::integration::builtin::binding(agent).map(|(target, adapter)| {
                     Arc::new(IntegrationProfile {
                         target,
                         definition,
+                        assets: definition_assets,
                         adapter,
                     })
                 })

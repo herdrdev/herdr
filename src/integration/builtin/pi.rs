@@ -1,11 +1,12 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::pi_extension_dir;
 use crate::integration::{install_pi, uninstall_pi};
 
 pub(crate) const EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
+#[cfg(test)]
 pub(crate) const EXTENSION_ASSET: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts"
@@ -14,8 +15,8 @@ pub(crate) const EXTENSION_ASSET: &str = include_str!(concat!(
 pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let path = install_pi()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let path = install_pi(profile)?;
     Ok(vec![format!(
         "installed pi integration to {}",
         path.display()

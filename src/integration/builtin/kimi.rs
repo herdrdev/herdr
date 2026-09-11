@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::agents::integration::AgentVersionRequirement;
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::kimi_dir;
 use crate::integration::{install_kimi, uninstall_kimi};
 
@@ -13,6 +13,7 @@ pub(crate) const HOOK_INSTALL_NAME: &str = if cfg!(windows) {
 } else {
     HOOK_INSTALL_NAME_UNIX
 };
+#[cfg(test)]
 pub(crate) const HOOK_ASSET: &str = if cfg!(windows) {
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -59,8 +60,8 @@ pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path)
         .with_version_requirement(&AGENT_VERSION_REQUIREMENT);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let installed = install_kimi()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_kimi(profile)?;
     Ok(vec![
         format!(
             "installed kimi integration hook to {}",

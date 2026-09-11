@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/herdrdev/agent-registry",
-  "sha256": "a00b75a67e3d7eb9aa47ede92246aa187529c8e89d8811cc2c662796cabbd2bc",
+  "sha256": "c85b430d22cb70f7dc3fe6f374a74c0a4f0c7dd085af9221b8a04fb1730316db",
   "files": [
     {
       "path": "agents/agy/agent.toml",
@@ -429,11 +429,11 @@
     },
     {
       "path": "agents/opencode/assets/herdr-agent-state.js",
-      "sha256": "754c596c5b809ef0427859ea463923cd1989b43f9baf21be34f4b6399e050342"
+      "sha256": "1a6aebf6632324fec63d1de226737b9fa6b35f3ddb51ce687439e66b6c7cb475"
     },
     {
       "path": "agents/opencode/assets/herdr-tui-session.js",
-      "sha256": "1b636d770ec9fed34e1735b232f6e5f94d90fa6d709d6a4aa8a542bf5f04e3fe"
+      "sha256": "f9b5c2db169b0f0c38a78bc2c8341178673bc0d00e5f7057765aea73ddc57f95"
     },
     {
       "path": "agents/opencode/detection.toml",
@@ -441,7 +441,7 @@
     },
     {
       "path": "agents/opencode/integration.toml",
-      "sha256": "7b66796d33f61fb2c99baea7cba15f9404fb310e60dd887b3b68d5ac5991a7d5"
+      "sha256": "bd388024a4201994bac951cf5d693210c38a543bf1d2a64ce657af963267a376"
     },
     {
       "path": "agents/opencode/process.toml",

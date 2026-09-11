@@ -1,4 +1,4 @@
-//! Stage-one compatibility boundary: metadata cannot redirect fixed installers.
+//! Compatibility boundary: metadata cannot redirect fixed installers.
 //! Only installer assumptions live here, not CLI metadata, versions, or asset bytes.
 
 use crate::agents::source::Package;
@@ -32,8 +32,7 @@ impl AssetContract {
     }
 }
 
-// The source paths match the fixed include_str! paths in the hook adapters;
-// installed names come from the same constants used by those installers.
+// Source paths and installed names stay fixed while versioned contents can update.
 fn shell_hook(
     unix_install_name: &'static str,
     windows_install_name: &'static str,

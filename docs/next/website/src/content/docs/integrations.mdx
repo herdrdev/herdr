@@ -29,6 +29,16 @@ herdr integration install antigravity-cli
 herdr integration install grok
 ```
 
+## Update integrations
+
+Registry updates can deliver new versions of supported integration files without updating the Herdr binary. Downloading a registry snapshot does not install or replace plugins and hooks.
+
+Use the existing integrations tab in settings to apply an available update, or rerun `herdr integration install <target>`. The installer uses the selected registry's files and preserves unrelated agent configuration. CLI integration commands operate locally and use the selected session's saved registry, including while that server is stopped.
+
+Herdr replaces each integration asset atomically. An installation with multiple files can still stop partway through; rerun the installer to repair it. Running agents are not restarted, and when they load a changed plugin depends on that agent's own behavior.
+
+Installation paths, config handling, and trusted reporting rules remain in Herdr. A registry update cannot introduce an arbitrary installer or grant a new agent trusted reporting authority.
+
 ## Uninstall integrations
 
 ```bash

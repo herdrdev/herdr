@@ -1,7 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use crate::agents::integration::IntegrationAdapter;
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
 use crate::integration::cursor_dir;
 use crate::integration::{install_cursor, uninstall_cursor};
 
@@ -12,6 +12,7 @@ pub(crate) const HOOK_INSTALL_NAME: &str = if cfg!(windows) {
 } else {
     HOOK_INSTALL_NAME_UNIX
 };
+#[cfg(test)]
 pub(crate) const HOOK_ASSET: &str = if cfg!(windows) {
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -27,8 +28,8 @@ pub(crate) const HOOK_ASSET: &str = if cfg!(windows) {
 pub(super) const ADAPTER: IntegrationAdapter =
     IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path);
 
-fn install_adapter() -> io::Result<Vec<String>> {
-    let installed = install_cursor()?;
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_cursor(profile)?;
     Ok(vec![
         format!(
             "installed cursor integration hook to {}",

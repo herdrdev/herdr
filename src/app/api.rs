@@ -902,7 +902,7 @@ impl App {
             }
             Method::ServerAgentManifests(_) => {
                 self.state.refresh_agent_manifest_summaries();
-                let update_status = crate::detect::manifest_update::load_status();
+                let update_status = crate::detect::manifest_compat::load_status();
                 SuccessResponse {
                     id: request.id,
                     result: ResponseResult::AgentManifestStatus {
@@ -921,7 +921,7 @@ impl App {
             Method::ServerReloadAgentManifests(_) => {
                 let summaries = crate::detect::manifest::reload_manifests();
                 self.state.agent_manifest_summaries = summaries.clone();
-                let update_status = crate::detect::manifest_update::load_status();
+                let update_status = crate::detect::manifest_compat::load_status();
                 self.reset_all_agent_detection_runtimes();
                 SuccessResponse {
                     id: request.id,
@@ -1312,7 +1312,7 @@ fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> 
 
 fn agent_manifest_info(
     summary: crate::detect::manifest::AgentManifestSummary,
-    update_status: &crate::detect::manifest_update::ManifestUpdateStatus,
+    update_status: &crate::detect::manifest_compat::ManifestUpdateStatus,
 ) -> crate::api::schema::AgentManifestInfo {
     let remote = update_status.agent_status(summary.agent);
     crate::api::schema::AgentManifestInfo {

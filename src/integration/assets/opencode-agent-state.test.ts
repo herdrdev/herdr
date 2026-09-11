@@ -228,7 +228,7 @@ function requestMethod(request: unknown): unknown {
 }
 
 test("dual server entrypoint keeps V1 hooks and never reports from the V2 shared server", async () => {
-  const module = await import(`./herdr-agent-state.js?test=${++importCounter}`);
+  const module = await import(`../../../vendor/agent-registry/agents/opencode/assets/herdr-agent-state.js?test=${++importCounter}`);
   expect(module.default.server).toBe(module.HerdrAgentStatePlugin);
   expect(await module.default.setup({})).toBeUndefined();
   expect(requests).toHaveLength(0);

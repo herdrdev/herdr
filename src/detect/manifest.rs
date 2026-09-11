@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde::Deserialize;
 
-use super::{agent_label, manifest_update::ManifestVersion, Agent, AgentDetection, AgentState};
+use super::{agent_label, manifest_version::ManifestVersion, Agent, AgentDetection, AgentState};
 
 pub const DEFAULT_KNOWN_AGENT_IDLE_FALLBACK: &str = "default_known_agent_idle_fallback";
 
@@ -479,7 +479,7 @@ fn evaluate_loaded_manifest(
         .then(|| format!("matched_rule:{}", rule.id));
 
     let remote_update_status = include_update_status
-        .then(|| super::manifest_update::status_for_version(loaded.cached_remote_version.clone()))
+        .then(|| super::manifest_compat::status_for_version(loaded.cached_remote_version.clone()))
         .flatten();
 
     DetectionExplain {
@@ -537,7 +537,7 @@ fn fallback_explain(
         .unwrap_or((None, Vec::new(), None, None, None, false));
     let known_agent = agent.is_some();
     let remote_update_status = include_update_status
-        .then(|| super::manifest_update::status_for_version(cached_remote_version.clone()))
+        .then(|| super::manifest_compat::status_for_version(cached_remote_version.clone()))
         .flatten();
 
     DetectionExplain {
@@ -814,7 +814,7 @@ pub(crate) fn validate_package_manifest(
     }
     if manifest
         .min_engine_version
-        .is_some_and(|version| version > super::manifest_update::MANIFEST_ENGINE_VERSION)
+        .is_some_and(|version| version > super::manifest_version::MANIFEST_ENGINE_VERSION)
     {
         return Err(format!("{id} detection requires a newer engine"));
     }

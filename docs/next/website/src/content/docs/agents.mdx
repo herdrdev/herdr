@@ -67,7 +67,7 @@ Herdr starts offline with its bundled registry or a saved last-known-good snapsh
 
 Manual updates remain available: `herdr registry check` validates an available full-registry snapshot without activating it, and `herdr registry update` downloads and hot-activates it in the selected server. Invalid or incompatible updates leave the last working snapshot active. Historical website manifest caches are ignored and left untouched.
 
-New registry packages can add agent IDs, launch definitions, process recognition, and detection rules without rebuilding Herdr. Trusted reporters and integration installers remain compiled capabilities; a snapshot containing incompatible built-in integration assets is rejected as a whole.
+New registry packages can add agent IDs, launch definitions, process recognition, and detection rules without rebuilding Herdr. They can also deliver versioned updates to existing integration files, which users apply from settings or the integration CLI. Trusted reporters and installation procedures remain compiled capabilities; a snapshot containing incompatible installation layouts or invalid integration versions is rejected as a whole.
 
 Local detection overrides use the existing platform config directory:
 

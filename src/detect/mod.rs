@@ -6,7 +6,8 @@
 use crate::agents::AgentRegistry;
 
 pub mod manifest;
-pub mod manifest_update;
+pub(crate) mod manifest_compat;
+pub(crate) mod manifest_version;
 
 /// The detected state of a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

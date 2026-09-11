@@ -37,7 +37,7 @@ fn install_target_inner(
         None => None,
     };
 
-    let mut messages = adapter.install()?;
+    let mut messages = adapter.install(profile)?;
     if let Some(warning) = version_warning {
         messages.push(warning);
     }
