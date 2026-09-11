@@ -90,6 +90,8 @@ jobs:
         with:
           version: 0.16.0
           use-cache: ${{ matrix.kind != 'windows' }}
+          # Linux builds both SIMD/ReleaseFast and scalar/ReleaseSafe variants.
+          cache-size-limit: 4096
 
       - name: Configure Zig cache on macOS
         if: runner.os == 'macOS'
@@ -161,6 +163,14 @@ jobs:
         with:
           version: 0.16.0
           use-cache: false
+
+      - name: Restore Zig build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .zig-cache
+          key: zig-build-v1-conpty-package-windows-2022-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            zig-build-v1-conpty-package-windows-2022-${{ runner.arch }}-0.16.0-
 
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
