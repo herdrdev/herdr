@@ -130,8 +130,16 @@ jobs:
           cache-bin: false
           key: ${{ matrix.os }}
 
-      - name: Run checks
-        if: matrix.kind == 'unix'
+      - name: Run Linux lint
+        if: runner.os == 'Linux'
+        run: just lint
+
+      - name: Run Linux tests
+        if: runner.os == 'Linux'
+        run: CARGO_INCREMENTAL=1 just ci-tests '${{ matrix.nextest_filter }}'
+
+      - name: Run macOS checks
+        if: runner.os == 'macOS'
         run: just ci '${{ matrix.nextest_filter }}'
 
       - name: Check scalar libghostty with runtime safety
@@ -139,7 +147,13 @@ jobs:
         env:
           LIBGHOSTTY_VT_SIMD: "false"
           LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
-        run: just test-one ghostty
+        run: CARGO_INCREMENTAL=1 just test-one ghostty
+
+      - name: Measure incremental build state
+        if: runner.os == 'Linux'
+        run: |
+          du -sh target/debug/incremental
+          df -h .
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'

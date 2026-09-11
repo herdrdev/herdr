@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 $probeTarget = Join-Path $env:RUNNER_TEMP "herdr-ci-lld"
 $sysroot = (& rustc --print sysroot).Trim()
 if ($LASTEXITCODE -ne 0) { throw "could not locate Rust toolchain" }
-$lldLink = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-msvc\bin\gcc-ld\lld-link.exe"
-if (-not (Test-Path -LiteralPath $lldLink)) { throw "bundled lld-link.exe not found" }
+$lldLink = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe"
+if (-not (Test-Path -LiteralPath $lldLink)) { throw "bundled rust-lld.exe not found" }
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Set-Linker {
@@ -32,7 +32,6 @@ function Invoke-Compile {
 }
 
 try {
-    Invoke-Compile "msvc" "warmup"
     Invoke-Compile "lld" "warmup"
     foreach ($linker in @("lld", "msvc", "msvc", "lld")) {
         Invoke-Compile $linker "measured"

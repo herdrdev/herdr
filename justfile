@@ -36,6 +36,10 @@ lint:
 
 # Run PR CI checks
 ci filter='all()': lint
+    just ci-tests "{{filter}}"
+
+# Keep the test build independently configurable from clippy in CI.
+ci-tests filter='all()':
     cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
