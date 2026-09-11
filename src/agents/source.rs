@@ -74,6 +74,17 @@ pub(crate) struct ResumeDefinition {
     pub(crate) preferred_reference: ReferenceKind,
     pub(crate) strategy: ResumeStrategy,
     pub(crate) token: String,
+    #[serde(default)]
+    pub(crate) resume_options: ResumeOptionsDefinition,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeOptionsDefinition {
+    #[serde(default)]
+    pub(crate) flags: Vec<String>,
+    #[serde(default)]
+    pub(crate) options: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -485,7 +496,27 @@ fn validate_resume(resume: &ResumeDefinition) -> Result<(), String> {
             .is_some_and(word),
         ResumeStrategy::Subcommand => word(&resume.token),
     };
-    ensure(valid, "unknown resume strategy or unsafe token")
+    ensure(valid, "unknown resume strategy or unsafe token")?;
+    let policy = &resume.resume_options;
+    ensure(
+        policy.flags.len() + policy.options.len() <= MAX_LIST,
+        "too many resume options",
+    )?;
+    let mut names = BTreeSet::new();
+    for name in policy.flags.iter().chain(&policy.options) {
+        ensure(
+            name.len() <= 64
+                && name
+                    .strip_prefix("--")
+                    .or_else(|| name.strip_prefix('-'))
+                    .is_some_and(word)
+                && !super::session::reserved_resume_option(name)
+                && name != resume.token.trim_end_matches('=')
+                && names.insert(name),
+            "invalid, duplicate or reserved resume option",
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_integration(
@@ -770,6 +801,42 @@ mod tests {
                 valid
             );
         }
+    }
+
+    #[test]
+    fn resume_options_policy_is_bounded_unique_and_cannot_own_session_selection() {
+        let base = "accepted_references = ['id']\npreferred_reference = 'id'\nstrategy = 'joined_flag'\ntoken = '--restore='\n";
+        for (policy, valid) in [
+            ("", true),
+            (
+                "[resume_options]\nflags=['--yolo','-f']\noptions=['--model']",
+                true,
+            ),
+            (
+                "[resume_options]\nflags=['--yolo']\noptions=['--yolo']",
+                false,
+            ),
+            ("[resume_options]\noptions=['--restore']", false),
+            ("[resume_options]\nflags=['--continue']", false),
+            ("[resume_options]\noptions=['-r']", false),
+            ("[resume_options]\noptions=['--model=value']", false),
+            ("[resume_options]\nflags=['--']", false),
+            ("[resume_options]\nunknown=[]", false),
+        ] {
+            let text = format!("{base}{policy}");
+            assert_eq!(
+                load_packages(&[
+                    ("agents/future-agent/agent.toml", AGENT),
+                    ("agents/future-agent/resume.toml", &text),
+                ])
+                .is_ok(),
+                valid,
+                "{policy}"
+            );
+        }
+        let mut resume: ResumeDefinition = toml::from_str(base).unwrap();
+        resume.resume_options.flags = (0..=MAX_LIST).map(|i| format!("--flag-{i}")).collect();
+        assert!(validate_resume(&resume).is_err());
     }
 
     #[test]

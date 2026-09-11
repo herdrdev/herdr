@@ -366,15 +366,19 @@ fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
 
 fn process_argv(pid: u32) -> Option<Vec<String>> {
     let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    parse_proc_cmdline(&bytes)
+}
+
+fn parse_proc_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
     if bytes.is_empty() {
         return None;
     }
-    let parts: Vec<String> = bytes
-        .split(|&b| b == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).into_owned())
-        .collect();
-    (!parts.is_empty()).then_some(parts)
+    bytes
+        .strip_suffix(&[0])
+        .unwrap_or(bytes)
+        .split(|&byte| byte == 0)
+        .map(|part| std::str::from_utf8(part).map(str::to_owned).ok())
+        .collect()
 }
 
 /// Get the current working directory of a process.
@@ -899,6 +903,26 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn process_argv_preserves_exact_argument_boundaries() {
+        assert_eq!(
+            parse_proc_cmdline(b"agent\0--model\0model name\0\0\0"),
+            Some(vec![
+                "agent".into(),
+                "--model".into(),
+                "model name".into(),
+                "".into(),
+                "".into()
+            ])
+        );
+        assert_eq!(parse_proc_cmdline(b"agent\0\xff\0"), None);
+        assert_eq!(parse_proc_cmdline(b""), None);
+        assert_eq!(
+            process_argv(std::process::id()),
+            Some(std::env::args().collect())
+        );
     }
 
     #[test]

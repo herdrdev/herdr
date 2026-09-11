@@ -2,3 +2,7 @@ accepted_references = ["path", "id"]
 preferred_reference = "path"
 strategy = "separate_flag"
 token = "--session"
+
+[resume_options]
+flags = ["--no-tools", "-nt", "--no-builtin-tools", "-nbt", "--no-extensions", "-ne", "--no-skills", "-ns", "--no-context-files", "-nc", "--approve", "-a", "--no-approve", "-na", "--offline"]
+options = ["--provider", "--model", "--thinking", "--tui-mode"]

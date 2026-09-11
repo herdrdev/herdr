@@ -56,7 +56,11 @@ Native agent session restore is enabled by default. Disable it with:
 resume_agents_on_restore = false
 ```
 
-Herdr only resumes panes that reported a native session reference through a current official Herdr integration.
+Herdr needs a trusted native session reference: one reported through a current official integration, or an explicit resume target supplied to `herdr agent start` that matches the agent's registry resume definition. Screen detection alone does not establish conversation ownership.
+
+Herdr also preserves explicitly supplied CLI choices, such as model or permission mode, when the agent's registry `resume.toml` allows them. It reads structured process arguments, not shell command text, and never replays prompts or substitutes another session target. Unknown options are not preserved. Switching conversations inside the same running agent updates the saved session reference while preserving its original CLI choices. A replacement process must supply its own options. An unreadable process command line means resuming without those extras.
+
+Allowed choices are checked again before resume. Registry updates can remove an option from replay, but cannot change an already-authorized queued restore's session or command. Detection-only local overrides do not change the resume allowlist.
 
 After a client attaches and provides terminal size and theme context, Herdr resumes eligible restored agent panes across workspaces and tabs without waiting for each pane to be focused.
 

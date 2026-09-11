@@ -217,7 +217,10 @@ impl App {
             return false;
         }
 
-        let Some(resume_command) = shell_command_from_argv(&plan.argv) else {
+        let launch_argv = plan.replay_argv(&crate::agents::registry());
+        let Some(resume_command) =
+            crate::platform::interactive_shell_command(&launch_argv, &self.state.default_shell)
+        else {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
@@ -266,6 +269,7 @@ impl App {
 
         let mut input = resume_command;
         input.push('\r');
+        let injected_at = Instant::now();
         if let Err(err) = runtime.try_send_bytes(Bytes::from(input)) {
             tracing::warn!(
                 pane = pane_id.raw(),
@@ -283,7 +287,6 @@ impl App {
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             if let Ok(agent) = crate::detect::Agent::parse(&plan.agent) {
-                let injected_at = Instant::now();
                 if terminal.managed_agent_kind() == Some(agent) {
                     terminal.mark_queued_agent_injected(
                         injected_at,
@@ -304,7 +307,12 @@ impl App {
                     crate::agents::bundled_profile(&plan.agent)
                         .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
                 });
-                terminal.admit_agent_resume_recipe(agent, recipe, injected_at);
+                terminal.admit_agent_resume_recipe(
+                    agent,
+                    recipe,
+                    terminal.persisted_agent_session.clone(),
+                    injected_at,
+                );
             }
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
@@ -348,35 +356,9 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
     )
 }
 
-fn shell_command_from_argv(argv: &[String]) -> Option<String> {
-    let mut parts = argv.iter();
-    let first = shell_quote(parts.next()?);
-    let mut command = first;
-    for part in parts {
-        command.push(' ');
-        command.push_str(&shell_quote(part));
-    }
-    Some(command)
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'_' | b'-' | b'.' | b'/' | b':' | b'@' | b'%' | b'+' | b'='
-            )
-    }) {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[cfg(unix)]
@@ -428,6 +410,7 @@ mod tests {
         terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: marker_resume_test_argv(),
+            resume_options: Vec::new(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
             strict_input_readiness: false,
         });
@@ -520,6 +503,7 @@ mod tests {
             .get_mut(&terminal_id)
             .expect("test terminal should exist");
         terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            resume_options: Vec::new(),
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
@@ -565,6 +549,7 @@ mod tests {
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
             strict_input_readiness: false,
+            resume_options: Vec::new(),
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -615,6 +600,7 @@ mod tests {
                 .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
                 agent: "codex".into(),
                 argv: long_running_test_argv(),
+                resume_options: Vec::new(),
                 dedupe_key: format!("herdr:codex\0codex\0Id\0{terminal_id}"),
                 strict_input_readiness: false,
             });
@@ -680,6 +666,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
+            resume_options: Vec::new(),
             dedupe_key: "herdr:codex\0codex\0Id\0inactive-tab-session".into(),
             strict_input_readiness: false,
         });
@@ -742,6 +729,7 @@ mod tests {
             .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
+            resume_options: Vec::new(),
             dedupe_key: "herdr:codex\0codex\0Id\0zoom-hidden-session".into(),
             strict_input_readiness: false,
         });
@@ -803,6 +791,7 @@ mod tests {
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
             strict_input_readiness: false,
+            resume_options: Vec::new(),
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -865,6 +854,7 @@ mod tests {
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
             strict_input_readiness: false,
+            resume_options: Vec::new(),
         });
 
         assert!(app.start_pending_agent_resumes(false));
@@ -879,20 +869,5 @@ mod tests {
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
-    }
-
-    #[test]
-    fn shell_command_from_argv_quotes_resume_arguments() {
-        let argv = vec![
-            "claude".to_string(),
-            "--resume".to_string(),
-            "session with ' quote".to_string(),
-        ];
-
-        assert_eq!(
-            shell_command_from_argv(&argv).as_deref(),
-            Some("claude --resume 'session with '\\'' quote'")
-        );
-        assert_eq!(shell_command_from_argv(&[]), None);
     }
 }

@@ -434,13 +434,12 @@ async function runHarness(binaryArg: string) {
     check("real OpenCode exit clears identity", "pass");
     const nativeID = await localSessionID(env.XDG_DATA_HOME, work);
     let beforeNativeRestart: TrackedProcess | undefined;
+    const resumeOptions = ["--model", "herdr-local/fixture", "--agent", "build"];
     if (nativeID) {
       await writeFile(path.join(root, "native-session-reference.json"), JSON.stringify({ id: nativeID, source: "isolated OpenCode sqlite (read-only)" }, null, 2));
       // Legitimate internal launch path only; never forge a reporter/source or grant hook authority.
-      // Exact native resume argv is intentional: safe launch capture rejects unrelated flags.
-      // The isolated configuration already pins the model; no --model/--agent is needed here.
       const started = await rawApi({ id: "e2e:native-explicit-start", method: "agent.start", params: {
-        name: "registry-native-resume", kind: novel, pane_id: pane!, args: ["--session", nativeID], timeout_ms: 20000,
+        name: "registry-native-resume", kind: novel, pane_id: pane!, args: ["--session", nativeID, ...resumeOptions], timeout_ms: 20000,
       } });
       assert.equal(started.result?.type, "agent_started");
       assert.equal(started.result?.agent?.launch_pending, true);
@@ -473,6 +472,7 @@ async function runHarness(binaryArg: string) {
       };
       collect(saved);
       assert(references.some((ref) => ref.source === "herdr:launch" && ref.recipe), "stopped session must persist legitimate native reference plus pinned recipe");
+      for (const ref of references) assert.deepEqual(ref.resume_options, resumeOptions, "persist options only with the exact accepted native session");
       await cp(savedPath, path.join(root, "native-before-restart.session.json"));
       check("native reference and pinned recipe persisted", "pass", references);
     }
@@ -493,7 +493,7 @@ async function runHarness(binaryArg: string) {
       const resumedProcess = await poll("automatic native OpenCode restore", foreground, 60000);
       assert(beforeNativeRestart && (resumedProcess.pid !== beforeNativeRestart.pid || resumedProcess.start !== beforeNativeRestart.start), "must observe a new OpenCode process after restart");
       const argv = (await readFile(`/proc/${resumedProcess.pid}/cmdline`, "utf8")).split("\0").filter(Boolean);
-      assert.deepEqual(argv.slice(1), ["--session", nativeID], "automatic restore must use the pinned native resume argv");
+      assert.deepEqual(argv.slice(1), ["--session", nativeID, ...resumeOptions], "automatic restore must preserve the pinned native session and allowed original CLI choices");
       await capture("native-restored-process-before-ui");
       await rejectPrematurePrompt("native-automatic-restore");
       await productReady(true);

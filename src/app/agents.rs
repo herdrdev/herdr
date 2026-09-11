@@ -250,10 +250,10 @@ impl App {
             return Err(AgentStartError::InvalidTimeout);
         }
 
+        let now = Instant::now();
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             return Err(AgentStartError::InputFailed(err.to_string()));
         }
-        let now = Instant::now();
         let terminal = self
             .state
             .terminals
@@ -267,7 +267,12 @@ impl App {
             AGENT_START_SETTLE_DELAY,
             timeout,
         );
-        terminal.admit_agent_resume_recipe(kind, pinned_recipe.clone(), now);
+        terminal.admit_agent_resume_recipe(
+            kind,
+            pinned_recipe.clone(),
+            persisted_agent_session.clone(),
+            now,
+        );
         terminal.pinned_agent_resume_recipe = pinned_recipe;
         if let Some(session) = persisted_agent_session {
             terminal.set_managed_agent_launch_session(session);
@@ -491,10 +496,14 @@ pub(super) fn runtime_hosts_agent(
                 return false;
             };
             let registry = crate::agents::registry();
-            return crate::platform::foreground_job_with_registry(&registry, pid, Some(process))
-                .is_some_and(|job| {
-                    retained_binding_in_foreground(binding, &job, crate::platform::process_identity)
-                });
+            return crate::platform::foreground_job_with_registry(
+                &registry,
+                pid,
+                Some((process, &registry)),
+            )
+            .is_some_and(|job| {
+                retained_binding_in_foreground(binding, &job, crate::platform::process_identity)
+            });
         }
     }
     live_runtime_agent(runtime) == Some(expected)
@@ -782,6 +791,8 @@ mod tests {
             observed_at: now,
             managed_admission: false,
             report_proof: None,
+            resume_options_owner: None,
+            resume_options: None,
         };
         state.handle_app_event(crate::events::AppEvent::AgentResumeProcessBound {
             pane_id,
@@ -947,6 +958,8 @@ mod tests {
             observed_at: std::time::Instant::now(),
             managed_admission: false,
             report_proof: None,
+            resume_options_owner: None,
+            resume_options: None,
         };
         let mut job = crate::platform::ForegroundJob {
             process_group_id: 100,

@@ -148,6 +148,7 @@ pub struct TerminalState {
     pub(crate) live_agent_resume_binding: Option<crate::agent_resume::LiveAgentResumeBinding>,
     pending_report_resume_bindings: HashMap<Agent, crate::agent_resume::LiveAgentResumeBinding>,
     pub pinned_agent_resume_recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
+    restored_resume_options: Option<(crate::agent_resume::PersistedAgentSession, Vec<String>)>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -188,6 +189,7 @@ impl TerminalState {
             live_agent_resume_binding: None,
             pending_report_resume_bindings: HashMap::new(),
             pinned_agent_resume_recipe: None,
+            restored_resume_options: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -789,6 +791,9 @@ impl TerminalState {
         self.persisted_agent_session = None;
         if let Some(reference) = session_ref.as_ref() {
             self.pin_report_resume_recipe(&source, &agent_label, reference);
+        }
+        if session_ref.is_none() {
+            self.restored_resume_options = None;
         }
         self.hook_authority = Some(HookAuthority {
             source,
@@ -1415,6 +1420,7 @@ impl TerminalState {
         &mut self,
         agent: Agent,
         recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
+        admitted_session: Option<crate::agent_resume::PersistedAgentSession>,
         now: Instant,
     ) {
         self.pending_report_resume_bindings.remove(&agent);
@@ -1425,11 +1431,36 @@ impl TerminalState {
             process_identity: None,
             observed_at: now,
             managed_admission: true,
+            resume_options_owner: admitted_session,
             report_proof: None,
+            resume_options: None,
         });
     }
 
     pub(crate) fn bind_agent_resume_process(
+        &mut self,
+        binding: crate::agent_resume::LiveAgentResumeBinding,
+    ) -> bool {
+        let owner =
+            self.current_session_identity_for_persistence()
+                .map(
+                    |(source, agent, kind, value)| crate::agent_resume::PersistedAgentSession {
+                        source,
+                        agent,
+                        session_ref: crate::agent_resume::AgentSessionRef { kind, value },
+                    },
+                );
+        let before = owner
+            .as_ref()
+            .map(|owner| self.resume_options_for_session(owner).to_vec());
+        self.apply_agent_resume_process_binding(binding);
+        before
+            != owner
+                .as_ref()
+                .map(|owner| self.resume_options_for_session(owner).to_vec())
+    }
+
+    fn apply_agent_resume_process_binding(
         &mut self,
         mut binding: crate::agent_resume::LiveAgentResumeBinding,
     ) {
@@ -1483,6 +1514,22 @@ impl TerminalState {
                                     },
                                 )
                         });
+                if current.process.is_none() && verified_historical_report {
+                    if let Some((source, agent, kind, value)) = &historical_session {
+                        current.resume_options_owner =
+                            Some(crate::agent_resume::PersistedAgentSession {
+                                source: source.clone(),
+                                agent: agent.clone(),
+                                session_ref: crate::agent_resume::AgentSessionRef {
+                                    kind: *kind,
+                                    value: value.clone(),
+                                },
+                            });
+                    }
+                }
+                if same_report_process {
+                    binding.resume_options_owner = current.resume_options_owner.clone();
+                }
                 let same_process = current.process.is_some()
                     && current.process_identity.is_some()
                     && current.process_identity == binding.process_identity;
@@ -1493,8 +1540,27 @@ impl TerminalState {
                             || (same_report_process && current.observed_at <= binding.observed_at)))
                 {
                     let first_process = current.process.is_none();
+                    self.restored_resume_options = None;
                     current.process = binding.process;
                     current.process_identity = binding.process_identity;
+                    if !first_process
+                        && current.resume_options.as_ref().is_some_and(|previous| {
+                            binding
+                                .resume_options
+                                .as_ref()
+                                .is_none_or(|next| previous != next)
+                        })
+                    {
+                        current.resume_options_owner = None;
+                        current.report_proof = None;
+                    }
+                    if let Some(options) = binding.resume_options {
+                        current.resume_options = Some(options);
+                    } else if let Some(previous) = &mut current.resume_options {
+                        // Remember the last argv birth even across unreadability,
+                        // so a later replacement cannot inherit its session owner.
+                        previous.options.clear();
+                    }
                     current.observed_at = binding.observed_at;
                     if first_process
                         && verified_historical_report
@@ -1533,6 +1599,7 @@ impl TerminalState {
             });
         }
         binding.report_proof = verified_report_proof;
+        self.restored_resume_options = None;
         self.live_agent_resume_binding = Some(binding);
     }
 
@@ -1613,7 +1680,9 @@ impl TerminalState {
             process_identity: None,
             observed_at: Instant::now(),
             managed_admission: false,
+            resume_options_owner: None,
             report_proof: None,
+            resume_options: None,
         };
         if self.live_agent_resume_binding.is_none() {
             self.live_agent_resume_binding = Some(binding);
@@ -1660,6 +1729,15 @@ impl TerminalState {
             return;
         }
         self.ensure_report_resume_binding(source, agent);
+        if self
+            .restored_resume_options
+            .as_ref()
+            .is_some_and(|(owner, _)| {
+                owner.source != source || owner.agent != agent || &owner.session_ref != reference
+            })
+        {
+            self.restored_resume_options = None;
+        }
         // Only an accepted/validated session mutation may authorize its early
         // evidence. An ignored stale report cannot promote historical metadata.
         if let Some(binding) = self.report_resume_binding_mut(agent) {
@@ -1669,7 +1747,7 @@ impl TerminalState {
                 }
             }
         }
-        self.pinned_agent_resume_recipe = self.report_resume_binding(agent).map(|binding| {
+        self.pinned_agent_resume_recipe = self.report_resume_binding_mut(agent).map(|binding| {
             let verified = binding.process_identity.is_some()
                 && binding
                     .report_proof
@@ -1679,6 +1757,13 @@ impl TerminalState {
                             && Some(*identity) == binding.process_identity
                             && reported == reference
                     });
+            if verified {
+                binding.resume_options_owner = Some(crate::agent_resume::PersistedAgentSession {
+                    source: source.into(),
+                    agent: agent.into(),
+                    session_ref: reference.clone(),
+                });
+            }
             if !verified {
                 crate::agent_resume::PinnedAgentResumeRecipe::unavailable(agent)
             } else {
@@ -1689,10 +1774,49 @@ impl TerminalState {
         });
     }
 
+    pub(crate) fn restore_agent_session(
+        &mut self,
+        session: crate::agent_resume::PersistedAgentSession,
+        options: Vec<String>,
+    ) {
+        self.set_persisted_agent_session(session.clone());
+        self.restored_resume_options = (!options.is_empty()).then_some((session, options));
+    }
+
+    pub(crate) fn resume_options_for_session(
+        &self,
+        owner: &crate::agent_resume::PersistedAgentSession,
+    ) -> &[String] {
+        if let Some(binding) = self
+            .live_agent_resume_binding
+            .as_ref()
+            .filter(|binding| binding.process.is_some())
+        {
+            let verified = binding.agent.as_str() == owner.agent
+                && binding.process_identity.is_some()
+                && binding.resume_options_owner.as_ref() == Some(owner);
+            return if verified && self.recent_agent_process_exit.is_none() {
+                binding
+                    .resume_options
+                    .as_ref()
+                    .map_or(&[], |options| options.options.as_slice())
+            } else {
+                &[]
+            };
+        }
+        self.restored_resume_options
+            .as_ref()
+            .filter(|(saved_owner, _)| {
+                saved_owner == owner && self.recent_agent_process_exit.is_none()
+            })
+            .map_or(&[], |(_, options)| options.as_slice())
+    }
+
     pub fn set_persisted_agent_session(
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.restored_resume_options = None;
         self.persisted_agent_session = Some(session);
     }
 
@@ -1700,6 +1824,7 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.restored_resume_options = None;
         self.persisted_agent_session = Some(session.clone());
         self.managed_agent_launch_session = Some(session);
     }
@@ -2081,6 +2206,7 @@ impl TerminalState {
         );
         self.hook_authority = None;
         self.persisted_agent_session = None;
+        self.restored_resume_options = None;
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -2144,6 +2270,7 @@ impl TerminalState {
         }
         self.hook_authority = None;
         if !preserve_foreign_persisted_session {
+            self.restored_resume_options = None;
             self.persisted_agent_session = None;
         }
         let current_session = self.current_session_identity_for_persistence();
@@ -2558,6 +2685,7 @@ impl TerminalState {
             .as_ref()
             .is_some_and(|session| self.persisted_agent_session.as_ref() == Some(session))
         {
+            self.restored_resume_options = None;
             self.persisted_agent_session = None;
         }
         self.agent_name = None;
@@ -2568,6 +2696,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.restored_resume_options = None;
         self.live_agent_resume_binding = None;
         self.pending_report_resume_bindings.clear();
         self.detected_agent = None;
@@ -2731,7 +2860,311 @@ mod tests {
             }),
             managed_admission: false,
             report_proof: None,
+            resume_options_owner: None,
+            resume_options: None,
         }
+    }
+
+    #[test]
+    fn resume_options_follow_verified_session_and_process_birth_not_agent_name() {
+        use crate::agent_resume::*;
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        let recipe =
+            crate::agents::bundled_profile("codex").and_then(PinnedAgentResumeRecipe::capture);
+        let mut binding = resume_test_binding(recipe.clone(), 101, now);
+        let options = vec!["--model".into(), "model name".into()];
+        binding.resume_options = Some(ProcessResumeOptions {
+            argv_owner: binding.process_identity.unwrap(),
+            options: options.clone(),
+        });
+        terminal.bind_agent_resume_process(binding.clone());
+        let owner = PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: AgentSessionRef::id("session").unwrap(),
+        };
+        assert!(terminal.resume_options_for_session(&owner).is_empty());
+        terminal
+            .set_agent_session_ref(
+                owner.source.clone(),
+                owner.agent.clone(),
+                Some(owner.session_ref.clone()),
+                Some(1),
+            )
+            .unwrap();
+        assert_eq!(terminal.resume_options_for_session(&owner), options);
+        let mut stale = binding.clone();
+        stale.observed_at = now - std::time::Duration::from_secs(1);
+        stale.resume_options = None;
+        assert!(!terminal.bind_agent_resume_process(stale));
+        assert_eq!(terminal.resume_options_for_session(&owner), options);
+        let mut replacement =
+            resume_test_binding(recipe, 102, now + std::time::Duration::from_secs(1));
+        replacement.resume_options = Some(ProcessResumeOptions {
+            argv_owner: replacement.process_identity.unwrap(),
+            options: vec!["--model=new".into()],
+        });
+        assert!(terminal.bind_agent_resume_process(replacement.clone()));
+        assert!(terminal.resume_options_for_session(&owner).is_empty());
+        terminal
+            .set_agent_session_ref(
+                owner.source.clone(),
+                owner.agent.clone(),
+                Some(owner.session_ref.clone()),
+                Some(2),
+            )
+            .unwrap();
+        assert_eq!(terminal.resume_options_for_session(&owner), ["--model=new"]);
+        replacement.resume_options = None;
+        replacement.observed_at += std::time::Duration::from_secs(1);
+        assert!(terminal.bind_agent_resume_process(replacement));
+        assert!(terminal.resume_options_for_session(&owner).is_empty());
+    }
+
+    #[test]
+    fn resume_options_follow_accepted_conversation_switches_in_the_same_process() {
+        use crate::agent_resume::*;
+        for admitted in [false, true] {
+            let mut terminal = test_terminal();
+            let now = Instant::now();
+            let recipe =
+                crate::agents::bundled_profile("codex").and_then(PinnedAgentResumeRecipe::capture);
+            let first = PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: AgentSessionRef::id("first").unwrap(),
+            };
+            let mut binding = resume_test_binding(recipe.clone(), 101, now);
+            binding.resume_options = Some(ProcessResumeOptions {
+                argv_owner: binding.process_identity.unwrap(),
+                options: vec![
+                    "--model=chosen".into(),
+                    "--dangerously-bypass-approvals-and-sandbox".into(),
+                ],
+            });
+            if admitted {
+                terminal.set_managed_agent_launch_session(first.clone());
+                terminal.admit_agent_resume_recipe(Agent::Codex, recipe, Some(first.clone()), now);
+            }
+            terminal.bind_agent_resume_process(binding.clone());
+            terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+            terminal
+                .set_agent_session_ref(
+                    first.source.clone(),
+                    first.agent.clone(),
+                    Some(first.session_ref.clone()),
+                    Some(1),
+                )
+                .unwrap();
+            let original_options = binding.resume_options.as_ref().unwrap().options.clone();
+            assert_eq!(
+                terminal.resume_options_for_session(&first),
+                original_options
+            );
+            for (seq, reference) in [(2, "second"), (3, "first")] {
+                let owner = PersistedAgentSession {
+                    session_ref: AgentSessionRef::id(reference).unwrap(),
+                    ..first.clone()
+                };
+                terminal
+                    .set_agent_session_ref_for_session_start(
+                        owner.source.clone(),
+                        owner.agent.clone(),
+                        Some(owner.session_ref.clone()),
+                        Some(seq),
+                        Some("resume".into()),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    terminal.resume_options_for_session(&owner),
+                    original_options
+                );
+                assert_eq!(terminal.persisted_agent_session.as_ref(), Some(&owner));
+                binding.observed_at += std::time::Duration::from_secs(1);
+                terminal.bind_agent_resume_process(binding.clone());
+                assert_eq!(
+                    terminal.resume_options_for_session(&owner),
+                    original_options
+                );
+                assert_eq!(
+                    terminal
+                        .live_agent_resume_binding
+                        .as_ref()
+                        .unwrap()
+                        .resume_options_owner
+                        .as_ref(),
+                    Some(&owner)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resume_options_source_changes_require_fresh_session_evidence() {
+        use crate::agent_resume::*;
+        for change in ["birth", "argv", "unreadable"] {
+            let mut terminal = test_terminal();
+            let now = Instant::now();
+            let recipe =
+                crate::agents::bundled_profile("codex").and_then(PinnedAgentResumeRecipe::capture);
+            let mut binding = resume_test_binding(recipe, 101, now);
+            binding.resume_options = Some(ProcessResumeOptions {
+                argv_owner: binding.process_identity.unwrap(),
+                options: vec!["--model=old".into()],
+            });
+            let owner = PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: AgentSessionRef::id("native").unwrap(),
+            };
+            terminal.bind_agent_resume_process(binding.clone());
+            terminal
+                .set_agent_session_ref(
+                    owner.source.clone(),
+                    owner.agent.clone(),
+                    Some(owner.session_ref.clone()),
+                    Some(1),
+                )
+                .unwrap();
+            match change {
+                "birth" => {
+                    binding
+                        .resume_options
+                        .as_mut()
+                        .unwrap()
+                        .argv_owner
+                        .birth_token += 1
+                }
+                "argv" => {
+                    binding.resume_options.as_mut().unwrap().options = vec!["--model=new".into()]
+                }
+                "unreadable" => binding.resume_options = None,
+                _ => unreachable!(),
+            }
+            binding.observed_at += std::time::Duration::from_secs(1);
+            assert!(terminal.bind_agent_resume_process(binding.clone()));
+            assert!(terminal.resume_options_for_session(&owner).is_empty());
+            assert!(terminal
+                .live_agent_resume_binding
+                .as_ref()
+                .unwrap()
+                .report_proof
+                .is_none());
+            binding.observed_at += std::time::Duration::from_secs(1);
+            terminal.bind_agent_resume_process(binding.clone());
+            assert!(terminal.resume_options_for_session(&owner).is_empty());
+            assert!(terminal
+                .set_agent_session_ref(
+                    owner.source.clone(),
+                    owner.agent.clone(),
+                    Some(owner.session_ref.clone()),
+                    Some(1)
+                )
+                .is_none());
+            assert!(terminal.resume_options_for_session(&owner).is_empty());
+            if change == "unreadable" {
+                binding.resume_options = Some(ProcessResumeOptions {
+                    argv_owner: binding.process_identity.unwrap(),
+                    options: vec!["--model=recovered".into()],
+                });
+                binding.observed_at += std::time::Duration::from_secs(1);
+                terminal.bind_agent_resume_process(binding.clone());
+                assert!(terminal.resume_options_for_session(&owner).is_empty());
+            }
+            terminal
+                .set_agent_session_ref(
+                    owner.source.clone(),
+                    owner.agent.clone(),
+                    Some(owner.session_ref.clone()),
+                    Some(2),
+                )
+                .unwrap();
+            assert_eq!(
+                terminal.resume_options_for_session(&owner),
+                binding.resume_options.as_ref().unwrap().options
+            );
+        }
+    }
+
+    #[test]
+    fn resume_options_early_report_requires_matching_birth_proof() {
+        use crate::agent_resume::*;
+        for (prove_birth, acquired_before_report) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let mut terminal = test_terminal();
+            let now = Instant::now();
+            let recipe =
+                crate::agents::bundled_profile("codex").and_then(PinnedAgentResumeRecipe::capture);
+            let observed_at = if acquired_before_report {
+                now - std::time::Duration::from_secs(1)
+            } else {
+                now + std::time::Duration::from_secs(1)
+            };
+            let mut binding = resume_test_binding(recipe, 101, observed_at);
+            binding.resume_options = Some(ProcessResumeOptions {
+                argv_owner: binding.process_identity.unwrap(),
+                options: vec!["--model=kept".into()],
+            });
+            let owner = PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: AgentSessionRef::id("session").unwrap(),
+            };
+            terminal
+                .session_ref_from_bound_report(
+                    &owner.source,
+                    &owner.agent,
+                    Some("session".into()),
+                    None,
+                )
+                .unwrap();
+            if prove_birth {
+                terminal.record_report_process_proof(
+                    "codex",
+                    &owner.session_ref,
+                    binding.process_identity.unwrap(),
+                );
+            }
+            terminal
+                .set_agent_session_ref(
+                    owner.source.clone(),
+                    owner.agent.clone(),
+                    Some(owner.session_ref.clone()),
+                    Some(1),
+                )
+                .unwrap();
+            assert!(terminal.resume_options_for_session(&owner).is_empty());
+            terminal.bind_agent_resume_process(binding);
+            assert_eq!(
+                !terminal.resume_options_for_session(&owner).is_empty(),
+                prove_birth
+            );
+        }
+    }
+
+    #[test]
+    fn restored_resume_options_are_consumed_by_unreadable_reacquisition() {
+        use crate::agent_resume::*;
+        let mut terminal = test_terminal();
+        let owner = PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: AgentSessionRef::id("session").unwrap(),
+        };
+        terminal.restore_agent_session(owner.clone(), vec!["--model=saved".into()]);
+        assert_eq!(
+            terminal.resume_options_for_session(&owner),
+            ["--model=saved"]
+        );
+        let recipe =
+            crate::agents::bundled_profile("codex").and_then(PinnedAgentResumeRecipe::capture);
+        let now = Instant::now();
+        terminal.admit_agent_resume_recipe(Agent::Codex, recipe.clone(), Some(owner.clone()), now);
+        assert!(terminal.bind_agent_resume_process(resume_test_binding(recipe, 101, now)));
+        assert!(terminal.resume_options_for_session(&owner).is_empty());
+        assert!(terminal.restored_resume_options.is_none());
     }
 
     #[test]
@@ -3100,6 +3533,7 @@ mod tests {
         terminal.admit_agent_resume_recipe(
             crate::detect::Agent::Codex,
             Some(original.clone()),
+            None,
             now,
         );
         terminal.bind_agent_resume_process(resume_test_binding(
@@ -3331,6 +3765,7 @@ mod tests {
         terminal.set_persisted_agent_session(session.clone());
         terminal.pinned_agent_resume_recipe = recipe.clone();
         terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            resume_options: Vec::new(),
             agent: "opencode".into(),
             argv: vec![
                 "opencode".into(),

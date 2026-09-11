@@ -2,3 +2,7 @@ accepted_references = ["path", "id"]
 preferred_reference = "path"
 strategy = "joined_flag"
 token = "--resume="
+
+[resume_options]
+flags = ["--prewalk", "--no-prewalk", "--plan-yolo", "--allow-home", "--no-tools", "--no-lsp", "--no-pty", "--hide-thinking", "--advisor", "--no-extensions", "--no-skills", "--no-rules", "--no-title", "--auto-approve"]
+options = ["--model", "--smol", "--slow", "--plan", "--provider", "--thinking", "--max-time", "--approval-mode"]

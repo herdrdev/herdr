@@ -484,7 +484,7 @@ pub(crate) fn parse_agent_env_hint_with_registry(
 pub(crate) fn foreground_job_with_registry(
     _registry: &crate::agents::RegistrySnapshot,
     pid: u32,
-    _bound: Option<&ForegroundProcess>,
+    _bound: Option<(&ForegroundProcess, &crate::agents::AgentRegistry)>,
 ) -> Option<ForegroundJob> {
     foreground_job(pid)
 }
@@ -493,7 +493,7 @@ pub(crate) fn foreground_job_with_registry(
 pub(crate) fn foreground_process_group_id_with_registry(
     _registry: &crate::agents::RegistrySnapshot,
     pid: u32,
-    _bound: Option<&ForegroundProcess>,
+    _bound: Option<(&ForegroundProcess, &crate::agents::AgentRegistry)>,
 ) -> Option<u32> {
     foreground_process_group_id(pid)
 }
@@ -672,6 +672,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn interactive_shell_command_quotes_for_posix_and_powershell() {
+        assert_eq!(interactive_shell_command(&[], "bash"), None);
         let argv = vec![
             "pi".into(),
             String::new(),

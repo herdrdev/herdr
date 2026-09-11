@@ -1595,8 +1595,9 @@ impl AppState {
                     if let Some(id) = ws.terminal_id(pane_id) {
                         if let Some(terminal) = self.terminals.get_mut(id) {
                             let previous = terminal.pinned_agent_resume_recipe.clone();
-                            terminal.bind_agent_resume_process(*binding);
-                            recipe_changed = previous != terminal.pinned_agent_resume_recipe;
+                            let options_changed = terminal.bind_agent_resume_process(*binding);
+                            recipe_changed =
+                                options_changed || previous != terminal.pinned_agent_resume_recipe;
                         }
                         break;
                     }

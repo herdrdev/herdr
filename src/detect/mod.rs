@@ -197,11 +197,39 @@ pub fn foreground_group_leader_job(
     crate::platform::foreground_group_leader_job(process_group_id)
 }
 
+/// Only a concrete executable/script argv can supply options, never shell command text.
+pub(crate) fn structured_resume_args<'a>(
+    registry: &AgentRegistry,
+    process: &'a crate::platform::ForegroundProcess,
+    agent: Agent,
+) -> Option<&'a [String]> {
+    let argv = process.argv.as_deref()?;
+    let (canonical, start) = ProcessRecognizer { registry }.structured_agent_entrypoint(argv)?;
+    (canonical == agent.as_str()).then(|| &argv[start..])
+}
+
 struct ProcessRecognizer<'a> {
     registry: &'a AgentRegistry,
 }
 
 impl ProcessRecognizer<'_> {
+    fn structured_agent_entrypoint(&self, argv: &[String]) -> Option<(String, usize)> {
+        let runtime = normalized_agent_lookup_name(path_basename(argv.first()?));
+        if !is_generic_runtime_or_shell(&runtime) {
+            return self
+                .agent_name_from_path_token(argv.first()?)
+                .map(|agent| (agent, 1));
+        }
+        let index = structured_runtime_script_index(&runtime, argv)?;
+        let agent = if runtime == "node" && index == 1 {
+            self.bundled_node_agent_name_from_argv(argv)
+                .or_else(|| self.agent_name_from_path_token(&argv[index]))
+        } else {
+            self.agent_name_from_path_token(&argv[index])
+        }?;
+        Some((agent, index + 1))
+    }
+
     fn normalized_process_name(
         &self,
         process: &crate::platform::ForegroundProcess,
@@ -505,6 +533,79 @@ impl ProcessRecognizer<'_> {
     }
 }
 
+// Capture needs stronger evidence than identity heuristics: an unknown runtime
+// switch might consume the following agent-looking path as its own value.
+fn structured_runtime_script_index(runtime: &str, argv: &[String]) -> Option<usize> {
+    let (flags, options): (&[&str], &[&str]) = match runtime {
+        "node" | "bun" => (
+            &[
+                "--no-warnings",
+                "--enable-source-maps",
+                "--preserve-symlinks",
+                "--preserve-symlinks-main",
+                "--experimental-strip-types",
+            ],
+            &[
+                "-r",
+                "--require",
+                "--import",
+                "--loader",
+                "--experimental-loader",
+                "--conditions",
+            ],
+        ),
+        name if is_python_runtime(name) => (&["-u", "-B", "-E", "-I", "-s", "-S"], &["-W", "-X"]),
+        "sh" | "bash" | "zsh" | "fish" => (
+            &["--noprofile", "--norc", "-l", "-i"],
+            &["--rcfile", "--init-file"],
+        ),
+        "powershell" | "pwsh" => (
+            &["-noprofile", "-nologo", "-noninteractive", "-noexit"],
+            &[
+                "-executionpolicy",
+                "-inputformat",
+                "-outputformat",
+                "-workingdirectory",
+                "-windowstyle",
+                "-version",
+            ],
+        ),
+        _ => return None,
+    };
+    let powershell = matches!(runtime, "powershell" | "pwsh");
+    let mut index = 1;
+    while let Some(arg) = argv.get(index) {
+        let lower;
+        let arg = if powershell {
+            lower = arg.to_ascii_lowercase();
+            lower.as_str()
+        } else {
+            arg.as_str()
+        };
+        if arg == "--" || (powershell && matches!(arg, "-file" | "-f" | "/file")) {
+            return argv.get(index + 1).map(|_| index + 1);
+        }
+        if !(arg.starts_with('-') || powershell && arg.starts_with('/')) {
+            return Some(index);
+        }
+        if flags.contains(&arg) {
+            index += 1;
+        } else if options.contains(&arg) {
+            argv.get(index + 1)?;
+            index += 2;
+        } else if !powershell
+            && arg
+                .split_once('=')
+                .is_some_and(|(name, value)| options.contains(&name) && !value.is_empty())
+        {
+            index += 1;
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
 fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
     let split = path.rfind(['/', '\\'])?;
     let parent = path[..split].trim_end_matches(['/', '\\']);
@@ -639,6 +740,83 @@ mod tests {
             argv: Some(argv.iter().map(|arg| (*arg).to_string()).collect()),
             cmdline: Some(argv.join(" ")),
         }
+    }
+
+    #[test]
+    fn resume_args_require_a_structured_agent_entrypoint_not_a_later_incidental_token() {
+        let registry = crate::agents::registry();
+        for argv in [
+            vec!["claude", "--model", "model name"],
+            vec![
+                "node",
+                "--require",
+                "preload.js",
+                "/bin/claude",
+                "--model",
+                "model name",
+            ],
+            vec!["bash", "/bin/claude", "--model", "model name"],
+            vec![
+                "pwsh",
+                "-NoProfile",
+                "-File",
+                "/bin/claude",
+                "--model",
+                "model name",
+            ],
+        ] {
+            let process = foreground_process(1, argv[0], &argv);
+            assert_eq!(
+                structured_resume_args(&registry, &process, Agent::Claude),
+                Some(["--model".into(), "model name".into()].as_slice()),
+                "{argv:?}"
+            );
+        }
+        for argv in [
+            vec!["bash", "-c", "claude --model other"],
+            vec![
+                "bash",
+                "--rcfile",
+                "/tmp/claude",
+                "-c",
+                ":",
+                "--model",
+                "other",
+            ],
+            vec![
+                "node",
+                "--unknown-runtime-option",
+                "/bin/claude",
+                "--model",
+                "other",
+            ],
+            vec![
+                "pwsh",
+                "-CommandWithArgs",
+                "/bin/claude",
+                "--model",
+                "other",
+            ],
+            vec!["cmd", "/C", "claude --model other"],
+            vec!["pwsh", "-Command", "claude --model other"],
+            vec!["pwsh", "-EncodedCommand", "encoded", "claude"],
+            vec!["node", "unrelated.js", "claude", "--model", "other"],
+            vec!["node", "--eval=claude", "claude", "--model", "other"],
+            vec!["other", "claude", "--model", "other"],
+        ] {
+            let process = foreground_process(1, "claude", &argv);
+            assert_eq!(
+                structured_resume_args(&registry, &process, Agent::Claude),
+                None,
+                "{argv:?}"
+            );
+        }
+        let mut process = foreground_process(1, "claude", &["claude", "--model", "other"]);
+        process.argv = None;
+        assert_eq!(
+            structured_resume_args(&registry, &process, Agent::Claude),
+            None
+        );
     }
 
     #[cfg(unix)]

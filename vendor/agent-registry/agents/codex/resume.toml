@@ -2,3 +2,15 @@ accepted_references = ["id"]
 preferred_reference = "id"
 strategy = "subcommand"
 token = "resume"
+
+[resume_options]
+flags = [
+  "--approve-for-me",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--dangerously-bypass-hook-trust",
+  "--oss",
+  "--search",
+  "--strict-config",
+  "--no-alt-screen",
+]
+options = ["-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval", "--local-provider"]

@@ -547,7 +547,10 @@ fn restore_tab(
                 terminal.set_manual_label(label);
             }
             if let Some(session) = restored_agent_session {
-                terminal.set_persisted_agent_session(session);
+                terminal.restore_agent_session(
+                    session,
+                    saved_agent_session.map_or_else(Vec::new, |saved| saved.resume_options.clone()),
+                );
                 terminal.pinned_agent_resume_recipe =
                     saved_agent_session.and_then(|session| session.recipe.clone());
             }
@@ -634,7 +637,11 @@ fn restore_tab(
                     terminal.set_manual_label(label);
                 }
                 if let Some(session) = restored_agent_session {
-                    terminal.set_persisted_agent_session(session);
+                    terminal.restore_agent_session(
+                        session,
+                        saved_agent_session
+                            .map_or_else(Vec::new, |saved| saved.resume_options.clone()),
+                    );
                     terminal.pinned_agent_resume_recipe =
                         saved_agent_session.and_then(|session| session.recipe.clone());
                 }
@@ -648,6 +655,7 @@ fn restore_tab(
                             terminal.admit_agent_resume_recipe(
                                 agent,
                                 recipe,
+                                terminal.persisted_agent_session.clone(),
                                 std::time::Instant::now(),
                             );
                         }
@@ -809,7 +817,15 @@ fn restore_plan_for_snapshot_with_registry(
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
     match crate::agent_resume::pinned_plan(registry, &persisted, session.recipe.as_ref()) {
-        Ok(plan) => Some(plan),
+        Ok(mut plan) => {
+            plan.resume_options = registry
+                .profile_by_id(&session.agent)
+                .and_then(|profile| profile.session())
+                .map_or_else(Vec::new, |profile| {
+                    profile.resume_options.filter(&session.resume_options)
+                });
+            Some(plan)
+        }
         Err(reason) => {
             warn!(agent = %session.agent, reason, "automatic agent resume disabled; session metadata retained");
             None
@@ -949,6 +965,27 @@ fn collect_ids_inner(node: &Node, ids: &mut Vec<PaneId>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resume_options_snapshot_is_optional_bounded_and_revalidated_for_novel_agents() {
+        let registry = crate::agent_resume::resume_options_test_registry(1, "options=['--model']");
+        let recipe = crate::agent_resume::PinnedAgentResumeRecipe::capture(
+            registry.profile_by_id("novel-options").unwrap(),
+        )
+        .unwrap();
+        let mut json = serde_json::json!({"source":"herdr:launch", "agent":"novel-options", "kind":"id", "value":"native", "recipe":recipe});
+        let old: PaneAgentSessionSnapshot = serde_json::from_value(json.clone()).unwrap();
+        assert!(old.resume_options.is_empty());
+        json["resume_options"] =
+            serde_json::json!(["--model", "chosen model", "--yolo", "--resume=other"]);
+        let saved: PaneAgentSessionSnapshot = serde_json::from_value(json.clone()).unwrap();
+        let plan = restore_plan_for_snapshot_with_registry(&saved, true, &registry).unwrap();
+        assert_eq!(plan.resume_options, ["--model", "chosen model"]);
+        json["resume_options"] = serde_json::json!(["x".repeat(4097)]);
+        assert!(serde_json::from_value::<PaneAgentSessionSnapshot>(json.clone()).is_err());
+        json["resume_options"] = serde_json::json!(vec!["--model"; 129]);
+        assert!(serde_json::from_value::<PaneAgentSessionSnapshot>(json).is_err());
+    }
+
     #[tokio::test]
     async fn missing_dynamic_package_preserves_recipe_and_metadata_without_auto_resume() {
         let registry = crate::agent_resume::test_registry(
@@ -1052,6 +1089,7 @@ mod tests {
         let old = crate::agent_resume::test_registry("novel-42", "old-cli", "subcommand", "resume");
         let new = crate::agent_resume::test_registry("novel-42", "new-cli", "subcommand", "resume");
         let session = PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             source: "herdr:launch".into(),
             agent: "novel-42".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1079,6 +1117,7 @@ mod tests {
     #[test]
     fn rejected_recipe_keeps_history_and_does_not_reserve_a_session() {
         let mut session = PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             source: "herdr:codex".into(),
             agent: "codex".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1208,6 +1247,7 @@ mod tests {
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1222,6 +1262,7 @@ mod tests {
         );
 
         let unsupported_path = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:claude".into(),
             agent: "claude".into(),
@@ -1235,6 +1276,7 @@ mod tests {
     fn restore_plan_selection_suppresses_duplicates() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1258,6 +1300,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1285,6 +1328,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_duplicate_native_agent_session() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1315,6 +1359,7 @@ mod tests {
     #[test]
     fn pane_restore_startup_keeps_history_without_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1343,6 +1388,7 @@ mod tests {
     #[test]
     fn restore_rehydrates_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:hermes".into(),
             agent: "hermes".into(),
@@ -1360,6 +1406,7 @@ mod tests {
     #[test]
     fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
             recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
@@ -1398,6 +1445,7 @@ mod tests {
                             agent_name: Some("reviewer".into()),
                             managed_agent_kind: Some("opencode".into()),
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                resume_options: Vec::new(),
                                 recipe: None,
                                 source: "herdr:opencode".into(),
                                 agent: "opencode".into(),
@@ -1559,6 +1607,7 @@ mod tests {
             agent_name: Some("planner".into()),
             managed_agent_kind: None,
             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                resume_options: Vec::new(),
                 recipe: None,
                 source: "herdr:codex".into(),
                 agent: "codex".into(),
@@ -1714,6 +1763,7 @@ mod tests {
                             agent_name: None,
                             managed_agent_kind: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                resume_options: Vec::new(),
                                 recipe: Some(recipe.clone()),
                                 source: "herdr:codex".into(),
                                 agent: "codex".into(),

@@ -603,6 +603,51 @@ struct BoundDetectionProcess {
     profile: Arc<crate::agents::store::RegistrySnapshot>,
     resume_recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
     identity: Option<crate::platform::ProcessIdentity>,
+    resume_registry: Arc<crate::agents::store::RegistrySnapshot>,
+    resume_options: Option<crate::agent_resume::ProcessResumeOptions>,
+}
+
+impl BoundDetectionProcess {
+    fn observe_resume_options(
+        &self,
+        processes: &[crate::platform::ForegroundProcess],
+        read_identity: fn(u32) -> Option<crate::platform::ProcessIdentity>,
+    ) -> Option<crate::agent_resume::ProcessResumeOptions> {
+        let identity = self.identity?;
+        let policy = &self
+            .resume_registry
+            .profile_by_agent(self.agent)?
+            .session()?
+            .resume_options;
+        if policy.flags.is_empty() && policy.options.is_empty() {
+            return None;
+        }
+        let candidates = processes
+            .iter()
+            .filter(|process| process.pid == self.process.pid)
+            .chain(
+                processes
+                    .iter()
+                    .filter(|process| process.pid != self.process.pid),
+            );
+        for process in candidates {
+            let Some(args) =
+                crate::detect::structured_resume_args(&self.resume_registry, process, self.agent)
+            else {
+                continue;
+            };
+            let argv_owner = if process.pid == identity.pid {
+                identity
+            } else {
+                read_identity(process.pid)?
+            };
+            return Some(crate::agent_resume::ProcessResumeOptions {
+                argv_owner,
+                options: policy.filter(args),
+            });
+        }
+        None
+    }
 }
 
 impl DetectionRegistryState {
@@ -660,15 +705,24 @@ impl DetectionRegistryState {
                         process_identity: bound.identity,
                         observed_at: now,
                         managed_admission: false,
+                        resume_options_owner: None,
                         report_proof: None,
+                        resume_options: bound.resume_options.clone(),
                     }),
                 })
                 .await;
         }
     }
 
-    fn bound_process(&self) -> Option<&crate::platform::ForegroundProcess> {
-        self.bound.as_ref().map(|bound| &bound.process)
+    fn bound_process(
+        &self,
+    ) -> Option<(
+        &crate::platform::ForegroundProcess,
+        &crate::agents::AgentRegistry,
+    )> {
+        self.bound
+            .as_ref()
+            .map(|bound| (&bound.process, &*bound.resume_registry.registry))
     }
 
     fn screen_snapshot(&self, agent: Option<Agent>) -> &crate::agents::store::RegistrySnapshot {
@@ -737,7 +791,18 @@ impl DetectionRegistryState {
                 && bound.identity.is_some()
                 && (self.read_process_identity)(bound.process.pid) == bound.identity
             {
-                let changed = probe.process_group_id != Some(bound.process_group_id);
+                let options =
+                    bound.observe_resume_options(&probe.processes, self.read_process_identity);
+                let changed = probe.process_group_id != Some(bound.process_group_id)
+                    || options != bound.resume_options;
+                bound.resume_options = options;
+                if let Some(process) = probe
+                    .processes
+                    .iter()
+                    .find(|process| process.pid == bound.process.pid)
+                {
+                    bound.process = process.clone();
+                }
                 if let Some(pgid) = probe.process_group_id {
                     bound.process_group_id = pgid;
                 }
@@ -780,7 +845,7 @@ impl DetectionRegistryState {
         });
         if let Some(process) = process {
             let identity = (self.read_process_identity)(process.pid);
-            self.bound = Some(BoundDetectionProcess {
+            let mut bound = BoundDetectionProcess {
                 agent,
                 process: process.clone(),
                 identity,
@@ -791,7 +856,12 @@ impl DetectionRegistryState {
                         .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
                 }),
                 profile: self.active.clone(),
-            });
+                resume_registry: self.active.clone(),
+                resume_options: None,
+            };
+            bound.resume_options =
+                bound.observe_resume_options(&probe.processes, self.read_process_identity);
+            self.bound = Some(bound);
             return true;
         }
         false
@@ -4785,6 +4855,100 @@ mod tests {
             })
         };
         registry
+    }
+
+    #[test]
+    fn resume_options_capture_is_birth_pinned_and_clears_on_unreadable_argv() {
+        use crate::agent_resume::resume_options_test_registry;
+        let initial = resume_options_test_registry(1, "options=['--model']");
+        let expanded = resume_options_test_registry(2, "options=['--model']\nflags=['--yolo']");
+        let mut registry = test_detection_registry(initial);
+        let mut probe = fixture_probe(&registry, 99_999_999, "options-cli");
+        probe.processes[0].argv = Some(vec![
+            "options-cli".into(),
+            "--model".into(),
+            "model name".into(),
+            "--yolo".into(),
+        ]);
+        assert!(registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--model", "model name"]
+        );
+        assert!(!registry.bind(&probe, probe.agent));
+        registry.refresh(2, || expanded, &mut true, &mut Some(1));
+        assert!(!registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--model", "model name"]
+        );
+        probe.processes[0].argv = None;
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(registry.bound.as_ref().unwrap().resume_options.is_none());
+        probe.processes[0].pid -= 1;
+        probe.process_group_id = Some(probe.processes[0].pid);
+        probe.processes[0].argv = Some(vec!["options-cli".into(), "--yolo".into()]);
+        assert!(registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--yolo"]
+        );
+    }
+
+    #[test]
+    fn resume_options_use_concrete_descendant_argv_not_opaque_wrapper_text() {
+        let mut registry = test_detection_registry(
+            crate::agent_resume::resume_options_test_registry(1, "options=['--model']"),
+        );
+        let mut probe = fixture_probe(&registry, 99_999_999, "options-cli");
+        probe.processes[0].name = "cmd.exe".into();
+        probe.processes[0].argv = Some(vec![
+            "cmd.exe".into(),
+            "/C".into(),
+            "options-cli --model untrusted".into(),
+        ]);
+        let mut descendant = foreground_process(99_999_998, "node");
+        descendant.argv = Some(vec![
+            "node".into(),
+            "/bin/options-cli".into(),
+            "--model".into(),
+            "exact ' value".into(),
+        ]);
+        probe.processes.push(descendant);
+        assert!(registry.bind(&probe, probe.agent));
+        let options = registry
+            .bound
+            .as_ref()
+            .unwrap()
+            .resume_options
+            .as_ref()
+            .unwrap();
+        assert_eq!(options.argv_owner.pid, 99_999_998);
+        assert_eq!(options.options, ["--model", "exact ' value"]);
+        probe.processes.pop();
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(registry.bound.as_ref().unwrap().resume_options.is_none());
     }
 
     fn detection_registry_fixture(

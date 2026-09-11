@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/herdrdev/agent-registry",
-  "sha256": "7ee208035966d2bdf4315f42c555904319d47f14d72fd2b7d39e9c9b9262bf95",
+  "sha256": "a00b75a67e3d7eb9aa47ede92246aa187529c8e89d8811cc2c662796cabbd2bc",
   "files": [
     {
       "path": "agents/agy/agent.toml",
@@ -69,7 +69,7 @@
     },
     {
       "path": "agents/claude/resume.toml",
-      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+      "sha256": "bb551e683e1cbee81db9f8b6941a289f323563c0851036c95a3db13c9a973880"
     },
     {
       "path": "agents/cline/agent.toml",
@@ -109,7 +109,7 @@
     },
     {
       "path": "agents/codex/resume.toml",
-      "sha256": "da9a89662a0e7aa77a2b2c4e8d9a291506305c2a8a869351db6c25bb5cc5a655"
+      "sha256": "89328ae69b5382232af9dea1a135e94ba89c358759ba64bbef63f9dc0fe0afc2"
     },
     {
       "path": "agents/copilot/agent.toml",
@@ -137,7 +137,7 @@
     },
     {
       "path": "agents/copilot/resume.toml",
-      "sha256": "80fdf46e9b98091af2a341d06bdca1fdcf3bd8725275be6a7c25341d32c37eea"
+      "sha256": "d8c7279f949c3afbdc090c10e66545e874374f71ffcfa6a753c746ba44f8afff"
     },
     {
       "path": "agents/cursor/agent.toml",
@@ -165,7 +165,7 @@
     },
     {
       "path": "agents/cursor/resume.toml",
-      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+      "sha256": "93d0c7bf7f3581eaf5b707a0bbf9af296461909185a39364d13fbcfe6aaf68e5"
     },
     {
       "path": "agents/devin/agent.toml",
@@ -221,7 +221,7 @@
     },
     {
       "path": "agents/droid/resume.toml",
-      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+      "sha256": "770d7d31065498ade93c0d9e58b709f9665192f984141e018c8c6f83bb3f7909"
     },
     {
       "path": "agents/gemini/agent.toml",
@@ -289,7 +289,7 @@
     },
     {
       "path": "agents/hermes/resume.toml",
-      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+      "sha256": "d62267638c9dc33555990c7598e8790f453365aff99bde9460bd12bbbede93fc"
     },
     {
       "path": "agents/kilo/agent.toml",
@@ -341,7 +341,7 @@
     },
     {
       "path": "agents/kimi/resume.toml",
-      "sha256": "b8b5077fd1fa78f68d5ae0b0b6b6e68ff8d385581a77ee79000329992383d383"
+      "sha256": "668520271a4194d9a008ff7dd3538acde36497f57f3262ef72e8a9f77d3ea2ef"
     },
     {
       "path": "agents/kiro/agent.toml",
@@ -421,7 +421,7 @@
     },
     {
       "path": "agents/omp/resume.toml",
-      "sha256": "7f6349d45ad0a8be051fa84c48c1db7836e230a57c86868b39715d14e901739a"
+      "sha256": "82b0ee49611741d651dbbc49c6dae2808577c1ccb6c6e5f7722c37248d5c13c6"
     },
     {
       "path": "agents/opencode/agent.toml",
@@ -449,7 +449,7 @@
     },
     {
       "path": "agents/opencode/resume.toml",
-      "sha256": "b8b5077fd1fa78f68d5ae0b0b6b6e68ff8d385581a77ee79000329992383d383"
+      "sha256": "c861467807b157270620d994b1b3cba6c2d665c637c1fbc97893d27b1e9d3f31"
     },
     {
       "path": "agents/pi/agent.toml",
@@ -473,7 +473,7 @@
     },
     {
       "path": "agents/pi/resume.toml",
-      "sha256": "fcfbb3ceab9b91e51cf851c7f414a643c99965b38a21ea7392cf498d4fd6decb"
+      "sha256": "9282ea526f54d4131e1557dc2e733d13f251de7a91b67c00da48343ae732af3b"
     },
     {
       "path": "agents/qodercli/agent.toml",

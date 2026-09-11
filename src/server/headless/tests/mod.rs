@@ -4974,6 +4974,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
+        resume_options: Vec::new(),
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
         strict_input_readiness: false,
     });

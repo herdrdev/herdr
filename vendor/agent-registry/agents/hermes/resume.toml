@@ -2,3 +2,7 @@ accepted_references = ["id"]
 preferred_reference = "id"
 strategy = "separate_flag"
 token = "--resume"
+
+[resume_options]
+flags = ["--yolo", "--accept-hooks", "--ignore-user-config", "--ignore-rules", "--safe-mode", "--no-restore-cwd", "--pass-session-id", "--tui", "--cli"]
+options = ["-m", "--model", "--provider", "-t", "--toolsets", "--skills", "-s"]

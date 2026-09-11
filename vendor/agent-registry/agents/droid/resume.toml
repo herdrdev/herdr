@@ -2,3 +2,6 @@ accepted_references = ["id"]
 preferred_reference = "id"
 strategy = "separate_flag"
 token = "--resume"
+
+[resume_options]
+options = ["--auto"]

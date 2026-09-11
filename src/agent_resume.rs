@@ -24,6 +24,7 @@ pub enum AgentSessionRefKind {
 pub struct AgentResumePlan {
     pub agent: String,
     pub argv: Vec<String>,
+    pub resume_options: Vec<String>,
     pub dedupe_key: String,
     /// Pinned from the same immutable registry snapshot as `argv`.
     pub strict_input_readiness: bool,
@@ -57,7 +58,15 @@ pub(crate) struct LiveAgentResumeBinding {
     pub process_identity: Option<crate::platform::ProcessIdentity>,
     pub observed_at: std::time::Instant,
     pub managed_admission: bool,
+    pub resume_options_owner: Option<PersistedAgentSession>,
     pub report_proof: Option<(crate::platform::ProcessIdentity, AgentSessionRef, bool)>,
+    pub resume_options: Option<ProcessResumeOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessResumeOptions {
+    pub argv_owner: crate::platform::ProcessIdentity,
+    pub options: Vec<String>,
 }
 
 impl PinnedAgentResumeRecipe {
@@ -179,12 +188,26 @@ pub(crate) fn pinned_plan(
             .session()
             .ok_or("agent resume is unavailable")?
             .argv(&active.executable, &session.session_ref.value),
+        resume_options: Vec::new(),
         dedupe_key: dedupe_key(&session.source, &session.agent, &session.session_ref),
         strict_input_readiness: crate::detect::manifest::requires_screen_visible_idle(
             registry,
             profile.legacy_agent(),
         ),
     })
+}
+
+impl AgentResumePlan {
+    pub(crate) fn replay_argv(&self, registry: &crate::agents::AgentRegistry) -> Vec<String> {
+        let mut argv = self.argv.clone();
+        if let Some(session) = registry
+            .profile_by_id(&self.agent)
+            .and_then(|profile| profile.session())
+        {
+            argv.extend(session.resume_options.filter(&self.resume_options));
+        }
+        argv
+    }
 }
 
 impl AgentSessionRef {
@@ -238,15 +261,38 @@ pub(crate) fn persisted_session_from_profile_launch_args(
 ) -> Option<PersistedAgentSession> {
     use crate::agents::source::ResumeStrategy;
     let session = profile.session()?;
-    let value = match (session.strategy, args) {
-        (ResumeStrategy::SeparateFlag | ResumeStrategy::Subcommand, [token, value])
-            if token == &session.token =>
-        {
-            value.as_str()
+    if args.len() > crate::agents::session::MAX_RESUME_OPTION_ARGS + 2 {
+        return None;
+    }
+    let mut value = None;
+    let mut extras = Vec::new();
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        let selected = match session.strategy {
+            ResumeStrategy::SeparateFlag | ResumeStrategy::Subcommand if arg == &session.token => {
+                Some((args.get(index + 1)?.as_str(), 2))
+            }
+            ResumeStrategy::JoinedFlag => arg.strip_prefix(&session.token).map(|value| (value, 1)),
+            _ => None,
+        };
+        if let Some((selected, count)) = selected {
+            if value.replace(selected).is_some() {
+                return None;
+            }
+            index += count;
+        } else {
+            let count = session.resume_options.argument_count(&args[index..]);
+            if count == 0 {
+                return None;
+            }
+            extras.extend_from_slice(&args[index..index + count]);
+            index += count;
         }
-        (ResumeStrategy::JoinedFlag, [arg]) => arg.strip_prefix(&session.token)?,
-        _ => return None,
-    };
+    }
+    if session.resume_options.filter(&extras) != extras {
+        return None;
+    }
+    let value = value?;
     if value.starts_with('-') {
         return None;
     }
@@ -336,6 +382,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
     Some(AgentResumePlan {
         agent: agent.to_string(),
         argv,
+        resume_options: Vec::new(),
         dedupe_key: dedupe_key(source, agent, session_ref),
         strict_input_readiness: crate::detect::manifest::requires_screen_visible_idle(
             &registry,
@@ -380,8 +427,99 @@ pub(crate) fn test_registry(
 }
 
 #[cfg(test)]
+pub(crate) fn resume_options_test_registry(
+    generation: u64,
+    policy: &str,
+) -> std::sync::Arc<crate::agents::RegistrySnapshot> {
+    crate::agents::store::snapshot_for_test(vec![
+        ("agents/novel-options/agent.toml".into(), "schema = 1\nid = 'novel-options'\nname = 'Novel'\naliases = []\nstartable = true\n[launch]\nunix = 'options-cli'\nwindows = 'options-cli'\n".into()),
+        ("agents/novel-options/process.toml".into(), "names = ['options-cli']\n".into()),
+        ("agents/novel-options/resume.toml".into(), format!("accepted_references = ['id']\npreferred_reference = 'id'\nstrategy = 'separate_flag'\ntoken = '--resume'\n[resume_options]\n{policy}\n")),
+    ], generation).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_resume_with_options_requires_one_session_and_only_declared_arguments() {
+        let registry = resume_options_test_registry(1, "flags=['--yolo']\noptions=['--model']");
+        let profile = registry.profile_by_id("novel-options").unwrap();
+        for args in [
+            vec!["--model", "model name", "--resume", "native", "--yolo"],
+            vec!["--resume", "native", "--model=model name"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(
+                persisted_session_from_profile_launch_args(profile, &args)
+                    .unwrap()
+                    .session_ref
+                    .value,
+                "native"
+            );
+        }
+        for args in [
+            vec!["--resume", "native", "--resume", "other"],
+            vec!["--resume", "native", "prompt"],
+            vec!["--model", "--resume", "native"],
+            vec!["--resume", "native", "--unknown"],
+            vec!["--resume", "native", "--continue"],
+            vec!["--resume", "native", "--", "--yolo"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(
+                persisted_session_from_profile_launch_args(profile, &args).is_none(),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn queued_resume_revalidates_only_options_without_retargeting_admitted_recipe() {
+        let initial = resume_options_test_registry(1, "flags=['--yolo']\noptions=['--model']");
+        let narrowed = resume_options_test_registry(2, "options=['--model']");
+        let owner = PersistedAgentSession {
+            source: "herdr:launch".into(),
+            agent: "novel-options".into(),
+            session_ref: AgentSessionRef::id("native").unwrap(),
+        };
+        let recipe =
+            PinnedAgentResumeRecipe::capture(initial.profile_by_id("novel-options").unwrap())
+                .unwrap();
+        assert_eq!(
+            Some(recipe.clone()),
+            PinnedAgentResumeRecipe::capture(narrowed.profile_by_id("novel-options").unwrap())
+        );
+        let mut plan = pinned_plan(&initial, &owner, Some(&recipe)).unwrap();
+        plan.resume_options = vec![
+            "--model".into(),
+            "model name".into(),
+            "--yolo".into(),
+            "--resume=other".into(),
+        ];
+        let admitted = plan.clone();
+        assert_eq!(
+            plan.replay_argv(&initial),
+            [
+                "options-cli",
+                "--resume",
+                "native",
+                "--model",
+                "model name",
+                "--yolo"
+            ]
+        );
+        assert_eq!(
+            plan.replay_argv(&narrowed),
+            ["options-cli", "--resume", "native", "--model", "model name"]
+        );
+        assert_eq!(
+            plan.replay_argv(&crate::agents::AgentRegistry::default()),
+            plan.argv
+        );
+        assert_eq!(plan, admitted);
+    }
 
     #[test]
     fn arbitrary_ids_capture_only_closed_explicit_launch_recipes() {

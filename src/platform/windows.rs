@@ -649,6 +649,7 @@ impl ProcessSnapshot {
             .map(|&index| &self.entries[index])
     }
 
+    #[cfg(test)]
     fn descendant_signatures(&self, root_pid: u32) -> Vec<ProcessSignature> {
         let mut signatures = descendant_entries(root_pid, self)
             .into_iter()
@@ -1167,7 +1168,7 @@ pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
 pub(crate) fn foreground_job_with_registry(
     registry: &crate::agents::RegistrySnapshot,
     child_pid: u32,
-    bound: Option<&super::ForegroundProcess>,
+    bound: Option<(&super::ForegroundProcess, &crate::agents::AgentRegistry)>,
 ) -> Option<ForegroundJob> {
     select_pane_foreground_job_cached(registry, child_pid, bound)
 }
@@ -1192,6 +1193,17 @@ fn available_pane_shell_from_snapshot(
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
     let snapshot = cached_foreground_processes();
+    if let Some(job) = FOREGROUND_SELECTION_CACHE
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .job_for_selected(
+            crate::agents::store::generation(),
+            process_group_id,
+            &snapshot,
+        )
+    {
+        return Some(job);
+    }
     let entry = snapshot.entry(process_group_id)?;
     Some(ForegroundJob {
         process_group_id,
@@ -1202,7 +1214,7 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
 pub(crate) fn foreground_process_group_id_with_registry(
     registry: &crate::agents::RegistrySnapshot,
     child_pid: u32,
-    bound: Option<&super::ForegroundProcess>,
+    bound: Option<(&super::ForegroundProcess, &crate::agents::AgentRegistry)>,
 ) -> Option<u32> {
     select_pane_foreground_job_cached(registry, child_pid, bound).map(|job| job.process_group_id)
 }
@@ -1218,11 +1230,12 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
 fn select_pane_foreground_job_cached(
     registry: &crate::agents::RegistrySnapshot,
     shell_pid: u32,
-    bound: Option<&super::ForegroundProcess>,
+    bound: Option<(&super::ForegroundProcess, &crate::agents::AgentRegistry)>,
 ) -> Option<ForegroundJob> {
     let snapshot = cached_foreground_processes();
-    if let Some(bound) = bound {
+    if let Some((bound, retained_registry)) = bound {
         if let Some(job) = retained_foreground_job(
+            retained_registry,
             shell_pid,
             &snapshot,
             bound,
@@ -1255,6 +1268,7 @@ fn select_pane_foreground_job_cached(
 /// Names/argv may change during one lifetime. Unix has a kernel foreground group
 /// and does not need this fallback.
 fn retained_foreground_job(
+    registry: &crate::agents::AgentRegistry,
     shell_pid: u32,
     snapshot: &ProcessSnapshot,
     bound: &super::ForegroundProcess,
@@ -1267,7 +1281,7 @@ fn retained_foreground_job(
         return None;
     }
     if entry.pid == shell_pid || process_is_ancestor(shell_pid, entry.pid, snapshot) {
-        return Some(foreground_job_from_entry(entry));
+        return Some(retained_job_with_descendants(registry, entry, snapshot));
     }
     let shell = snapshot.entry(shell_pid)?;
     if !shell_is_git_bash(shell) {
@@ -1275,7 +1289,19 @@ fn retained_foreground_job(
     }
     let marker = runtime_marker(shell).filter(|marker| !marker.is_empty())?;
     (runtime_marker(entry).as_deref() == Some(marker.as_str()))
-        .then(|| foreground_job_from_entry(entry))
+        .then(|| retained_job_with_descendants(registry, entry, snapshot))
+}
+
+fn retained_job_with_descendants(
+    registry: &crate::agents::AgentRegistry,
+    entry: &WindowsProcessEntry,
+    snapshot: &ProcessSnapshot,
+) -> ForegroundJob {
+    let candidates: Vec<_> = descendant_entries(entry.pid, snapshot)
+        .into_iter()
+        .filter(|candidate| process_entry_identifies_agent(registry, candidate))
+        .collect();
+    foreground_job_from_selection(entry, &candidates, snapshot)
 }
 
 fn select_pane_foreground_job_from_snapshot(
@@ -1333,7 +1359,11 @@ fn select_pane_foreground_job_from_snapshot_with_registry(
     }
 
     if let Some(selected) = select_topmost_agent_chain_candidate(&candidates, snapshot) {
-        return Some(foreground_job_from_entry(selected));
+        return Some(foreground_job_from_selection(
+            selected,
+            &candidates,
+            snapshot,
+        ));
     }
     if !candidates.is_empty() || !shell_is_git_bash(shell) {
         return Some(foreground_job_from_entry(shell));
@@ -1355,7 +1385,11 @@ fn select_pane_foreground_job_from_snapshot_with_registry(
         .collect();
     let selected =
         select_topmost_agent_chain_candidate(&matching_candidates, snapshot).unwrap_or(shell);
-    Some(foreground_job_from_entry(selected))
+    Some(foreground_job_from_selection(
+        selected,
+        &matching_candidates,
+        snapshot,
+    ))
 }
 
 #[cfg(test)]
@@ -1396,6 +1430,23 @@ fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         shell_is_git_bash,
         runtime_marker,
     )
+}
+
+fn foreground_job_from_selection(
+    selected: &WindowsProcessEntry,
+    candidates: &[&WindowsProcessEntry],
+    snapshot: &ProcessSnapshot,
+) -> ForegroundJob {
+    let processes = std::iter::once(selected)
+        .chain(candidates.iter().copied().filter(|entry| {
+            entry.pid != selected.pid && process_is_ancestor(selected.pid, entry.pid, snapshot)
+        }))
+        .map(foreground_process_from_entry)
+        .collect();
+    ForegroundJob {
+        process_group_id: selected.pid,
+        processes,
+    }
 }
 
 fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
@@ -1518,6 +1569,18 @@ fn fresh_foreground_processes() -> Arc<ProcessSnapshot> {
     cache.snapshot(Duration::ZERO, snapshot_processes)
 }
 
+fn foreground_selection_descendants(
+    shell_pid: u32,
+    selected_pid: u32,
+    snapshot: &ProcessSnapshot,
+) -> Vec<&WindowsProcessEntry> {
+    let mut entries = descendant_entries(shell_pid, snapshot);
+    if selected_pid != shell_pid && !process_is_ancestor(shell_pid, selected_pid, snapshot) {
+        entries.extend(descendant_entries(selected_pid, snapshot));
+    }
+    entries
+}
+
 fn prepare_cached_foreground_selection(
     shell_pid: u32,
     snapshot: &ProcessSnapshot,
@@ -1528,7 +1591,10 @@ fn prepare_cached_foreground_selection(
     }
     let shell_identity = ProcessIdentity::open(shell_pid)?;
     let selected_identity = ProcessIdentity::open(job.process_group_id)?;
-    let descendants = snapshot.descendant_signatures(shell_pid);
+    let descendants = foreground_selection_descendants(shell_pid, job.process_group_id, snapshot)
+        .into_iter()
+        .map(ProcessSignature::from_entry)
+        .collect::<Vec<_>>();
     let descendant_identities = descendants
         .iter()
         .map(|entry| ProcessIdentity::open(entry.pid))
@@ -1599,6 +1665,19 @@ impl CachedForegroundSelection {
 }
 
 impl ForegroundSelectionCache {
+    fn job_for_selected(
+        &mut self,
+        generation: u64,
+        selected_pid: u32,
+        snapshot: &ProcessSnapshot,
+    ) -> Option<ForegroundJob> {
+        self.sync_generation(generation);
+        let shell_pid = self.entries.iter().find_map(|(shell, cached)| {
+            (cached.job.process_group_id == selected_pid).then_some(*shell)
+        })?;
+        self.get_with_generation(generation, shell_pid, snapshot)
+    }
+
     fn sync_generation(&mut self, generation: u64) {
         if self.registry_generation != Some(generation) {
             self.entries.clear();
@@ -1614,7 +1693,8 @@ impl ForegroundSelectionCache {
     ) -> Option<ForegroundJob> {
         self.sync_generation(generation);
         if let Some(cached) = self.entries.get_mut(&shell_pid) {
-            let current_descendants = descendant_entries(shell_pid, snapshot);
+            let current_descendants =
+                foreground_selection_descendants(shell_pid, cached.job.process_group_id, snapshot);
             let topology_matches = current_descendants.len() == cached.descendants.len()
                 && cached
                     .descendants
@@ -1633,8 +1713,21 @@ impl ForegroundSelectionCache {
                     .matches(snapshot.entry(cached.job.process_group_id))
                 && topology_matches;
             if valid {
+                let processes = cached
+                    .job
+                    .processes
+                    .iter()
+                    .map(|process| {
+                        snapshot
+                            .entry(process.pid)
+                            .map(foreground_process_from_entry)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
                 cached.last_used = Instant::now();
-                return Some(cached.job.clone());
+                return Some(ForegroundJob {
+                    process_group_id: cached.job.process_group_id,
+                    processes,
+                });
             }
         }
         self.entries.remove(&shell_pid);
@@ -1679,7 +1772,11 @@ impl ForegroundSelectionCache {
         snapshot: &ProcessSnapshot,
         job: &ForegroundJob,
     ) {
-        let descendants = snapshot.descendant_signatures(shell_pid);
+        let descendants =
+            foreground_selection_descendants(shell_pid, job.process_group_id, snapshot)
+                .into_iter()
+                .map(ProcessSignature::from_entry)
+                .collect::<Vec<_>>();
         let descendant_identities = descendants
             .iter()
             .map(|_| ProcessIdentity::Stub {
@@ -3798,7 +3895,15 @@ mod tests {
         ]);
         let bound = super::foreground_process_from_entry(snapshot.entry(20).unwrap());
         let probe = |bound: &super::super::ForegroundProcess, live| {
-            super::retained_foreground_job(10, &snapshot, bound, |_| false, |_| None, |_| live)
+            super::retained_foreground_job(
+                &crate::agents::registry(),
+                10,
+                &snapshot,
+                bound,
+                |_| false,
+                |_| None,
+                |_| live,
+            )
         };
         assert_eq!(probe(&bound, true).unwrap().process_group_id, 20);
         assert_eq!(probe(&bound, false), None);
@@ -3818,6 +3923,7 @@ mod tests {
         ]);
         assert_eq!(
             super::retained_foreground_job(
+                &crate::agents::registry(),
                 10,
                 &escaped,
                 &bound,
@@ -3831,6 +3937,7 @@ mod tests {
         );
         assert_eq!(
             super::retained_foreground_job(
+                &crate::agents::registry(),
                 10,
                 &escaped,
                 &bound,
@@ -4086,6 +4193,96 @@ mod tests {
 
         assert_eq!(job.process_group_id, 20);
         assert_eq!(job.processes[0].name, "cmd.exe");
+    }
+
+    #[test]
+    fn windows_resume_argv_preserves_quotes_spaces_and_empty_values() {
+        assert_eq!(
+            super::command_line_to_argv(r#"agent.exe --model "two words" "" "a'b""#).unwrap(),
+            ["agent.exe", "--model", "two words", "", "a'b"]
+        );
+    }
+
+    #[test]
+    fn windows_resume_options_keep_descendants_through_selection_cache_and_retention() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(
+                20,
+                10,
+                "cmd.exe",
+                &["cmd.exe", "/C", "codex --model opaque"],
+            ),
+            test_entry(
+                30,
+                20,
+                "node.exe",
+                &["node.exe", "C:\\tools\\codex.js", "--model", "exact value"],
+            ),
+        ]);
+        let registry = crate::agents::registry();
+        let job = super::select_pane_foreground_job_from_snapshot_with_registry(
+            &registry,
+            10,
+            &snapshot,
+            |_| false,
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(
+            job.processes
+                .iter()
+                .map(|process| process.pid)
+                .collect::<Vec<_>>(),
+            [20, 30]
+        );
+        assert!(crate::detect::structured_resume_args(
+            &registry,
+            &job.processes[0],
+            crate::detect::Agent::Codex
+        )
+        .is_none());
+        assert_eq!(
+            crate::detect::structured_resume_args(
+                &registry,
+                &job.processes[1],
+                crate::detect::Agent::Codex
+            )
+            .unwrap(),
+            ["--model", "exact value"]
+        );
+        let mut cache = super::ForegroundSelectionCache::default();
+        cache.remember_for_test(10, &snapshot, &job);
+        assert_eq!(cache.job_for_selected(1, 20, &snapshot), Some(job.clone()));
+        let mut unreadable = snapshot.entries.clone();
+        unreadable[2].command = super::OnceLock::from(super::WindowsProcessCommand {
+            creation_time: None,
+            argv0: None,
+            argv: None,
+            cmdline: None,
+        });
+        let unreadable = super::ProcessSnapshot::new(unreadable);
+        let refreshed = cache.job_for_selected(1, 20, &unreadable).unwrap();
+        assert!(refreshed.processes[1].argv.is_none());
+        cache.entries.get_mut(&10).unwrap().descendant_identities[1] =
+            super::ProcessIdentity::Stub {
+                running: false,
+                creation_time: None,
+            };
+        assert!(cache.job_for_selected(1, 20, &snapshot).is_none());
+        cache.remember_for_test(10, &snapshot, &job);
+        assert!(cache.job_for_selected(2, 20, &snapshot).is_none());
+        let retained = super::retained_foreground_job(
+            &registry,
+            10,
+            &snapshot,
+            &job.processes[0],
+            |_| false,
+            |_| None,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(retained.processes, job.processes);
     }
 
     #[test]

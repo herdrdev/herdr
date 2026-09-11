@@ -835,7 +835,7 @@ fn procargs2_argv(buf: &[u8]) -> Option<Vec<String>> {
     }
 
     let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    if argc < 1 {
+    if argc < 1 || argc as usize > buf.len() {
         return None;
     }
 
@@ -850,12 +850,8 @@ fn procargs2_argv(buf: &[u8]) -> Option<Vec<String>> {
         let end = rest[current..]
             .iter()
             .position(|&b| b == 0)
-            .map(|offset| current + offset)
-            .unwrap_or(rest.len());
-        if end == current {
-            return None;
-        }
-        argv.push(String::from_utf8_lossy(&rest[current..end]).into_owned());
+            .map(|offset| current + offset)?;
+        argv.push(std::str::from_utf8(&rest[current..end]).ok()?.to_owned());
         current = end + 1;
     }
 
@@ -1115,6 +1111,25 @@ mod tests {
         assert_eq!(argv, vec!["node", "/Users/can/.local/bin/pi"]);
         assert_eq!(argv.join(" "), "node /Users/can/.local/bin/pi");
         assert!(!argv.join(" ").contains("codex.system"));
+    }
+
+    #[test]
+    fn procargs2_argv_preserves_exact_arguments_and_rejects_lossy_or_truncated_input() {
+        let args = ["agent", "--model", "model name", "", ""];
+        let buf = build_procargs2("/bin/agent", &args, &[]);
+        assert_eq!(procargs2_argv(&buf), Some(args.map(str::to_owned).to_vec()));
+        let mut invalid = build_procargs2("/bin/agent", &["agent", "value"], &[]);
+        let value = invalid
+            .windows(5)
+            .position(|bytes| bytes == b"value")
+            .unwrap();
+        invalid[value] = 0xff;
+        assert!(procargs2_argv(&invalid).is_none());
+        let mut truncated = build_procargs2("/bin/agent", &["agent", "value"], &[]);
+        while truncated.last() == Some(&0) {
+            truncated.pop();
+        }
+        assert!(procargs2_argv(&truncated).is_none());
     }
 
     #[test]
