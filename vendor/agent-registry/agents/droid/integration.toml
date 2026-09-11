@@ -1,0 +1,26 @@
+cli_name = "droid"
+aliases = []
+
+[commands]
+unix = ["droid"]
+windows = ["droid"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 3
+windows = 3
+
+[[assets]]
+path = "assets/herdr-agent-state.ps1"
+platform = "windows"
+role = "reporter"
+install_name = "herdr-agent-state.ps1"
+
+[[assets]]
+path = "assets/herdr-agent-state.sh"
+platform = "unix"
+role = "reporter"
+install_name = "herdr-agent-state.sh"

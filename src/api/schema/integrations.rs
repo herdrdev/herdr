@@ -49,6 +49,7 @@ pub enum IntegrationTarget {
     Grok,
 }
 
+#[cfg(test)]
 impl IntegrationTarget {
     pub(crate) const ALL: [Self; 17] = [
         Self::Pi,

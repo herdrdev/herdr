@@ -1,0 +1,13 @@
+schema = 1
+id = "copilot"
+name = "copilot"
+aliases = ["github-copilot", "ghcs"]
+startable = true
+
+[launch]
+unix = "copilot"
+windows = "copilot"
+
+[sound]
+key = "github_copilot"
+default = "default"

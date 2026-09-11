@@ -11,8 +11,10 @@ keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
+    "vendor/agent-registry/**/*",
     "assets/sounds/*",
     "docs/next/api/herdr-api.schema.json",
+    "scripts/fixtures/agent-registry-snapshot-v1.json",
     "skills/herdr/SKILL.md",
     "distribution/install.ps1",
     "README.md",

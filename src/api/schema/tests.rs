@@ -1433,3 +1433,124 @@ fn popup_close_request_round_trips() {
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
 }
+
+#[test]
+fn registry_requests_and_typed_status_round_trip() {
+    let source = std::env::current_dir()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    for method in [
+        Method::RegistryStatus(EmptyParams::default()),
+        Method::RegistryCheck(RegistryUpdateParams::default()),
+        Method::RegistryUpdate(RegistryUpdateParams {
+            channel: crate::agents::remote::Channel::Staging,
+        }),
+        Method::RegistryReset(EmptyParams::default()),
+        Method::RegistryReload(RegistryReloadParams::default()),
+        Method::RegistryReload(RegistryReloadParams {
+            source: Some(source),
+        }),
+    ] {
+        let request = Request {
+            id: "registry".into(),
+            method,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(matches!(
+            json["method"].as_str(),
+            Some(
+                "registry.status"
+                    | "registry.reload"
+                    | "registry.check"
+                    | "registry.update"
+                    | "registry.reset"
+            )
+        ));
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        assert!(!crate::api::request_changes_ui(&request));
+    }
+    let json = serde_json::json!({
+        "id": "registry",
+        "result": {
+            "type": "agent_registry",
+            "registry": {
+                "generation": 7,
+                "digest": "abc123",
+                "source": null,
+                "last_error": null,
+                "agents": [{
+                    "id": "future-agent", "startable": true, "process": true,
+                    "detection": false, "resume": false, "integration": false
+                }]
+            }
+        }
+    });
+    let response: SuccessResponse = serde_json::from_value(json.clone()).unwrap();
+    assert!(
+        matches!(&response.result, ResponseResult::AgentRegistry { registry } if registry.generation == 7)
+    );
+    assert_eq!(serde_json::to_value(response).unwrap(), json);
+}
+
+#[test]
+fn registry_remote_methods_accept_only_explicit_known_channels_and_no_source_urls() {
+    for method in ["registry.check", "registry.update"] {
+        for params in [
+            serde_json::json!({"channel":"untrusted"}),
+            serde_json::json!({"channel":"stable", "url":"https://other.example"}),
+            serde_json::json!({"channel":"stable", "install":true}),
+        ] {
+            assert!(serde_json::from_value::<Request>(serde_json::json!({
+                "id":"registry", "method":method, "params":params
+            }))
+            .is_err());
+        }
+        assert!(serde_json::from_value::<Request>(serde_json::json!({
+            "id":"registry", "method":method, "params":{}
+        }))
+        .is_ok());
+    }
+}
+
+#[test]
+fn registry_reload_source_is_a_bounded_absolute_local_path() {
+    assert!(RegistryReloadParams::default()
+        .source_path()
+        .unwrap()
+        .is_none());
+    let source = std::env::current_dir()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let valid = RegistryReloadParams {
+        source: Some(source.clone()),
+    };
+    assert_eq!(
+        valid.source_path().unwrap(),
+        Some(std::path::Path::new(&source))
+    );
+    for source in [
+        String::new(),
+        "relative/path".into(),
+        "https://example.com/registry".into(),
+        "/bad\0path".into(),
+        format!("/{}", "x".repeat(4096)),
+    ] {
+        assert!(RegistryReloadParams {
+            source: Some(source)
+        }
+        .source_path()
+        .is_err());
+    }
+    assert!(serde_json::from_value::<Request>(serde_json::json!({
+        "id": "bad", "method": "registry.reload", "params": { "source": 123 }
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<Request>(serde_json::json!({
+        "id": "bad", "method": "registry.reload", "params": { "install": true }
+    }))
+    .is_err());
+}

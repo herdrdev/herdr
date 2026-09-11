@@ -64,7 +64,7 @@ afterEach(() => {
 
 async function loadPlugin() {
   importCounter += 1;
-  const module = await import(`./herdr-tui-session.js?test=${importCounter}`);
+  const module = await import(`../../../vendor/agent-registry/agents/opencode/assets/herdr-tui-session.js?test=${importCounter}`);
   return module.default;
 }
 

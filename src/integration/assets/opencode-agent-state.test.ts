@@ -50,7 +50,7 @@ beforeEach(() => {
 
 async function loadPlugin() {
   importCounter += 1;
-  const { HerdrAgentStatePlugin } = await import(`./herdr-agent-state.js?test=${importCounter}`);
+  const { HerdrAgentStatePlugin } = await import(`../../../vendor/agent-registry/agents/opencode/assets/herdr-agent-state.js?test=${importCounter}`);
   return HerdrAgentStatePlugin();
 }
 

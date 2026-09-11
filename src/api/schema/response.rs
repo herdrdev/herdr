@@ -94,6 +94,12 @@ pub enum ResponseResult {
     TabList {
         tabs: Vec<TabInfo>,
     },
+    AgentRegistry {
+        registry: crate::agents::store::RegistryStatus,
+    },
+    RegistryUpdateCheck {
+        registry_update: crate::agents::store::RegistryUpdateCheck,
+    },
     AgentInfo {
         agent: AgentInfo,
     },

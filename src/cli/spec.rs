@@ -46,6 +46,7 @@ pub(super) fn command() -> Command {
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
+        .subcommand(registry_command())
         .subcommand(plugin_command());
     configure_help(command, 0)
 }
@@ -142,6 +143,54 @@ fn config_command() -> Command {
         .subcommand(Command::new("reset-keys").about("Reset custom keybindings"))
 }
 
+fn registry_command() -> Command {
+    Command::new("registry")
+        .about("Validate local sources or control the selected session's agent registry")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("validate")
+                .about("Validate agents/ packages and detection rules offline")
+                .arg(required("directory", "DIRECTORY").value_hint(ValueHint::DirPath)),
+        )
+        .subcommand(
+            Command::new("validate-snapshot")
+                .about("Validate immutable registry snapshot bytes offline")
+                .arg(required("file", "FILE").value_hint(ValueHint::FilePath))
+                .arg(
+                    Arg::new("runtime-compatible")
+                        .long("runtime-compatible")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(Command::new("status").about("Show the selected session's active registry"))
+        .subcommand(
+            Command::new("reset")
+                .about("Return to bundled registry and re-enable managed R2 updates"),
+        )
+        .subcommands(["check", "update"].map(|name| {
+            Command::new(name)
+                .about(if name == "check" {
+                    "Validate an R2 update without activation"
+                } else {
+                    "Download and activate an R2 registry snapshot"
+                })
+                .arg(
+                    Arg::new("channel")
+                        .long("channel")
+                        .value_parser(["stable", "preview", "staging"]),
+                )
+        }))
+        .subcommand(
+            Command::new("reload")
+                .about("Explicitly reload a local source in the selected session")
+                .arg(
+                    Arg::new("directory")
+                        .value_name("DIRECTORY")
+                        .value_hint(ValueHint::DirPath),
+                ),
+        )
+}
+
 fn channel_command() -> Command {
     Command::new("channel")
         .about("Manage stable and preview update channels")
@@ -168,7 +217,7 @@ fn server_command() -> Command {
         )
         .subcommand(
             Command::new("update-agent-manifests")
-                .about("Fetch and reload agent detection manifests")
+                .about("Compatibility alias for registry update (full R2 registry)")
                 .arg(json_flag()),
         )
         .subcommand(
@@ -409,8 +458,7 @@ fn agent_command() -> Command {
                 .arg(
                     option("kind", "KIND")
                         .required(true)
-                        .value_parser(agent_kind_values())
-                        .help("Supported agent kind and canonical executable"),
+                        .help("Agent kind or alias resolved by the server's active registry"),
                 )
                 .arg(
                     option("pane", "ID")
@@ -446,13 +494,6 @@ fn agent_command() -> Command {
                         .action(ArgAction::SetTrue),
                 ),
         )
-}
-
-pub(super) fn agent_kind_values() -> Vec<&'static str> {
-    crate::detect::Agent::ALL
-        .into_iter()
-        .map(crate::detect::agent_label)
-        .collect()
 }
 
 fn pane_command() -> Command {
@@ -891,14 +932,18 @@ fn integration_target_arg() -> Arg {
     Arg::new("target")
         .value_name("TARGET")
         .required(true)
-        .value_parser(integration_target_values())
-}
-
-fn integration_target_values() -> Vec<&'static str> {
-    crate::api::schema::IntegrationTarget::ALL
-        .into_iter()
-        .map(crate::integration::integration_target_label)
-        .collect()
+        .value_parser(|value: &str| -> Result<String, String> {
+            let registry = crate::agents::registry();
+            if registry
+                .profile_by_integration_cli_name(value)
+                .and_then(|profile| profile.integration())
+                .is_some()
+            {
+                Ok(value.to_owned())
+            } else {
+                Err(format!("unknown integration target: {value}"))
+            }
+        })
 }
 
 fn id_command(name: &'static str, id: &'static str, about: &'static str) -> Command {
@@ -1118,20 +1163,53 @@ mod tests {
     }
 
     #[test]
-    fn spec_matches_all_integration_targets() {
+    fn registry_validate_requires_one_local_directory_and_renders_help() {
         let cmd = super::command();
-        let install = command_path(&cmd, &["integration", "install"]);
+        let validate = command_path(&cmd, &["registry", "validate"]);
         assert_eq!(
-            argument(install, "target")
-                .get_value_parser()
-                .possible_values()
-                .unwrap()
-                .map(|value| value.get_name().to_string())
-                .collect::<Vec<_>>(),
-            crate::api::schema::IntegrationTarget::ALL
-                .map(crate::integration::integration_target_label)
-                .map(str::to_string)
+            argument(validate, "directory").get_value_hint(),
+            clap::ValueHint::DirPath
         );
+        for valid in [
+            &["herdr", "registry", "validate", "/var/tmp/registry"][..],
+            &["herdr", "registry", "validate", "--", "-directory"][..],
+        ] {
+            assert!(super::command().try_get_matches_from(valid).is_ok());
+        }
+        for invalid in [
+            &["herdr", "registry"][..],
+            &["herdr", "registry", "validate"][..],
+            &["herdr", "registry", "validate", ".", "extra"][..],
+            &["herdr", "registry", "install", "."][..],
+        ] {
+            assert!(super::command().try_get_matches_from(invalid).is_err());
+        }
+        assert!(long_help(&["registry", "validate"]).contains("offline"));
+        assert!(long_help(&["registry", "validate"])
+            .contains("Usage: herdr registry validate <DIRECTORY>"));
+    }
+
+    #[test]
+    fn spec_matches_all_integration_targets() {
+        let registry = crate::agents::registry();
+        for profile in registry.integration_capable_profiles() {
+            let integration = profile.integration().expect("integration metadata");
+            for name in std::iter::once(integration.cli_label())
+                .chain(integration.cli_aliases().iter().map(String::as_str))
+            {
+                assert!(
+                    super::command()
+                        .try_get_matches_from(["herdr", "integration", "install", name])
+                        .is_ok(),
+                    "integration target {name}"
+                );
+            }
+        }
+        for rejected in ["future-agent", "Pi", " pi "] {
+            assert!(super::command()
+                .try_get_matches_from(["herdr", "integration", "install", rejected])
+                .is_err());
+        }
     }
 
     #[test]
@@ -1284,12 +1362,23 @@ mod tests {
         let cmd = super::command();
         let agent_start = command_path(&cmd, &["agent", "start"]);
         assert!(has_option(agent_start, "kind"));
-        assert_eq!(
-            option_values(agent_start, "kind"),
-            crate::detect::Agent::ALL
-                .map(crate::detect::agent_label)
-                .map(str::to_string)
-        );
+        assert!(option_values(agent_start, "kind").is_empty());
+        for kind in ["future-agent", "cursor-agent", "Remote Alias"] {
+            let matches = super::command()
+                .try_get_matches_from([
+                    "herdr", "agent", "start", "worker", "--kind", kind, "--pane", "pane-1",
+                ])
+                .expect("kind admission belongs to the server");
+            let start = matches
+                .subcommand_matches("agent")
+                .unwrap()
+                .subcommand_matches("start")
+                .unwrap();
+            assert_eq!(
+                start.get_one::<String>("kind").map(String::as_str),
+                Some(kind)
+            );
+        }
         assert!(has_option(agent_start, "pane"));
         for legacy in ["cwd", "workspace", "tab", "split", "focus", "env", "argv"] {
             assert!(!has_option(agent_start, legacy), "legacy option --{legacy}");

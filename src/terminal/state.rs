@@ -60,10 +60,12 @@ struct StaleFullLifecycleHookSession {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedAgentPhase {
+    /// Persisted identity is queued, but no command has reached a live PTY yet.
+    Queued,
     Pending {
+        injected_at: Instant,
         ready_after: Option<Instant>,
         deadline: Instant,
-        observed_expected: bool,
     },
     Blocked,
     Active,
@@ -72,7 +74,22 @@ enum ManagedAgentPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ManagedAgent {
     kind: Agent,
+    strict_input_readiness: bool,
     phase: ManagedAgentPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManagedStartupProcessEvidence {
+    agent: Agent,
+    observed_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManagedStartupScreenEvidence {
+    agent: Agent,
+    observed_at: Instant,
+    visible_idle: bool,
+    visible_blocker: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,11 +145,16 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    pub(crate) live_agent_resume_binding: Option<crate::agent_resume::LiveAgentResumeBinding>,
+    pending_report_resume_bindings: HashMap<Agent, crate::agent_resume::LiveAgentResumeBinding>,
+    pub pinned_agent_resume_recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
     managed_agent: Option<ManagedAgent>,
+    managed_startup_process_evidence: Option<ManagedStartupProcessEvidence>,
+    managed_startup_screen_evidence: Option<ManagedStartupScreenEvidence>,
     managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
     hook_report_sequences: HashMap<String, u64>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
@@ -163,11 +185,16 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            live_agent_resume_binding: None,
+            pending_report_resume_bindings: HashMap::new(),
+            pinned_agent_resume_recipe: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
             agent_name_owner: None,
             managed_agent: None,
+            managed_startup_process_evidence: None,
+            managed_startup_screen_evidence: None,
             managed_agent_launch_session: None,
             hook_report_sequences: HashMap::new(),
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
@@ -191,6 +218,15 @@ impl TerminalState {
         agent: Agent,
         now: Instant,
     ) -> TerminalStateMutation {
+        if self
+            .managed_startup_process_evidence
+            .is_none_or(|evidence| now >= evidence.observed_at)
+        {
+            self.managed_startup_process_evidence = Some(ManagedStartupProcessEvidence {
+                agent,
+                observed_at: now,
+            });
+        }
         let starts_acquisition = !self
             .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
             && !self.detected_state_observed_before_release_suppression(Some(agent), now);
@@ -316,11 +352,28 @@ impl TerminalState {
         agent: Option<Agent>,
         fallback_state: AgentState,
         visible_blocker: bool,
-        _visible_idle: bool,
-        _visible_working: bool,
+        visible_idle: bool,
+        visible_working: bool,
         process_exited: bool,
         now: Instant,
     ) -> TerminalStateMutation {
+        if !process_exited {
+            if let Some(agent) =
+                agent.filter(|_| visible_idle || visible_blocker || visible_working)
+            {
+                if self
+                    .managed_startup_screen_evidence
+                    .is_none_or(|evidence| now >= evidence.observed_at)
+                {
+                    self.managed_startup_screen_evidence = Some(ManagedStartupScreenEvidence {
+                        agent,
+                        observed_at: now,
+                        visible_idle,
+                        visible_blocker,
+                    });
+                }
+            }
+        }
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
@@ -329,7 +382,7 @@ impl TerminalState {
         let previous_session = self.current_session_identity_for_persistence();
         let newer_custom_authority = process_exited
             && self.hook_authority.as_ref().is_some_and(|authority| {
-                crate::detect::parse_agent_label(&authority.agent_label) == agent
+                self.known_agent_for_label(&authority.agent_label) == agent
                     && !crate::agent_resume::is_official_agent_source(
                         &authority.source,
                         &authority.agent_label,
@@ -337,13 +390,16 @@ impl TerminalState {
                     && authority.reported_at > now
             });
         let agent_released = process_exited
+            && self
+                .managed_agent
+                .is_none_or(|managed| Some(managed.kind) == agent)
             && !newer_custom_authority
             && (previous_agent_label.is_some() || self.agent_name.is_some());
         if self.should_ignore_detected_state_under_full_lifecycle_hook(agent, process_exited) {
             if self
                 .hook_authority
                 .as_ref()
-                .and_then(|authority| crate::detect::parse_agent_label(&authority.agent_label))
+                .and_then(|authority| self.known_agent_for_label(&authority.agent_label))
                 == agent
             {
                 self.detected_agent = agent;
@@ -382,7 +438,7 @@ impl TerminalState {
         }
         self.detected_agent = agent;
         if let Some(agent) = agent {
-            let agent_label = crate::detect::agent_label(agent);
+            let agent_label = crate::detect::agent_label(&agent);
             self.reconcile_agent_name_owner(agent_label, None);
         }
         if !process_exited {
@@ -412,7 +468,7 @@ impl TerminalState {
             let mut reset_sources = Vec::new();
             let mut stale_sessions = Vec::new();
             for (source, suppressed) in &mut self.suppressed_full_lifecycle_hook_reports {
-                if crate::detect::parse_agent_label(&suppressed.agent_label) != agent
+                if !agent_label_matches(&suppressed.agent_label, agent)
                     || suppressed.reason == FullLifecycleHookSuppressionReason::HookClear
                 {
                     continue;
@@ -457,7 +513,7 @@ impl TerminalState {
                     crate::agent_resume::is_official_agent_source(
                         &authority.source,
                         &authority.agent_label,
-                    ) && crate::detect::parse_agent_label(&authority.agent_label) == agent
+                    ) && self.known_agent_for_label(&authority.agent_label) == agent
                 })
                 .map(|authority| {
                     (
@@ -471,7 +527,7 @@ impl TerminalState {
                         (crate::agent_resume::is_official_agent_source(
                             &session.source,
                             &session.agent,
-                        ) && crate::detect::parse_agent_label(&session.agent) == agent)
+                        ) && self.known_agent_for_label(&session.agent) == agent)
                             .then(|| {
                                 (
                                     session.source.clone(),
@@ -492,7 +548,7 @@ impl TerminalState {
                 );
             }
             let cleared_hook_source = self.hook_authority.as_ref().and_then(|authority| {
-                (crate::detect::parse_agent_label(&authority.agent_label) == agent
+                (self.known_agent_for_label(&authority.agent_label) == agent
                     && !newer_custom_authority)
                     .then(|| authority.source.clone())
             });
@@ -504,14 +560,12 @@ impl TerminalState {
                 && self
                     .persisted_agent_session
                     .as_ref()
-                    .is_some_and(|session| {
-                        crate::detect::parse_agent_label(&session.agent) == agent
-                    })
+                    .is_some_and(|session| self.known_agent_for_label(&session.agent) == agent)
             {
                 self.persisted_agent_session = None;
             }
             if let Some(agent) = agent {
-                let agent_label = crate::detect::agent_label(agent);
+                let agent_label = crate::detect::agent_label(&agent);
                 let mut cleared_metadata_sources = Vec::new();
                 self.agent_metadata.retain(|source, metadata| {
                     let official_metadata = crate::agent_resume::is_official_agent_source(
@@ -555,7 +609,7 @@ impl TerminalState {
                 || (previous_detected_agent.is_some()
                     && agent != previous_detected_agent
                     && self.hook_authority.as_ref().is_some_and(|authority| {
-                        crate::detect::parse_agent_label(&authority.agent_label)
+                        self.known_agent_for_label(&authority.agent_label)
                             == previous_detected_agent
                     })))
         {
@@ -642,13 +696,20 @@ impl TerminalState {
         seq: Option<u64>,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
-        if crate::detect::session_identity_only_integration(&source, &agent_label) {
+        let session_ref = session_ref.filter(|session_ref| {
+            !crate::agents::bundled_report_pair(&source, &agent_label)
+                || self.bound_report_accepts_reference(&source, &agent_label, session_ref)
+        });
+        // Launch provenance is internal state, never a reportable source.
+        if source == "herdr:launch"
+            || crate::detect::session_identity_only_integration(&source, &agent_label)
+        {
             return None;
         }
         if !crate::detect::full_lifecycle_hook_authority(&source, &agent_label)
-            && self.recent_agent_process_exit.is_some_and(|exit| {
-                crate::detect::parse_agent_label(&agent_label) == Some(exit.agent)
-            })
+            && self
+                .recent_agent_process_exit
+                .is_some_and(|exit| self.known_agent_for_label(&agent_label) == Some(exit.agent))
         {
             return None;
         }
@@ -726,6 +787,9 @@ impl TerminalState {
             }
         }
         self.persisted_agent_session = None;
+        if let Some(reference) = session_ref.as_ref() {
+            self.pin_report_resume_recipe(&source, &agent_label, reference);
+        }
         self.hook_authority = Some(HookAuthority {
             source,
             agent_label,
@@ -766,7 +830,7 @@ impl TerminalState {
             return false;
         };
         self.hook_authority.as_ref().is_some_and(|authority| {
-            crate::detect::parse_agent_label(&authority.agent_label)
+            self.known_agent_for_label(&authority.agent_label)
                 .is_some_and(|hook_agent| hook_agent != detected_agent)
         })
     }
@@ -877,7 +941,7 @@ impl TerminalState {
             return FullLifecycleHookReportRoute::Ignore;
         }
 
-        let known_agent = crate::detect::parse_agent_label(agent_label);
+        let known_agent = self.known_agent_for_label(agent_label);
         let process_present = known_agent.is_some()
             && self.detected_agent == known_agent
             && self.recent_agent_process_exit.is_none();
@@ -1087,13 +1151,13 @@ impl TerminalState {
         if previous_detected_agent == Some(detected_agent) {
             return;
         }
-        let detected_label = crate::detect::agent_label(detected_agent);
+        let detected_label = crate::detect::agent_label(&detected_agent);
         let mut stale_sessions = Vec::new();
         let mut validated_replacement_sessions = Vec::new();
         self.suppressed_full_lifecycle_hook_reports
             .retain(|source, suppressed| {
-                let should_clear = crate::detect::parse_agent_label(&suppressed.agent_label)
-                    == Some(detected_agent);
+                let should_clear =
+                    agent_label_matches(&suppressed.agent_label, Some(detected_agent));
                 if !should_clear {
                     return true;
                 }
@@ -1159,6 +1223,7 @@ impl TerminalState {
         for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
             self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+            self.pin_report_resume_recipe(&source, &agent_label, &session_ref);
             self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
                 source: source.clone(),
                 agent: agent_label,
@@ -1224,7 +1289,7 @@ impl TerminalState {
         self.suppressed_full_lifecycle_hook_reports
             .values()
             .any(|suppressed| {
-                crate::detect::parse_agent_label(&suppressed.agent_label) == Some(detected_agent)
+                self.known_agent_for_label(&suppressed.agent_label) == Some(detected_agent)
                     && observed_at <= suppressed.observed_at
             })
     }
@@ -1299,7 +1364,8 @@ impl TerminalState {
         session_ref: &crate::agent_resume::AgentSessionRef,
     ) -> bool {
         self.hook_authority.is_none()
-            && (source, agent_label) == ("herdr:mastracode", "mastracode")
+            && crate::agents::registry()
+                .initial_lifecycle_report_replaces_session(source, agent_label)
             && self
                 .persisted_agent_session
                 .as_ref()
@@ -1317,31 +1383,10 @@ impl TerminalState {
         agent_label: &str,
         session_start_source: Option<&str>,
     ) -> bool {
-        matches!(
-            (source, agent_label, session_start_source),
-            (
-                "herdr:claude",
-                "claude",
-                Some("clear" | "resume" | "compact")
-            ) | (
-                "herdr:codex",
-                "codex",
-                Some("startup" | "clear" | "resume" | "compact")
-            ) | ("herdr:mastracode", "mastracode", Some("startup"))
-                | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
-                | ("herdr:opencode", "opencode", Some("select"))
-                | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
-                | (
-                    "herdr:omp",
-                    "omp",
-                    Some("startup" | "new" | "resume" | "fork")
-                )
-                | (
-                    "herdr:qwen",
-                    "qwen",
-                    Some("startup" | "clear" | "resume" | "compact" | "branch")
-                )
-                | ("herdr:antigravity_cli", "agy", None)
+        crate::agents::registry().session_report_allows_replacement(
+            source,
+            agent_label,
+            session_start_source,
         )
     }
 
@@ -1352,14 +1397,296 @@ impl TerminalState {
         )
     }
 
-    fn is_unsequenced_opencode_selection(
+    fn is_unsequenced_session_replacement(
         source: &str,
         agent_label: &str,
         session_start_source: Option<&str>,
         seq: Option<u64>,
     ) -> bool {
-        (source, agent_label, session_start_source, seq)
-            == ("herdr:opencode", "opencode", Some("select"), None)
+        seq.is_none()
+            && crate::agents::registry().session_replacement_allows_unsequenced_report(
+                source,
+                agent_label,
+                session_start_source,
+            )
+    }
+
+    pub(crate) fn admit_agent_resume_recipe(
+        &mut self,
+        agent: Agent,
+        recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
+        now: Instant,
+    ) {
+        self.pending_report_resume_bindings.remove(&agent);
+        self.live_agent_resume_binding = Some(crate::agent_resume::LiveAgentResumeBinding {
+            agent,
+            recipe,
+            process: None,
+            process_identity: None,
+            observed_at: now,
+            managed_admission: true,
+            report_proof: None,
+        });
+    }
+
+    pub(crate) fn bind_agent_resume_process(
+        &mut self,
+        mut binding: crate::agent_resume::LiveAgentResumeBinding,
+    ) {
+        if self.recent_agent_process_exit.is_some_and(|exit| {
+            exit.agent == binding.agent && binding.observed_at <= exit.observed_at
+        }) {
+            return;
+        }
+        if self
+            .live_agent_resume_binding
+            .as_ref()
+            .is_none_or(|current| current.agent != binding.agent)
+        {
+            if let Some(pending) = self.pending_report_resume_bindings.remove(&binding.agent) {
+                self.live_agent_resume_binding = Some(pending);
+            }
+        }
+        let historical_session = self.current_session_identity_for_persistence();
+        let mut reanchor_queued_report = false;
+        let mut verified_historical_report = false;
+        let mut verified_report_proof = None;
+        if let Some(current) = &mut self.live_agent_resume_binding {
+            if current.managed_admission
+                && current.process.is_none()
+                && binding.observed_at < current.observed_at
+            {
+                return;
+            }
+            if current.process.is_some() && binding.observed_at < current.observed_at {
+                return;
+            }
+            if current.agent == binding.agent {
+                let same_report_process = current
+                    .report_proof
+                    .as_ref()
+                    .is_some_and(|(identity, _, _)| Some(*identity) == binding.process_identity);
+                if same_report_process {
+                    verified_report_proof = current.report_proof.clone();
+                }
+                verified_historical_report = same_report_process
+                    && current
+                        .report_proof
+                        .as_ref()
+                        .is_some_and(|(_, reference, accepted)| {
+                            *accepted
+                                && historical_session.as_ref().is_some_and(
+                                    |(_, agent, kind, value)| {
+                                        agent == current.agent.as_str()
+                                            && *kind == reference.kind
+                                            && value == &reference.value
+                                    },
+                                )
+                        });
+                let same_process = current.process.is_some()
+                    && current.process_identity.is_some()
+                    && current.process_identity == binding.process_identity;
+                if same_process
+                    || (current.process.is_none()
+                        && binding.process_identity.is_some()
+                        && (current.managed_admission
+                            || (same_report_process && current.observed_at <= binding.observed_at)))
+                {
+                    let first_process = current.process.is_none();
+                    current.process = binding.process;
+                    current.process_identity = binding.process_identity;
+                    current.observed_at = binding.observed_at;
+                    if first_process
+                        && verified_historical_report
+                        && self
+                            .pinned_agent_resume_recipe
+                            .as_ref()
+                            .is_some_and(|recipe| {
+                                recipe.agent == current.agent.as_str()
+                                    && recipe.strategy == "unavailable"
+                            })
+                    {
+                        self.pinned_agent_resume_recipe =
+                            Some(current.recipe.clone().unwrap_or_else(|| {
+                                crate::agent_resume::PinnedAgentResumeRecipe::unavailable(
+                                    current.agent.as_str(),
+                                )
+                            }));
+                    }
+                    return;
+                }
+                // The report was processed before the already-acquired process
+                // observation reached the reducer. Its global provisional recipe
+                // must not win over the older, exact acquisition snapshot.
+                reanchor_queued_report = current.process.is_none();
+            }
+        }
+        if reanchor_queued_report {
+            self.pinned_agent_resume_recipe = Some(if verified_historical_report {
+                binding.recipe.clone().unwrap_or_else(|| {
+                    crate::agent_resume::PinnedAgentResumeRecipe::unavailable(
+                        binding.agent.as_str(),
+                    )
+                })
+            } else {
+                crate::agent_resume::PinnedAgentResumeRecipe::unavailable(binding.agent.as_str())
+            });
+        }
+        binding.report_proof = verified_report_proof;
+        self.live_agent_resume_binding = Some(binding);
+    }
+
+    pub(crate) fn session_ref_from_bound_report(
+        &mut self,
+        source: &str,
+        agent: &str,
+        id: Option<String>,
+        path: Option<String>,
+    ) -> Option<crate::agent_resume::AgentSessionRef> {
+        if !crate::agents::bundled_report_pair(source, agent) {
+            return None;
+        }
+        self.ensure_report_resume_binding(source, agent);
+        self.report_resume_binding(agent)?
+            .recipe
+            .as_ref()?
+            .select_report_reference(id, path)
+    }
+
+    pub(crate) fn record_report_process_proof(
+        &mut self,
+        agent: &str,
+        reference: &crate::agent_resume::AgentSessionRef,
+        identity: crate::platform::ProcessIdentity,
+    ) {
+        if let Some(binding) = self.report_resume_binding_mut(agent) {
+            binding.report_proof = Some((identity, reference.clone(), false));
+        }
+    }
+
+    fn report_resume_binding_mut(
+        &mut self,
+        agent: &str,
+    ) -> Option<&mut crate::agent_resume::LiveAgentResumeBinding> {
+        if self
+            .live_agent_resume_binding
+            .as_ref()
+            .is_some_and(|binding| binding.agent.as_str() == agent)
+        {
+            self.live_agent_resume_binding.as_mut()
+        } else {
+            Agent::parse(agent)
+                .ok()
+                .and_then(|id| self.pending_report_resume_bindings.get_mut(&id))
+        }
+    }
+
+    fn report_resume_binding(
+        &self,
+        agent: &str,
+    ) -> Option<&crate::agent_resume::LiveAgentResumeBinding> {
+        self.live_agent_resume_binding
+            .as_ref()
+            .filter(|binding| binding.agent.as_str() == agent)
+            .or_else(|| {
+                Agent::parse(agent)
+                    .ok()
+                    .and_then(|id| self.pending_report_resume_bindings.get(&id))
+            })
+    }
+
+    fn ensure_report_resume_binding(&mut self, source: &str, agent: &str) {
+        if !crate::agents::bundled_report_pair(source, agent)
+            || self.report_resume_binding(agent).is_some()
+        {
+            return;
+        }
+        let Ok(agent_id) = Agent::parse(agent) else {
+            return;
+        };
+        // A different agent's trusted startup reports may precede acquisition.
+        // Keep their capability separate; they cannot replace the live process.
+        let binding = crate::agent_resume::LiveAgentResumeBinding {
+            agent: agent_id,
+            recipe: crate::agent_resume::recipe_for_report(source, agent),
+            process: None,
+            process_identity: None,
+            observed_at: Instant::now(),
+            managed_admission: false,
+            report_proof: None,
+        };
+        if self.live_agent_resume_binding.is_none() {
+            self.live_agent_resume_binding = Some(binding);
+        } else {
+            // Only exact compiled reporter pairs reach here, bounding this map
+            // by the small core-owned reporter set, never package-supplied IDs.
+            self.pending_report_resume_bindings
+                .insert(agent_id, binding);
+        }
+    }
+
+    fn bound_report_accepts_reference(
+        &mut self,
+        source: &str,
+        agent: &str,
+        session_ref: &crate::agent_resume::AgentSessionRef,
+    ) -> bool {
+        if !crate::agents::bundled_report_pair(source, agent) {
+            return false;
+        }
+        self.ensure_report_resume_binding(source, agent);
+        let accepted = self
+            .report_resume_binding(agent)
+            .and_then(|binding| binding.recipe.as_ref())
+            .is_some_and(|recipe| recipe.accepted_references.contains(&session_ref.kind));
+        if accepted {
+            if let Some(identity) = self
+                .report_resume_binding(agent)
+                .and_then(|binding| binding.process_identity)
+            {
+                self.record_report_process_proof(agent, session_ref, identity);
+            }
+        }
+        accepted
+    }
+
+    fn pin_report_resume_recipe(
+        &mut self,
+        source: &str,
+        agent: &str,
+        reference: &crate::agent_resume::AgentSessionRef,
+    ) {
+        if !crate::agents::bundled_report_pair(source, agent) {
+            return;
+        }
+        self.ensure_report_resume_binding(source, agent);
+        // Only an accepted/validated session mutation may authorize its early
+        // evidence. An ignored stale report cannot promote historical metadata.
+        if let Some(binding) = self.report_resume_binding_mut(agent) {
+            if let Some((_, reported, accepted)) = &mut binding.report_proof {
+                if reported == reference {
+                    *accepted = true;
+                }
+            }
+        }
+        self.pinned_agent_resume_recipe = self.report_resume_binding(agent).map(|binding| {
+            let verified = binding.process_identity.is_some()
+                && binding
+                    .report_proof
+                    .as_ref()
+                    .is_some_and(|(identity, reported, accepted)| {
+                        *accepted
+                            && Some(*identity) == binding.process_identity
+                            && reported == reference
+                    });
+            if !verified {
+                crate::agent_resume::PinnedAgentResumeRecipe::unavailable(agent)
+            } else {
+                binding.recipe.clone().unwrap_or_else(|| {
+                    crate::agent_resume::PinnedAgentResumeRecipe::unavailable(agent)
+                })
+            }
+        });
     }
 
     pub fn set_persisted_agent_session(
@@ -1395,8 +1722,14 @@ impl TerminalState {
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
+        if source == "herdr:launch" {
+            return None;
+        }
         let session_ref = session_ref?;
-        let known_agent = crate::detect::parse_agent_label(&agent_label);
+        if !self.bound_report_accepts_reference(&source, &agent_label, &session_ref) {
+            return None;
+        }
+        let known_agent = self.known_agent_for_label(&agent_label);
         let process_present = known_agent.is_some()
             && self.detected_agent == known_agent
             && self.recent_agent_process_exit.is_none();
@@ -1414,7 +1747,7 @@ impl TerminalState {
                 && authority.agent_label == agent_label
                 && authority.session_ref.is_some()
         }) || self.persisted_agent_session_matches(&source, &agent_label);
-        let unsequenced_selection = Self::is_unsequenced_opencode_selection(
+        let unsequenced_selection = Self::is_unsequenced_session_replacement(
             &source,
             &agent_label,
             session_start_source.as_deref(),
@@ -1605,6 +1938,11 @@ impl TerminalState {
         if self.managed_agent_launch_session.as_ref() == Some(&persisted_session) {
             self.managed_agent_launch_session = None;
         }
+        self.pin_report_resume_recipe(
+            &persisted_session.source,
+            &persisted_session.agent,
+            &persisted_session.session_ref,
+        );
         self.persisted_agent_session = Some(persisted_session);
         let current_session = self.current_session_identity_for_persistence();
         Some(TerminalStateMutation {
@@ -1620,11 +1958,26 @@ impl TerminalState {
         })
     }
 
+    fn known_agent_for_label(&self, label: &str) -> Option<Agent> {
+        [
+            self.detected_agent,
+            self.live_agent_resume_binding
+                .as_ref()
+                .map(|binding| binding.agent),
+            self.managed_agent.map(|managed| managed.kind),
+            self.recent_agent_process_exit.map(|exit| exit.agent),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|agent| agent.as_str() == label)
+        .or_else(|| crate::detect::parse_agent_label(label))
+    }
+
     fn known_agent_label_conflicts_with_detected_agent(&self, agent_label: &str) -> bool {
         let Some(detected_agent) = self.detected_agent else {
             return false;
         };
-        crate::detect::parse_agent_label(agent_label)
+        self.known_agent_for_label(agent_label)
             .is_some_and(|hook_agent| hook_agent != detected_agent)
     }
 
@@ -1659,8 +2012,12 @@ impl TerminalState {
         let Some(detected_agent) = self.detected_agent else {
             return false;
         };
-        crate::detect::parse_agent_label(agent_label) == Some(detected_agent)
-            && crate::agent_resume::plan(source, agent_label, session_ref).is_some()
+        self.known_agent_for_label(agent_label) == Some(detected_agent)
+            && crate::agents::bundled_report_pair(source, agent_label)
+            && self
+                .report_resume_binding(agent_label)
+                .and_then(|binding| binding.recipe.as_ref())
+                .is_some_and(|recipe| recipe.accepted_references.contains(&session_ref.kind))
     }
 
     fn accept_hook_report(&mut self, source: &str, seq: Option<u64>) -> bool {
@@ -1761,8 +2118,9 @@ impl TerminalState {
             .persisted_agent_session
             .as_ref()
             .is_some_and(|session| session.source != source || session.agent != agent_label);
-        let process_owns_agent =
-            crate::detect::parse_agent_label(agent_label).is_some_and(|agent| {
+        let process_owns_agent = self
+            .known_agent_for_label(agent_label)
+            .is_some_and(|agent| {
                 self.detected_agent == Some(agent) && self.recent_agent_process_exit.is_none()
             });
 
@@ -1804,9 +2162,11 @@ impl TerminalState {
 
     fn hook_authority_is_effective(&self, authority: &HookAuthority) -> bool {
         !crate::detect::full_lifecycle_hook_authority(&authority.source, &authority.agent_label)
-            || crate::detect::parse_agent_label(&authority.agent_label).is_none_or(|agent| {
-                self.detected_agent == Some(agent) && self.recent_agent_process_exit.is_none()
-            })
+            || self
+                .known_agent_for_label(&authority.agent_label)
+                .is_none_or(|agent| {
+                    self.detected_agent == Some(agent) && self.recent_agent_process_exit.is_none()
+                })
     }
 
     pub fn effective_agent_label(&self) -> Option<&str> {
@@ -1817,14 +2177,14 @@ impl TerminalState {
             .or_else(|| {
                 self.recent_agent_process_exit
                     .is_none()
-                    .then(|| self.detected_agent.map(crate::detect::agent_label))
+                    .then(|| self.detected_agent.as_ref().map(crate::detect::agent_label))
                     .flatten()
             })
     }
 
     pub fn effective_known_agent(&self) -> Option<Agent> {
         self.effective_agent_label()
-            .and_then(crate::detect::parse_agent_label)
+            .and_then(|label| self.known_agent_for_label(label))
     }
 
     pub(crate) fn unchanged_effective_state_change_at(&self, now: Instant) -> EffectiveStateChange {
@@ -1856,8 +2216,7 @@ impl TerminalState {
             && self.fallback_not_older_than_hook()
             && self.hook_authority.as_ref().is_some_and(|authority| {
                 authority.state != AgentState::Blocked
-                    && crate::detect::parse_agent_label(&authority.agent_label)
-                        == self.detected_agent
+                    && self.known_agent_for_label(&authority.agent_label) == self.detected_agent
             })
     }
 
@@ -1907,6 +2266,7 @@ impl TerminalState {
         });
     }
 
+    #[cfg(test)]
     pub fn begin_managed_agent(
         &mut self,
         name: String,
@@ -1915,33 +2275,118 @@ impl TerminalState {
         settle_delay: Duration,
         timeout: Duration,
     ) {
-        self.set_agent_name(name);
-        self.agent_name_owner = Some(AgentNameOwner {
-            agent_label: crate::detect::agent_label(kind).to_string(),
-            session_ref: None,
-        });
+        let strict_input_readiness =
+            crate::detect::manifest::requires_screen_visible_idle(&crate::agents::registry(), kind);
+        self.begin_managed_agent_with_readiness(
+            Some(name),
+            kind,
+            strict_input_readiness,
+            now,
+            settle_delay,
+            timeout,
+        );
+    }
+
+    pub(crate) fn begin_managed_agent_with_readiness(
+        &mut self,
+        name: Option<String>,
+        kind: Agent,
+        strict_input_readiness: bool,
+        now: Instant,
+        settle_delay: Duration,
+        timeout: Duration,
+    ) {
+        if let Some(name) = name {
+            self.set_agent_name(name);
+            self.agent_name_owner = Some(AgentNameOwner {
+                agent_label: crate::detect::agent_label(&kind).to_string(),
+                session_ref: None,
+            });
+        }
+        self.managed_startup_process_evidence = None;
+        self.managed_startup_screen_evidence = None;
         self.managed_agent = Some(ManagedAgent {
             kind,
+            strict_input_readiness,
             phase: ManagedAgentPhase::Pending {
+                injected_at: now,
                 ready_after: Some(now.checked_add(settle_delay).unwrap_or(now)),
                 deadline: now.checked_add(timeout).unwrap_or(now),
-                observed_expected: false,
             },
         });
     }
 
+    pub(crate) fn queue_managed_agent(
+        &mut self,
+        name: Option<String>,
+        kind: Agent,
+        strict_input_readiness: bool,
+    ) {
+        if let Some(name) = name {
+            self.set_agent_name(name);
+            self.agent_name_owner = Some(AgentNameOwner {
+                agent_label: crate::detect::agent_label(&kind).to_string(),
+                session_ref: None,
+            });
+        }
+        self.managed_agent = Some(ManagedAgent {
+            kind,
+            strict_input_readiness,
+            phase: ManagedAgentPhase::Queued,
+        });
+    }
+
+    pub(crate) fn mark_queued_agent_injected(
+        &mut self,
+        now: Instant,
+        settle_delay: Duration,
+        timeout: Duration,
+    ) {
+        let Some(managed) = self
+            .managed_agent
+            .filter(|managed| managed.phase == ManagedAgentPhase::Queued)
+        else {
+            return;
+        };
+        self.managed_startup_process_evidence = None;
+        self.managed_startup_screen_evidence = None;
+        self.managed_agent = Some(ManagedAgent {
+            phase: ManagedAgentPhase::Pending {
+                injected_at: now,
+                ready_after: Some(now.checked_add(settle_delay).unwrap_or(now)),
+                deadline: now.checked_add(timeout).unwrap_or(now),
+            },
+            ..managed
+        });
+    }
+
     pub fn managed_agent_launch_pending(&self) -> bool {
-        self.managed_agent.is_some_and(|managed| {
-            matches!(
-                managed.phase,
-                ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
-            )
-        })
+        self.pending_agent_resume_plan.is_some()
+            || self.managed_agent.is_some_and(|managed| {
+                matches!(
+                    managed.phase,
+                    ManagedAgentPhase::Queued
+                        | ManagedAgentPhase::Pending { .. }
+                        | ManagedAgentPhase::Blocked
+                )
+            })
     }
 
     pub fn managed_agent_interactive_ready(&self) -> bool {
-        self.managed_agent
-            .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
+        self.pending_agent_resume_plan.is_none()
+            && self
+                .managed_agent
+                .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
+    }
+
+    pub(crate) fn screen_detection_required_for_managed_startup(&self) -> bool {
+        self.managed_agent.is_some_and(|managed| {
+            managed.strict_input_readiness
+                && matches!(
+                    managed.phase,
+                    ManagedAgentPhase::Pending { .. } | ManagedAgentPhase::Blocked
+                )
+        })
     }
 
     pub fn managed_agent_kind(&self) -> Option<Agent> {
@@ -1949,97 +2394,146 @@ impl TerminalState {
     }
 
     pub fn next_managed_agent_deadline(&self) -> Option<Instant> {
+        let managed = self.managed_agent?;
         let ManagedAgentPhase::Pending {
             ready_after,
             deadline,
             ..
-        } = self.managed_agent?.phase
+        } = managed.phase
         else {
             return None;
         };
-        Some(ready_after.unwrap_or(deadline).min(deadline))
+        let waiting_for_legacy_settle = !managed.strict_input_readiness
+            && self.detected_agent == Some(managed.kind)
+            && self.state == AgentState::Idle;
+        Some(if waiting_for_legacy_settle {
+            ready_after.unwrap_or(deadline).min(deadline)
+        } else {
+            deadline
+        })
     }
 
     pub fn reconcile_managed_agent_at(&mut self, now: Instant, process_exited: bool) -> bool {
         let Some(managed) = self.managed_agent else {
             return false;
         };
-        let known_agent = self.effective_known_agent();
-        let observed_expected = match managed.phase {
-            ManagedAgentPhase::Pending {
-                observed_expected, ..
-            } => observed_expected || known_agent == Some(managed.kind),
-            ManagedAgentPhase::Blocked | ManagedAgentPhase::Active => false,
-        };
-        let clear = process_exited
-            || known_agent.is_some_and(|agent| agent != managed.kind)
-            || matches!(managed.phase, ManagedAgentPhase::Pending { .. })
-                && observed_expected
-                && known_agent.is_none();
-        if clear {
+        if managed.phase == ManagedAgentPhase::Queued {
+            return false;
+        }
+        if process_exited {
             self.clear_agent_name();
             return true;
         }
-        if managed.phase == ManagedAgentPhase::Blocked {
-            if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
-                self.managed_agent = Some(ManagedAgent {
-                    kind: managed.kind,
-                    phase: ManagedAgentPhase::Active,
-                });
-                self.managed_agent_launch_session = None;
-                return true;
-            }
-            return false;
-        }
-        if let ManagedAgentPhase::Pending {
-            ready_after,
-            deadline,
-            observed_expected: previous_observed_expected,
-        } = managed.phase
-        {
-            if known_agent == Some(managed.kind) && self.state == AgentState::Blocked {
-                self.managed_agent = Some(ManagedAgent {
-                    kind: managed.kind,
-                    phase: ManagedAgentPhase::Blocked,
-                });
-                return true;
-            }
-            if now >= deadline {
-                self.clear_agent_name();
-                return true;
-            }
-            if ready_after.is_none_or(|ready_after| now >= ready_after) {
-                if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
+
+        let (injected_at, ready_after, deadline) = match managed.phase {
+            ManagedAgentPhase::Pending {
+                injected_at,
+                ready_after,
+                deadline,
+            } => (injected_at, ready_after, Some(deadline)),
+            ManagedAgentPhase::Blocked => {
+                if !managed.strict_input_readiness {
+                    if self.effective_known_agent() == Some(managed.kind)
+                        && self.state == AgentState::Idle
+                    {
+                        self.managed_agent = Some(ManagedAgent {
+                            phase: ManagedAgentPhase::Active,
+                            ..managed
+                        });
+                        self.managed_agent_launch_session = None;
+                        return true;
+                    }
+                    return false;
+                }
+                let Some(screen) = self.managed_startup_screen_evidence else {
+                    return false;
+                };
+                let process_ready = self
+                    .managed_startup_process_evidence
+                    .is_some_and(|process| {
+                        process.agent == managed.kind && process.observed_at <= screen.observed_at
+                    });
+                if process_ready
+                    && screen.agent == managed.kind
+                    && screen.visible_idle
+                    && self.state != AgentState::Blocked
+                {
                     self.managed_agent = Some(ManagedAgent {
-                        kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
+                        ..managed
                     });
                     self.managed_agent_launch_session = None;
                     return true;
                 }
-                if ready_after.is_some() {
-                    self.managed_agent = Some(ManagedAgent {
-                        kind: managed.kind,
-                        phase: ManagedAgentPhase::Pending {
-                            ready_after: None,
-                            deadline,
-                            observed_expected,
-                        },
-                    });
-                    return true;
-                }
+                return false;
             }
-            if observed_expected != previous_observed_expected {
-                self.managed_agent = Some(ManagedAgent {
-                    kind: managed.kind,
-                    phase: ManagedAgentPhase::Pending {
-                        ready_after,
-                        deadline,
-                        observed_expected,
-                    },
+            ManagedAgentPhase::Active | ManagedAgentPhase::Queued => return false,
+        };
+
+        let process_ready = self
+            .managed_startup_process_evidence
+            .is_some_and(|process| {
+                process.agent == managed.kind && process.observed_at >= injected_at
+            });
+        let fresh_screen = self
+            .managed_startup_screen_evidence
+            .filter(|screen| screen.agent == managed.kind && screen.observed_at >= injected_at);
+        if process_ready
+            && (fresh_screen.is_some_and(|screen| screen.visible_blocker)
+                || (self.effective_known_agent() == Some(managed.kind)
+                    && self.state == AgentState::Blocked))
+        {
+            self.managed_agent = Some(ManagedAgent {
+                phase: ManagedAgentPhase::Blocked,
+                ..managed
+            });
+            return true;
+        }
+        if managed.strict_input_readiness {
+            let visible_idle_after_process = self
+                .managed_startup_process_evidence
+                .zip(fresh_screen)
+                .is_some_and(|(process, screen)| {
+                    process.agent == managed.kind
+                        && screen.visible_idle
+                        && screen.observed_at >= process.observed_at
                 });
+            if process_ready && visible_idle_after_process && self.state != AgentState::Blocked {
+                self.managed_agent = Some(ManagedAgent {
+                    phase: ManagedAgentPhase::Active,
+                    ..managed
+                });
+                self.managed_agent_launch_session = None;
                 return true;
             }
+        } else if ready_after.is_none_or(|ready_after| now >= ready_after)
+            && process_ready
+            && self.effective_known_agent() == Some(managed.kind)
+            && self.state == AgentState::Idle
+        {
+            self.managed_agent = Some(ManagedAgent {
+                phase: ManagedAgentPhase::Active,
+                ..managed
+            });
+            self.managed_agent_launch_session = None;
+            return true;
+        }
+
+        let deadline = deadline.expect("pending managed agent has a deadline");
+        if now >= deadline {
+            self.clear_agent_name();
+            return true;
+        }
+        if ready_after.is_some_and(|ready_after| now >= ready_after) {
+            self.managed_agent = Some(ManagedAgent {
+                phase: ManagedAgentPhase::Pending {
+                    injected_at,
+                    ready_after: None,
+                    deadline,
+                },
+                ..managed
+            });
+            return true;
         }
         false
     }
@@ -2047,11 +2541,12 @@ impl TerminalState {
     pub fn restore_managed_agent(&mut self, name: String, kind: Agent) {
         self.set_agent_name(name);
         self.agent_name_owner = Some(AgentNameOwner {
-            agent_label: crate::detect::agent_label(kind).to_string(),
+            agent_label: crate::detect::agent_label(&kind).to_string(),
             session_ref: None,
         });
         self.managed_agent = Some(ManagedAgent {
             kind,
+            strict_input_readiness: false,
             phase: ManagedAgentPhase::Active,
         });
     }
@@ -2068,9 +2563,13 @@ impl TerminalState {
         self.agent_name = None;
         self.agent_name_owner = None;
         self.managed_agent = None;
+        self.managed_startup_process_evidence = None;
+        self.managed_startup_screen_evidence = None;
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.live_agent_resume_binding = None;
+        self.pending_report_resume_bindings.clear();
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
@@ -2088,11 +2587,16 @@ impl TerminalState {
         self.recent_agent_process_exit = None;
         self.agent_process_acquisition_pending = false;
         self.pending_agent_resume_plan = None;
+        self.managed_startup_process_evidence = None;
+        self.managed_startup_screen_evidence = None;
         self.clear_agent_name();
     }
 
     pub fn is_agent_terminal(&self) -> bool {
-        self.agent_name.is_some() || self.effective_agent_label().is_some()
+        self.agent_name.is_some()
+            || self.effective_agent_label().is_some()
+            || self.managed_agent.is_some()
+            || self.pending_agent_resume_plan.is_some()
     }
 
     fn reconcile_agent_name_owner(
@@ -2104,7 +2608,8 @@ impl TerminalState {
             return;
         }
         if self.managed_agent.is_some_and(|managed| {
-            crate::detect::parse_agent_label(agent_label) == Some(managed.kind)
+            self.known_agent_for_label(agent_label) == Some(managed.kind)
+                || !matches!(managed.phase, ManagedAgentPhase::Active)
         }) {
             return;
         }
@@ -2194,8 +2699,489 @@ pub(crate) fn stabilize_agent_detection(detection: crate::detect::AgentDetection
     detection.state
 }
 
+fn agent_label_matches(label: &str, agent: Option<Agent>) -> bool {
+    agent.is_some_and(|agent| agent.as_str() == label)
+        || crate::detect::parse_agent_label(label) == agent
+}
+
 #[cfg(test)]
 mod tests {
+    fn resume_test_binding(
+        recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
+        pid: u32,
+        at: std::time::Instant,
+    ) -> crate::agent_resume::LiveAgentResumeBinding {
+        crate::agent_resume::LiveAgentResumeBinding {
+            agent: crate::detect::Agent::Codex,
+            recipe,
+            process: Some((
+                pid,
+                crate::platform::ForegroundProcess {
+                    pid,
+                    name: "worker".into(),
+                    argv0: None,
+                    argv: None,
+                    cmdline: None,
+                },
+            )),
+            observed_at: at,
+            process_identity: Some(crate::platform::ProcessIdentity {
+                pid,
+                birth_token: 1,
+            }),
+            managed_admission: false,
+            report_proof: None,
+        }
+    }
+
+    #[test]
+    fn trusted_foreign_startup_reference_waits_without_replacing_live_capability() {
+        use crate::agent_resume::*;
+        let mut terminal = test_terminal();
+        let now = std::time::Instant::now();
+        terminal.bind_agent_resume_process(resume_test_binding(
+            PinnedAgentResumeRecipe::capture(crate::agents::bundled_profile("codex").unwrap()),
+            101,
+            now,
+        ));
+        let reference = terminal
+            .session_ref_from_bound_report(
+                "herdr:claude",
+                "claude",
+                Some("queued-native".into()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            terminal.live_agent_resume_binding.as_ref().unwrap().agent,
+            crate::detect::Agent::Codex
+        );
+        terminal.record_report_process_proof(
+            "claude",
+            &reference,
+            crate::platform::ProcessIdentity {
+                pid: 102,
+                birth_token: 1,
+            },
+        );
+        let pending = terminal.report_resume_binding("claude").unwrap();
+        let expected = pending.recipe.clone();
+        let acquired_at = pending.observed_at + std::time::Duration::from_millis(1);
+        let changed = test_registry("claude", "new-cli", "subcommand", "resume");
+        let mut acquired = resume_test_binding(
+            changed
+                .profile_by_id("claude")
+                .and_then(PinnedAgentResumeRecipe::capture),
+            102,
+            acquired_at,
+        );
+        acquired.agent = crate::detect::Agent::Claude;
+        terminal.bind_agent_resume_process(acquired);
+        assert_eq!(
+            terminal.live_agent_resume_binding.as_ref().unwrap().recipe,
+            expected
+        );
+        terminal.set_detected_agent_process_at(crate::detect::Agent::Claude, acquired_at);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:claude".into(),
+                "claude".into(),
+                Some(reference),
+                Some(1),
+                Some("startup".into()),
+            )
+            .unwrap();
+        assert_eq!(terminal.pinned_agent_resume_recipe, expected);
+    }
+
+    #[test]
+    fn early_session_requires_matching_report_lifetime_proof_or_a_fresh_report() {
+        use crate::agent_resume::*;
+        for proof_birth in [None, Some(1), Some(2)] {
+            let mut terminal = test_terminal();
+            let reference = terminal
+                .session_ref_from_bound_report(
+                    "herdr:codex",
+                    "codex",
+                    Some("early-session".into()),
+                    None,
+                )
+                .unwrap();
+            if let Some(birth_token) = proof_birth {
+                terminal.record_report_process_proof(
+                    "codex",
+                    &reference,
+                    crate::platform::ProcessIdentity {
+                        pid: 101,
+                        birth_token,
+                    },
+                );
+            }
+            terminal
+                .set_agent_session_ref(
+                    "herdr:codex".into(),
+                    "codex".into(),
+                    Some(reference.clone()),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                terminal
+                    .pinned_agent_resume_recipe
+                    .as_ref()
+                    .unwrap()
+                    .strategy,
+                "unavailable"
+            );
+            let recipe =
+                PinnedAgentResumeRecipe::capture(crate::agents::bundled_profile("codex").unwrap())
+                    .unwrap();
+            terminal.bind_agent_resume_process(resume_test_binding(
+                Some(recipe.clone()),
+                101,
+                std::time::Instant::now(),
+            ));
+            let persisted = terminal.persisted_agent_session.as_ref().unwrap();
+            assert_eq!(
+                pinned_plan(
+                    &crate::agents::registry(),
+                    persisted,
+                    terminal.pinned_agent_resume_recipe.as_ref()
+                )
+                .is_ok(),
+                proof_birth == Some(1)
+            );
+            if proof_birth != Some(1) {
+                assert_eq!(
+                    terminal
+                        .pinned_agent_resume_recipe
+                        .as_ref()
+                        .unwrap()
+                        .strategy,
+                    "unavailable",
+                    "mere later same-ID acquisition cannot authorize old metadata"
+                );
+                terminal
+                    .set_agent_session_ref(
+                        "herdr:codex".into(),
+                        "codex".into(),
+                        Some(reference),
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(terminal.pinned_agent_resume_recipe.as_ref(), Some(&recipe));
+            }
+        }
+    }
+
+    #[test]
+    fn ignored_early_report_cannot_attach_foreground_proof_to_old_session() {
+        use crate::agent_resume::*;
+        let mut terminal = test_terminal();
+        let reference = terminal
+            .session_ref_from_bound_report("herdr:codex", "codex", Some("old-session".into()), None)
+            .unwrap();
+        terminal
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                Some(reference.clone()),
+                Some(10),
+            )
+            .unwrap();
+        terminal.record_report_process_proof(
+            "codex",
+            &reference,
+            crate::platform::ProcessIdentity {
+                pid: 101,
+                birth_token: 1,
+            },
+        );
+        assert!(terminal
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                Some(reference),
+                Some(9)
+            )
+            .is_none());
+        terminal.bind_agent_resume_process(resume_test_binding(
+            PinnedAgentResumeRecipe::capture(crate::agents::bundled_profile("codex").unwrap()),
+            101,
+            std::time::Instant::now(),
+        ));
+        assert_eq!(
+            terminal
+                .pinned_agent_resume_recipe
+                .as_ref()
+                .unwrap()
+                .strategy,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn process_group_change_updates_foreground_tuple_without_refreshing_resume_recipe() {
+        use crate::agent_resume::*;
+        let now = std::time::Instant::now();
+        let old = test_registry("codex", "old-cli", "subcommand", "resume");
+        let new = test_registry("codex", "new-cli", "subcommand", "continue");
+        let original = old
+            .profile_by_id("codex")
+            .and_then(PinnedAgentResumeRecipe::capture)
+            .unwrap();
+        let mut terminal = test_terminal();
+        terminal.bind_agent_resume_process(resume_test_binding(Some(original.clone()), 101, now));
+        let mut regrouped = resume_test_binding(
+            new.profile_by_id("codex")
+                .and_then(PinnedAgentResumeRecipe::capture),
+            101,
+            now + std::time::Duration::from_secs(1),
+        );
+        regrouped.process.as_mut().unwrap().0 = 999;
+        terminal.bind_agent_resume_process(regrouped);
+        let retained = terminal.live_agent_resume_binding.as_ref().unwrap();
+        assert_eq!(retained.recipe.as_ref(), Some(&original));
+        assert_eq!(retained.process.as_ref().unwrap().0, 999);
+    }
+
+    #[test]
+    fn report_reference_kind_uses_bound_capability_not_active_builtin_selection() {
+        use crate::agent_resume::*;
+        let mut recipe =
+            PinnedAgentResumeRecipe::capture(crate::agents::bundled_profile("codex").unwrap())
+                .unwrap();
+        recipe.accepted_references = vec![AgentSessionRefKind::Path];
+        recipe.preferred_reference = AgentSessionRefKind::Path;
+        let mut terminal = test_terminal();
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(recipe),
+            101,
+            std::time::Instant::now(),
+        ));
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("native-session")
+            .display()
+            .to_string();
+        let reference = terminal
+            .session_ref_from_bound_report(
+                "herdr:codex",
+                "codex",
+                Some("not-selected".into()),
+                Some(path.clone()),
+            )
+            .unwrap();
+        assert_eq!(reference, AgentSessionRef::path(path).unwrap());
+        assert!(terminal
+            .session_ref_from_bound_report("herdr:codex", "codex", Some("id-only".into()), None)
+            .is_none());
+    }
+
+    #[test]
+    fn retained_canonical_identity_survives_membership_removal_without_promoting_custom_labels() {
+        let mut terminal = test_terminal();
+        let retained = crate::detect::Agent::parse("removed-agent").unwrap();
+        assert!(crate::agents::registry()
+            .profile_by_agent(retained)
+            .is_none());
+        terminal.set_detected_state(Some(retained), crate::detect::AgentState::Idle);
+        terminal.restore_managed_agent("reviewer".into(), retained);
+        assert_eq!(terminal.effective_known_agent(), Some(retained));
+        assert_eq!(
+            terminal.known_agent_for_label("removed-agent"),
+            Some(retained)
+        );
+        assert_eq!(
+            terminal.known_agent_for_label("arbitrary-unregistered-label"),
+            None
+        );
+        terminal.reconcile_agent_name_owner("removed-agent", None);
+        assert_eq!(terminal.managed_agent_kind(), Some(retained));
+        terminal.release_agent_with_mutation("custom:removed", "removed-agent", None);
+        assert_eq!(terminal.detected_agent, Some(retained));
+        assert_eq!(terminal.effective_known_agent(), Some(retained));
+    }
+
+    #[test]
+    fn resume_capability_follows_process_acquisition_not_report_time_or_reload() {
+        use crate::agent_resume::*;
+        let old = test_registry("codex", "old-cli", "separate_flag", "--old-session");
+        let new = test_registry("codex", "new-cli", "subcommand", "continue");
+        let recipe = |registry: &crate::agents::RegistrySnapshot| {
+            PinnedAgentResumeRecipe::capture(registry.profile_by_id("codex").unwrap()).unwrap()
+        };
+        let old_recipe = recipe(&old);
+        let new_recipe = recipe(&new);
+        let now = std::time::Instant::now();
+        let mut terminal = test_terminal();
+        terminal.bind_agent_resume_process(resume_test_binding(Some(old_recipe.clone()), 101, now));
+        terminal.set_detected_agent_process_at(crate::detect::Agent::Codex, now);
+        let reference = terminal
+            .session_ref_from_bound_report("herdr:codex", "codex", Some("session".into()), None)
+            .unwrap();
+        terminal
+            .set_agent_session_ref("herdr:codex".into(), "codex".into(), Some(reference), None)
+            .unwrap();
+        assert_eq!(
+            terminal.pinned_agent_resume_recipe.as_ref(),
+            Some(&old_recipe)
+        );
+        let session = terminal.persisted_agent_session.as_ref().unwrap();
+        assert!(pinned_plan(&new, session, terminal.pinned_agent_resume_recipe.as_ref()).is_err());
+        // A refreshed observation of the same exact process cannot refresh its recipe.
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(new_recipe.clone()),
+            101,
+            now + std::time::Duration::from_secs(1),
+        ));
+        assert_eq!(
+            terminal
+                .live_agent_resume_binding
+                .as_ref()
+                .unwrap()
+                .recipe
+                .as_ref(),
+            Some(&old_recipe)
+        );
+        // A verified same-ID replacement can acquire new instructions, without rewriting history yet.
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(new_recipe.clone()),
+            102,
+            now + std::time::Duration::from_secs(2),
+        ));
+        assert_eq!(
+            terminal.pinned_agent_resume_recipe.as_ref(),
+            Some(&old_recipe)
+        );
+        terminal
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                AgentSessionRef::id("session"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            terminal.pinned_agent_resume_recipe.as_ref(),
+            Some(&new_recipe)
+        );
+    }
+
+    #[test]
+    fn acquired_no_resume_cannot_backfill_and_managed_admission_survives_reload() {
+        use crate::agent_resume::*;
+        let registry = test_registry("codex", "new-cli", "subcommand", "continue");
+        let recipe =
+            PinnedAgentResumeRecipe::capture(registry.profile_by_id("codex").unwrap()).unwrap();
+        let now = std::time::Instant::now();
+        let mut terminal = test_terminal();
+        terminal.bind_agent_resume_process(resume_test_binding(None, 101, now));
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(recipe.clone()),
+            101,
+            now + std::time::Duration::from_secs(1),
+        ));
+        assert!(terminal
+            .session_ref_from_bound_report("herdr:codex", "codex", Some("session".into()), None)
+            .is_none());
+        assert!(terminal
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                AgentSessionRef::id("session"),
+                None
+            )
+            .is_none());
+        assert!(terminal.persisted_agent_session.is_none());
+        let original =
+            PinnedAgentResumeRecipe::capture(crate::agents::bundled_profile("codex").unwrap())
+                .unwrap();
+        terminal.admit_agent_resume_recipe(
+            crate::detect::Agent::Codex,
+            Some(original.clone()),
+            now,
+        );
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(recipe.clone()),
+            999,
+            now - std::time::Duration::from_secs(1),
+        ));
+        assert!(terminal
+            .live_agent_resume_binding
+            .as_ref()
+            .unwrap()
+            .process
+            .is_none());
+
+        terminal.bind_agent_resume_process(resume_test_binding(
+            Some(recipe),
+            102,
+            now + std::time::Duration::from_secs(2),
+        ));
+        assert_eq!(
+            terminal
+                .live_agent_resume_binding
+                .as_ref()
+                .unwrap()
+                .recipe
+                .as_ref(),
+            Some(&original)
+        );
+    }
+
+    #[test]
+    fn queued_acquisition_wins_over_later_report_and_unverified_reports_cannot_auto_resume() {
+        use crate::agent_resume::*;
+        let mut terminal = test_terminal();
+        let acquired_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let reference = terminal
+            .session_ref_from_bound_report("herdr:codex", "codex", Some("session".into()), None)
+            .unwrap();
+        terminal
+            .set_agent_session_ref("herdr:codex".into(), "codex".into(), Some(reference), None)
+            .unwrap();
+        assert_eq!(
+            terminal
+                .pinned_agent_resume_recipe
+                .as_ref()
+                .unwrap()
+                .strategy,
+            "unavailable"
+        );
+        let session = terminal.persisted_agent_session.as_ref().unwrap();
+        assert!(pinned_plan(
+            &crate::agents::registry(),
+            session,
+            terminal.pinned_agent_resume_recipe.as_ref()
+        )
+        .is_err());
+        terminal.bind_agent_resume_process(resume_test_binding(None, 101, acquired_at));
+        assert!(terminal
+            .live_agent_resume_binding
+            .as_ref()
+            .unwrap()
+            .recipe
+            .is_none());
+        assert_eq!(
+            terminal
+                .pinned_agent_resume_recipe
+                .as_ref()
+                .unwrap()
+                .strategy,
+            "unavailable"
+        );
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .unwrap()
+                .session_ref
+                .value,
+            "session"
+        );
+    }
+
     use super::*;
     use crate::detect::AgentDetection;
 
@@ -2237,6 +3223,7 @@ mod tests {
             Duration::from_millis(100),
             Duration::from_secs(1),
         );
+        terminal.set_detected_agent_process_at(Agent::Pi, now);
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Unknown);
 
         assert!(terminal.managed_agent_launch_pending());
@@ -2270,7 +3257,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_mismatch_and_timeout_release_name() {
+    fn managed_agent_wrong_agent_evidence_waits_for_timeout() {
         let now = Instant::now();
         let mut mismatch = test_terminal();
         mismatch.begin_managed_agent(
@@ -2280,8 +3267,34 @@ mod tests {
             Duration::ZERO,
             Duration::from_secs(1),
         );
+        let launch_session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:launch".into(),
+            agent: "pi".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("pending-pi-session").unwrap(),
+        };
+        mismatch.set_managed_agent_launch_session(launch_session.clone());
+        mismatch.set_detected_agent_process_at(Agent::Codex, now);
         mismatch.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         assert!(mismatch.reconcile_managed_agent_at(now, false));
+        assert!(!mismatch.managed_agent_interactive_ready());
+        assert_eq!(mismatch.agent_name.as_deref(), Some("reviewer"));
+        assert_eq!(mismatch.managed_agent_kind(), Some(Agent::Pi));
+        let exited = mismatch.set_detected_state_with_screen_signals_at(
+            Some(Agent::Codex),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            true,
+            now + Duration::from_millis(1),
+        );
+        assert!(!exited.agent_released);
+        mismatch.reconcile_managed_agent_at(now + Duration::from_millis(1), false);
+        assert_eq!(mismatch.agent_name.as_deref(), Some("reviewer"));
+        assert_eq!(mismatch.managed_agent_kind(), Some(Agent::Pi));
+        assert_eq!(mismatch.managed_agent_launch_session, Some(launch_session));
+        assert!(!mismatch.managed_agent_interactive_ready());
+        assert!(mismatch.reconcile_managed_agent_at(now + Duration::from_secs(1), false));
         assert_eq!(mismatch.agent_name, None);
         assert_eq!(mismatch.managed_agent_kind(), None);
 
@@ -2305,11 +3318,265 @@ mod tests {
     }
 
     #[test]
+    fn queued_restore_has_no_deadline_or_synthetic_process_until_injection() {
+        let mut terminal = test_terminal();
+        let session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:launch".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("native-session").unwrap(),
+        };
+        let recipe = crate::agent_resume::PinnedAgentResumeRecipe::capture(
+            crate::agents::bundled_profile("opencode").unwrap(),
+        );
+        terminal.set_persisted_agent_session(session.clone());
+        terminal.pinned_agent_resume_recipe = recipe.clone();
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "opencode".into(),
+            argv: vec![
+                "opencode".into(),
+                "--session".into(),
+                "native-session".into(),
+            ],
+            dedupe_key: "native-session".into(),
+            strict_input_readiness: true,
+        });
+        terminal.queue_managed_agent(Some("reviewer".into()), Agent::OpenCode, true);
+
+        assert!(terminal.is_agent_terminal());
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        assert_eq!(terminal.detected_agent, None);
+        assert_eq!(terminal.state, AgentState::Unknown);
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert_eq!(terminal.managed_agent_kind(), Some(Agent::OpenCode));
+        assert_eq!(terminal.persisted_agent_session.as_ref(), Some(&session));
+        assert_eq!(terminal.pinned_agent_resume_recipe, recipe);
+
+        let injected_at = Instant::now();
+        terminal.mark_queued_agent_injected(
+            injected_at,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        terminal.pending_agent_resume_plan = None;
+        assert!(terminal.managed_agent_launch_pending());
+        assert_eq!(
+            terminal.next_managed_agent_deadline(),
+            injected_at.checked_add(Duration::from_secs(30))
+        );
+        assert!(!terminal.managed_agent_interactive_ready());
+    }
+
+    fn begin_strict_opencode(terminal: &mut TerminalState, injected_at: Instant) {
+        terminal.begin_managed_agent_with_readiness(
+            Some("reviewer".into()),
+            Agent::OpenCode,
+            true,
+            injected_at,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+    }
+
+    #[test]
+    fn hook_idle_before_paint_does_not_activate_strict_startup_but_visible_idle_does() {
+        let injected_at = Instant::now();
+        let mut terminal = test_terminal();
+        begin_strict_opencode(&mut terminal, injected_at);
+        terminal.set_detected_agent_process_at(Agent::OpenCode, injected_at);
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("native-session").unwrap(),
+        });
+        terminal.set_hook_authority(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Idle,
+            None,
+            None,
+        );
+        assert!(terminal.full_lifecycle_hook_authority_active());
+        assert!(!terminal.reconcile_managed_agent_at(injected_at, false));
+        assert!(terminal.managed_agent_launch_pending());
+
+        let painted_at = injected_at + Duration::from_millis(20);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            painted_at,
+        );
+        assert_eq!(
+            terminal.state,
+            AgentState::Idle,
+            "hook remains state authority"
+        );
+        assert!(terminal.reconcile_managed_agent_at(painted_at, false));
+        assert!(terminal.managed_agent_interactive_ready());
+        assert!(!terminal.screen_detection_required_for_managed_startup());
+    }
+
+    #[test]
+    fn strict_startup_rejects_preinjection_stale_and_wrong_agent_evidence() {
+        let injected_at = Instant::now();
+        let old = injected_at - Duration::from_secs(1);
+        let mut terminal = test_terminal();
+        terminal.queue_managed_agent(None, Agent::OpenCode, true);
+        terminal.set_detected_agent_process_at(Agent::OpenCode, old);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            old,
+        );
+        terminal.mark_queued_agent_injected(
+            injected_at,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_agent_process_at(Agent::OpenCode, old);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            old,
+        );
+        assert!(!terminal.reconcile_managed_agent_at(injected_at, false));
+
+        let fresh = injected_at + Duration::from_millis(1);
+        terminal.set_detected_agent_process_at(Agent::Pi, fresh);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            fresh,
+        );
+        assert!(!terminal.reconcile_managed_agent_at(fresh, false));
+        assert!(terminal.managed_agent_launch_pending());
+    }
+
+    #[test]
+    fn strict_startup_requires_visible_idle_at_or_after_process_acquisition() {
+        let injected_at = Instant::now();
+        let mut terminal = test_terminal();
+        begin_strict_opencode(&mut terminal, injected_at);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            injected_at + Duration::from_millis(1),
+        );
+        terminal
+            .set_detected_agent_process_at(Agent::OpenCode, injected_at + Duration::from_millis(2));
+        assert!(
+            !terminal.reconcile_managed_agent_at(injected_at + Duration::from_millis(2), false,)
+        );
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            injected_at + Duration::from_millis(3),
+        );
+        assert!(terminal.reconcile_managed_agent_at(injected_at + Duration::from_millis(3), false,));
+        assert!(terminal.managed_agent_interactive_ready());
+    }
+
+    #[test]
+    fn legacy_startup_keeps_process_idle_and_settle_compatibility() {
+        let injected_at = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.begin_managed_agent_with_readiness(
+            Some("reviewer".into()),
+            Agent::Pi,
+            false,
+            injected_at,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+        terminal.set_detected_agent_process_at(Agent::Pi, injected_at);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        assert!(!terminal.reconcile_managed_agent_at(injected_at + Duration::from_secs(2), false));
+        assert!(terminal.reconcile_managed_agent_at(injected_at + Duration::from_secs(3), false));
+        assert!(terminal.managed_agent_interactive_ready());
+    }
+
+    #[test]
+    fn strict_visible_blocker_holds_startup_until_a_later_visible_idle() {
+        let injected_at = Instant::now();
+        let mut terminal = test_terminal();
+        begin_strict_opencode(&mut terminal, injected_at);
+        terminal.set_detected_agent_process_at(Agent::OpenCode, injected_at);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Blocked,
+            true,
+            false,
+            false,
+            false,
+            injected_at + Duration::from_millis(1),
+        );
+        assert!(terminal.reconcile_managed_agent_at(injected_at + Duration::from_millis(1), false));
+        assert!(terminal.managed_agent_launch_pending());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("native-session").unwrap(),
+        });
+        terminal.set_hook_authority(
+            "herdr:opencode".into(),
+            "opencode".into(),
+            AgentState::Blocked,
+            None,
+            None,
+        );
+        assert!(terminal.full_lifecycle_hook_authority_active());
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            injected_at + Duration::from_millis(2),
+        );
+        assert!(!terminal.reconcile_managed_agent_at(injected_at + Duration::from_millis(2), false));
+        assert_eq!(terminal.state, AgentState::Blocked);
+        terminal.hook_authority.as_mut().unwrap().state = AgentState::Idle;
+        terminal.state = AgentState::Idle;
+        assert!(terminal.reconcile_managed_agent_at(injected_at + Duration::from_millis(3), false));
+        assert!(terminal.managed_agent_interactive_ready());
+    }
+
+    #[test]
     fn stabilization_uses_raw_policy_state() {
         let detection = AgentDetection {
             state: AgentState::Idle,
             skip_state_update: false,
             visible_idle: false,
+            screen_visible_idle: false,
             visible_blocker: false,
             visible_working: false,
         };
@@ -5014,7 +6281,16 @@ mod tests {
             Duration::ZERO,
             Duration::from_secs(1),
         );
-        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        terminal.set_detected_agent_process_at(Agent::OpenCode, now);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::OpenCode),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            now,
+        );
         assert!(terminal.reconcile_managed_agent_at(now, false));
 
         for session in ["opencode-old", "opencode-new"] {

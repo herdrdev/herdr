@@ -56,7 +56,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
 
     HeadlessServer {
         app,
-        #[cfg(unix)]
         api_tx: None,
         api_server: None,
         #[cfg(unix)]
@@ -601,6 +600,7 @@ async fn client_shell_attach_seeds_workspace() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 6,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 0,
@@ -631,6 +631,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 0,
@@ -767,6 +768,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 7,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 10,
@@ -934,6 +936,7 @@ fn connect_test_shell(
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id,
+            notification_sound_profile: false,
             surface_cols,
             surface_rows,
             cell_width_px: 0,
@@ -1367,6 +1370,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 13,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 0,
@@ -1391,6 +1395,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 14,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 0,
@@ -2293,6 +2298,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 9,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 0,
@@ -2543,6 +2549,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             client_id: 12,
+            notification_sound_profile: false,
             surface_cols: 80,
             surface_rows: 23,
             cell_width_px: 10,
@@ -4939,13 +4946,13 @@ fn headless_scheduled_tasks_expire_agent_metadata() {
 }
 
 #[test]
-fn headless_scheduled_tasks_clears_disabled_agent_manifest_update_deadline() {
+fn headless_scheduled_tasks_do_not_activate_registry_updates() {
     let mut server = test_headless_server();
-    let now = Instant::now();
-    server.app.next_agent_manifest_update_check = Some(now - Duration::from_millis(1));
+    let before = crate::agents::registry();
 
-    assert!(!server.handle_scheduled_tasks_headless(now, false));
-    assert_eq!(server.app.next_agent_manifest_update_check, None);
+    assert!(!server.handle_scheduled_tasks_headless(Instant::now(), false));
+    assert!(std::sync::Arc::ptr_eq(&before, &crate::agents::registry()));
+    assert_eq!(before.generation, crate::agents::registry().generation);
 }
 
 #[cfg(unix)]
@@ -4968,6 +4975,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+        strict_input_readiness: false,
     });
 
     server.render_and_stream();
@@ -5891,6 +5899,100 @@ fn semantic_notifications_broadcast_only_to_client_shells() {
 }
 
 #[test]
+fn semantic_notifications_negotiate_resolved_sound_without_changing_legacy_bytes() {
+    let mut server = test_headless_server();
+    server.app.state.sound.enabled = false;
+    let mut receivers = Vec::new();
+    for client_id in 1..=3 {
+        let (writer, control, _frames) = test_client_writer();
+        let mut connection = ClientConnection::new_with_mode(
+            ClientConnectionMode::ClientShell,
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            client_id,
+            RenderEncoding::SemanticFrame,
+            Some(writer),
+        );
+        connection.shell_notification_sound_profile = client_id != 1;
+        server.clients.insert(client_id, connection);
+        receivers.push(control);
+    }
+    let event = protocol::SemanticNotification {
+        kind: protocol::SemanticNotificationKind::NeedsAttention,
+        title: "droid needs attention".into(),
+        body: None,
+        sound: Some(protocol::SemanticNotificationSound::Request),
+        agent: Some("droid".into()),
+        workspace_id: None,
+        tab_id: None,
+        pane_id: None,
+        position: None,
+    };
+    let legacy =
+        HeadlessServer::frame_server_message(&ServerMessage::SemanticNotification(event.clone()))
+            .unwrap();
+    assert!(server.send_to_client_shells(ServerMessage::SemanticNotification(event.clone())));
+    let received = receivers
+        .iter()
+        .map(|receiver| receiver.recv_timeout(Duration::from_millis(100)).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(received[0], legacy);
+    assert_eq!(received[1], received[2]);
+    let ServerMessage::EndpointControl { kind, data } = read_server_message(received[1].clone())
+    else {
+        panic!("capable shells receive a named notification");
+    };
+    assert_eq!(kind, protocol::endpoint::ENDPOINT_NOTIFICATION_KIND);
+    let envelope: protocol::endpoint::EndpointNotification = serde_json::from_str(&data).unwrap();
+    assert_eq!(envelope.notification, event);
+    assert_eq!(
+        envelope.sound_profile,
+        Some(protocol::endpoint::NotificationSoundProfile {
+            config_key: "droid".into(),
+            default_off: true,
+        })
+    );
+    assert!(receivers
+        .iter()
+        .all(|receiver| receiver.try_recv().is_err()));
+}
+
+#[test]
+fn notification_sound_metadata_tracks_package_snapshot_changes_and_removal() {
+    let snapshot = |sound: &str, generation| {
+        crate::agents::store::snapshot_for_test(vec![(
+            "agents/future-agent/agent.toml".into(),
+            format!("schema = 1\nid = 'future-agent'\nname = 'future'\naliases = []\nstartable = true\n[launch]\nunix = 'shared-cli'\nwindows = 'shared-cli'\n{sound}"),
+        )], generation).unwrap()
+    };
+    let first = snapshot("[sound]\nkey = 'old_key'\ndefault = 'off'\n", 1);
+    let second = snapshot("[sound]\nkey = 'new_key'\ndefault = 'default'\n", 2);
+    let absent = snapshot("", 3);
+    let event = protocol::SemanticNotification {
+        kind: protocol::SemanticNotificationKind::NeedsAttention,
+        title: "future needs attention".into(),
+        body: None,
+        sound: Some(protocol::SemanticNotificationSound::Request),
+        agent: Some("future-agent".into()),
+        workspace_id: None,
+        tab_id: None,
+        pane_id: None,
+        position: None,
+    };
+    let old = HeadlessServer::resolved_notification_sound_profile(&first, &event).unwrap();
+    let new = HeadlessServer::resolved_notification_sound_profile(&second, &event).unwrap();
+    assert_eq!(
+        (old.config_key.as_str(), old.default_off),
+        ("old_key", true)
+    );
+    assert_eq!(
+        (new.config_key.as_str(), new.default_off),
+        ("new_key", false)
+    );
+    assert!(HeadlessServer::resolved_notification_sound_profile(&absent, &event).is_none());
+}
+
+#[test]
 fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
     let mut server = test_headless_server();
     server.app.state.toast_config.delivery = config::ToastDelivery::Off;
@@ -6465,6 +6567,7 @@ fn startup_idle_does_not_forward_completion() {
             pane_id,
             agent: Some(crate::detect::Agent::Pi),
             state: crate::detect::AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,

@@ -12,6 +12,7 @@ const NESTED_HERDR_MESSAGES: [&str; 6] = [
 ];
 
 mod agent_resume;
+mod agents;
 mod api;
 mod app;
 mod build_info;
@@ -554,6 +555,9 @@ fn main() -> io::Result<()> {
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("server") {
+        // Compile the active registry before server hot paths start. Transport
+        // CLI commands above use the server's registry, not a local snapshot.
+        let _ = agents::registry();
         return server::headless::run_server();
     }
 
@@ -617,6 +621,7 @@ fn main() -> io::Result<()> {
         println!("       herdr pane <subcommand> ...");
         println!("       herdr session <subcommand> ...");
         println!("       herdr integration <subcommand> ...");
+        println!("       herdr registry validate <directory>");
         println!();
         println!("Common commands:");
         for (command, description) in [
@@ -687,6 +692,10 @@ fn main() -> io::Result<()> {
         println!();
         println!("Advanced commands:");
         println!("  {:<32} Run as headless server", "herdr server");
+        println!(
+            "  {:<32} Validate local agent packages without activating them",
+            "herdr registry validate <directory>"
+        );
         println!();
         println!("Options:");
         println!("  --session <name>    Use or create a named persistent session");
@@ -762,6 +771,7 @@ fn main() -> io::Result<()> {
                 "pane",
                 "session",
                 "integration",
+                "registry",
             ]
             .contains(&arg.as_str())
         {

@@ -39,7 +39,8 @@ fn agent_start_waits_through_unknown_then_rejects_blocked() {
                     "agent": {
                         "pane_id": "w1:p1",
                         "terminal_id": "term_1",
-                        "name": "reviewer"
+                        "name": "reviewer",
+                        "agent": "opencode"
                     },
                     "argv": ["opencode"]
                 }
@@ -114,6 +115,123 @@ fn agent_start_waits_through_unknown_then_rejects_blocked() {
 
     server.join().unwrap();
     cleanup_test_base(&base);
+}
+
+#[test]
+fn agent_start_uses_novel_server_canonical_identity_not_alias_or_executable() {
+    for (detected_kind, expected_error) in [
+        ("future-agent-42", None),
+        ("other-agent-42", Some("agent_kind_mismatch")),
+    ] {
+        let base = unique_test_dir();
+        fs::create_dir_all(&base).unwrap();
+        let socket_path = base.join("herdr.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, line) = accept_fake_cli_operation(&listener);
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "pane.get");
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({
+                    "id": request["id"],
+                    "result": {
+                        "type": "pane_info",
+                        "pane": { "terminal_id": "term_1" }
+                    }
+                })
+            )
+            .unwrap();
+            stream.flush().unwrap();
+
+            let (mut stream, line) = accept_fake_cli_operation(&listener);
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "agent.start");
+            assert_eq!(request["params"]["kind"], " Remote Alias ");
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({
+                    "id": request["id"],
+                    "result": {
+                        "type": "agent_started",
+                        "agent": {
+                            "pane_id": "w1:p1",
+                            "terminal_id": "term_1",
+                            "name": "reviewer",
+                            "agent": "future-agent-42",
+                            "agent_status": "unknown",
+                            "launch_pending": true,
+                            "interactive_ready": false
+                        },
+                        "argv": ["shared-cli"]
+                    }
+                })
+            )
+            .unwrap();
+            stream.flush().unwrap();
+
+            let (mut stream, line) = accept_fake_cli_operation(&listener);
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "agent.get");
+            assert_eq!(request["params"]["target"], "reviewer");
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({
+                    "id": request["id"],
+                    "result": {
+                        "type": "agent_info",
+                        "agent": {
+                            "pane_id": "w1:p1",
+                            "terminal_id": "term_1",
+                            "name": "reviewer",
+                            "agent": detected_kind,
+                            "agent_status": "idle",
+                            "launch_pending": false,
+                            "interactive_ready": true
+                        }
+                    }
+                })
+            )
+            .unwrap();
+            stream.flush().unwrap();
+        });
+
+        let started = run_cli(
+            &socket_path,
+            &[
+                "agent",
+                "start",
+                "reviewer",
+                "--kind",
+                " Remote Alias ",
+                "--pane",
+                "w1:p1",
+            ],
+        );
+        if let Some(expected_error) = expected_error {
+            assert_eq!(started.status.code(), Some(1));
+            let error: serde_json::Value = serde_json::from_slice(&started.stderr).unwrap();
+            assert_eq!(error["error"]["code"], expected_error);
+        } else {
+            assert!(
+                started.status.success(),
+                "{}",
+                String::from_utf8_lossy(&started.stderr)
+            );
+            let response: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+            assert_eq!(response["result"]["agent"]["agent"], "future-agent-42");
+            assert_eq!(
+                response["result"]["argv"],
+                serde_json::json!(["shared-cli"])
+            );
+        }
+        server.join().unwrap();
+        cleanup_test_base(&base);
+    }
 }
 
 #[test]

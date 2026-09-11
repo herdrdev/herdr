@@ -1825,6 +1825,32 @@ async fn run_client_loop(
                         }
                         let snapshot = match endpoint::decode_endpoint_control(&kind, &data) {
                             Ok(endpoint::EndpointControlMessage::HealthPong) => continue,
+                            Ok(endpoint::EndpointControlMessage::Notification(event)) => {
+                                if let Some(shell) = state.shell.as_mut() {
+                                    let (effects, repaint) = shell
+                                        .receive_notification_with_sound_profile(
+                                            &endpoint_id,
+                                            event.notification,
+                                            shell::ClientNotificationSoundProfile::Resolved(
+                                                event.sound_profile,
+                                            ),
+                                            now,
+                                        );
+                                    let frame = repaint
+                                        .then(|| {
+                                            shell.compose(
+                                                state.reported_size.0,
+                                                state.reported_size.1,
+                                            )
+                                        })
+                                        .flatten();
+                                    handle_shell_notification_effects(effects, &state.sound_config);
+                                    if let Some(frame) = frame {
+                                        state.present_frame(frame);
+                                    }
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::Ignored) => {
                                 debug!(%kind, "ignoring unknown endpoint control message");
                                 continue;

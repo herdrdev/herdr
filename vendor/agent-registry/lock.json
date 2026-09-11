@@ -1,0 +1,535 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/herdrdev/agent-registry",
+  "sha256": "7ee208035966d2bdf4315f42c555904319d47f14d72fd2b7d39e9c9b9262bf95",
+  "files": [
+    {
+      "path": "agents/agy/agent.toml",
+      "sha256": "4c419527f83d96f55a83610eabd453beb43a46973c55822d0667100c03f92824"
+    },
+    {
+      "path": "agents/agy/assets/herdr-agent-state.ps1",
+      "sha256": "25eefb17464a01ee000bfab24b95b7f040b8beaa9020e993416e315d6db1ef84"
+    },
+    {
+      "path": "agents/agy/assets/herdr-agent-state.sh",
+      "sha256": "bdf8073a23de2aa919a23d004c1788f2af3082484acb144e2f6735699995ec09"
+    },
+    {
+      "path": "agents/agy/detection.toml",
+      "sha256": "11300b853130d037eb2c57d9c4b897893cc1f0a876e12eb54ff1b216177db9d7"
+    },
+    {
+      "path": "agents/agy/integration.toml",
+      "sha256": "44c93028a5ef6c5a038a9f6dd886462bf958481635f1a9a74f21604213b1a388"
+    },
+    {
+      "path": "agents/agy/process.toml",
+      "sha256": "19a391715be2fbd10264e1aef16391f2d965d8d7556781442873787f41a29b1b"
+    },
+    {
+      "path": "agents/agy/resume.toml",
+      "sha256": "4b8ecfc1e818f94db490878ba9ded5628e2090a4b6d98897d3348374c9154e14"
+    },
+    {
+      "path": "agents/amp/agent.toml",
+      "sha256": "dda476701d54cf28c131ba29be0c9f8e1aaac709734067bc6ab59843a49a2f63"
+    },
+    {
+      "path": "agents/amp/detection.toml",
+      "sha256": "b5806b0dd21e2f5e752d0eac7f084d5ce2e3f275638cfd1234c42cc88152dc8c"
+    },
+    {
+      "path": "agents/amp/process.toml",
+      "sha256": "b1c83cfa6e6ec374b37fdb4df23fe16eccb89ec52e8f6c808fbf3c6afbcbc4ec"
+    },
+    {
+      "path": "agents/claude/agent.toml",
+      "sha256": "859505114acee05642b051dc4956b3ed2003ead95cb938f2d7d5c0b699fa2b0b"
+    },
+    {
+      "path": "agents/claude/assets/herdr-agent-state.ps1",
+      "sha256": "6db8bf92db45a3c5aa67994c1fb665231339e1dc3b08c28239c246c0874ebaaa"
+    },
+    {
+      "path": "agents/claude/assets/herdr-agent-state.sh",
+      "sha256": "a61bbe2619a316669406316de260c13b6c1ae525dafd6f4f4956e26646268105"
+    },
+    {
+      "path": "agents/claude/detection.toml",
+      "sha256": "038d0aa23fee3f9b39cb3c9ca117d0f95b0b3a5873cf0f38284ccbac279c9664"
+    },
+    {
+      "path": "agents/claude/integration.toml",
+      "sha256": "7ac77a16539d085eaf44950e38747baf991b55fab93bae666e79f7f45757beb0"
+    },
+    {
+      "path": "agents/claude/process.toml",
+      "sha256": "9169a6a734a141179136ae7c399be3e1eaaf9d5f2a33e71a526bf2b63d9ccce4"
+    },
+    {
+      "path": "agents/claude/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/cline/agent.toml",
+      "sha256": "f30d3d2a2e3ad37840a15574abc52ddb31a8ee1d5319ca80834e470b5f8eedbe"
+    },
+    {
+      "path": "agents/cline/detection.toml",
+      "sha256": "75fe33ec735c59638da8d62e16bddd257d9959e692edb83b1f11b7f28057866a"
+    },
+    {
+      "path": "agents/cline/process.toml",
+      "sha256": "2d751fc450305601c49bcbdd572a4dfc52d75bd4a4697d9e08941b34580f7264"
+    },
+    {
+      "path": "agents/codex/agent.toml",
+      "sha256": "0cd67f25b8f435a2609286d8df116d78ba609169b4a629ffe284281d0c0320a4"
+    },
+    {
+      "path": "agents/codex/assets/herdr-agent-state.ps1",
+      "sha256": "8fee2867ba1346e472157966dde74d7c5c6976a2a6e394583f03a5b9df690f4a"
+    },
+    {
+      "path": "agents/codex/assets/herdr-agent-state.sh",
+      "sha256": "38a90a2a99872d06dcbc978e7613406cdd852dbb07503abd7a113f518d5951f3"
+    },
+    {
+      "path": "agents/codex/detection.toml",
+      "sha256": "c9780984fec679a5a1a91f2018ba486a74d971e5837324a2a1d95047178d5a22"
+    },
+    {
+      "path": "agents/codex/integration.toml",
+      "sha256": "1ff52570fe6930b240566525933b74621d3790ae1a4d5e37561037052a619344"
+    },
+    {
+      "path": "agents/codex/process.toml",
+      "sha256": "9f93175e4aa36ca829fd2e1dcf18e477e8c58d98ff0d0938c7d2e8637295faa7"
+    },
+    {
+      "path": "agents/codex/resume.toml",
+      "sha256": "da9a89662a0e7aa77a2b2c4e8d9a291506305c2a8a869351db6c25bb5cc5a655"
+    },
+    {
+      "path": "agents/copilot/agent.toml",
+      "sha256": "35658382de83bedadf311e4c638b59f552737bbde91ffc231720a0a7f15f3dac"
+    },
+    {
+      "path": "agents/copilot/assets/herdr-agent-state.ps1",
+      "sha256": "5df815609525dad3a2e93cfd46a16650a6baba2ec20e89ee8fbca32ce3a6a4dd"
+    },
+    {
+      "path": "agents/copilot/assets/herdr-agent-state.sh",
+      "sha256": "197460e7423d243862690eeb2dadaa0eeaec3d42f3106c5972483b029b797825"
+    },
+    {
+      "path": "agents/copilot/detection.toml",
+      "sha256": "b70c652584326a1a98475a5fcef16207dee9f23b65f8e78300f4fc2bb578cb11"
+    },
+    {
+      "path": "agents/copilot/integration.toml",
+      "sha256": "d0f8d645268fb3e89841d5a4ad146565f8af2f24a49f6ad1dd3d2bfa8f715e6d"
+    },
+    {
+      "path": "agents/copilot/process.toml",
+      "sha256": "637f9d0c848b9a1e554f265530f33340a52dc510b78e8e538459ed7f28ec0a19"
+    },
+    {
+      "path": "agents/copilot/resume.toml",
+      "sha256": "80fdf46e9b98091af2a341d06bdca1fdcf3bd8725275be6a7c25341d32c37eea"
+    },
+    {
+      "path": "agents/cursor/agent.toml",
+      "sha256": "da4a10d5512630c1cd4817a256d6a0b2796fda2f65bfedac5ecdc729a4107a82"
+    },
+    {
+      "path": "agents/cursor/assets/herdr-agent-state.ps1",
+      "sha256": "3405df5870b8151f8179fb96b0c79304566567339db7938b07fc2a79f0fd7b30"
+    },
+    {
+      "path": "agents/cursor/assets/herdr-agent-state.sh",
+      "sha256": "186c6b4b9e0f8ca59288cb74c3c2c9131c0e3ca086004b1a26d0617c843a38a2"
+    },
+    {
+      "path": "agents/cursor/detection.toml",
+      "sha256": "753b1f7f632d42fa21139c2767ecbb5e1078748aba2e59407ac4932d3ce36ad7"
+    },
+    {
+      "path": "agents/cursor/integration.toml",
+      "sha256": "3dea48e869f79f9287fa31b19f85b13e85c06c6649bc4fa6eecde13bb619d566"
+    },
+    {
+      "path": "agents/cursor/process.toml",
+      "sha256": "331626e76f1bff0421a2e62886f41c8342cda62673363071ee682e0b8d6948f4"
+    },
+    {
+      "path": "agents/cursor/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/devin/agent.toml",
+      "sha256": "159dc15c8a7b013c403a30630753869eafa1d085e13dc77fbbd42a355d6a44ec"
+    },
+    {
+      "path": "agents/devin/assets/herdr-agent-state.ps1",
+      "sha256": "a62c8c65b789843b9fdc99e702bc75f18279ce85a7228cc604e86750d626212c"
+    },
+    {
+      "path": "agents/devin/assets/herdr-agent-state.sh",
+      "sha256": "29ee8f4c216dd07b08d45a2549ae1d3cbe0d593e6f0af987eb6983cca64cc6af"
+    },
+    {
+      "path": "agents/devin/detection.toml",
+      "sha256": "250c9cea1d60bdb965dc6056f3066b785e941d60242756fbaca73b57ca6b0f85"
+    },
+    {
+      "path": "agents/devin/integration.toml",
+      "sha256": "dd8f9ea6953036b05f89a21b1d45fc91072fafa6e6059f2775540714d249298a"
+    },
+    {
+      "path": "agents/devin/process.toml",
+      "sha256": "653e851c209e3113801122cab1f1809d1c5161c08610d8f171458cf3e8b7cd2e"
+    },
+    {
+      "path": "agents/devin/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/droid/agent.toml",
+      "sha256": "38a0cced0fe9737055c5692ee46c7208cefbb0759983b5bff37f6c6b7238cb47"
+    },
+    {
+      "path": "agents/droid/assets/herdr-agent-state.ps1",
+      "sha256": "26d0f52c594a0322396ce746d6f9ee4723511005ce7ceff631c6895da74fa384"
+    },
+    {
+      "path": "agents/droid/assets/herdr-agent-state.sh",
+      "sha256": "635a1e6eac814460c61da9421f6cd7a7fea81eaeca2b7469ac333e3c4e780b77"
+    },
+    {
+      "path": "agents/droid/detection.toml",
+      "sha256": "d37e7c464177c0e8f3edce8d4fabc4bcc7a1874edf2c4c87a2f927888cf69ce9"
+    },
+    {
+      "path": "agents/droid/integration.toml",
+      "sha256": "3f3ec094a03364a4a0bb9800dd557c18af67fb2e96f3577d8437656abcd27641"
+    },
+    {
+      "path": "agents/droid/process.toml",
+      "sha256": "0f499de355d0f691da6cbb8b5a94427c975d3331ee0c883ac06ca5948d5f38de"
+    },
+    {
+      "path": "agents/droid/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/gemini/agent.toml",
+      "sha256": "d382c3d6cf5cf50d53bb0778b52cd335fa85a7a156badaf0acf331fb34559f99"
+    },
+    {
+      "path": "agents/gemini/detection.toml",
+      "sha256": "d7013b5e772852ecc595febf964f00b4f9edcbc6047a2a5421613a154d92520d"
+    },
+    {
+      "path": "agents/gemini/process.toml",
+      "sha256": "aebe5eac8120de3c38e41aee72f2d228e64e6589b51988d732ca1458a3c7e5b6"
+    },
+    {
+      "path": "agents/grok/agent.toml",
+      "sha256": "12d21ab94fed20df92936e33649a1f3425aab0c144c4c38b5bf9b1cd7c142cbd"
+    },
+    {
+      "path": "agents/grok/assets/herdr-agent-state.ps1",
+      "sha256": "f5868cb925780899a912f06e38c5000cca913627556816d4d9b2f8f73e8bda3b"
+    },
+    {
+      "path": "agents/grok/assets/herdr-agent-state.sh",
+      "sha256": "a5c66f3117037341df12e59fbefc5ff9869e092f8766dedf0500629e24006def"
+    },
+    {
+      "path": "agents/grok/detection.toml",
+      "sha256": "618afc3d09d784343fc6c4bcee5801906df2c0fd62a65b447cf5f4b1bd215bb2"
+    },
+    {
+      "path": "agents/grok/integration.toml",
+      "sha256": "eacf1c894261b3b61358a69e0c0e93ee7c2bb068c5fa3f378f17ddf9dea390bd"
+    },
+    {
+      "path": "agents/grok/process.toml",
+      "sha256": "8c5eef68d135332fe5661d777694964965239b92f8ebe0c93a8d13c97493c451"
+    },
+    {
+      "path": "agents/grok/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/hermes/agent.toml",
+      "sha256": "9f81f2c382958d3bad1f09f15c1c98555ec6208146eefda5465bc20a8bcd9ace"
+    },
+    {
+      "path": "agents/hermes/assets/__init__.py",
+      "sha256": "62884f3e0f714f78bfc42722cddef3dd32a0a184502864d79d113329563deed2"
+    },
+    {
+      "path": "agents/hermes/assets/plugin.yaml",
+      "sha256": "e1c775a6d6ccad2f8e6e0566a0aa61aeef9b8141f59d8a742a77c6951a261170"
+    },
+    {
+      "path": "agents/hermes/detection.toml",
+      "sha256": "533d21b65dea3a0c60c25d0475c9c900d28a5712b6392669a7788f75de2b6e85"
+    },
+    {
+      "path": "agents/hermes/integration.toml",
+      "sha256": "938eae966f96a9cba98f23beb477a2a8601b5a04c91627d24170ca858bd07225"
+    },
+    {
+      "path": "agents/hermes/process.toml",
+      "sha256": "a6c9f941374841b02d90045dca7883eea16256c0ef8d8700570c92e15650a84c"
+    },
+    {
+      "path": "agents/hermes/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/kilo/agent.toml",
+      "sha256": "c2e7a7d973c10d31346136a77e06787e04bc7711a6e970e7d5f98747224b49d8"
+    },
+    {
+      "path": "agents/kilo/assets/herdr-agent-state.js",
+      "sha256": "386e7605e0bfb39b71bc9c48509c54e9964e71097d3b35a44f4a509af421469d"
+    },
+    {
+      "path": "agents/kilo/detection.toml",
+      "sha256": "70f0ba4e58bc141fe69d7024013f973cd16e8616393079318914d70afeefef3b"
+    },
+    {
+      "path": "agents/kilo/integration.toml",
+      "sha256": "1ec8cb69e3ba110209232a2e0e01dbb9c3f8f96df3a710e2f5d134d9ace5fca8"
+    },
+    {
+      "path": "agents/kilo/process.toml",
+      "sha256": "ef00463dda268462a7424d16a0c55c7375e608a23b8d2a6e5e68575fd9984c39"
+    },
+    {
+      "path": "agents/kilo/resume.toml",
+      "sha256": "b8b5077fd1fa78f68d5ae0b0b6b6e68ff8d385581a77ee79000329992383d383"
+    },
+    {
+      "path": "agents/kimi/agent.toml",
+      "sha256": "bf2893d438714960644507a1831afdfe23f073fdad916caef263fb34edf9846c"
+    },
+    {
+      "path": "agents/kimi/assets/herdr-agent-state.ps1",
+      "sha256": "2b76be7c2b7be2e3a5a746ab7949ebec77d451914d50f6f7ca5348c03d824f32"
+    },
+    {
+      "path": "agents/kimi/assets/herdr-agent-state.sh",
+      "sha256": "f28cf38a2b1e46b654b33e4dff72bdafbd24b6d58b37f7c0f538c2a096410f00"
+    },
+    {
+      "path": "agents/kimi/detection.toml",
+      "sha256": "ede08c0d2d5024f7606dc0a1b2f7a9c6a0ebb99f3b6c58ca6757049856d06e05"
+    },
+    {
+      "path": "agents/kimi/integration.toml",
+      "sha256": "2ec751582697cf1a575cca0f53c0a947b3637f1b97eddf75388c3b78761cc53a"
+    },
+    {
+      "path": "agents/kimi/process.toml",
+      "sha256": "6667e09624d84f367232b4edd3c397f2b853285ef05ac1bb0b9c8336fbaca56e"
+    },
+    {
+      "path": "agents/kimi/resume.toml",
+      "sha256": "b8b5077fd1fa78f68d5ae0b0b6b6e68ff8d385581a77ee79000329992383d383"
+    },
+    {
+      "path": "agents/kiro/agent.toml",
+      "sha256": "96fa9bf08ac360c51eac513960f8b6fc959a60286200a972f0e5199ab005e67e"
+    },
+    {
+      "path": "agents/kiro/detection.toml",
+      "sha256": "2b56fc18c478e2730acd9f8cbfecb69a2496258f8f20ef157813b09fa74c6e37"
+    },
+    {
+      "path": "agents/kiro/process.toml",
+      "sha256": "a4db775feeb1389b6d4903d2a34027617ca144101f61640f19cf24338873dd81"
+    },
+    {
+      "path": "agents/maki/agent.toml",
+      "sha256": "f07628da0adebe75d6eabc4d1ba25c63e288dd68124e7dd31d72ecd82a09d690"
+    },
+    {
+      "path": "agents/maki/detection.toml",
+      "sha256": "3b392170ee3082051266509f575a4640bde8d693b2f37ecf52157a641bc75b28"
+    },
+    {
+      "path": "agents/maki/process.toml",
+      "sha256": "b33066eeab5b457f79150a4c4400fd4acb79ee7966490ecc459ff8ff0e009ad8"
+    },
+    {
+      "path": "agents/mastracode/agent.toml",
+      "sha256": "920a7af86cff356c6798f7f17edfb8a219a0041755477377844e0665f41a0ea7"
+    },
+    {
+      "path": "agents/mastracode/assets/herdr-agent-state.ps1",
+      "sha256": "36672725e132737d0659c8f906380f9fb033c68b70f646d0dc0197cbefc6bf73"
+    },
+    {
+      "path": "agents/mastracode/assets/herdr-agent-state.sh",
+      "sha256": "f5d9dc5c99458a5872ccb437bbd92d7b2d5c6d5469510a6b39b95ecc671ba94a"
+    },
+    {
+      "path": "agents/mastracode/integration.toml",
+      "sha256": "3e1a69b412829340024a6bb40ee175fa40bd02b57f02885ca2203b1495c1040e"
+    },
+    {
+      "path": "agents/mastracode/process.toml",
+      "sha256": "80f6d36fba74cbccf5fb5064e75b9c52c3f6faffd0276f4b13283e59814d1cd0"
+    },
+    {
+      "path": "agents/mastracode/resume.toml",
+      "sha256": "7fc3fc89e814db6643ab85d1f36a7962e0e176fe84129fc7e9393d3041f84a02"
+    },
+    {
+      "path": "agents/muse/agent.toml",
+      "sha256": "9e568aabebcf366f3ec8a3a0610aa8b9921ba883bee5f2ff8be626949c7b2dfe"
+    },
+    {
+      "path": "agents/muse/detection.toml",
+      "sha256": "b69c4d87fa9c19e3e6453b706fbe39c98a8b33ffbaa48e8cd5ae6751e9615074"
+    },
+    {
+      "path": "agents/muse/process.toml",
+      "sha256": "e833f42575212623a0eb9229aeadcafddaa0a58fc7f9cfb7d956fd562a5863d8"
+    },
+    {
+      "path": "agents/omp/agent.toml",
+      "sha256": "95073a584455fc07d17cffa55dae09c9f5e13797868c80b3426a58a33a4ae81f"
+    },
+    {
+      "path": "agents/omp/assets/herdr-agent-state.ts",
+      "sha256": "4cfd1e32da1f15efba0521c52fee3ba4b23c36dc236a77aea922220fdefa024e"
+    },
+    {
+      "path": "agents/omp/integration.toml",
+      "sha256": "8381007563ac40afa262a2e05e62538685a0dffcfc7e48e99332ab0da05986d8"
+    },
+    {
+      "path": "agents/omp/process.toml",
+      "sha256": "22566d1dbee7bd5c7afdb770774e9fb693b2569063a4816cb425908bea24b76d"
+    },
+    {
+      "path": "agents/omp/resume.toml",
+      "sha256": "7f6349d45ad0a8be051fa84c48c1db7836e230a57c86868b39715d14e901739a"
+    },
+    {
+      "path": "agents/opencode/agent.toml",
+      "sha256": "a8ac0b09b2d6ff41e81345a2dfcbfc8b2074a1622af2d23ebea9923f6edb1678"
+    },
+    {
+      "path": "agents/opencode/assets/herdr-agent-state.js",
+      "sha256": "754c596c5b809ef0427859ea463923cd1989b43f9baf21be34f4b6399e050342"
+    },
+    {
+      "path": "agents/opencode/assets/herdr-tui-session.js",
+      "sha256": "1b636d770ec9fed34e1735b232f6e5f94d90fa6d709d6a4aa8a542bf5f04e3fe"
+    },
+    {
+      "path": "agents/opencode/detection.toml",
+      "sha256": "cb7ec791eb082a4da0f334804f2b361aa1a0a8bfc80e4a280dcfae20942402e3"
+    },
+    {
+      "path": "agents/opencode/integration.toml",
+      "sha256": "7b66796d33f61fb2c99baea7cba15f9404fb310e60dd887b3b68d5ac5991a7d5"
+    },
+    {
+      "path": "agents/opencode/process.toml",
+      "sha256": "bb2da1f7482e89b57c878cfe4f80f55612fb9bb3456a65fa7f036bfbb9ce8b90"
+    },
+    {
+      "path": "agents/opencode/resume.toml",
+      "sha256": "b8b5077fd1fa78f68d5ae0b0b6b6e68ff8d385581a77ee79000329992383d383"
+    },
+    {
+      "path": "agents/pi/agent.toml",
+      "sha256": "a1f263905a6753d6346a8f57f3b7fe75038197e1b726b4d59c6446645cab8fd1"
+    },
+    {
+      "path": "agents/pi/assets/herdr-agent-state.ts",
+      "sha256": "2c5272d732b475bbf91a027203b1f98d25fe43d2c1402530a442b288aeaca1e4"
+    },
+    {
+      "path": "agents/pi/detection.toml",
+      "sha256": "d852f52d637040fad207a395928dc190d99d24b6c72d6e1b7fbbf4487a416e40"
+    },
+    {
+      "path": "agents/pi/integration.toml",
+      "sha256": "6d431e1950ca31951e53b82dcfaa0d512c1a1399d58dee1ee2173ba88f101420"
+    },
+    {
+      "path": "agents/pi/process.toml",
+      "sha256": "2f4524afc2870aa80ae2f03df5985b8980f73b4376ab5ab361c3a8aecc9623da"
+    },
+    {
+      "path": "agents/pi/resume.toml",
+      "sha256": "fcfbb3ceab9b91e51cf851c7f414a643c99965b38a21ea7392cf498d4fd6decb"
+    },
+    {
+      "path": "agents/qodercli/agent.toml",
+      "sha256": "ccae165817356ab60ce5da26480cb98a66a78de0cdd7ef38e147e5040bc237bc"
+    },
+    {
+      "path": "agents/qodercli/assets/herdr-agent-state.ps1",
+      "sha256": "6558902b7778d32702a8a2a375b2bd004ae3389de37f296e52cb0d20e6129577"
+    },
+    {
+      "path": "agents/qodercli/assets/herdr-agent-state.sh",
+      "sha256": "fbcca789b1488b6ac6092e1143655184fb5c321207182b31ac17324b23e13132"
+    },
+    {
+      "path": "agents/qodercli/detection.toml",
+      "sha256": "2089f70fc78c6576fd7128a00f4e7eedb85be81bde9ed73301b3b88000048961"
+    },
+    {
+      "path": "agents/qodercli/integration.toml",
+      "sha256": "2b465f4d1a393eda6c801aa3fa466d2746d3a08496e68402b057a62535481ef8"
+    },
+    {
+      "path": "agents/qodercli/process.toml",
+      "sha256": "3512aa956b4174b91e7e8f1b3213c6405cc1d33221970ce07d721bf6a80bbd3e"
+    },
+    {
+      "path": "agents/qodercli/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    },
+    {
+      "path": "agents/qwen/agent.toml",
+      "sha256": "ee7d732194265d70ff8836b6d7069ce88de6d910704f82890e8541b87c7cd6a7"
+    },
+    {
+      "path": "agents/qwen/assets/herdr-agent-session.ps1",
+      "sha256": "f3207f32d99a3517e0560de1d3352e6118e67dfea18fc31a44ff0394a0dfeafd"
+    },
+    {
+      "path": "agents/qwen/assets/herdr-agent-session.sh",
+      "sha256": "db424e03eca6bef24f3e04cd41292128acf3b8bfd0e97d838a577b39da660075"
+    },
+    {
+      "path": "agents/qwen/detection.toml",
+      "sha256": "b27aa456af228e8a4ceac74f0dd431c33b21473b69314fc672a7fba474e2a7fe"
+    },
+    {
+      "path": "agents/qwen/integration.toml",
+      "sha256": "7cda658fbf6c1f767bf0a59e36158f31cbc337ab4a2b7c0c00560cb9b2e78842"
+    },
+    {
+      "path": "agents/qwen/process.toml",
+      "sha256": "34edea01c7b645aab8812ded54bfb00d595de95b2196ace13ec9d9af70aed683"
+    },
+    {
+      "path": "agents/qwen/resume.toml",
+      "sha256": "823de1f80cbd9f050754a421ed8b6d231cd3fc6204e39beb9f6d75723debaeba"
+    }
+  ]
+}

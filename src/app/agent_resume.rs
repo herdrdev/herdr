@@ -230,6 +230,8 @@ impl App {
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, Vec::new()))
         else {
+            self.pending_agent_resume_deadline =
+                Some(Instant::now() + super::PENDING_AGENT_RESUME_THEME_WAIT);
             return false;
         };
 
@@ -254,11 +256,10 @@ impl App {
                     terminal = %terminal_id,
                     agent = %plan.agent,
                     err = %err,
-                    "failed to start shell for deferred agent resume"
+                    "failed to start shell for deferred agent resume; keeping resume queued"
                 );
-                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                    terminal.clear_agent_runtime_identity_after_respawn();
-                }
+                self.pending_agent_resume_deadline =
+                    Some(Instant::now() + super::PENDING_AGENT_RESUME_THEME_WAIT);
                 return false;
             }
         };
@@ -271,14 +272,40 @@ impl App {
                 terminal = %terminal_id,
                 agent = %plan.agent,
                 err = %err,
-                "failed to send deferred agent resume command to shell"
+                "failed to send deferred agent resume command to shell; keeping resume queued"
             );
             runtime.shutdown();
+            self.pending_agent_resume_deadline =
+                Some(Instant::now() + super::PENDING_AGENT_RESUME_THEME_WAIT);
             return false;
         }
 
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            if let Ok(agent) = crate::detect::Agent::parse(&plan.agent) {
+                let injected_at = Instant::now();
+                if terminal.managed_agent_kind() == Some(agent) {
+                    terminal.mark_queued_agent_injected(
+                        injected_at,
+                        super::agents::AGENT_START_SETTLE_DELAY,
+                        super::agents::DEFAULT_AGENT_START_TIMEOUT,
+                    );
+                } else {
+                    terminal.begin_managed_agent_with_readiness(
+                        None,
+                        agent,
+                        plan.strict_input_readiness,
+                        injected_at,
+                        super::agents::AGENT_START_SETTLE_DELAY,
+                        super::agents::DEFAULT_AGENT_START_TIMEOUT,
+                    );
+                }
+                let recipe = terminal.pinned_agent_resume_recipe.clone().or_else(|| {
+                    crate::agents::bundled_profile(&plan.agent)
+                        .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
+                });
+                terminal.admit_agent_resume_recipe(agent, recipe, injected_at);
+            }
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
         }
@@ -402,6 +429,7 @@ mod tests {
             agent: "codex".into(),
             argv: marker_resume_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+            strict_input_readiness: false,
         });
 
         assert!(!app.start_pending_agent_resumes(false));
@@ -460,6 +488,62 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn failed_deferred_spawn_keeps_cold_restore_queued_without_readiness_deadline() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("restored");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.view.pane_infos = workspace.tabs[0]
+            .layout
+            .panes(ratatui::layout::Rect::new(0, 0, 100, 30));
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 100, 30);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
+            foreground: Some(crate::terminal_theme::RgbColor {
+                r: 220,
+                g: 220,
+                b: 220,
+            }),
+            background: Some(crate::terminal_theme::RgbColor {
+                r: 20,
+                g: 20,
+                b: 20,
+            }),
+            ..Default::default()
+        };
+        app.state.default_shell = "/definitely/missing/herdr-shell".into();
+        let terminal = app
+            .state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist");
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "codex".into(),
+            argv: long_running_test_argv(),
+            dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+            strict_input_readiness: false,
+        });
+        terminal.queue_managed_agent(Some("reviewer".into()), crate::detect::Agent::Codex, false);
+
+        let before = Instant::now();
+        app.pending_agent_resume_deadline = Some(before);
+        assert!(!app.start_pending_agent_resumes(false));
+        assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+        let terminal = app.state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.pending_agent_resume_plan.is_some());
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
+        assert!(app
+            .pending_agent_resume_deadline
+            .is_some_and(|deadline| deadline > before));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn pending_agent_resume_can_launch_after_theme_wait_expires() {
         let mut app = test_app();
         let workspace = crate::workspace::Workspace::test_new("restored");
@@ -480,6 +564,7 @@ mod tests {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+            strict_input_readiness: false,
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -531,6 +616,7 @@ mod tests {
                 agent: "codex".into(),
                 argv: long_running_test_argv(),
                 dedupe_key: format!("herdr:codex\0codex\0Id\0{terminal_id}"),
+                strict_input_readiness: false,
             });
         }
         app.pending_agent_resume_deadline =
@@ -595,6 +681,7 @@ mod tests {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0inactive-tab-session".into(),
+            strict_input_readiness: false,
         });
 
         assert!(app.start_pending_agent_resumes(false));
@@ -656,6 +743,7 @@ mod tests {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0zoom-hidden-session".into(),
+            strict_input_readiness: false,
         });
 
         assert!(app.start_pending_agent_resumes(false));
@@ -714,6 +802,7 @@ mod tests {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+            strict_input_readiness: false,
         });
 
         app.sync_pending_agent_resume_deadline(std::time::Instant::now());
@@ -775,6 +864,7 @@ mod tests {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+            strict_input_readiness: false,
         });
 
         assert!(app.start_pending_agent_resumes(false));

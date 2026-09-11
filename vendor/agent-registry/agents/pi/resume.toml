@@ -1,0 +1,4 @@
+accepted_references = ["path", "id"]
+preferred_reference = "path"
+strategy = "separate_flag"
+token = "--session"

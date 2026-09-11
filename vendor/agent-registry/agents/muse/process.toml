@@ -1,0 +1,2 @@
+names = ["muse", "muse-code", "muse-cli"]
+versioned_basename_prefix = "muse-bin-"

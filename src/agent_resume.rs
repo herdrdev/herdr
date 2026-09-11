@@ -2,6 +2,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::session::{ReportReferencePreference, SessionProfile};
+
 const MAX_SESSION_ID_LEN: usize = 512;
 const MAX_SESSION_PATH_LEN: usize = 4096;
 
@@ -23,6 +25,8 @@ pub struct AgentResumePlan {
     pub agent: String,
     pub argv: Vec<String>,
     pub dedupe_key: String,
+    /// Pinned from the same immutable registry snapshot as `argv`.
+    pub strict_input_readiness: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +34,157 @@ pub struct PersistedAgentSession {
     pub source: String,
     pub agent: String,
     pub session_ref: AgentSessionRef,
+}
+
+/// Instructions captured from a single registry generation, never inferred from an executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinnedAgentResumeRecipe {
+    pub agent: String,
+    pub executable: String,
+    pub strategy: String,
+    pub token: String,
+    pub accepted_references: Vec<AgentSessionRefKind>,
+    pub preferred_reference: AgentSessionRefKind,
+}
+
+/// Live capability is distinct from saved conversation metadata. `recipe: None`
+/// means this acquired process has no resume capability, not "look it up later".
+#[derive(Debug, Clone)]
+pub(crate) struct LiveAgentResumeBinding {
+    pub agent: crate::detect::Agent,
+    pub recipe: Option<PinnedAgentResumeRecipe>,
+    pub process: Option<(u32, crate::platform::ForegroundProcess)>,
+    pub process_identity: Option<crate::platform::ProcessIdentity>,
+    pub observed_at: std::time::Instant,
+    pub managed_admission: bool,
+    pub report_proof: Option<(crate::platform::ProcessIdentity, AgentSessionRef, bool)>,
+}
+
+impl PinnedAgentResumeRecipe {
+    pub(crate) fn unavailable(agent: &str) -> Self {
+        Self {
+            agent: agent.into(),
+            executable: String::new(),
+            strategy: "unavailable".into(),
+            token: String::new(),
+            accepted_references: Vec::new(),
+            preferred_reference: AgentSessionRefKind::Id,
+        }
+    }
+
+    pub(crate) fn select_report_reference(
+        &self,
+        id: Option<String>,
+        path: Option<String>,
+    ) -> Option<AgentSessionRef> {
+        let id = id
+            .and_then(AgentSessionRef::id)
+            .filter(|_| self.accepted_references.contains(&AgentSessionRefKind::Id));
+        let path = path.and_then(AgentSessionRef::path).filter(|_| {
+            self.accepted_references
+                .contains(&AgentSessionRefKind::Path)
+        });
+        match self.preferred_reference {
+            AgentSessionRefKind::Id => id,
+            AgentSessionRefKind::Path => path.or(id),
+        }
+    }
+
+    pub(crate) fn capture(profile: &crate::agents::AgentProfile) -> Option<Self> {
+        use crate::agents::source::ResumeStrategy;
+        let session = profile.session()?;
+        Some(Self {
+            agent: profile.canonical_id().into(),
+            executable: profile.launch().executable().into(),
+            strategy: match session.strategy {
+                ResumeStrategy::SeparateFlag => "separate_flag",
+                ResumeStrategy::JoinedFlag => "joined_flag",
+                ResumeStrategy::Subcommand => "subcommand",
+            }
+            .into(),
+            token: session.token.clone(),
+            accepted_references: [AgentSessionRefKind::Id, AgentSessionRefKind::Path]
+                .into_iter()
+                .filter(|kind| session_profile_accepts_kind(session, *kind))
+                .collect(),
+            preferred_reference: match session.report_preference() {
+                ReportReferencePreference::IdOnly => AgentSessionRefKind::Id,
+                ReportReferencePreference::AbsolutePathThenId => AgentSessionRefKind::Path,
+            },
+        })
+    }
+}
+
+pub(crate) fn recipe_for_report(source: &str, agent: &str) -> Option<PinnedAgentResumeRecipe> {
+    let registry = crate::agents::registry();
+    let (profile, _) = registry.session_profile_for_exact_report_pair(source, agent)?;
+    PinnedAgentResumeRecipe::capture(profile)
+}
+
+/// Metadata is retained even when its package disappears. Only planning grants execution.
+pub(crate) fn retained_snapshot_session(
+    source: &str,
+    agent: &str,
+    kind: AgentSessionRefKind,
+    value: &str,
+) -> Option<PersistedAgentSession> {
+    crate::detect::Agent::parse(agent).ok()?;
+    if source != "herdr:launch" && !crate::agents::bundled_report_pair(source, agent) {
+        return None;
+    }
+    Some(PersistedAgentSession {
+        source: source.into(),
+        agent: agent.into(),
+        session_ref: match kind {
+            AgentSessionRefKind::Id => AgentSessionRef::id(value)?,
+            AgentSessionRefKind::Path => AgentSessionRef::path(value)?,
+        },
+    })
+}
+
+pub(crate) fn pinned_plan(
+    registry: &crate::agents::RegistrySnapshot,
+    session: &PersistedAgentSession,
+    pinned: Option<&PinnedAgentResumeRecipe>,
+) -> Result<AgentResumePlan, &'static str> {
+    let profile = registry
+        .profile_by_id(&session.agent)
+        .ok_or("agent package is missing")?;
+    if !profile.is_startable() {
+        return Err("agent package is not startable");
+    }
+    let active = PinnedAgentResumeRecipe::capture(profile).ok_or("agent resume is unavailable")?;
+    let baseline;
+    let expected = match pinned {
+        Some(pinned) => pinned,
+        None => {
+            baseline = crate::agents::bundled_profile(&session.agent)
+                .and_then(PinnedAgentResumeRecipe::capture)
+                .ok_or("unpinned session is not a bundled agent")?;
+            &baseline
+        }
+    };
+    if &active != expected {
+        return Err("agent resume recipe changed; explicit launch required");
+    }
+    if !active
+        .accepted_references
+        .contains(&session.session_ref.kind)
+    {
+        return Err("agent resume reference kind is unsupported");
+    }
+    Ok(AgentResumePlan {
+        agent: session.agent.clone(),
+        argv: profile
+            .session()
+            .ok_or("agent resume is unavailable")?
+            .argv(&active.executable, &session.session_ref.value),
+        dedupe_key: dedupe_key(&session.source, &session.agent, &session.session_ref),
+        strict_input_readiness: crate::detect::manifest::requires_screen_visible_idle(
+            registry,
+            profile.legacy_agent(),
+        ),
+    })
 }
 
 impl AgentSessionRef {
@@ -50,40 +205,78 @@ impl AgentSessionRef {
     }
 }
 
+#[cfg(test)]
 pub fn session_ref_from_report(
     source: &str,
     agent: &str,
     agent_session_id: Option<String>,
-    _agent_session_path: Option<String>,
+    agent_session_path: Option<String>,
 ) -> Option<AgentSessionRef> {
-    if !is_official_agent_source(source, agent) {
-        return None;
-    }
+    let registry = crate::agents::registry();
+    let (_, session) = registry.session_profile_for_exact_report_pair(source, agent)?;
 
-    if agent == "pi" || agent == "omp" {
-        return _agent_session_path
+    match session.report_preference() {
+        ReportReferencePreference::IdOnly => agent_session_id.and_then(AgentSessionRef::id),
+        ReportReferencePreference::AbsolutePathThenId => agent_session_path
             .and_then(AgentSessionRef::path)
-            .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
+            .or_else(|| agent_session_id.and_then(AgentSessionRef::id)),
     }
-
-    agent_session_id.and_then(AgentSessionRef::id)
 }
 
+#[cfg(test)]
 pub fn persisted_session_from_launch_args(
     agent: crate::detect::Agent,
     args: &[String],
 ) -> Option<PersistedAgentSession> {
-    let [command, session_id] = args else {
-        return None;
+    let registry = crate::agents::registry();
+    persisted_session_from_profile_launch_args(registry.profile_by_id(agent.as_str())?, args)
+}
+
+pub(crate) fn persisted_session_from_profile_launch_args(
+    profile: &crate::agents::AgentProfile,
+    args: &[String],
+) -> Option<PersistedAgentSession> {
+    use crate::agents::source::ResumeStrategy;
+    let session = profile.session()?;
+    let value = match (session.strategy, args) {
+        (ResumeStrategy::SeparateFlag | ResumeStrategy::Subcommand, [token, value])
+            if token == &session.token =>
+        {
+            value.as_str()
+        }
+        (ResumeStrategy::JoinedFlag, [arg]) => arg.strip_prefix(&session.token)?,
+        _ => return None,
     };
-    if agent != crate::detect::Agent::Codex || command != "resume" || session_id.starts_with('-') {
+    if value.starts_with('-') {
         return None;
     }
-
+    let session_ref = if session.accepts_path() {
+        AgentSessionRef::path(value).or_else(|| {
+            session
+                .accepts_id()
+                .then(|| AgentSessionRef::id(value))
+                .flatten()
+        })?
+    } else if session.accepts_id() {
+        AgentSessionRef::id(value)?
+    } else {
+        return None;
+    };
+    // Preserve core builtin ownership semantics; packages cannot declare trusted report pairs.
+    let builtin_source = if profile.canonical_id() == "agy" {
+        "herdr:antigravity_cli".into()
+    } else {
+        format!("herdr:{}", profile.canonical_id())
+    };
+    let source = if crate::agents::bundled_report_pair(&builtin_source, profile.canonical_id()) {
+        builtin_source
+    } else {
+        "herdr:launch".into()
+    };
     Some(PersistedAgentSession {
-        source: "herdr:codex".into(),
-        agent: "codex".into(),
-        session_ref: AgentSessionRef::id(session_id.clone())?,
+        source,
+        agent: profile.canonical_id().into(),
+        session_ref,
     })
 }
 
@@ -98,33 +291,31 @@ pub fn normalize_session_start_source(value: Option<String>) -> Option<String> {
 }
 
 pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
-    matches!(
-        (source, agent),
-        ("herdr:claude", "claude")
-            | ("herdr:codex", "codex")
-            | ("herdr:copilot", "copilot")
-            | ("herdr:devin", "devin")
-            | ("herdr:droid", "droid")
-            | ("herdr:qodercli", "qodercli")
-            | ("herdr:qwen", "qwen")
-            | ("herdr:cursor", "cursor")
-            | ("herdr:grok", "grok")
-    )
+    crate::agents::registry().is_reserved_native_state_source(source, agent)
 }
 
+fn session_profile_accepts_kind(session: &SessionProfile, kind: AgentSessionRefKind) -> bool {
+    match kind {
+        AgentSessionRefKind::Id => session.accepts_id(),
+        AgentSessionRefKind::Path => session.accepts_path(),
+    }
+}
+
+#[cfg(test)]
 pub fn session_ref_from_snapshot(
     source: &str,
     agent: &str,
     kind: AgentSessionRefKind,
     value: &str,
 ) -> Option<PersistedAgentSession> {
-    if !is_official_agent_source(source, agent) {
+    let registry = crate::agents::registry();
+    let (_, session) = registry.session_profile_for_exact_report_pair(source, agent)?;
+    if !session_profile_accepts_kind(session, kind) {
         return None;
     }
-    let session_ref = match (agent, kind) {
-        ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
-        (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
-        _ => return None,
+    let session_ref = match kind {
+        AgentSessionRefKind::Id => AgentSessionRef::id(value)?,
+        AgentSessionRefKind::Path => AgentSessionRef::path(value)?,
     };
     Some(PersistedAgentSession {
         source: source.to_string(),
@@ -133,105 +324,23 @@ pub fn session_ref_from_snapshot(
     })
 }
 
+#[cfg(test)]
 pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<AgentResumePlan> {
-    if !is_official_agent_source(source, agent) {
+    let registry = crate::agents::registry();
+    let (profile, session) = registry.session_profile_for_exact_report_pair(source, agent)?;
+    if !session_profile_accepts_kind(session, session_ref.kind) {
         return None;
     }
-
-    let argv = match (source, agent, session_ref.kind) {
-        ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
-            vec![
-                "claude".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
-            vec!["codex".into(), "resume".into(), session_ref.value.clone()]
-        }
-        ("herdr:copilot", "copilot", AgentSessionRefKind::Id) => {
-            vec!["copilot".into(), format!("--resume={}", session_ref.value)]
-        }
-        ("herdr:devin", "devin", AgentSessionRefKind::Id) => {
-            vec!["devin".into(), "--resume".into(), session_ref.value.clone()]
-        }
-        ("herdr:droid", "droid", AgentSessionRefKind::Id) => {
-            vec!["droid".into(), "--resume".into(), session_ref.value.clone()]
-        }
-        ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
-            vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
-        }
-        ("herdr:mastracode", "mastracode", AgentSessionRefKind::Id) => {
-            vec![
-                "mastracode".into(),
-                "--thread".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
-            vec!["pi".into(), "--session".into(), session_ref.value.clone()]
-        }
-        ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
-            // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
-            // `--session` flag, unlike pi.
-            vec!["omp".into(), format!("--resume={}", session_ref.value)]
-        }
-        ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
-            vec![
-                "hermes".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:opencode", "opencode", AgentSessionRefKind::Id) => {
-            vec![
-                "opencode".into(),
-                "--session".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:qodercli", "qodercli", AgentSessionRefKind::Id) => {
-            vec![
-                "qodercli".into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:qwen", "qwen", AgentSessionRefKind::Id) => {
-            vec!["qwen".into(), "--resume".into(), session_ref.value.clone()]
-        }
-        ("herdr:kilo", "kilo", AgentSessionRefKind::Id) => {
-            vec!["kilo".into(), "--session".into(), session_ref.value.clone()]
-        }
-        ("herdr:cursor", "cursor", AgentSessionRefKind::Id) => {
-            vec![
-                if cfg!(windows) {
-                    "cursor-agent.cmd"
-                } else {
-                    "cursor-agent"
-                }
-                .into(),
-                "--resume".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:antigravity_cli", "agy", AgentSessionRefKind::Id) => {
-            vec![
-                "agy".into(),
-                "--conversation".into(),
-                session_ref.value.clone(),
-            ]
-        }
-        ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
-            vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
-        }
-        _ => return None,
-    };
+    let argv = session.argv(profile.launch().executable(), &session_ref.value);
 
     Some(AgentResumePlan {
         agent: agent.to_string(),
         argv,
         dedupe_key: dedupe_key(source, agent, session_ref),
+        strict_input_readiness: crate::detect::manifest::requires_screen_visible_idle(
+            &registry,
+            profile.legacy_agent(),
+        ),
     })
 }
 
@@ -243,26 +352,7 @@ pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> S
 }
 
 pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
-    matches!(
-        (source, agent),
-        ("herdr:claude", "claude")
-            | ("herdr:codex", "codex")
-            | ("herdr:copilot", "copilot")
-            | ("herdr:devin", "devin")
-            | ("herdr:droid", "droid")
-            | ("herdr:kimi", "kimi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:pi", "pi")
-            | ("herdr:hermes", "hermes")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:qodercli", "qodercli")
-            | ("herdr:qwen", "qwen")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:cursor", "cursor")
-            | ("herdr:antigravity_cli", "agy")
-            | ("herdr:grok", "grok")
-    )
+    crate::agents::bundled_report_pair(source, agent)
 }
 
 fn valid_session_id(value: &str) -> bool {
@@ -277,8 +367,96 @@ fn valid_session_path(value: &str) -> bool {
 }
 
 #[cfg(test)]
+pub(crate) fn test_registry(
+    id: &str,
+    executable: &str,
+    strategy: &str,
+    token: &str,
+) -> std::sync::Arc<crate::agents::RegistrySnapshot> {
+    crate::agents::store::snapshot_for_test(vec![
+        (format!("agents/{id}/agent.toml"), format!("schema = 1\nid = '{id}'\nname = '{id}'\naliases = ['novel alias']\nstartable = true\n[launch]\nunix = '{executable}'\nwindows = '{executable}'\n")),
+        (format!("agents/{id}/resume.toml"), format!("accepted_references = ['id']\npreferred_reference = 'id'\nstrategy = '{strategy}'\ntoken = '{token}'\n")),
+    ], 17).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arbitrary_ids_capture_only_closed_explicit_launch_recipes() {
+        for (strategy, token, args) in [
+            (
+                "separate_flag",
+                "--session",
+                vec!["--session".into(), "abc; data".into()],
+            ),
+            (
+                "subcommand",
+                "continue",
+                vec!["continue".into(), "abc; data".into()],
+            ),
+            (
+                "joined_flag",
+                "--thread=",
+                vec!["--thread=abc; data".into()],
+            ),
+        ] {
+            let registry = test_registry("novel-42", "shared-cli", strategy, token);
+            let profile = registry.profile_by_id("novel-42").unwrap();
+            let captured = persisted_session_from_profile_launch_args(profile, &args).unwrap();
+            assert_eq!(captured.source, "herdr:launch");
+            assert_eq!(captured.agent, "novel-42");
+            assert_eq!(captured.session_ref.value, "abc; data");
+            let recipe = PinnedAgentResumeRecipe::capture(profile).unwrap();
+            let plan = pinned_plan(&registry, &captured, Some(&recipe)).unwrap();
+            assert_eq!(plan.argv[0], "shared-cli");
+            assert_eq!(&plan.argv[1..], args);
+            assert!(pinned_plan(&registry, &captured, None).is_err());
+            assert!(registry
+                .profile_for_exact_report_pair("herdr:launch", "novel-42")
+                .is_none());
+            assert!(registry
+                .profile_for_exact_report_pair("herdr:novel-42", "novel-42")
+                .is_none());
+            let mut extra = args.clone();
+            extra.push("--last".into());
+            assert!(persisted_session_from_profile_launch_args(profile, &extra).is_none());
+        }
+    }
+
+    #[test]
+    fn pinned_resume_rejects_recipe_changes_missing_packages_and_unpinned_downgrade() {
+        let original = test_registry("novel-42", "shared-cli", "separate_flag", "--session");
+        let profile = original.profile_by_id("novel-42").unwrap();
+        let session =
+            persisted_session_from_profile_launch_args(profile, &["--session".into(), "id".into()])
+                .unwrap();
+        let recipe = PinnedAgentResumeRecipe::capture(profile).unwrap();
+        for changed in [
+            test_registry("novel-42", "changed-cli", "separate_flag", "--session"),
+            test_registry("novel-42", "shared-cli", "separate_flag", "--resume"),
+            test_registry("novel-42", "shared-cli", "subcommand", "resume"),
+            test_registry("other-package", "shared-cli", "separate_flag", "--session"),
+        ] {
+            assert!(pinned_plan(&changed, &session, Some(&recipe)).is_err());
+        }
+        let mut changed = recipe.clone();
+        changed.accepted_references.push(AgentSessionRefKind::Path);
+        assert!(pinned_plan(&original, &session, Some(&changed)).is_err());
+        assert_eq!(
+            retained_snapshot_session("herdr:launch", "novel-42", AgentSessionRefKind::Id, "id"),
+            Some(session)
+        );
+        let builtin = PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: AgentSessionRef::id("id").unwrap(),
+        };
+        assert!(pinned_plan(&crate::agents::registry(), &builtin, None).is_ok());
+        let changed = test_registry("codex", "codex", "separate_flag", "--session");
+        assert!(pinned_plan(&changed, &builtin, None).is_err());
+    }
 
     fn absolute_test_path(name: &str) -> String {
         std::env::current_dir()
@@ -288,16 +466,57 @@ mod tests {
             .to_string()
     }
 
+    const OFFICIAL_SESSION_PAIRS: [(&str, &str); 17] = [
+        ("herdr:pi", "pi"),
+        ("herdr:claude", "claude"),
+        ("herdr:codex", "codex"),
+        ("herdr:cursor", "cursor"),
+        ("herdr:devin", "devin"),
+        ("herdr:antigravity_cli", "agy"),
+        ("herdr:omp", "omp"),
+        ("herdr:mastracode", "mastracode"),
+        ("herdr:opencode", "opencode"),
+        ("herdr:copilot", "copilot"),
+        ("herdr:kimi", "kimi"),
+        ("herdr:droid", "droid"),
+        ("herdr:grok", "grok"),
+        ("herdr:hermes", "hermes"),
+        ("herdr:kilo", "kilo"),
+        ("herdr:qodercli", "qodercli"),
+        ("herdr:qwen", "qwen"),
+    ];
+
     #[test]
-    fn native_state_reservation_excludes_full_lifecycle_sources() {
-        assert!(is_reserved_native_state_source("herdr:claude", "claude"));
-        assert!(is_reserved_native_state_source("herdr:codex", "codex"));
-        assert!(is_reserved_native_state_source("herdr:devin", "devin"));
-        assert!(!is_reserved_native_state_source("herdr:kimi", "kimi"));
-        assert!(!is_reserved_native_state_source(
-            "herdr:opencode",
-            "opencode"
-        ));
+    fn official_source_identity_requires_every_exact_source_and_canonical_pair() {
+        for (index, (source, agent)) in OFFICIAL_SESSION_PAIRS.into_iter().enumerate() {
+            assert!(is_official_agent_source(source, agent), "{source} {agent}");
+            assert!(!is_official_agent_source("custom:agent", agent));
+
+            let other_agent = OFFICIAL_SESSION_PAIRS[(index + 1) % OFFICIAL_SESSION_PAIRS.len()].1;
+            assert!(!is_official_agent_source(source, other_agent));
+        }
+
+        for (source, alias) in [
+            ("herdr:claude", "claude-code"),
+            ("herdr:cursor", "cursor-agent"),
+            ("herdr:devin", "devin-cli"),
+            ("herdr:antigravity_cli", "antigravity"),
+            ("herdr:mastracode", "mastra-code"),
+            ("herdr:opencode", "open-code"),
+            ("herdr:copilot", "github-copilot"),
+            ("herdr:kimi", "kimi-code"),
+            ("herdr:grok", "grok-build"),
+            ("herdr:hermes", "hermes-agent"),
+            ("herdr:kilo", "kilo-code"),
+            ("herdr:qodercli", "qoder"),
+            ("herdr:qwen", "qwen-code"),
+        ] {
+            assert!(!is_official_agent_source(source, alias), "{source} {alias}");
+        }
+
+        for agent in ["gemini", "cline", "kiro", "amp", "maki"] {
+            assert!(!is_official_agent_source("herdr:custom", agent));
+        }
     }
 
     #[test]
@@ -420,6 +639,16 @@ mod tests {
         );
         assert_eq!(
             plan(
+                "herdr:pi",
+                "pi",
+                &AgentSessionRef::id("pi-session-id").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["pi", "--session", "pi-session-id"]
+        );
+        assert_eq!(
+            plan(
                 "herdr:omp",
                 "omp",
                 &AgentSessionRef::path(&omp_session).unwrap()
@@ -427,6 +656,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["omp", format!("--resume={omp_session}").as_str()]
+        );
+        assert_eq!(
+            plan(
+                "herdr:omp",
+                "omp",
+                &AgentSessionRef::id("omp-session-id").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["omp", "--resume=omp-session-id"]
         );
         assert_eq!(
             plan(
@@ -536,159 +775,110 @@ mod tests {
     }
 
     #[test]
-    fn report_ref_prefers_pi_and_omp_paths_and_validates_values() {
-        let pi_session = absolute_test_path("pi-session.jsonl");
-        let omp_session = absolute_test_path("omp-session.jsonl");
-        let claude_session = absolute_test_path("claude-session");
-        let copilot_session = absolute_test_path("copilot-session");
-        let session_ref = session_ref_from_report(
-            "herdr:pi",
-            "pi",
-            Some("pi-id".into()),
-            Some(pi_session.clone()),
-        )
-        .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
-        assert_eq!(session_ref.value, pi_session);
-
+    fn report_reference_validation_rejects_malformed_values_and_custom_sources() {
         assert!(session_ref_from_report("herdr:pi", "pi", Some("bad\nid".into()), None).is_none());
         assert!(
             session_ref_from_report("herdr:pi", "pi", None, Some("relative.jsonl".into()))
                 .is_none()
         );
         assert!(session_ref_from_report("custom:pi", "pi", Some("pi-id".into()), None).is_none());
+    }
 
-        let session_ref = session_ref_from_report(
-            "herdr:omp",
-            "omp",
-            Some("omp-id".into()),
-            Some(omp_session.clone()),
-        )
-        .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
-        assert_eq!(session_ref.value, omp_session);
+    #[test]
+    fn report_reference_policy_is_id_only_except_for_pi_and_omp_path_preference() {
+        let absolute_path = absolute_test_path("reported-session.jsonl");
 
-        let session_ref =
-            session_ref_from_report("herdr:omp", "omp", Some("omp-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "omp-id");
-        let session_ref = session_ref_from_report(
-            "herdr:omp",
-            "omp",
-            Some("omp-id".into()),
-            Some("relative.jsonl".into()),
-        )
-        .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "omp-id");
-        assert!(
-            session_ref_from_report("herdr:omp", "omp", None, Some("relative.jsonl".into()))
-                .is_none()
-        );
+        for (source, agent) in OFFICIAL_SESSION_PAIRS {
+            let selected = session_ref_from_report(
+                source,
+                agent,
+                Some(format!("{agent}-id")),
+                Some(absolute_path.clone()),
+            )
+            .unwrap();
+            let path_preferred = matches!(agent, "pi" | "omp");
+            assert_eq!(
+                selected.kind,
+                if path_preferred {
+                    AgentSessionRefKind::Path
+                } else {
+                    AgentSessionRefKind::Id
+                },
+                "{source} {agent}"
+            );
+            let expected_value = if path_preferred {
+                absolute_path.clone()
+            } else {
+                format!("{agent}-id")
+            };
+            assert_eq!(selected.value, expected_value);
+            if !path_preferred {
+                assert!(
+                    session_ref_from_report(source, agent, None, Some(absolute_path.clone()))
+                        .is_none()
+                );
+            }
+        }
 
-        assert!(
-            session_ref_from_report("herdr:claude", "claude", None, Some(claude_session)).is_none()
-        );
+        for (source, agent) in [("herdr:pi", "pi"), ("herdr:omp", "omp")] {
+            let fallback = session_ref_from_report(
+                source,
+                agent,
+                Some(format!("{agent}-id")),
+                Some("relative-session.jsonl".into()),
+            )
+            .unwrap();
+            assert_eq!(fallback.kind, AgentSessionRefKind::Id);
+            assert_eq!(fallback.value, format!("{agent}-id"));
+        }
+    }
 
-        let session_ref =
-            session_ref_from_report("herdr:copilot", "copilot", Some("copilot-id".into()), None)
-                .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "copilot-id");
-        assert!(
-            session_ref_from_report("herdr:copilot", "copilot", None, Some(copilot_session))
-                .is_none()
-        );
+    #[test]
+    fn snapshot_reference_kinds_match_the_exact_session_capability_matrix() {
+        let absolute_path = absolute_test_path("snapshot-session.jsonl");
 
-        let session_ref =
-            session_ref_from_report("herdr:devin", "devin", Some("devin-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "devin-id");
+        for (source, agent) in OFFICIAL_SESSION_PAIRS {
+            assert!(session_ref_from_snapshot(
+                source,
+                agent,
+                AgentSessionRefKind::Id,
+                "session-id"
+            )
+            .is_some());
+            assert_eq!(
+                session_ref_from_snapshot(source, agent, AgentSessionRefKind::Path, &absolute_path)
+                    .is_some(),
+                matches!(agent, "pi" | "omp"),
+                "{source} {agent}"
+            );
+        }
 
-        let session_ref =
-            session_ref_from_report("herdr:droid", "droid", Some("droid-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "droid-id");
-        assert!(session_ref_from_report(
-            "herdr:droid",
-            "droid",
-            None,
-            Some("/tmp/droid-session".into())
+        assert!(session_ref_from_snapshot(
+            "custom:pi",
+            "pi",
+            AgentSessionRefKind::Id,
+            "session-id"
         )
         .is_none());
-
-        let session_ref =
-            session_ref_from_report("herdr:kimi", "kimi", Some("kimi-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "kimi-id");
-
-        let session_ref = session_ref_from_report(
-            "herdr:mastracode",
-            "mastracode",
-            Some("mastracode-id".into()),
-            None,
+        assert!(session_ref_from_snapshot(
+            "herdr:qwen",
+            "qwen-code",
+            AgentSessionRefKind::Id,
+            "session-id"
         )
-        .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "mastracode-id");
-
-        let session_ref =
-            session_ref_from_report("herdr:kilo", "kilo", Some("kilo-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "kilo-id");
-
-        let session_ref =
-            session_ref_from_report("herdr:qodercli", "qodercli", Some("qoder-id".into()), None)
-                .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "qoder-id");
-
-        let session_ref =
-            session_ref_from_report("herdr:qwen", "qwen", Some("qwen-id".into()), None).unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "qwen-id");
-
-        let session_ref =
-            session_ref_from_report("herdr:antigravity_cli", "agy", Some("agy-id".into()), None)
-                .unwrap();
-        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
-        assert_eq!(session_ref.value, "agy-id");
+        .is_none());
     }
 
     #[test]
     fn normalize_session_start_source_allows_known_values() {
-        assert_eq!(
-            normalize_session_start_source(Some("startup".into())),
-            Some("startup".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("resume".into())),
-            Some("resume".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("clear".into())),
-            Some("clear".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("compact".into())),
-            Some("compact".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("branch".into())),
-            Some("branch".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("new".into())),
-            Some("new".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("fork".into())),
-            Some("fork".into())
-        );
-        assert_eq!(
-            normalize_session_start_source(Some("select".into())),
-            Some("select".into())
-        );
+        for source in [
+            "startup", "resume", "clear", "compact", "branch", "new", "fork", "select",
+        ] {
+            assert_eq!(
+                normalize_session_start_source(Some(source.into())),
+                Some(source.into())
+            );
+        }
         assert_eq!(
             normalize_session_start_source(Some(" resume ".into())),
             Some("resume".into())
@@ -716,97 +906,18 @@ mod tests {
     }
 
     #[test]
-    fn planner_rejects_path_refs_for_id_only_agents() {
-        let hermes_session = absolute_test_path("hermes-session");
-        let opencode_session = absolute_test_path("opencode-session");
-        let kilo_session = absolute_test_path("kilo-session");
-        let copilot_session = absolute_test_path("copilot-session");
-        let devin_session = absolute_test_path("devin-session");
-        assert!(plan(
-            "herdr:hermes",
-            "hermes",
-            &AgentSessionRef::path(&hermes_session).unwrap()
-        )
-        .is_none());
-        assert!(plan(
-            "herdr:opencode",
-            "opencode",
-            &AgentSessionRef::path(&opencode_session).unwrap()
-        )
-        .is_none());
-        assert!(plan(
-            "herdr:kilo",
-            "kilo",
-            &AgentSessionRef::path(&kilo_session).unwrap()
-        )
-        .is_none());
-        assert!(plan(
-            "herdr:copilot",
-            "copilot",
-            &AgentSessionRef::path(&copilot_session).unwrap()
-        )
-        .is_none());
-        assert!(plan(
-            "herdr:devin",
-            "devin",
-            &AgentSessionRef::path(&devin_session).unwrap()
-        )
-        .is_none());
-        assert!(session_ref_from_snapshot(
-            "herdr:mastracode",
-            "mastracode",
-            AgentSessionRefKind::Id,
-            "mastracode-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:hermes",
-            "hermes",
-            AgentSessionRefKind::Id,
-            "hermes-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:opencode",
-            "opencode",
-            AgentSessionRefKind::Id,
-            "opencode-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:kilo",
-            "kilo",
-            AgentSessionRefKind::Id,
-            "kilo-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:copilot",
-            "copilot",
-            AgentSessionRefKind::Id,
-            "copilot-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:devin",
-            "devin",
-            AgentSessionRefKind::Id,
-            "devin-session"
-        )
-        .is_some());
-        assert!(session_ref_from_snapshot(
-            "herdr:antigravity_cli",
-            "agy",
-            AgentSessionRefKind::Id,
-            "agy-session"
-        )
-        .is_some());
-        let agy_session = absolute_test_path("agy-session");
-        assert!(plan(
-            "herdr:antigravity_cli",
-            "agy",
-            &AgentSessionRef::path(&agy_session).unwrap()
-        )
-        .is_none());
+    fn planner_rejects_path_refs_for_every_id_only_agent() {
+        let absolute_path = absolute_test_path("id-only-session");
+        let session_ref = AgentSessionRef::path(absolute_path).unwrap();
+
+        for (source, agent) in OFFICIAL_SESSION_PAIRS {
+            if matches!(agent, "pi" | "omp") {
+                continue;
+            }
+            assert!(
+                plan(source, agent, &session_ref).is_none(),
+                "{source} {agent}"
+            );
+        }
     }
 }

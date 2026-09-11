@@ -1,0 +1,26 @@
+cli_name = "claude"
+aliases = []
+
+[commands]
+unix = ["claude"]
+windows = ["claude"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 9
+windows = 9
+
+[[assets]]
+path = "assets/herdr-agent-state.ps1"
+platform = "windows"
+role = "reporter"
+install_name = "herdr-agent-state.ps1"
+
+[[assets]]
+path = "assets/herdr-agent-state.sh"
+platform = "unix"
+role = "reporter"
+install_name = "herdr-agent-state.sh"

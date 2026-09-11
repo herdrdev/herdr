@@ -1,0 +1,26 @@
+cli_name = "hermes"
+aliases = []
+
+[commands]
+unix = ["hermes"]
+windows = ["hermes"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 5
+windows = 5
+
+[[assets]]
+path = "assets/__init__.py"
+platform = "all"
+role = "reporter"
+install_name = "__init__.py"
+
+[[assets]]
+path = "assets/plugin.yaml"
+platform = "all"
+role = "manifest"
+install_name = "plugin.yaml"

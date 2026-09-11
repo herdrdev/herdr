@@ -1,0 +1,13 @@
+schema = 1
+id = "maki"
+name = "maki"
+aliases = []
+startable = true
+
+[launch]
+unix = "maki"
+windows = "maki"
+
+[sound]
+key = "maki"
+default = "default"

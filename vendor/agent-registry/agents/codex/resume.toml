@@ -1,0 +1,4 @@
+accepted_references = ["id"]
+preferred_reference = "id"
+strategy = "subcommand"
+token = "resume"

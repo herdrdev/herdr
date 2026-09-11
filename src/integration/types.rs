@@ -153,8 +153,8 @@ pub(crate) enum IntegrationStatusKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IntegrationRecommendation {
     pub target: crate::api::schema::IntegrationTarget,
-    pub label: &'static str,
-    pub command: &'static str,
+    pub label: String,
+    pub command: String,
     pub available: bool,
     pub path: PathBuf,
     pub state: IntegrationStatusKind,

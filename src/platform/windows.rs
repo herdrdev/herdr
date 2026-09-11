@@ -328,9 +328,7 @@ pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::i
     ))
 }
 
-pub(crate) fn create_remote_ssh_config_file(
-    path: &std::path::Path,
-) -> std::io::Result<std::fs::File> {
+pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -531,6 +529,7 @@ struct CachedForegroundSelection {
 
 #[derive(Debug, Default)]
 struct ForegroundSelectionCache {
+    registry_generation: Option<u64>,
     entries: HashMap<u32, CachedForegroundSelection>,
 }
 
@@ -622,7 +621,7 @@ struct ProcessSnapshot {
     entries: Vec<WindowsProcessEntry>,
     entry_by_pid: HashMap<u32, usize>,
     children_by_parent: HashMap<u32, Vec<usize>>,
-    agent_indices: OnceLock<Vec<usize>>,
+    agent_indices: Mutex<Option<(u64, Arc<Vec<usize>>)>>,
 }
 
 impl ProcessSnapshot {
@@ -640,7 +639,7 @@ impl ProcessSnapshot {
             entries,
             entry_by_pid,
             children_by_parent,
-            agent_indices: OnceLock::new(),
+            agent_indices: Mutex::new(None),
         }
     }
 
@@ -659,14 +658,35 @@ impl ProcessSnapshot {
         signatures
     }
 
-    fn agent_indices(&self) -> &[usize] {
-        self.agent_indices.get_or_init(|| {
+    fn agent_indices(&self, registry: &crate::agents::RegistrySnapshot) -> Arc<Vec<usize>> {
+        {
+            let cached = self
+                .agent_indices
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if let Some((generation, indices)) = &*cached {
+                if *generation == registry.generation {
+                    return indices.clone();
+                }
+            }
+        }
+        // Compile both positive and negative selections against one pinned
+        // registry; never hold a cache/registry lock over the candidate loop.
+        let indices = Arc::new(
             self.entries
                 .iter()
                 .enumerate()
-                .filter_map(|(index, entry)| process_entry_identifies_agent(entry).then_some(index))
-                .collect()
-        })
+                .filter_map(|(index, entry)| {
+                    process_entry_identifies_agent(registry, entry).then_some(index)
+                })
+                .collect(),
+        );
+        *self
+            .agent_indices
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) =
+            Some((registry.generation, Arc::clone(&indices)));
+        indices
     }
 }
 
@@ -1141,7 +1161,15 @@ pub fn current_process_is_detached_server_daemon() -> bool {
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    select_pane_foreground_job_cached(child_pid)
+    foreground_job_with_registry(&crate::agents::registry(), child_pid, None)
+}
+
+pub(crate) fn foreground_job_with_registry(
+    registry: &crate::agents::RegistrySnapshot,
+    child_pid: u32,
+    bound: Option<&super::ForegroundProcess>,
+) -> Option<ForegroundJob> {
+    select_pane_foreground_job_cached(registry, child_pid, bound)
 }
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
@@ -1171,8 +1199,12 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     })
 }
 
-pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    select_pane_foreground_job_cached(child_pid).map(|job| job.process_group_id)
+pub(crate) fn foreground_process_group_id_with_registry(
+    registry: &crate::agents::RegistrySnapshot,
+    child_pid: u32,
+    bound: Option<&super::ForegroundProcess>,
+) -> Option<u32> {
+    select_pane_foreground_job_cached(registry, child_pid, bound).map(|job| job.process_group_id)
 }
 
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
@@ -1183,45 +1215,99 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-fn select_pane_foreground_job_cached(shell_pid: u32) -> Option<ForegroundJob> {
+fn select_pane_foreground_job_cached(
+    registry: &crate::agents::RegistrySnapshot,
+    shell_pid: u32,
+    bound: Option<&super::ForegroundProcess>,
+) -> Option<ForegroundJob> {
     let snapshot = cached_foreground_processes();
+    if let Some(bound) = bound {
+        if let Some(job) = retained_foreground_job(
+            shell_pid,
+            &snapshot,
+            bound,
+            |shell| process_is_git_bash(shell.pid),
+            |entry| process_runtime_marker(entry.pid),
+            |entry| {
+                ProcessIdentity::open(entry.pid).is_some_and(|identity| {
+                    identity.running() && identity.creation_time() == entry.command().creation_time
+                })
+            },
+        ) {
+            return Some(job);
+        }
+    }
     let (job, retry_with_fresh_snapshot) =
-        select_pane_foreground_job_from_snapshot(shell_pid, &snapshot)?;
+        select_pane_foreground_job_from_snapshot(registry, shell_pid, &snapshot)?;
     if !retry_with_fresh_snapshot {
         return Some(job);
     }
 
     let snapshot = fresh_foreground_processes();
-    select_pane_foreground_job_from_snapshot(shell_pid, &snapshot).map(|(job, _)| job)
+    select_pane_foreground_job_from_snapshot(registry, shell_pid, &snapshot).map(|(job, _)| job)
+}
+
+/// Registry reloads change acquisition policy, not ownership of an already
+/// observed live process. Locate the bound PID and revalidate pane ownership
+/// independently of matchers, then leave all new acquisitions to the active
+/// registry. The caller must compare its saved process_identity birth token
+/// before retaining an agent: this observation is not itself identity evidence.
+/// Names/argv may change during one lifetime. Unix has a kernel foreground group
+/// and does not need this fallback.
+fn retained_foreground_job(
+    shell_pid: u32,
+    snapshot: &ProcessSnapshot,
+    bound: &super::ForegroundProcess,
+    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
+    mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
+    is_live: impl FnOnce(&WindowsProcessEntry) -> bool,
+) -> Option<ForegroundJob> {
+    let entry = snapshot.entry(bound.pid)?;
+    if !is_live(entry) {
+        return None;
+    }
+    if entry.pid == shell_pid || process_is_ancestor(shell_pid, entry.pid, snapshot) {
+        return Some(foreground_job_from_entry(entry));
+    }
+    let shell = snapshot.entry(shell_pid)?;
+    if !shell_is_git_bash(shell) {
+        return None;
+    }
+    let marker = runtime_marker(shell).filter(|marker| !marker.is_empty())?;
+    (runtime_marker(entry).as_deref() == Some(marker.as_str()))
+        .then(|| foreground_job_from_entry(entry))
 }
 
 fn select_pane_foreground_job_from_snapshot(
+    registry: &crate::agents::RegistrySnapshot,
     shell_pid: u32,
     snapshot: &ProcessSnapshot,
 ) -> Option<(ForegroundJob, bool)> {
     if let Some(job) = FOREGROUND_SELECTION_CACHE
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .get(shell_pid, snapshot)
+        .get_with_generation(registry.generation, shell_pid, snapshot)
     {
         return Some((job, false));
     }
 
-    let job = select_pane_foreground_job_from_snapshot_uncached(shell_pid, snapshot)?;
+    let job = select_pane_foreground_job_from_snapshot_uncached(registry, shell_pid, snapshot)?;
     let cached = prepare_cached_foreground_selection(shell_pid, snapshot, &job);
     let retry_with_fresh_snapshot = job.process_group_id != shell_pid && cached.is_none();
     FOREGROUND_SELECTION_CACHE
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .remember(shell_pid, cached);
+        .remember_with_generation(registry.generation, shell_pid, cached);
     Some((job, retry_with_fresh_snapshot))
 }
 
 fn select_pane_foreground_job_from_snapshot_uncached(
+    registry: &crate::agents::RegistrySnapshot,
     shell_pid: u32,
     snapshot: &ProcessSnapshot,
 ) -> Option<ForegroundJob> {
-    select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+    select_pane_foreground_job_from_snapshot_with_registry(
+        registry,
         shell_pid,
         snapshot,
         |shell| process_is_git_bash(shell.pid),
@@ -1229,7 +1315,8 @@ fn select_pane_foreground_job_from_snapshot_uncached(
     )
 }
 
-fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+fn select_pane_foreground_job_from_snapshot_with_registry(
+    registry: &crate::agents::RegistrySnapshot,
     shell_pid: u32,
     snapshot: &ProcessSnapshot,
     shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
@@ -1240,7 +1327,7 @@ fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
     let descendants = descendant_entries(shell_pid, snapshot);
     let mut candidates = Vec::new();
     for entry in std::iter::once(shell).chain(descendants) {
-        if process_entry_identifies_agent(entry) {
+        if process_entry_identifies_agent(registry, entry) {
             candidates.push(entry);
         }
     }
@@ -1252,7 +1339,7 @@ fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         return Some(foreground_job_from_entry(shell));
     }
 
-    let escaped_agent_indices = snapshot.agent_indices();
+    let escaped_agent_indices = snapshot.agent_indices(registry);
     if escaped_agent_indices.is_empty() {
         return Some(foreground_job_from_entry(shell));
     }
@@ -1277,14 +1364,38 @@ fn select_pane_foreground_job(
     entries: &[WindowsProcessEntry],
 ) -> Option<ForegroundJob> {
     select_pane_foreground_job_from_snapshot_uncached(
+        &crate::agents::registry(),
         shell_pid,
         &ProcessSnapshot::new(entries.to_vec()),
     )
 }
 
-fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
-    crate::detect::identify_agent(&entry.name).is_some()
-        || crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
+fn process_entry_identifies_agent(
+    registry: &crate::agents::AgentRegistry,
+    entry: &WindowsProcessEntry,
+) -> bool {
+    crate::detect::identify_agent_with_registry(registry, &entry.name).is_some()
+        || crate::detect::identify_agent_in_job_with_registry(
+            registry,
+            &foreground_job_from_entry(entry),
+        )
+        .is_some()
+}
+
+#[cfg(test)]
+fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+    shell_pid: u32,
+    snapshot: &ProcessSnapshot,
+    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
+    runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> Option<ForegroundJob> {
+    select_pane_foreground_job_from_snapshot_with_registry(
+        &crate::agents::registry(),
+        shell_pid,
+        snapshot,
+        shell_is_git_bash,
+        runtime_marker,
+    )
 }
 
 fn foreground_job_from_entry(entry: &WindowsProcessEntry) -> ForegroundJob {
@@ -1488,7 +1599,20 @@ impl CachedForegroundSelection {
 }
 
 impl ForegroundSelectionCache {
-    fn get(&mut self, shell_pid: u32, snapshot: &ProcessSnapshot) -> Option<ForegroundJob> {
+    fn sync_generation(&mut self, generation: u64) {
+        if self.registry_generation != Some(generation) {
+            self.entries.clear();
+            self.registry_generation = Some(generation);
+        }
+    }
+
+    fn get_with_generation(
+        &mut self,
+        generation: u64,
+        shell_pid: u32,
+        snapshot: &ProcessSnapshot,
+    ) -> Option<ForegroundJob> {
+        self.sync_generation(generation);
         if let Some(cached) = self.entries.get_mut(&shell_pid) {
             let current_descendants = descendant_entries(shell_pid, snapshot);
             let topology_matches = current_descendants.len() == cached.descendants.len()
@@ -1517,7 +1641,15 @@ impl ForegroundSelectionCache {
         None
     }
 
-    fn remember(&mut self, shell_pid: u32, cached: Option<CachedForegroundSelection>) {
+    fn remember_with_generation(
+        &mut self,
+        generation: u64,
+        shell_pid: u32,
+        cached: Option<CachedForegroundSelection>,
+    ) {
+        // A computation can finish after another generation has used the cache.
+        // Tag on insertion as well as lookup; never admit mixed-generation entries.
+        self.sync_generation(generation);
         let Some(cached) = cached else {
             self.entries.remove(&shell_pid);
             return;
@@ -1528,6 +1660,16 @@ impl ForegroundSelectionCache {
             self.entries.clear();
         }
         self.entries.insert(shell_pid, cached);
+    }
+
+    #[cfg(test)]
+    fn get(&mut self, shell_pid: u32, snapshot: &ProcessSnapshot) -> Option<ForegroundJob> {
+        self.get_with_generation(1, shell_pid, snapshot)
+    }
+
+    #[cfg(test)]
+    fn remember(&mut self, shell_pid: u32, cached: Option<CachedForegroundSelection>) {
+        self.remember_with_generation(1, shell_pid, cached);
     }
 
     #[cfg(test)]
@@ -1782,6 +1924,10 @@ fn process_runtime_marker(pid: u32) -> Option<String> {
 }
 
 fn process_creation_time(process: HANDLE) -> Option<u64> {
+    process_creation_and_exit_time(process).map(|(created, _)| created)
+}
+
+fn process_creation_and_exit_time(process: HANDLE) -> Option<(u64, u64)> {
     let mut creation_time = FILETIME::default();
     let mut exit_time = FILETIME::default();
     let mut kernel_time = FILETIME::default();
@@ -1798,7 +1944,9 @@ fn process_creation_time(process: HANDLE) -> Option<u64> {
     {
         return None;
     }
-    Some((u64::from(creation_time.dwHighDateTime) << 32) | u64::from(creation_time.dwLowDateTime))
+    let ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    Some((ticks(creation_time), ticks(exit_time)))
 }
 
 fn process_runtime_marker_from_handle(process: HANDLE) -> Option<Option<String>> {
@@ -2002,6 +2150,19 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
             TerminateProcess(process.0, 1);
         }
     }
+}
+
+/// Query only on bound-process acquisition/revalidation, not per process
+/// candidate. The FILETIME birth token is a value, not a retained OS handle.
+pub(crate) fn process_identity(pid: u32) -> Option<super::ProcessIdentity> {
+    if pid == 0 {
+        return None;
+    }
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let (birth_token, exited_at) = process_creation_and_exit_time(process.0)?;
+    // Exit code 259 is legal, so GetExitCodeProcess == STILL_ACTIVE alone is
+    // not proof of liveness. GetProcessTimes reports the actual exit timestamp.
+    (exited_at == 0).then_some(super::ProcessIdentity { pid, birth_token })
 }
 
 pub fn process_exists(pid: u32) -> bool {
@@ -3391,7 +3552,7 @@ mod tests {
             test_entry(50, 98, "claude.exe", &["claude.exe"]),
         ]);
         let mut inspected = Vec::new();
-        assert!(snapshot.agent_indices.get().is_none());
+        assert!(snapshot.agent_indices.lock().unwrap().is_none());
         let marker = |entry: &super::WindowsProcessEntry| match entry.pid {
             12 | 50 => Some("pane-b".to_string()),
             _ => Some("pane-a".to_string()),
@@ -3407,7 +3568,14 @@ mod tests {
             },
         )
         .unwrap();
-        let indices = snapshot.agent_indices.get().unwrap();
+        let indices = snapshot
+            .agent_indices
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
         let second = super::select_pane_foreground_job_from_snapshot_with_runtime_inspection(
             12,
             &snapshot,
@@ -3419,8 +3587,11 @@ mod tests {
         assert_eq!(first.process_group_id, 20);
         assert_eq!(first.processes[0].name, "sh.exe");
         assert_eq!(second.process_group_id, 50);
-        assert_eq!(indices, &[3, 4, 5, 6]);
-        assert!(std::ptr::eq(indices, snapshot.agent_indices.get().unwrap()));
+        assert_eq!(indices.as_slice(), &[3, 4, 5, 6]);
+        assert!(Arc::ptr_eq(
+            &indices,
+            &snapshot.agent_indices.lock().unwrap().as_ref().unwrap().1
+        ));
         assert_eq!(inspected, vec![10, 20, 30, 40, 50]);
     }
 
@@ -3556,6 +3727,119 @@ mod tests {
         assert!(!Arc::ptr_eq(&second, &refreshed));
         assert_eq!(builds, 2);
         assert_eq!(refreshed.entries[0].pid, 20);
+    }
+
+    fn selection_registry_fixture(
+        generation: u64,
+        name: &str,
+    ) -> Arc<crate::agents::RegistrySnapshot> {
+        crate::agents::store::snapshot_for_test(vec![
+            ("agents/windows-selection-agent/agent.toml".into(), "schema = 1\nid = 'windows-selection-agent'\nname = 'Selection'\naliases = []\nstartable = true\n[launch]\nunix = 'windows-selection-agent'\nwindows = 'windows-selection-agent'\n".into()),
+            ("agents/windows-selection-agent/process.toml".into(), format!("names = ['{name}']\n")),
+        ], generation).unwrap()
+    }
+
+    #[test]
+    fn windows_agent_indices_invalidate_positive_and_negative_generation_caches() {
+        let old = selection_registry_fixture(1, "other-worker");
+        let new = selection_registry_fixture(2, "new-worker");
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "bash.exe", &["bash.exe"]),
+            test_entry(20, 99, "new-worker.exe", &["new-worker.exe"]),
+        ]);
+        let negative = snapshot.agent_indices(&old);
+        assert!(negative.is_empty());
+        assert!(Arc::ptr_eq(&negative, &snapshot.agent_indices(&old)));
+        let select = |registry: &crate::agents::RegistrySnapshot| {
+            super::select_pane_foreground_job_from_snapshot_with_registry(
+                registry,
+                10,
+                &snapshot,
+                |_| true,
+                |_| Some("same-pane".into()),
+            )
+            .unwrap()
+            .process_group_id
+        };
+        assert_eq!(select(&old), 10);
+        // No new OS snapshot or terminal output is required for acquisition.
+        assert_eq!(select(&new), 20);
+        assert_eq!(snapshot.agent_indices(&new).as_slice(), &[1]);
+        // A now-invalid positive result is discarded on the same OS snapshot.
+        assert_eq!(select(&old), 10);
+        assert!(snapshot.agent_indices(&old).is_empty());
+    }
+
+    #[test]
+    fn windows_foreground_selection_cache_generation_is_checked_on_lookup_and_insertion() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "powershell.exe", &["powershell.exe"]),
+            test_entry(20, 10, "codex.exe", &["codex.exe"]),
+        ]);
+        let job = super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+        let mut cache = super::ForegroundSelectionCache::default();
+        cache.remember_for_test(10, &snapshot, &job);
+        assert_eq!(
+            cache.get_with_generation(1, 10, &snapshot),
+            Some(job.clone())
+        );
+        assert_eq!(cache.get_with_generation(2, 10, &snapshot), None);
+        assert!(cache.entries.is_empty());
+        // A late old-generation result may not pollute a newer lookup.
+        cache.remember_for_test(10, &snapshot, &job);
+        assert_eq!(cache.get_with_generation(2, 10, &snapshot), None);
+    }
+
+    #[test]
+    fn windows_removed_bound_process_is_retained_only_while_live_and_owned() {
+        let snapshot = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "bash.exe", &["bash.exe"]),
+            test_entry(20, 10, "removed-worker.exe", &["removed-worker.exe"]),
+        ]);
+        let bound = super::foreground_process_from_entry(snapshot.entry(20).unwrap());
+        let probe = |bound: &super::super::ForegroundProcess, live| {
+            super::retained_foreground_job(10, &snapshot, bound, |_| false, |_| None, |_| live)
+        };
+        assert_eq!(probe(&bound, true).unwrap().process_group_id, 20);
+        assert_eq!(probe(&bound, false), None);
+        let mut replacement = bound.clone();
+        replacement.pid = 21;
+        assert_eq!(probe(&replacement, true), None);
+        replacement = bound.clone();
+        replacement.name = "renamed-worker.exe".into();
+        replacement.argv = Some(vec!["updated process title".into()]);
+        // The snapshot is an observation, not a claim that this PID has the old
+        // lifetime. Caller-side birth-token validation decides retention.
+        assert_eq!(probe(&replacement, true).unwrap().process_group_id, 20);
+
+        let escaped = super::ProcessSnapshot::new(vec![
+            test_entry(10, 1, "bash.exe", &["bash.exe"]),
+            test_entry(20, 99, "removed-worker.exe", &["removed-worker.exe"]),
+        ]);
+        assert_eq!(
+            super::retained_foreground_job(
+                10,
+                &escaped,
+                &bound,
+                |_| true,
+                |_| Some("same-pane".into()),
+                |_| true
+            )
+            .unwrap()
+            .process_group_id,
+            20
+        );
+        assert_eq!(
+            super::retained_foreground_job(
+                10,
+                &escaped,
+                &bound,
+                |_| true,
+                |entry| Some(entry.pid.to_string()),
+                |_| true
+            ),
+            None
+        );
     }
 
     #[test]

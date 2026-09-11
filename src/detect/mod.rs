@@ -3,6 +3,8 @@
 //! Each pane's live bottom-of-buffer text is read periodically and matched
 //! against known agent output patterns to determine state.
 
+use crate::agents::AgentRegistry;
+
 pub mod manifest;
 pub mod manifest_update;
 
@@ -28,6 +30,8 @@ pub struct AgentDetection {
     pub skip_state_update: bool,
     /// True when the current screen visibly shows live idle chrome.
     pub visible_idle: bool,
+    /// Idle evidence from terminal cells, never an OSC title or progress report.
+    pub screen_visible_idle: bool,
     /// True when the current screen visibly shows live UI chrome that needs
     /// human input. This is stronger than arbitrary prompt-like text in the
     /// scrollback and may override a non-blocked integration state.
@@ -39,224 +43,81 @@ pub struct AgentDetection {
 }
 
 /// Which agent we detected running in a pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Agent {
-    Pi,
-    Claude,
-    Codex,
-    Gemini,
-    Cursor,
-    Devin,
-    Antigravity,
-    Cline,
-    Omp,
-    Mastracode,
-    OpenCode,
-    GithubCopilot,
-    Kimi,
-    Kiro,
-    Droid,
-    Amp,
-    Grok,
-    Hermes,
-    Kilo,
-    Qodercli,
-    Qwen,
-    Maki,
-    Muse,
+pub use crate::agents::id::AgentId as Agent;
+
+pub fn agent_label(agent: &Agent) -> &str {
+    agent.as_str()
 }
 
-impl Agent {
-    pub const ALL: [Self; 23] = [
-        Self::Pi,
-        Self::Claude,
-        Self::Codex,
-        Self::Gemini,
-        Self::Cursor,
-        Self::Devin,
-        Self::Antigravity,
-        Self::Cline,
-        Self::Omp,
-        Self::Mastracode,
-        Self::OpenCode,
-        Self::GithubCopilot,
-        Self::Kimi,
-        Self::Kiro,
-        Self::Droid,
-        Self::Amp,
-        Self::Grok,
-        Self::Hermes,
-        Self::Kilo,
-        Self::Qodercli,
-        Self::Qwen,
-        Self::Maki,
-        Self::Muse,
-    ];
-
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
-        Self::Pi,
-        Self::Claude,
-        Self::Codex,
-        Self::Gemini,
-        Self::Cursor,
-        Self::Devin,
-        Self::Antigravity,
-        Self::Cline,
-        Self::OpenCode,
-        Self::GithubCopilot,
-        Self::Kimi,
-        Self::Kiro,
-        Self::Droid,
-        Self::Amp,
-        Self::Grok,
-        Self::Hermes,
-        Self::Kilo,
-        Self::Qodercli,
-        Self::Qwen,
-        Self::Maki,
-        Self::Muse,
-    ];
-}
-
-pub fn agent_label(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor",
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
-    }
-}
-
-pub fn interactive_agent_executable(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => {
-            if cfg!(windows) {
-                "cursor-agent.cmd"
-            } else {
-                "cursor-agent"
-            }
-        }
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro-cli",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
-    }
+#[cfg(test)]
+pub fn interactive_agent_executable(agent: Agent) -> String {
+    crate::agents::registry()
+        .profile_by_agent(agent)
+        .map(|profile| profile.launch().executable().to_owned())
+        .unwrap_or_default()
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
+    let registry = crate::agents::registry();
     let name = normalized_agent_lookup_name(agent);
-    parse_canonical_agent_label(&name).or_else(|| lookup_agent(&name))
+    let name = path_basename(&name);
+    registry
+        .profile_by_normalized_alias(name)
+        .or_else(|| registry.profile_by_versioned_process_name(name))
+        .map(|profile| profile.legacy_agent())
 }
 
+#[cfg(test)]
 pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
-    let agent = lookup_agent(label)?;
-    (agent_label(agent) == label).then_some(agent)
-}
-
-fn lookup_agent(name: &str) -> Option<Agent> {
-    let name = path_basename(name);
-    match name {
-        "pi" => Some(Agent::Pi),
-        "claude" | "claude-code" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
-        "gemini" => Some(Agent::Gemini),
-        "cursor" | "cursor-agent" => Some(Agent::Cursor),
-        "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
-        "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
-        "cline" | ".cline" => Some(Agent::Cline),
-        "omp" => Some(Agent::Omp),
-        "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
-        "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
-        "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
-        "kimi" | "kimi-code" | "kimi code" => Some(Agent::Kimi),
-        "kiro" | "kiro-cli" => Some(Agent::Kiro),
-        "droid" => Some(Agent::Droid),
-        "amp" | "amp-local" => Some(Agent::Amp),
-        "grok" | "grok-build" => Some(Agent::Grok),
-        "hermes" | "hermes-agent" => Some(Agent::Hermes),
-        "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
-        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
-        "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
-        "maki" => Some(Agent::Maki),
-        "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
-        _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
-        _ => None,
-    }
-}
-
-/// Muse's install-dir launcher script resolves the active release and execs
-/// `muse-bin-<version>` (e.g. `muse-bin-0.1.0-R708.1`), so the running
-/// process never carries a bare `muse`/`muse-bin` alias. Require a digit
-/// immediately after the `muse-bin-` prefix so unrelated binaries such as
-/// `muse-binary` or a bare `muse-bin` stay unmatched.
-/// Accepts path-qualified `argv0` values by checking only the basename, since
-/// the launcher may `exec` with an absolute install-dir path.
-fn is_muse_versioned_binary(name: &str) -> bool {
-    path_basename(name)
-        .strip_prefix("muse-bin-")
-        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    crate::agents::registry()
+        .profile_by_id(label)
+        .map(|profile| profile.legacy_agent())
 }
 
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.
+#[cfg(test)]
 pub fn identify_agent(process_name: &str) -> Option<Agent> {
-    parse_agent_label(process_name)
+    let registry = crate::agents::registry();
+    identify_agent_with_registry(&registry, process_name)
+}
+
+/// Identify a process using only the caller's pinned registry.
+pub fn identify_agent_with_registry(registry: &AgentRegistry, process_name: &str) -> Option<Agent> {
+    let name = normalized_agent_lookup_name(process_name);
+    let name = path_basename(&name);
+    registry
+        .profile_by_normalized_process_name(name)
+        .map(|profile| profile.legacy_agent())
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
+    let registry = crate::agents::registry();
+    identify_agent_in_job_with_registry(&registry, job)
+}
+
+/// Recognize every candidate in a foreground job against the same snapshot.
+pub fn identify_agent_in_job_with_registry(
+    registry: &AgentRegistry,
+    job: &crate::platform::ForegroundJob,
+) -> Option<(Agent, String)> {
+    let recognizer = ProcessRecognizer { registry };
     if let Some(process) = job
         .processes
         .iter()
         .find(|process| process.pid == job.process_group_id)
     {
-        let candidate = normalized_process_name(process);
-        if let Some(agent) = identify_agent(&candidate) {
-            return Some((agent, candidate));
+        if let Some(candidate) = recognizer.normalized_process_name(process) {
+            return Some(candidate);
         }
     }
 
     let mut best: Option<(u8, Agent, String)> = None;
 
+    // Preserve the leader-first, single best-candidate pass without collecting
+    // profiles or allocating registry state inside the process/path loops.
     for process in &job.processes {
-        let candidate = normalized_process_name(process);
-        let Some(agent) = identify_agent(&candidate) else {
+        let Some((agent, candidate)) = recognizer.normalized_process_name(process) else {
             continue;
         };
         let score = process_priority(process, &candidate);
@@ -295,6 +156,7 @@ pub fn detect_agent_with_osc(
             state: AgentState::Unknown,
             skip_state_update: false,
             visible_idle: false,
+            screen_visible_idle: false,
             visible_blocker: false,
             visible_working: false,
         };
@@ -309,27 +171,12 @@ pub fn detect_agent_with_osc(
     )
 }
 
-pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> bool {
-    agent.is_some_and(|agent| manifest::should_skip_state_update(agent, screen_content))
-}
-
 pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:pi", "pi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:kimi", "kimi")
-    )
+    crate::agents::registry().has_full_lifecycle_report_authority(source, agent_label)
 }
 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
-    )
+    crate::agents::registry().is_session_identity_only_integration(source, agent_label)
 }
 
 // ---------------------------------------------------------------------------
@@ -350,91 +197,312 @@ pub fn foreground_group_leader_job(
     crate::platform::foreground_group_leader_job(process_group_id)
 }
 
-/// Get the foreground process group for a pane shell PID.
-/// This is cheaper than collecting every process in the foreground job.
-pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    crate::platform::foreground_process_group_id(child_pid)
+struct ProcessRecognizer<'a> {
+    registry: &'a AgentRegistry,
 }
 
-fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> String {
-    let effective = process.argv0.as_deref().unwrap_or(&process.name);
-    let lower_effective = effective.to_lowercase();
+impl ProcessRecognizer<'_> {
+    fn normalized_process_name(
+        &self,
+        process: &crate::platform::ForegroundProcess,
+    ) -> Option<(Agent, String)> {
+        let effective = process.argv0.as_deref().unwrap_or(&process.name);
+        let lower_effective = effective.to_lowercase();
 
-    if is_generic_runtime_or_shell(&lower_effective) {
-        if let Some(wrapped_agent) =
-            wrapped_agent_name_from_runtime_argv(&lower_effective, process.argv.as_deref())
-        {
-            return wrapped_agent;
-        }
-    }
-
-    if identify_agent(effective).is_some() {
-        return effective.to_string();
-    }
-
-    if let Some(runtime) = process.argv.as_deref().and_then(|argv| argv.first()) {
-        let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
-        if matches!(runtime_name.as_str(), "node" | "bun") {
+        if is_generic_runtime_or_shell(&lower_effective) {
             if let Some(wrapped_agent) =
-                wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
+                self.wrapped_agent_name_from_runtime_argv(&lower_effective, process.argv.as_deref())
             {
-                if matches!(
-                    identify_agent(&wrapped_agent),
-                    Some(Agent::Qwen | Agent::Cline)
-                ) {
-                    return wrapped_agent;
+                return self.canonical_candidate(wrapped_agent);
+            }
+        }
+
+        if let Some(agent) = identify_agent_with_registry(self.registry, effective) {
+            return Some((agent, effective.to_string()));
+        }
+
+        if let Some(runtime) = process.argv.as_deref().and_then(|argv| argv.first()) {
+            let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
+            if matches!(runtime_name.as_str(), "node" | "bun") {
+                if let Some(wrapped_agent) =
+                    self.wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
+                {
+                    if self
+                        .registry
+                        .profile_by_id(&wrapped_agent)
+                        .and_then(|profile| profile.process())
+                        .is_some_and(|profile| profile.uses_secondary_runtime_argv_fallback())
+                    {
+                        return self.canonical_candidate(wrapped_agent);
+                    }
                 }
             }
         }
+
+        self.argv0_agent_name(process.argv.as_deref())
+            .or_else(|| {
+                self.cmdline_argv0_agent_name(process.cmdline.as_deref().unwrap_or_default())
+            })
+            .and_then(|name| self.canonical_candidate(name))
     }
 
-    if let Some(wrapped_agent) = argv0_agent_name(process.argv.as_deref())
-        .or_else(|| cmdline_argv0_agent_name(process.cmdline.as_deref().unwrap_or_default()))
-    {
-        return wrapped_agent;
+    // Path/runtime matchers return canonical IDs, not process names. Carry the
+    // resolved identity forward so a novel ID need not also be a process alias.
+    fn canonical_candidate(&self, name: String) -> Option<(Agent, String)> {
+        let agent = self.registry.profile_by_id(&name)?.legacy_agent();
+        Some((agent, name))
     }
 
-    effective.to_string()
-}
+    fn wrapped_agent_name_from_runtime_argv(
+        &self,
+        runtime: &str,
+        argv: Option<&[String]>,
+    ) -> Option<String> {
+        let argv = argv?;
+        let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
 
-fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) -> Option<String> {
-    let argv = argv?;
-    let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
-
-    match runtime_name.as_str() {
-        "node" => cursor_agent_name_from_bundled_node_argv(argv)
-            .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
-        "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
-        name if is_python_runtime(name) => script_arg_agent_name(argv, &["-c"], &["-m"]),
-        "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
-        "cmd" => windows_cmd_arg_agent_name(argv),
-        "powershell" | "pwsh" => powershell_arg_agent_name(argv),
-        "tmux" => None,
-        _ => None,
-    }
-}
-
-fn cursor_agent_name_from_bundled_node_argv(argv: &[String]) -> Option<String> {
-    let (runtime_parent, runtime_name) = path_parent_and_basename(argv.first()?)?;
-    let (script_parent, script_name) = path_parent_and_basename(argv.get(1)?)?;
-    if !runtime_name.eq_ignore_ascii_case("node.exe")
-        || !script_name.eq_ignore_ascii_case("index.js")
-        || !runtime_parent.eq_ignore_ascii_case(script_parent)
-    {
-        return None;
+        match runtime_name.as_str() {
+            "node" => self.bundled_node_agent_name_from_argv(argv).or_else(|| {
+                self.script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])
+            }),
+            "bun" => self.script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
+            name if is_python_runtime(name) => self.script_arg_agent_name(argv, &["-c"], &["-m"]),
+            "sh" | "bash" | "zsh" | "fish" => self.script_arg_agent_name(argv, &["-c"], &[]),
+            "cmd" => self.windows_cmd_arg_agent_name(argv),
+            "powershell" | "pwsh" => self.powershell_arg_agent_name(argv),
+            "tmux" => None,
+            _ => None,
+        }
     }
 
-    let mut tail = runtime_parent
-        .rsplit(['/', '\\'])
-        .filter(|component| !component.is_empty());
-    let (Some(version), Some(versions), Some(package)) = (tail.next(), tail.next(), tail.next())
-    else {
-        return None;
-    };
-    (package.eq_ignore_ascii_case("cursor-agent")
-        && versions.eq_ignore_ascii_case("versions")
-        && !version.trim().is_empty())
-    .then(|| agent_label(Agent::Cursor).to_string())
+    fn bundled_node_agent_name_from_argv(&self, argv: &[String]) -> Option<String> {
+        let (runtime_parent, runtime_name) = path_parent_and_basename(argv.first()?)?;
+        let (script_parent, script_name) = path_parent_and_basename(argv.get(1)?)?;
+        if !runtime_parent.eq_ignore_ascii_case(script_parent) {
+            return None;
+        }
+
+        for profile in self.registry.process_profiles_with_bundled_node_layout() {
+            let layout = profile.process()?.bundled_node_layout()?;
+            if !runtime_name.eq_ignore_ascii_case(layout.runtime_basename())
+                || !script_name.eq_ignore_ascii_case(layout.entrypoint_basename())
+            {
+                continue;
+            }
+
+            let mut tail = runtime_parent
+                .rsplit(['/', '\\'])
+                .filter(|component| !component.is_empty());
+            let (Some(version), Some(versions), Some(package)) =
+                (tail.next(), tail.next(), tail.next())
+            else {
+                continue;
+            };
+            if package.eq_ignore_ascii_case(layout.package_directory())
+                && versions.eq_ignore_ascii_case(layout.versions_directory())
+                && !version.trim().is_empty()
+            {
+                return Some(profile.canonical_id().to_string());
+            }
+        }
+
+        None
+    }
+
+    fn windows_cmd_arg_agent_name(&self, argv: &[String]) -> Option<String> {
+        let mut args = argv.iter().skip(1);
+        while let Some(arg) = args.next() {
+            let flag = arg.trim_matches('"').to_lowercase();
+            match flag.as_str() {
+                "/c" | "/k" => {
+                    return args
+                        .next()
+                        .and_then(|command| self.command_text_agent_name(command))
+                }
+                "/d" | "/s" | "/q" | "/a" | "/u" | "/e:on" | "/e:off" | "/f:on" | "/f:off"
+                | "/v:on" | "/v:off" => continue,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn powershell_arg_agent_name(&self, argv: &[String]) -> Option<String> {
+        let mut args = argv.iter().skip(1);
+        while let Some(arg) = args.next() {
+            let flag = arg.trim_matches('"').to_lowercase();
+            match flag.as_str() {
+                "-file" | "-f" | "/file" => {
+                    return args
+                        .next()
+                        .and_then(|path| self.agent_name_from_path_token(path));
+                }
+                "-command" | "-c" | "/command" | "/c" => {
+                    return args
+                        .next()
+                        .and_then(|command| self.command_text_agent_name(command));
+                }
+                "-encodedcommand" | "-enc" | "/encodedcommand" | "/enc" => return None,
+                "-configurationname" | "-executionpolicy" | "-outputformat" | "-psconsolefile"
+                | "-version" | "-windowstyle" | "-workingdirectory" => {
+                    let _ = args.next();
+                }
+                _ if flag.starts_with('-') || flag.starts_with('/') => {}
+                _ => return self.agent_name_from_path_token(arg),
+            }
+        }
+        None
+    }
+
+    fn command_text_agent_name(&self, command: &str) -> Option<String> {
+        let mut rest = command;
+        while let Some((token, next)) = command_text_token(rest) {
+            let token = token.trim();
+            if token.eq_ignore_ascii_case("&")
+                || token.eq_ignore_ascii_case(".")
+                || token.eq_ignore_ascii_case("call")
+            {
+                rest = next;
+                continue;
+            }
+            return self.agent_name_from_path_token(token);
+        }
+        None
+    }
+
+    fn script_arg_agent_name(
+        &self,
+        argv: &[String],
+        eval_flags: &[&str],
+        module_flags: &[&str],
+    ) -> Option<String> {
+        let mut args = argv.iter().skip(1);
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                return args
+                    .next()
+                    .and_then(|token| self.agent_name_from_path_token(token));
+            }
+
+            if flag_matches(arg, eval_flags) || flag_matches(arg, module_flags) {
+                return None;
+            }
+
+            if arg.starts_with('-') {
+                if option_takes_value(arg) {
+                    let _ = args.next();
+                }
+                continue;
+            }
+
+            return self.agent_name_from_path_token(arg);
+        }
+
+        None
+    }
+
+    fn argv0_agent_name(&self, argv: Option<&[String]>) -> Option<String> {
+        self.agent_name_from_path_token(argv?.first()?)
+    }
+
+    fn cmdline_argv0_agent_name(&self, cmdline: &str) -> Option<String> {
+        self.agent_name_from_path_token(cmdline.split_whitespace().next()?)
+    }
+
+    fn agent_name_from_path_token(&self, token: &str) -> Option<String> {
+        let trimmed = token.trim_matches(|c| matches!(c, '"' | '\''));
+        if trimmed.is_empty() || trimmed.starts_with('-') {
+            return None;
+        }
+
+        self.agent_name_from_basename(path_basename(trimmed))
+            .or_else(|| self.agent_name_from_known_package_path(trimmed))
+            .or_else(|| self.resolved_agent_name_from_path_token(trimmed))
+    }
+
+    fn agent_name_from_known_package_path(&self, path: &str) -> Option<String> {
+        use crate::agents::process::KnownPackageMatch;
+
+        let raw_components: Vec<&str> = path
+            .split(['/', '\\'])
+            .filter(|component| !component.is_empty())
+            .collect();
+        let ends_with = |suffix: &[String]| {
+            raw_components.len() >= suffix.len()
+                && raw_components[raw_components.len() - suffix.len()..]
+                    .iter()
+                    .zip(suffix)
+                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+        };
+        // Exact suffixes take precedence over the legacy normalized layout search.
+        for profile in self.registry.process_profiles_with_package_layouts() {
+            for layout in profile.process()?.known_package_layouts() {
+                if layout.match_kind() == KnownPackageMatch::ExactSuffix
+                    && ends_with(layout.components())
+                {
+                    return Some(profile.canonical_id().to_string());
+                }
+            }
+        }
+
+        let components: Vec<String> = raw_components
+            .into_iter()
+            .map(normalized_agent_lookup_name)
+            .collect();
+
+        let mut best_match: Option<((usize, usize, usize), &crate::agents::AgentProfile)> = None;
+        for (profile_priority, profile) in self
+            .registry
+            .process_profiles_with_package_layouts()
+            .enumerate()
+        {
+            let process_profile = profile.process()?;
+            for layout in process_profile.known_package_layouts() {
+                if layout.match_kind() != KnownPackageMatch::NormalizedComponents {
+                    continue;
+                }
+                let expected = layout.components();
+                let Some(component_position) = components
+                    .windows(expected.len())
+                    .position(|window| window == expected)
+                else {
+                    continue;
+                };
+                let rank = (expected.len(), component_position, profile_priority);
+                let replace = match &best_match {
+                    None => true,
+                    Some((best_rank, _)) => {
+                        rank.0 > best_rank.0
+                            || (rank.0 == best_rank.0 && rank.1 < best_rank.1)
+                            || (rank.0 == best_rank.0
+                                && rank.1 == best_rank.1
+                                && rank.2 < best_rank.2)
+                    }
+                };
+                if replace {
+                    best_match = Some((rank, profile));
+                }
+            }
+        }
+
+        best_match.map(|(_, profile)| profile.canonical_id().to_string())
+    }
+
+    fn resolved_agent_name_from_path_token(&self, token: &str) -> Option<String> {
+        let path = std::path::Path::new(token);
+        if path.components().count() < 2 {
+            return None;
+        }
+
+        let resolved = std::fs::canonicalize(path).ok()?;
+        let basename = resolved.file_name()?.to_str()?;
+        self.agent_name_from_basename(basename)
+    }
+
+    fn agent_name_from_basename(&self, basename: &str) -> Option<String> {
+        let agent = identify_agent_with_registry(self.registry, basename)?;
+        Some(agent_label(&agent).to_string())
+    }
 }
 
 fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
@@ -442,67 +510,6 @@ fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
     let parent = path[..split].trim_end_matches(['/', '\\']);
     let basename = &path[split + 1..];
     (!parent.is_empty() && !basename.is_empty()).then_some((parent, basename))
-}
-
-fn windows_cmd_arg_agent_name(argv: &[String]) -> Option<String> {
-    let mut args = argv.iter().skip(1);
-    while let Some(arg) = args.next() {
-        let flag = arg.trim_matches('"').to_lowercase();
-        match flag.as_str() {
-            "/c" | "/k" => {
-                return args
-                    .next()
-                    .and_then(|command| command_text_agent_name(command))
-            }
-            "/d" | "/s" | "/q" | "/a" | "/u" | "/e:on" | "/e:off" | "/f:on" | "/f:off"
-            | "/v:on" | "/v:off" => continue,
-            _ => {}
-        }
-    }
-    None
-}
-
-fn powershell_arg_agent_name(argv: &[String]) -> Option<String> {
-    let mut args = argv.iter().skip(1);
-    while let Some(arg) = args.next() {
-        let flag = arg.trim_matches('"').to_lowercase();
-        match flag.as_str() {
-            "-file" | "-f" | "/file" => {
-                return args
-                    .next()
-                    .and_then(|path| agent_name_from_path_token(path));
-            }
-            "-command" | "-c" | "/command" | "/c" => {
-                return args
-                    .next()
-                    .and_then(|command| command_text_agent_name(command));
-            }
-            "-encodedcommand" | "-enc" | "/encodedcommand" | "/enc" => return None,
-            "-configurationname" | "-executionpolicy" | "-outputformat" | "-psconsolefile"
-            | "-version" | "-windowstyle" | "-workingdirectory" => {
-                let _ = args.next();
-            }
-            _ if flag.starts_with('-') || flag.starts_with('/') => {}
-            _ => return agent_name_from_path_token(arg),
-        }
-    }
-    None
-}
-
-fn command_text_agent_name(command: &str) -> Option<String> {
-    let mut rest = command;
-    while let Some((token, next)) = command_text_token(rest) {
-        let token = token.trim();
-        if token.eq_ignore_ascii_case("&")
-            || token.eq_ignore_ascii_case(".")
-            || token.eq_ignore_ascii_case("call")
-        {
-            rest = next;
-            continue;
-        }
-        return agent_name_from_path_token(token);
-    }
-    None
 }
 
 fn command_text_token(input: &str) -> Option<(&str, &str)> {
@@ -519,36 +526,6 @@ fn command_text_token(input: &str) -> Option<(&str, &str)> {
 
     let end = input.find(char::is_whitespace).unwrap_or(input.len());
     Some((&input[..end], &input[end..]))
-}
-
-fn script_arg_agent_name(
-    argv: &[String],
-    eval_flags: &[&str],
-    module_flags: &[&str],
-) -> Option<String> {
-    let mut args = argv.iter().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            return args
-                .next()
-                .and_then(|token| agent_name_from_path_token(token));
-        }
-
-        if flag_matches(arg, eval_flags) || flag_matches(arg, module_flags) {
-            return None;
-        }
-
-        if arg.starts_with('-') {
-            if option_takes_value(arg) {
-                let _ = args.next();
-            }
-            continue;
-        }
-
-        return agent_name_from_path_token(arg);
-    }
-
-    None
 }
 
 fn flag_matches(arg: &str, flags: &[&str]) -> bool {
@@ -585,87 +562,6 @@ fn option_takes_value(arg: &str) -> bool {
             | "-L"
             | "-o"
     )
-}
-
-fn argv0_agent_name(argv: Option<&[String]>) -> Option<String> {
-    agent_name_from_path_token(argv?.first()?)
-}
-
-fn cmdline_argv0_agent_name(cmdline: &str) -> Option<String> {
-    agent_name_from_path_token(cmdline.split_whitespace().next()?)
-}
-
-fn agent_name_from_path_token(token: &str) -> Option<String> {
-    let trimmed = token.trim_matches(|c| matches!(c, '"' | '\''));
-    if trimmed.is_empty() || trimmed.starts_with('-') {
-        return None;
-    }
-
-    agent_name_from_basename(path_basename(trimmed))
-        .or_else(|| agent_name_from_known_package_path(trimmed))
-        .or_else(|| resolved_agent_name_from_path_token(trimmed))
-}
-
-fn agent_name_from_known_package_path(path: &str) -> Option<String> {
-    let raw_components: Vec<&str> = path
-        .split(['/', '\\'])
-        .filter(|component| !component.is_empty())
-        .collect();
-    let ends_with = |suffix: &[&str]| {
-        raw_components.len() >= suffix.len()
-            && raw_components[raw_components.len() - suffix.len()..]
-                .iter()
-                .zip(suffix)
-                .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
-    };
-    if ends_with(&[
-        "node_modules",
-        "@earendil-works",
-        "pi-coding-agent",
-        "dist",
-        "cli.js",
-    ]) || ends_with(&[
-        "node_modules",
-        "@earendil-works",
-        "pi-coding-agent",
-        "dist",
-        "bundle",
-        "cli.js",
-    ]) {
-        return Some(agent_label(Agent::Pi).to_string());
-    }
-
-    let components: Vec<String> = raw_components
-        .into_iter()
-        .map(normalized_agent_lookup_name)
-        .collect();
-    for window in components.windows(5) {
-        if window == ["node_modules", "@qwen-code", "qwen-code", "dist", "index"] {
-            return Some(agent_label(Agent::Qwen).to_string());
-        }
-    }
-    for window in components.windows(4) {
-        if window == ["node_modules", "mastracode", "dist", "cli"] {
-            return Some(agent_label(Agent::Mastracode).to_string());
-        }
-    }
-    None
-}
-
-fn resolved_agent_name_from_path_token(token: &str) -> Option<String> {
-    let path = std::path::Path::new(token);
-    if path.components().count() < 2 {
-        return None;
-    }
-
-    let resolved = std::fs::canonicalize(path).ok()?;
-    let basename = resolved.file_name()?.to_str()?;
-    agent_name_from_basename(basename)
-}
-
-fn agent_name_from_basename(basename: &str) -> Option<String> {
-    let agent = parse_agent_label(basename)?;
-    Some(agent_label(agent).to_string())
 }
 
 fn normalized_agent_lookup_name(name: &str) -> String {
@@ -769,6 +665,138 @@ mod tests {
 
     // ---- Agent identification ----
 
+    fn novel_process_registry() -> AgentRegistry {
+        let packages = crate::agents::source::load_packages(&[
+            (
+                "agents/opencode-lab/agent.toml",
+                r#"schema = 1
+id = "opencode-lab"
+name = "OpenCode Lab"
+aliases = ["lab-alias"]
+startable = true
+[launch]
+unix = "opencode"
+windows = "opencode.exe"
+"#,
+            ),
+            (
+                "agents/opencode-lab/process.toml",
+                r#"names = ["opencode"]
+secondary_runtime_argv_fallback = true
+[[package_paths]]
+kind = "exact_suffix"
+components = ["node_modules", "opencode-lab", "dist", "cli.js"]
+[[package_paths]]
+kind = "normalized_components"
+components = ["node_modules", "opencode-lab", "dist", "main"]
+[bundled_node]
+runtime_basename = "node.exe"
+entrypoint_basename = "index.js"
+package_directory = "opencode-lab"
+versions_directory = "versions"
+"#,
+            ),
+        ])
+        .expect("validated novel package");
+        AgentRegistry::from_packages(packages).expect("owned registry")
+    }
+
+    #[test]
+    fn pinned_process_recognition_uses_novel_process_names_not_identity_aliases() {
+        let registry = novel_process_registry();
+        let agent = Agent::parse("opencode-lab").unwrap();
+        for name in ["opencode", "/usr/bin/OpenCode", r"C:\bin\opencode.exe"] {
+            assert_eq!(identify_agent_with_registry(&registry, name), Some(agent));
+        }
+        for name in ["opencode-lab", "lab-alias", "claude", "opencode-helper"] {
+            assert_eq!(identify_agent_with_registry(&registry, name), None);
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, name, &[name])],
+            };
+            assert_eq!(identify_agent_in_job_with_registry(&registry, &job), None);
+        }
+        let empty = AgentRegistry::from_packages(Vec::new()).unwrap();
+        assert_eq!(identify_agent_with_registry(&empty, "opencode"), None);
+        assert_eq!(
+            identify_agent_with_registry(&registry, "opencode"),
+            Some(agent)
+        );
+        assert!(!registry.has_full_lifecycle_report_authority("herdr:opencode-lab", "opencode-lab"));
+        assert!(
+            !registry.is_session_identity_only_integration("herdr:opencode-lab", "opencode-lab")
+        );
+        assert!(registry
+            .profile_by_id("opencode-lab")
+            .unwrap()
+            .integration()
+            .is_none());
+    }
+
+    #[test]
+    fn pinned_job_recognition_preserves_novel_identity_through_runtime_and_paths() {
+        let registry = novel_process_registry();
+        let recognizer = ProcessRecognizer {
+            registry: &registry,
+        };
+        let agent = Agent::parse("opencode-lab").unwrap();
+        assert_eq!(
+            recognizer.agent_name_from_basename("opencode.exe"),
+            Some("opencode-lab".into())
+        );
+        for path in [
+            "/opt/node_modules/opencode-lab/dist/cli.js",
+            r"C:\opt\node_modules\opencode-lab\dist\main.js",
+        ] {
+            assert_eq!(
+                recognizer.agent_name_from_known_package_path(path),
+                Some("opencode-lab".into())
+            );
+        }
+        for (name, argv) in [
+            ("opencode", vec!["opencode"]),
+            ("node", vec!["node", "/bin/opencode"]),
+            ("bun", vec!["bun", "/bin/opencode"]),
+            ("python3", vec!["python3", "/bin/opencode"]),
+            ("bash", vec!["bash", "/bin/opencode"]),
+            ("cmd.exe", vec!["cmd.exe", "/c", "opencode"]),
+            ("pwsh", vec!["pwsh", "-file", "opencode.ps1"]),
+            ("MainThread", vec!["node", "/bin/opencode"]),
+            (
+                "node",
+                vec!["node", "/opt/node_modules/opencode-lab/dist/cli.js"],
+            ),
+            (
+                "node",
+                vec!["node", "/opt/node_modules/opencode-lab/dist/main.js"],
+            ),
+            (
+                "node.exe",
+                vec![
+                    "/opt/opencode-lab/versions/1/node.exe",
+                    "/opt/opencode-lab/versions/1/index.js",
+                ],
+            ),
+        ] {
+            for pid in [123, 124] {
+                let job = crate::platform::ForegroundJob {
+                    process_group_id: 123,
+                    processes: vec![foreground_process(pid, name, &argv)],
+                };
+                let expected_name = if name == "opencode" {
+                    "opencode"
+                } else {
+                    "opencode-lab"
+                };
+                assert_eq!(
+                    identify_agent_in_job_with_registry(&registry, &job),
+                    Some((agent, expected_name.to_string())),
+                    "{name} {argv:?} pid={pid}",
+                );
+            }
+        }
+    }
+
     #[test]
     fn identify_known_agents() {
         assert_eq!(identify_agent("pi"), Some(Agent::Pi));
@@ -850,7 +878,7 @@ mod tests {
     #[test]
     fn every_agent_label_round_trips_through_canonical_and_alias_parsers() {
         for agent in Agent::ALL {
-            let label = agent_label(agent);
+            let label = agent_label(&agent);
             assert_eq!(parse_canonical_agent_label(label), Some(agent));
             assert_eq!(parse_agent_label(label), Some(agent));
         }
@@ -910,7 +938,9 @@ mod tests {
             "herdr:mastracode",
             "mastracode"
         ));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+        assert!(!crate::agents::registry()
+            .screen_detectable_profiles()
+            .any(|profile| profile.legacy_agent() == Agent::Mastracode));
     }
 
     #[test]
@@ -922,7 +952,9 @@ mod tests {
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
-            assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
+            assert!(crate::agents::registry()
+                .screen_detectable_profiles()
+                .any(|profile| profile.legacy_agent() == agent));
         }
     }
 
@@ -947,6 +979,30 @@ mod tests {
         assert_eq!(identify_agent("CLAUDE"), Some(Agent::Claude));
         assert_eq!(identify_agent("Codex"), Some(Agent::Codex));
         assert_eq!(identify_agent("Devin"), Some(Agent::Devin));
+    }
+
+    #[test]
+    fn identify_agent_in_job_preserves_absolute_argv0_recognition() {
+        for (path, expected) in [
+            ("/usr/bin/claude", Agent::Claude),
+            (r"C:\Users\user\bin\claude.exe", Agent::Claude),
+            ("/home/user/.local/bin/muse-bin-1.2.3", Agent::Muse),
+            (r"C:\Users\user\bin\muse-bin-1.2.3.exe", Agent::Muse),
+        ] {
+            for pid in [123, 124] {
+                let mut process = foreground_process(pid, "worker", &[path]);
+                process.argv0 = Some(path.to_string());
+                let job = crate::platform::ForegroundJob {
+                    process_group_id: 123,
+                    processes: vec![process],
+                };
+                assert_eq!(
+                    identify_agent_in_job(&job),
+                    Some((expected, path.to_string())),
+                    "{path} pid={pid}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1444,8 +1500,13 @@ mod tests {
 
     #[test]
     fn wrapped_agent_name_from_runtime_argv_ignores_plain_shell_flags() {
+        let registry = crate::agents::registry();
+        let recognizer = ProcessRecognizer {
+            registry: &registry,
+        };
         assert_eq!(
-            wrapped_agent_name_from_runtime_argv("bash", Some(&["bash".into(), "-lc".into()])),
+            recognizer
+                .wrapped_agent_name_from_runtime_argv("bash", Some(&["bash".into(), "-lc".into()])),
             None
         );
     }
@@ -1511,15 +1572,26 @@ mod tests {
 
     #[test]
     fn cmdline_argv0_agent_name_canonicalizes_known_aliases() {
+        let registry = crate::agents::registry();
+        let recognizer = ProcessRecognizer {
+            registry: &registry,
+        };
         assert_eq!(
-            cmdline_argv0_agent_name("/nix/store/example/bin/ghcs"),
+            recognizer.cmdline_argv0_agent_name("/nix/store/example/bin/ghcs"),
             Some("copilot".to_string())
         );
     }
 
     #[test]
     fn cmdline_argv0_agent_name_requires_exact_agent_basename() {
-        assert_eq!(cmdline_argv0_agent_name("/tmp/my-codex-helper"), None);
+        let registry = crate::agents::registry();
+        let recognizer = ProcessRecognizer {
+            registry: &registry,
+        };
+        assert_eq!(
+            recognizer.cmdline_argv0_agent_name("/tmp/my-codex-helper"),
+            None
+        );
     }
 
     #[cfg(unix)]

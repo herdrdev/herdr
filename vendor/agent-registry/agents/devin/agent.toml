@@ -1,0 +1,13 @@
+schema = 1
+id = "devin"
+name = "devin"
+aliases = ["devin-cli", "devin cli"]
+startable = true
+
+[launch]
+unix = "devin"
+windows = "devin"
+
+[sound]
+key = "devin"
+default = "default"

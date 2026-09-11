@@ -1,0 +1,13 @@
+schema = 1
+id = "gemini"
+name = "gemini"
+aliases = []
+startable = true
+
+[launch]
+unix = "gemini"
+windows = "gemini"
+
+[sound]
+key = "gemini"
+default = "default"

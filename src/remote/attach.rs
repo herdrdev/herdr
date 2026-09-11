@@ -2324,7 +2324,7 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
     contents.push_str("  ServerAliveCountMax 4\n");
 
     let write_result = (|| {
-        let mut file = crate::platform::create_remote_ssh_config_file(&path)?;
+        let mut file = crate::platform::create_private_file(&path)?;
         file.write_all(contents.as_bytes())
     })();
     if let Err(err) = write_result {

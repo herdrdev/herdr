@@ -12,8 +12,26 @@ test:
     just docs-contract-test
 
 # Run repository maintenance contract tests
-maintenance-test:
-    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross
+maintenance-test: agent-registry-check agent-registry-validate
+    {{python}} -m unittest scripts.test_agent_registry_vendor scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross
+
+# Explicitly refresh the checked-in agent registry from a local source tree
+agent-registry-sync source:
+    cargo run --locked -- registry validate "{{source}}"
+    {{python}} scripts/agent_registry_vendor.py sync --source "{{source}}"
+
+# Import a reviewed immutable snapshot OFFLINE through the existing vendor rollback path
+[positional-arguments]
+agent-registry-sync-snapshot snapshot sha256 validator:
+    {{python}} scripts/agent_registry_vendor.py sync-snapshot --snapshot "$1" --sha256 "$2" --validator "$3"
+
+# Herdr owns package/detection semantics; never compare against the legacy website catalog
+agent-registry-validate:
+    cargo run --locked -- registry validate vendor/agent-registry
+
+# Verify the pinned registry and generated include index without source/network access
+agent-registry-check:
+    {{python}} scripts/agent_registry_vendor.py --check
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
@@ -57,13 +75,13 @@ windows-lint:
 
 # Check formatting + run unit tests + Windows target lint + documentation contract tests
 [unix]
-check: ci windows-lint
+check: agent-registry-check ci windows-lint
     just docs-contract-test
     @echo "docs reminder: if this changes user-facing behavior, make sure the relevant release docs are updated or called out before release."
 
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [windows]
-check:
+check: agent-registry-check
     & .\scripts\windows_check.ps1 -Mode check
 
 # Install repo-local git hooks
@@ -93,8 +111,8 @@ docs-contract-test:
 # Test bundled agent integration assets
 integration-assets-test:
     bun test src/integration/assets/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-tui-session.test.ts
+    bun test src/integration/assets/opencode-agent-state.test.ts
+    bun test src/integration/assets/opencode-tui-session.test.ts
 
 # Regenerate the C API bindings with bindgen-cli 0.72.1
 libghostty-bindings *clang_args:
@@ -105,8 +123,7 @@ build-libghostty-vt:
     scripts/build_vendored_libghostty_vt.sh
 
 # Check that release docs and changelog have been finalized from docs/next before release
-release-docs-check:
-    python3 scripts/agent_detection_manifest_check.py --require-all-published
+release-docs-check: agent-registry-check agent-registry-validate
     python3 scripts/config_reference_check.py
     node scripts/docs/versions.mjs check
     node scripts/docs/preview.mjs check

@@ -109,6 +109,7 @@ impl HeadlessServer {
         let context =
             crate::app::actions::notification_context(workspace, &workspace_label, ws_idx, pane_id);
         let agent = known_agent
+            .as_ref()
             .map(crate::detect::agent_label)
             .map(str::to_owned);
         self.send_to_client_shells(ServerMessage::SemanticNotification(
@@ -320,7 +321,10 @@ impl HeadlessServer {
     /// in the headless server — use this method instead.
     ///
     /// Returns true if the event changed visual state (requiring a re-render).
-    pub(super) fn handle_internal_event_with_forwarding(&mut self, mut ev: AppEvent) -> bool {
+    pub(super) fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
+        let Some(mut ev) = ev.into_current_detection(crate::agents::store::generation()) else {
+            return false;
+        };
         let mut focused_worktree_response = if let AppEvent::WorktreeAddFinished(result) = &mut ev {
             result
                 .api_request

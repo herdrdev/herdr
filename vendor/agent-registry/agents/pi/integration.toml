@@ -1,0 +1,20 @@
+cli_name = "pi"
+aliases = []
+
+[commands]
+unix = ["pi"]
+windows = ["pi"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 9
+windows = 9
+
+[[assets]]
+path = "assets/herdr-agent-state.ts"
+platform = "all"
+role = "reporter"
+install_name = "herdr-agent-state.ts"

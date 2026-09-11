@@ -395,6 +395,7 @@ pub(crate) enum ServerEvent {
         endpoint_keybindings: bool,
         mouse_capture: bool,
         surface_active: bool,
+        notification_sound_profile: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -760,6 +761,7 @@ pub(crate) fn handle_client_handshake(
                     hello.endpoint_keybindings,
                     hello.mouse_capture,
                     hello.surface_active,
+                    hello.notification_sound_profile,
                 )),
             )
         }
@@ -854,6 +856,7 @@ pub(crate) fn handle_client_handshake(
         endpoint_keybindings,
         mouse_capture,
         surface_active,
+        notification_sound_profile,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -867,6 +870,7 @@ pub(crate) fn handle_client_handshake(
             endpoint_keybindings,
             mouse_capture,
             surface_active,
+            notification_sound_profile,
             writer,
         }
     } else {
@@ -1417,6 +1421,7 @@ mod tests {
             endpoint_keybindings: true,
             mouse_capture: true,
             surface_active: true,
+            notification_sound_profile: true,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -1829,6 +1834,7 @@ mod tests {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                notification_sound_profile,
                 writer,
             } => {
                 assert_eq!(client_id, 43);
@@ -1839,6 +1845,7 @@ mod tests {
                 assert!(endpoint_keybindings);
                 assert!(mouse_capture);
                 assert!(surface_active);
+                assert!(notification_sound_profile);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),

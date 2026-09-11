@@ -194,7 +194,6 @@ enum AltScreenReadConflict {
 /// The headless server — runs the herdr event loop without a real terminal.
 pub struct HeadlessServer {
     app: app::App,
-    #[cfg(unix)]
     api_tx: Option<api::ApiRequestSender>,
     // Kept on every platform so dropping HeadlessServer owns API server shutdown.
     #[cfg_attr(windows, allow(dead_code))]
@@ -336,11 +335,8 @@ impl HeadlessServer {
         let headless_size = app.state.headless_size;
         let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
             server_config_diagnostic_summaries(config_diagnostics);
-        #[cfg(not(unix))]
-        let _ = api_tx;
         Ok(Self {
             app,
-            #[cfg(unix)]
             api_tx,
             api_server,
             #[cfg(unix)]
@@ -1651,6 +1647,20 @@ impl HeadlessServer {
         }
     }
 
+    fn resolved_notification_sound_profile(
+        registry: &crate::agents::RegistrySnapshot,
+        notification: &protocol::SemanticNotification,
+    ) -> Option<protocol::endpoint::NotificationSoundProfile> {
+        let sound = registry
+            .profile_by_id(notification.agent.as_deref()?)?
+            .sound()?;
+        Some(protocol::endpoint::NotificationSoundProfile {
+            config_key: sound.config_key().to_owned(),
+            default_off: sound.default_policy()
+                == crate::agents::presentation::SoundDefaultPolicy::Off,
+        })
+    }
+
     /// Sends an ephemeral semantic event to every connected client-rendered shell.
     fn send_to_client_shells(&mut self, msg: ServerMessage) -> bool {
         let serialized = match Self::frame_server_message(&msg) {
@@ -1659,6 +1669,24 @@ impl HeadlessServer {
                 warn!(err = %err, "failed to serialize message for client shells");
                 return false;
             }
+        };
+        // Capture package metadata once for this event, not per client. Keep the
+        // generation-1 binary payload exact for clients without the capability.
+        let resolved = if let ServerMessage::SemanticNotification(notification) = &msg {
+            let registry = crate::agents::registry();
+            let sound_profile = Self::resolved_notification_sound_profile(&registry, notification);
+            let framed = protocol::endpoint::notification_message(notification, sound_profile)
+                .map_err(|err| protocol::FramingError::Bincode(err.to_string()))
+                .and_then(|message| Self::frame_server_message(&message));
+            match framed {
+                Ok(framed) => Some(framed),
+                Err(err) => {
+                    warn!(%err, "failed to serialize resolved shell notification");
+                    return false;
+                }
+            }
+        } else {
+            None
         };
         let client_ids = self
             .clients
@@ -1675,7 +1703,12 @@ impl HeadlessServer {
             let Some(writer) = &client.writer else {
                 continue;
             };
-            if writer.control.send(serialized.clone()).is_ok() {
+            let payload = if client.shell_notification_sound_profile {
+                resolved.as_ref().unwrap_or(&serialized)
+            } else {
+                &serialized
+            };
+            if writer.control.send(payload.clone()).is_ok() {
                 sent = true;
             } else {
                 self.remove_client_and_resize_if_needed(client_id);
@@ -1946,6 +1979,7 @@ impl HeadlessServer {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                notification_sound_profile,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1991,6 +2025,7 @@ impl HeadlessServer {
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
+                connection.shell_notification_sound_profile = notification_sound_profile;
                 connection.shell_projection_revision = 1;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()
@@ -3330,6 +3365,15 @@ impl HeadlessServer {
             }
         }
 
+        if self
+            .app
+            .state
+            .next_managed_agent_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            changed |= self.app.reconcile_due_managed_agents(now);
+        }
+
         if self.has_app_client() {
             self.app.start_git_status_refresh_if_due(now);
         }
@@ -3344,10 +3388,11 @@ impl HeadlessServer {
 
         if self
             .app
-            .next_agent_manifest_update_check
+            .next_agent_registry_update_check
             .is_some_and(|deadline| now >= deadline)
         {
-            self.app.run_agent_manifest_update_check();
+            self.app
+                .run_agent_registry_update_check(now, self.api_tx.as_ref());
         }
 
         if self

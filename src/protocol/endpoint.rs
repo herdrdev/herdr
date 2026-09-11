@@ -32,6 +32,37 @@ fn default_true() -> bool {
     true
 }
 
+pub const ENDPOINT_NOTIFICATION_KIND: &str = "shell.notification.v1";
+
+/// Package metadata only: the receiving client still owns all user sound policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationSoundProfile {
+    pub config_key: String,
+    pub default_off: bool,
+}
+
+/// Atomic notification and resolved package metadata. `None` is authoritative:
+/// this event has no package sound profile, regardless of the client's registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointNotification {
+    pub notification: super::SemanticNotification,
+    #[serde(default)]
+    pub sound_profile: Option<NotificationSoundProfile>,
+}
+
+pub fn notification_message(
+    notification: &super::SemanticNotification,
+    sound_profile: Option<NotificationSoundProfile>,
+) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: ENDPOINT_NOTIFICATION_KIND.into(),
+        data: serde_json::to_string(&EndpointNotification {
+            notification: notification.clone(),
+            sound_profile,
+        })?,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointClientHello {
     pub generation: u32,
@@ -44,6 +75,9 @@ pub struct EndpointClientHello {
     pub mouse_capture: bool,
     #[serde(default = "default_true")]
     pub surface_active: bool,
+    /// Supports atomic named notifications with resolved package sound metadata.
+    #[serde(default)]
+    pub notification_sound_profile: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -152,6 +186,7 @@ mod tests {
             endpoint_keybindings: false,
             mouse_capture: true,
             surface_active: true,
+            notification_sound_profile: true,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -203,6 +238,7 @@ mod tests {
         )))
         .unwrap();
         assert!(hello.supports_required_codecs());
+        assert!(!hello.notification_sound_profile);
 
         let welcome: EndpointServerWelcome = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -265,6 +301,73 @@ mod tests {
             decoded.commands[0].action,
             crate::protocol::ClientShellCommandAction::Unknown
         );
+    }
+
+    fn notification() -> super::super::SemanticNotification {
+        super::super::SemanticNotification {
+            kind: super::super::SemanticNotificationKind::Custom,
+            title: "notice".into(),
+            body: None,
+            sound: Some(super::super::SemanticNotificationSound::Done),
+            agent: Some("droid".into()),
+            workspace_id: None,
+            tab_id: None,
+            pane_id: None,
+            position: None,
+        }
+    }
+
+    #[test]
+    fn legacy_notification_binary_layout_remains_frozen() {
+        let bytes =
+            bincode::serde::encode_to_vec(notification(), bincode::config::standard()).unwrap();
+        assert_eq!(
+            bytes,
+            b"\x03\x06notice\x00\x01\x00\x01\x05droid\x00\x00\x00\x00"
+        );
+    }
+
+    #[test]
+    fn resolved_notification_uses_atomic_extensible_json_inside_frozen_control() {
+        let profile = Some(NotificationSoundProfile {
+            config_key: "remote_key".into(),
+            default_off: true,
+        });
+        let message = notification_message(&notification(), profile.clone()).unwrap();
+        let mut bytes = Vec::new();
+        super::super::write_message(&mut bytes, &message).unwrap();
+        let decoded: ServerMessage =
+            super::super::read_message(&mut bytes.as_slice(), super::super::MAX_FRAME_SIZE)
+                .unwrap();
+        assert_eq!(message, decoded);
+        let ServerMessage::EndpointControl { kind, data } = decoded else {
+            panic!("named notification")
+        };
+        assert_eq!(kind, ENDPOINT_NOTIFICATION_KIND);
+        let mut value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        value["future_field"] = serde_json::json!(true);
+        let envelope: EndpointNotification = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(envelope.notification, notification());
+        assert_eq!(envelope.sound_profile, profile);
+        value.as_object_mut().unwrap().remove("sound_profile");
+        assert!(serde_json::from_value::<EndpointNotification>(value)
+            .unwrap()
+            .sound_profile
+            .is_none());
+    }
+
+    #[test]
+    fn notification_capability_is_optional_without_changing_endpoint_core() {
+        let mut value = serde_json::to_value(hello()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("notification_sound_profile");
+        let legacy: EndpointClientHello = serde_json::from_value(value).unwrap();
+        assert!(!legacy.notification_sound_profile);
+        assert!(legacy.supports_required_codecs());
+        assert!(hello().notification_sound_profile);
+        assert_eq!(ENDPOINT_PROTOCOL_GENERATION, 1);
     }
 
     #[test]

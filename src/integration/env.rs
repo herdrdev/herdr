@@ -230,6 +230,7 @@ pub(crate) fn home_dir() -> io::Result<PathBuf> {
 #[cfg(test)]
 pub(crate) struct IntegrationEnvLock {
     _guard: MutexGuard<'static, ()>,
+    hermes_home: Option<std::ffi::OsString>,
     #[cfg(windows)]
     appdata: Option<std::ffi::OsString>,
 }
@@ -237,6 +238,11 @@ pub(crate) struct IntegrationEnvLock {
 #[cfg(test)]
 impl Drop for IntegrationEnvLock {
     fn drop(&mut self) {
+        if let Some(home) = self.hermes_home.take() {
+            std::env::set_var(HERMES_HOME_ENV_VAR, home);
+        } else {
+            std::env::remove_var(HERMES_HOME_ENV_VAR);
+        }
         #[cfg(windows)]
         if let Some(appdata) = self.appdata.take() {
             std::env::set_var("APPDATA", appdata);
@@ -250,8 +256,12 @@ impl Drop for IntegrationEnvLock {
 pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let hermes_home = std::env::var_os(HERMES_HOME_ENV_VAR);
+    // Installer fixtures must not target an inherited real Hermes installation.
+    std::env::remove_var(HERMES_HOME_ENV_VAR);
     IntegrationEnvLock {
         _guard: guard,
+        hermes_home,
         #[cfg(windows)]
         appdata: std::env::var_os("APPDATA"),
     }

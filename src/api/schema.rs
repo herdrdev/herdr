@@ -7,6 +7,7 @@ pub mod events;
 pub mod integrations;
 pub mod panes;
 pub mod plugins;
+pub mod registry;
 pub mod response;
 pub mod server;
 pub mod session;
@@ -21,6 +22,7 @@ pub use events::*;
 pub use integrations::*;
 pub use panes::*;
 pub use plugins::*;
+pub use registry::*;
 pub use response::*;
 pub use server::*;
 pub use session::*;
@@ -57,6 +59,20 @@ pub enum Method {
     ServerAgentManifests(EmptyParams),
     #[serde(rename = "server.reload_agent_manifests")]
     ServerReloadAgentManifests(EmptyParams),
+    #[serde(rename = "registry.status")]
+    RegistryStatus(EmptyParams),
+    #[serde(rename = "registry.reload")]
+    RegistryReload(RegistryReloadParams),
+    #[serde(rename = "registry.check")]
+    RegistryCheck(RegistryUpdateParams),
+    #[serde(rename = "registry.update")]
+    RegistryUpdate(RegistryUpdateParams),
+    #[serde(rename = "registry.reset")]
+    RegistryReset(EmptyParams),
+    // Coalesced in-process publication wakeup; not a callable wire method.
+    #[serde(skip)]
+    #[schemars(skip)]
+    RegistryPresentationRefresh(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
     #[serde(rename = "product_announcement.dismiss")]

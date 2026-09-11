@@ -1,0 +1,13 @@
+schema = 1
+id = "kilo"
+name = "kilo"
+aliases = ["kilo-code", "kilo code"]
+startable = true
+
+[launch]
+unix = "kilo"
+windows = "kilo"
+
+[sound]
+key = "kilo"
+default = "default"

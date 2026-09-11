@@ -124,7 +124,7 @@ herdr server update-agent-manifests [--json]
 herdr server reload-agent-manifests
 ```
 
-`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示生效的智能体检测清单来源、缓存的远程版本和最近的远程更新结果。`update-agent-manifests` 立即拉取远程清单更新,重载到运行中的服务器,并打印更新后的清单状态;要原始状态响应就加 `--json`。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。
+`herdr server` 显式运行无界面服务器,适合被监管或服务式的部署。`reload-config` 在不重启窗格的情况下应用可重载设置。`agent-manifests` 显示已接受注册表中的检测来源和版本。`update-agent-manifests` 是 `registry update` 的兼容别名：它获取并启用**完整的 R2 注册表快照**，包括智能体 ID 和 CLI 定义，而不只是检测规则。随后显示更新结果和清单状态；`--json` 保留旧版清单状态响应格式。使用 `registry status` 查看完整的更新来源和错误。`reload-agent-manifests` 在编辑本地覆盖后,把智能体检测清单重载到运行中的服务器。
 
 ## 通知
 
@@ -324,9 +324,11 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 智能体目标只能是唯一的实时智能体名称,或当前承载该智能体的窗格 ID。终端 ID 和单独的智能体 kind 标签不能作为目标。通过 `agent start` 启动的智能体必须有名称;手动启动的智能体保持未命名,通过窗格 ID 寻址。
 
-`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。支持的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
+`agent start` 会在现有可用 shell 窗格中启动智能体:交互式 shell 必须占用前台,不能有正在前台运行的命令、编辑器或智能体。拓扑必须单独创建。名称在实时智能体中必须唯一,并匹配 `[a-z][a-z0-9_-]{0,31}`。内置的 kind 是 `pi`、`claude`、`codex`、`gemini`、`cursor`、`devin`、`agy`、`cline`、`omp`、`mastracode`、`opencode`、`copilot`、`kimi`、`kiro`、`droid`、`amp`、`grok`、`hermes`、`kilo`、`qodercli`、`qwen`、`maki` 和 `muse`。名称属于当前窗格占用者,在该智能体退出、release 或被替换时清除;短暂的检测不确定不会清除它。
 
-成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`,检测变为 `idle` 后即可用于发送提示。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
+成功的 start 只有在预期智能体占用同一终端并可接受交互输入后才返回。如果启动期间检测到 `blocked`,命令会立即返回 `agent_not_ready`。该名称仍可用于 `agent read` 和 `agent send-keys`。对于 OpenCode 等通过屏幕检测输入控件的智能体，必须等到输入控件可见且阻塞状态解除后才能发送提示；仅有 `idle` 报告并不足够。默认启动超时是 30000 毫秒;显式值必须大于 3000 且不超过 300000。
+
+冷恢复的智能体会保持排队状态，直到恢复命令已发送。之后，它必须通过与正常启动相同的就绪检查才能接受提示；恢复保存的名称或会话本身并不代表已就绪。
 
 `agent prompt` 遵循当前的 bracketed paste 模式，即使智能体处于 working，也会将文本和延迟的 Enter 作为一次有序提交写入。不带 `--wait` 时，成功只确认写入完成，不代表轮次已经开始。在 Windows 上，Codex 在 Enter 前会收到粘贴边界，因此提交不依赖提示大小；调用方的超时包含提交时间。如果智能体已经是 `blocked`,它不会发送输入,而是返回 `agent_blocked`。使用 `--wait` 时,从其他非 working 状态接受的提示必须在提交后的最多五秒内产生可观察的 `working` 或 `blocked` 状态，否则 Herdr 返回 `agent_prompt_stalled`；如果调用方的超时先到期，则返回普通的 `timeout` 错误。这可防止无关的 `idle`、`done` 或会话变化错误地完成等待。观察到活动后，它会等待请求的第一个稳定状态。它不会跟踪单独的轮次。如果智能体已经处于 working，当前轮次的完成可能满足等待。`--until` 用于缩小匹配状态，不带 `--wait` 时会被拒绝。独立的 `agent wait` 在当前状态匹配时立即返回。两者默认匹配 `idle`、`done` 或 `blocked`；需要 `unknown` 时请明确使用 `--until unknown`。
 
@@ -400,6 +402,31 @@ herdr integration uninstall qwen
 herdr integration uninstall cursor
 herdr integration status [--outdated-only]
 ```
+
+## 智能体注册表
+
+`agent start --kind` 根据所选服务器的当前注册表解析类型，包括通过重载添加的新类型。
+
+```sh
+herdr registry validate /path/to/agent-registry
+herdr registry validate-snapshot /path/to/snapshot.json --runtime-compatible
+herdr --session work registry status
+herdr --session work registry check [--channel stable|preview|staging]
+herdr --session work registry update [--channel stable|preview|staging]
+herdr --session work registry reload /path/to/agent-registry
+herdr --session work registry reload
+herdr --session work registry reset
+```
+
+`validate` 离线检查本地包、检测规则和集成文件。`validate-snapshot` 还检查 JSON 快照的边界、哈希和来源；`--runtime-compatible` 验证与当前二进制文件中安装器的兼容性。`status` 显示所选服务器当前的智能体、代数、本地或远程来源，以及最近的错误。
+
+`check` 获取并验证完整 R2 快照，但不启用；`update` 在验证和持久化后显式启用。两者都由所选服务器执行，默认渠道为 `stable`；`preview` 和 `staging` 需明确指定。空渠道或不可用渠道会报错，不会显示为已是最新。渠道指针每次重新获取，不可变快照通过摘要寻址。这些命令不会安装集成或启用自动更新。
+
+`reload DIRECTORY` 替换该会话的完整注册表，而不是合并到现有包中。新的智能体 ID、CLI 定义和检测规则无需重新构建或重启 Herdr 即可启用。相对路径按调用方的工作目录解析，且所选服务器必须能够访问该目录。省略目录时，`reload` 离线重新读取所选本地来源或验证保留的快照，不会获取 R2。本地模式拒绝远程检查和更新；`reset` 返回内置注册表，不删除本地来源或检测覆盖文件。
+
+任何无效包都会导致整次更新被拒绝，原注册表继续生效。成功启用后，Herdr 保存经过验证的包快照供重启使用，即使来源目录随后被删除也能恢复。正在运行的智能体保留原有身份；检测在启用后异步更新。
+
+没有有效的已保存快照时，Herdr 使用固定的内置包。`HERDR_AGENT_REGISTRY_SOURCE` 显式选择完整本地来源，只恢复与其匹配的已保存快照；未明确设置时恢复上次接受的本地或托管来源。重载不会下载二进制文件、安装集成、执行钩子，也不会授予新智能体可信报告权限。集成安装器和报告权限仍须由 Herdr 明确支持。修改已支持集成的文件内容或版本需要新的 Herdr 构建，运行时启用会拒绝此类修改。
 
 ## 插件
 

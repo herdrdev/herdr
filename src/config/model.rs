@@ -33,6 +33,7 @@ impl UpdateChannelConfig {
 pub struct UpdateConfig {
     pub channel: UpdateChannelConfig,
     pub version_check: bool,
+    // Retain the existing setting name for automatic full-registry updates.
     pub manifest_check: bool,
 }
 
@@ -1058,10 +1059,7 @@ pub struct ExperimentalConfig {
     /// detected agent matches one of these names (case-insensitive). Empty
     /// list means apply to any focused pane. Unknown agent names are ignored;
     /// if the list contains no valid names, the reveal does not apply.
-    /// Accepted names: pi, claude, codex, gemini, cursor, devin, cline,
-    /// opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo,
-    /// qodercli, qoder, qwen, qwen-code, maki.
-    /// Default: empty.
+    /// Accepted names are canonical agent IDs or registered aliases. Default: empty.
     pub cjk_ime_agents: Vec<String>,
     /// Cursor shape rendered for the IME anchor when
     /// `reveal_hidden_cursor_for_cjk_ime` is enabled. Default: "steady_block".

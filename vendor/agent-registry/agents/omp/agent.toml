@@ -1,0 +1,9 @@
+schema = 1
+id = "omp"
+name = "omp"
+aliases = []
+startable = true
+
+[launch]
+unix = "omp"
+windows = "omp"

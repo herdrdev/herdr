@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 
-ASSET = Path(__file__).parents[1] / "src/integration/assets/hermes/__init__.py"
+ASSET = Path(__file__).parents[1] / "vendor/agent-registry/agents/hermes/assets/__init__.py"
 
 
 def load_asset():
@@ -12,7 +12,9 @@ def load_asset():
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load Hermes integration asset")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Imports must not add bytecode to the integrity-pinned snapshot.
+    with mock.patch("sys.dont_write_bytecode", True):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -25,6 +27,11 @@ class FakeContext:
 
 
 class HermesIntegrationAssetTests(unittest.TestCase):
+    def test_loading_does_not_write_to_the_snapshot(self):
+        before = sorted(ASSET.parent.rglob("*"))
+        load_asset()
+        self.assertEqual(sorted(ASSET.parent.rglob("*")), before)
+
     def test_reports_only_root_session_identity(self):
         module = load_asset()
         calls = []

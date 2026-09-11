@@ -1,0 +1,13 @@
+schema = 1
+id = "cursor"
+name = "cursor"
+aliases = ["cursor-agent"]
+startable = true
+
+[launch]
+unix = "cursor-agent"
+windows = "cursor-agent.cmd"
+
+[sound]
+key = "cursor"
+default = "default"

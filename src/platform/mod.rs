@@ -3,6 +3,16 @@
 //! Centralizes OS-dependent behavior behind a clean boundary so core
 //! modules don't scatter `#[cfg]` branches through product logic.
 
+/// A process lifetime, independent of mutable names, argv and terminal titles.
+/// The birth token is opaque and host/boot-local, not a persisted session ID.
+/// Compare the complete value: equal PIDs with different tokens are different
+/// processes. Failure to read an identity is not evidence of a retained binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProcessIdentity {
+    pub(crate) pid: u32,
+    pub(crate) birth_token: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForegroundProcess {
     pub pid: u32,
@@ -265,11 +275,18 @@ pub(crate) struct RemoteSshConfigPaths {
 mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, sync_directory_after_replace,
+    RemoteBridgeWake,
 };
 
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
+
+/// Preserve the existing non-Unix post-replacement durability policy.
+#[cfg(not(unix))]
+pub(crate) fn sync_directory_after_replace(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
@@ -416,15 +433,69 @@ pub fn process_agent_hint(_pid: u32) -> Option<crate::detect::Agent> {
     None
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn process_agent_hint_with_registry(
+    _registry: &crate::agents::AgentRegistry,
+    _pid: u32,
+) -> Option<crate::detect::Agent> {
+    None
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agent> {
+    parse_agent_env_hint_with_registry(&crate::agents::registry(), environ)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn parse_agent_env_hint_with_registry(
+    registry: &crate::agents::AgentRegistry,
+    environ: &[u8],
+) -> Option<crate::detect::Agent> {
     for record in environ.split(|&byte| byte == 0) {
         let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
             continue;
         };
-        return crate::detect::parse_agent_label(std::str::from_utf8(value).ok()?);
+        // Preserve the label parser's alias, executable suffix, and basename
+        // compatibility without reacquiring the registry for each job member.
+        let mut label = std::str::from_utf8(value).ok()?.trim().to_lowercase();
+        for suffix in [".exe", ".cmd", ".bat", ".ps1", ".js"] {
+            if label.ends_with(suffix) {
+                label.truncate(label.len() - suffix.len());
+                break;
+            }
+        }
+        let name = label
+            .rsplit(['/', '\\'])
+            .find(|component| !component.is_empty())
+            .unwrap_or(&label);
+        return registry
+            .profile_by_normalized_alias(name)
+            .or_else(|| registry.profile_by_versioned_process_name(name))
+            .map(|profile| profile.legacy_agent());
     }
     None
+}
+
+/// Unix foreground observation is registry-independent; Windows must select
+/// candidates with the same snapshot as its caller's detection cycle. A bound
+/// process is only a PID locator; callers must validate its saved birth token
+/// before retaining identity from the returned observation.
+#[cfg(not(windows))]
+pub(crate) fn foreground_job_with_registry(
+    _registry: &crate::agents::RegistrySnapshot,
+    pid: u32,
+    _bound: Option<&ForegroundProcess>,
+) -> Option<ForegroundJob> {
+    foreground_job(pid)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn foreground_process_group_id_with_registry(
+    _registry: &crate::agents::RegistrySnapshot,
+    pid: u32,
+    _bound: Option<&ForegroundProcess>,
+) -> Option<u32> {
+    foreground_process_group_id(pid)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -567,6 +638,39 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
+    fn parse_agent_env_hint_uses_the_pinned_registry_and_preserves_label_compatibility() {
+        let registry = crate::agents::store::snapshot_for_test(vec![(
+            "agents/pane-env-agent/agent.toml".into(),
+            "schema = 1\nid = 'pane-env-agent'\nname = 'Pane env'\naliases = ['pane-env-alias']\nstartable = true\n[launch]\nunix = 'pane-env-agent'\nwindows = 'pane-env-agent'\n".into(),
+        )], 99).unwrap();
+        let agent = crate::detect::Agent::parse("pane-env-agent").unwrap();
+        for label in [
+            "pane-env-agent",
+            " PANE-ENV-ALIAS ",
+            r"C:\bin\PANE-ENV-ALIAS.EXE",
+            "/opt/bin/pane-env-alias.js",
+        ] {
+            let environ = format!("PATH=/bin\0HERDR_AGENT={label}\0");
+            assert_eq!(
+                parse_agent_env_hint_with_registry(&registry, environ.as_bytes()),
+                Some(agent)
+            );
+        }
+        assert_eq!(
+            parse_agent_env_hint_with_registry(
+                &crate::agents::AgentRegistry::default(),
+                b"HERDR_AGENT=pane-env-agent\0"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_agent_env_hint_with_registry(&registry, b"HERDR_AGENT=\xff\0"),
+            None
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
     fn interactive_shell_command_quotes_for_posix_and_powershell() {
         let argv = vec![
             "pi".into(),
@@ -648,5 +752,83 @@ mod tests {
             read_limited_reader(input, 16).expect("limited read"),
             LimitedRead::Complete(b"image".to_vec())
         );
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
+mod process_identity_tests {
+    use super::process_identity;
+    use std::process::{Child, Command, Stdio};
+
+    struct HarmlessChild(Child);
+
+    impl HarmlessChild {
+        fn spawn() -> Self {
+            #[cfg(unix)]
+            let mut command = {
+                let mut command = Command::new("/bin/sh");
+                command.args(["-c", "read -r line"]);
+                command
+            };
+            #[cfg(windows)]
+            let mut command = {
+                let mut command = Command::new("cmd.exe");
+                command.args(["/D", "/Q", "/C", "set /p line="]);
+                command
+            };
+            Self(
+                command
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn harmless stdin-waiting child"),
+            )
+        }
+    }
+
+    impl Drop for HarmlessChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn process_identity_is_stable_for_the_current_native_process() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).expect("current process birth token");
+        assert_eq!(identity.pid, pid);
+        assert_eq!(process_identity(pid), Some(identity));
+        assert_eq!(process_identity(0), None);
+        assert_eq!(process_identity(u32::MAX), None);
+    }
+
+    #[test]
+    fn process_identity_does_not_retain_a_reaped_native_child() {
+        let mut child = HarmlessChild::spawn();
+        let pid = child.0.id();
+        let identity = process_identity(pid).expect("live child birth token");
+        assert_eq!(process_identity(pid), Some(identity));
+        child.0.kill().expect("terminate harmless child");
+        child.0.wait().expect("reap harmless child");
+        assert_ne!(process_identity(pid), Some(identity));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_identity_rejects_a_child_that_exited_with_still_active_code() {
+        let mut child = Command::new("cmd.exe")
+            .args(["/D", "/Q", "/C", "exit 259"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn harmless exiting child");
+        let pid = child.id();
+        assert_eq!(child.wait().expect("reap child").code(), Some(259));
+        // Child still owns its handle here, keeping the exited process object
+        // queryable. The exit timestamp must reject it despite numeric code 259.
+        assert_eq!(process_identity(pid), None);
     }
 }

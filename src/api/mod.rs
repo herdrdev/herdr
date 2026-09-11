@@ -24,6 +24,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
         &request.method,
         Method::ServerReloadConfig(_)
             | Method::ServerReloadAgentManifests(_)
+            | Method::RegistryPresentationRefresh(_)
             | Method::NotificationShow(_)
             | Method::ProductAnnouncementDismiss(_)
             | Method::ReleaseNotesDismiss(_)
@@ -95,6 +96,75 @@ pub struct ApiRequestMessage {
 
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
 
+/// At most one maintenance wakeup may be queued while publications race ahead
+/// of the App loop. The handler reads the latest generation, not an old payload.
+#[derive(Default)]
+pub(crate) struct RegistryPublicationWakeup(std::sync::atomic::AtomicBool);
+
+pub(crate) static REGISTRY_PUBLICATION_WAKEUP: RegistryPublicationWakeup =
+    RegistryPublicationWakeup(std::sync::atomic::AtomicBool::new(false));
+
+impl RegistryPublicationWakeup {
+    pub(crate) fn notify(&self, before: u64, after: u64, api_tx: &ApiRequestSender) {
+        use std::sync::atomic::Ordering;
+        if before == after || self.0.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (respond_to, _) = std::sync::mpsc::channel();
+        if api_tx
+            .send(ApiRequestMessage {
+                request: Request {
+                    id: "internal:registry:published".into(),
+                    method: Method::RegistryPresentationRefresh(schema::EmptyParams::default()),
+                },
+                respond_to,
+                response_write_complete: None,
+                stream_active: None,
+            })
+            .is_err()
+        {
+            self.begin_refresh();
+        }
+    }
+
+    pub(crate) fn begin_refresh(&self) {
+        // Clear before sampling generation: a publication during the refresh
+        // must enqueue another wakeup rather than becoming a lost update.
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub fn socket_path() -> PathBuf {
     crate::session::active_api_socket_path()
+}
+
+#[cfg(test)]
+mod registry_publication_tests {
+    use super::*;
+
+    #[test]
+    fn publication_wakeups_coalesce_and_unchanged_reloads_do_not_queue() {
+        let wakeup = RegistryPublicationWakeup::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        wakeup.notify(1, 1, &tx);
+        assert!(rx.try_recv().is_err());
+        wakeup.notify(1, 2, &tx);
+        wakeup.notify(2, 3, &tx);
+        let message = rx.try_recv().unwrap();
+        assert!(matches!(
+            message.request.method,
+            Method::RegistryPresentationRefresh(_)
+        ));
+        assert!(request_changes_ui(&message.request));
+        assert!(serde_json::to_value(&message.request).is_err());
+        assert!(serde_json::from_value::<Request>(serde_json::json!({
+            "id": "external", "method": "RegistryPresentationRefresh", "params": {}
+        }))
+        .is_err());
+        assert!(rx.try_recv().is_err());
+        wakeup.begin_refresh();
+        wakeup.notify(3, 4, &tx);
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+    }
 }

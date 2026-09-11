@@ -1,0 +1,13 @@
+schema = 1
+id = "pi"
+name = "pi"
+aliases = []
+startable = true
+
+[launch]
+unix = "pi"
+windows = "pi"
+
+[sound]
+key = "pi"
+default = "default"

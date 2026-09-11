@@ -8,17 +8,20 @@ on:
       - "docs/next/website/**"
       - "docs/preview/**"
       - "docs/versions/**"
-      - "scripts/agent_detection_manifest_check.py"
       - "scripts/config_reference_check.py"
       - "scripts/docs/**"
       - "scripts/docs_translation_parity.py"
       - "scripts/preview.py"
-      - "scripts/test_agent_detection_manifest_check.py"
       - "scripts/test_config_reference_check.py"
       - "scripts/test_docs_translation_parity.py"
       - "scripts/test_preview.py"
-      - "src/detect/manifest_update.rs"
-      - "src/detect/manifests/**"
+      - "src/agents/**"
+      - "scripts/fixtures/agent-registry-snapshot-v1.json"
+      - "vendor/agent-registry/**"
+      - "src/agents/bundled.rs"
+      - "scripts/agent_registry_vendor.py"
+      - "scripts/test_agent_registry_vendor.py"
+      - "src/config/**"
   push:
     branches: [master]
     paths:
@@ -27,17 +30,20 @@ on:
       - "docs/next/website/**"
       - "docs/preview/**"
       - "docs/versions/**"
-      - "scripts/agent_detection_manifest_check.py"
       - "scripts/config_reference_check.py"
       - "scripts/docs/**"
       - "scripts/docs_translation_parity.py"
       - "scripts/preview.py"
-      - "scripts/test_agent_detection_manifest_check.py"
       - "scripts/test_config_reference_check.py"
       - "scripts/test_docs_translation_parity.py"
       - "scripts/test_preview.py"
-      - "src/detect/manifest_update.rs"
-      - "src/detect/manifests/**"
+      - "src/agents/**"
+      - "scripts/fixtures/agent-registry-snapshot-v1.json"
+      - "vendor/agent-registry/**"
+      - "src/agents/bundled.rs"
+      - "scripts/agent_registry_vendor.py"
+      - "scripts/test_agent_registry_vendor.py"
+      - "src/config/**"
 
 permissions:
   contents: read
@@ -67,7 +73,7 @@ jobs:
 
       - name: Validate published contract
         run: |
-          python3 scripts/agent_detection_manifest_check.py --require-published
+          python3 scripts/agent_registry_vendor.py --check
           python3 scripts/config_reference_check.py
           python3 scripts/docs_translation_parity.py --docs-root docs/next/website/src/content/docs
           node scripts/docs/versions.mjs check
@@ -76,7 +82,7 @@ jobs:
       - name: Test contract tooling
         run: |
           python3 -m unittest \
-            scripts.test_agent_detection_manifest_check \
+            scripts.test_agent_registry_vendor \
             scripts.test_config_reference_check \
             scripts.test_docs_translation_parity \
             scripts.test_preview

@@ -117,6 +117,7 @@ pub struct App {
     pub(crate) config_diagnostic_deadline: Option<Instant>,
     pub(crate) toast_deadline: Option<Instant>,
     pub(crate) last_api_notification_at: Option<Instant>,
+    pub(crate) integration_registry_generation: u64,
     pub(crate) last_git_remote_status_refresh: Instant,
     pub(crate) last_git_repo_discovery_refresh: Instant,
     pub(crate) git_refresh_in_flight: bool,
@@ -130,8 +131,8 @@ pub struct App {
     pub(crate) pending_worktree_remove_runtime_restores: HashMap<crate::layout::PaneId, u64>,
     pub(crate) next_api_worktree_operation_id: u64,
     pub(crate) next_auto_update_check: Option<Instant>,
-    pub(crate) next_agent_manifest_update_check: Option<Instant>,
     pub(crate) update_version_check_enabled: bool,
+    pub(crate) next_agent_registry_update_check: Option<Instant>,
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
@@ -441,6 +442,8 @@ impl App {
         let theme_runtime = theme_runtime_config(config, true);
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
+        let integration_registry = crate::agents::store::snapshot();
+        let integration_registry_generation = integration_registry.generation;
         let mut state = AppState {
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
@@ -510,9 +513,9 @@ impl App {
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            integration_recommendations: crate::integration::integration_recommendations(),
+            integration_recommendations:
+                crate::integration::integration_recommendations_with_registry(&integration_registry),
             agent_manifest_summaries,
-            agent_manifest_update_status: crate::detect::manifest_update::load_status(),
             installed_plugins: load_plugin_registry(policy.persist_plugin_registry),
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
@@ -539,19 +542,9 @@ impl App {
         // running binary out from under spawned test processes.
         let version_check_enabled =
             background_update_check_enabled(policy.background_updates, config.update.version_check);
-        let manifest_check_enabled = background_update_check_enabled(
-            policy.background_updates,
-            config.update.manifest_check,
-        );
         if version_check_enabled {
             let update_tx = event_tx.clone();
             std::thread::spawn(move || crate::update::auto_update(update_tx));
-        }
-        if manifest_check_enabled {
-            let manifest_update_tx = event_tx.clone();
-            std::thread::spawn(move || {
-                crate::detect::manifest_update::auto_update(manifest_update_tx)
-            });
         }
 
         let last_focus = state.active.and_then(|idx| {
@@ -568,6 +561,7 @@ impl App {
             config_diagnostic_deadline: None,
             toast_deadline: None,
             last_api_notification_at: None,
+            integration_registry_generation,
             state,
             pane_graphics: pane_graphics::Runtime::default(),
             pane_graphics_files: Arc::new(crate::pane_graphics_files::FileStore::default()),
@@ -590,9 +584,12 @@ impl App {
             next_api_worktree_operation_id: 1,
             next_auto_update_check: version_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
-            next_agent_manifest_update_check: manifest_check_enabled
-                .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             update_version_check_enabled: config.update.version_check,
+            next_agent_registry_update_check: background_update_check_enabled(
+                policy.background_updates,
+                config.update.manifest_check,
+            )
+            .then_some(Instant::now()),
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
@@ -893,9 +890,17 @@ impl App {
         if !invalid_section("update") {
             let now = Instant::now();
             let previous_version_check_enabled = self.update_version_check_enabled;
-            let previous_manifest_check_enabled = self.update_manifest_check_enabled;
             self.update_version_check_enabled = config.update.version_check;
+            let previous_manifest_check_enabled = self.update_manifest_check_enabled;
             self.update_manifest_check_enabled = config.update.manifest_check;
+            if !background_update_check_enabled(
+                self.policy.background_updates,
+                self.update_manifest_check_enabled,
+            ) {
+                self.next_agent_registry_update_check = None;
+            } else if !previous_manifest_check_enabled {
+                self.next_agent_registry_update_check = Some(now);
+            }
 
             if !self.update_version_check_enabled {
                 self.next_auto_update_check = None;
@@ -907,17 +912,6 @@ impl App {
                 && self.state.update_available.is_none()
             {
                 self.next_auto_update_check = Some(now);
-            }
-
-            if !self.update_manifest_check_enabled {
-                self.next_agent_manifest_update_check = None;
-            } else if !previous_manifest_check_enabled
-                && background_update_check_enabled(
-                    self.policy.background_updates,
-                    self.update_manifest_check_enabled,
-                )
-            {
-                self.next_agent_manifest_update_check = Some(now);
             }
         }
 
@@ -1686,7 +1680,6 @@ mod tests {
 
         let mut app = test_app();
         app.next_auto_update_check = Some(Instant::now());
-        app.next_agent_manifest_update_check = Some(Instant::now());
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
@@ -1716,9 +1709,7 @@ mod tests {
             crate::config::NewTerminalCwdConfig::Home
         );
         assert!(!app.update_version_check_enabled);
-        assert!(!app.update_manifest_check_enabled);
         assert!(app.next_auto_update_check.is_none());
-        assert!(app.next_agent_manifest_update_check.is_none());
         assert!(app.state.config_diagnostic.is_none());
         let toast = app.state.toast.as_ref().unwrap();
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
@@ -1726,6 +1717,64 @@ mod tests {
         assert_eq!(toast.context, "using config.toml");
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn manifest_check_controls_registry_schedule_independently_of_binary_updates() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("registry-auto-update");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = std::env::var_os(crate::config::CONFIG_PATH_ENV_VAR);
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut config = Config::default();
+        config.update.version_check = false;
+        config.update.manifest_check = true;
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &config,
+            AppPolicy {
+                background_updates: true,
+                ..AppPolicy::TEST
+            },
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let accepted = crate::agents::registry();
+        assert!(app.next_auto_update_check.is_none());
+        assert_eq!(
+            app.next_agent_registry_update_check.is_some(),
+            background_update_check_enabled(true, true)
+        );
+        for enabled in [false, true, true] {
+            let previous_deadline = app.next_agent_registry_update_check;
+            let previous_enabled = app.update_manifest_check_enabled;
+            let content = format!("[update]\nversion_check = false\nmanifest_check = {enabled}\n");
+            std::fs::write(&path, &content).unwrap();
+            assert_eq!(
+                app.reload_config().status,
+                crate::config::ConfigReloadStatus::Applied
+            );
+            assert!(app.next_auto_update_check.is_none());
+            assert_eq!(app.update_manifest_check_enabled, enabled);
+            assert_eq!(
+                app.next_agent_registry_update_check.is_some(),
+                background_update_check_enabled(true, enabled)
+            );
+            if previous_enabled == enabled {
+                assert_eq!(app.next_agent_registry_update_check, previous_deadline);
+            }
+            assert!(std::sync::Arc::ptr_eq(
+                &accepted,
+                &crate::agents::registry()
+            ));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        }
+        match original {
+            Some(value) => std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, value),
+            None => std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR),
+        }
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -3219,6 +3268,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3243,6 +3293,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,

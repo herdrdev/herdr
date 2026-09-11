@@ -8,7 +8,6 @@ on:
       - ".github/workflows/website-deploy.yml"
       - "docs/preview/**"
       - "docs/versions/**"
-      - "src/detect/manifests/**"
       - "distribution/**"
 
 permissions:

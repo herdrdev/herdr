@@ -1,6 +1,6 @@
 use super::*;
 
-fn remote_manifest(version: &str, state: &str, contains: &str) -> String {
+fn versioned_manifest(version: &str, state: &str, contains: &str) -> String {
     format!(
         r#"
 id = "codex"
@@ -67,17 +67,56 @@ fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
     result
 }
 
-fn write_remote_codex(content: &str) {
-    let path = crate::detect::manifest_update::remote_manifest_path(Agent::Codex);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-    reload_manifests();
+fn historical_remote_path() -> PathBuf {
+    crate::config::state_dir().join("agent-detection/remote/codex.toml")
 }
 
-fn write_remote_codex_without_reload(content: &str) {
-    let path = crate::detect::manifest_update::remote_manifest_path(Agent::Codex);
+fn write_historical_remote(content: &str) {
+    let path = historical_remote_path();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
+}
+
+fn write_local_codex_without_reload(content: &str) {
+    let path = override_path(Agent::Codex).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+}
+
+fn selected_codex_registry() -> crate::agents::AgentRegistry {
+    let detection = versioned_manifest("7.2.1", "blocked", "package-ready");
+    let packages = crate::agents::source::load_packages(&[
+        ("agents/codex/agent.toml", "schema = 1\nid = 'codex'\nname = 'Codex'\naliases = []\nstartable = true\n[launch]\nunix = 'codex'\nwindows = 'codex'\n"),
+        ("agents/codex/detection.toml", detection.as_str()),
+    ]).unwrap();
+    crate::agents::AgentRegistry::from_packages(packages).unwrap()
+}
+
+fn cache_explain(cache: &ManifestCache, screen: &str) -> DetectionExplain {
+    explain_with_cache(
+        cache,
+        Agent::Codex,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        true,
+    )
+}
+
+fn test_remote_revision() -> crate::agents::remote::RemoteRevision {
+    crate::agents::remote::RemoteRevision {
+        origin: "https://registry.herdr.dev".into(),
+        pointer: crate::agents::remote::ChannelPointer {
+            schema: 1,
+            channel: crate::agents::remote::Channel::Stable,
+            generation: 9,
+            snapshot_sha256: "a".repeat(64),
+            snapshot_bytes: 100,
+        },
+        commit: "b".repeat(40),
+    }
 }
 
 fn write_local_codex(content: &str) {
@@ -154,149 +193,221 @@ line_regex = ["^exact line$"]
 }
 
 #[test]
-fn remote_manifest_loads_between_local_override_and_bundled() {
-    with_manifest_dirs("remote-source", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
+fn historical_website_cache_and_status_are_ignored_and_preserved() {
+    with_manifest_dirs("historical-cache", || {
+        let historical = versioned_manifest("9999.1", "working", "historical-ready");
+        write_historical_remote(&historical);
+        let status_path = crate::config::state_dir().join("agent-detection/status.toml");
+        let historical_status = "last_check_unix = 123\nlast_result = 'historical-website'\n";
+        std::fs::write(&status_path, historical_status).unwrap();
+        reload_manifests();
+        let explanation = explain(Agent::Codex, "historical-ready");
+        assert_eq!(explanation.source, Some(ManifestSource::Bundled));
+        assert_eq!(explanation.cached_remote_version, None);
+        assert_eq!(explanation.remote_update_status, None);
+        assert_eq!(explanation.warning, None);
+        assert_eq!(
+            std::fs::read_to_string(historical_remote_path()).unwrap(),
+            historical
+        );
+        assert_eq!(
+            std::fs::read_to_string(&status_path).unwrap(),
+            historical_status
+        );
+        let status = crate::detect::manifest_update::load_status();
+        assert_eq!(status.last_check_unix, None);
+        assert_eq!(
+            status.last_result.as_deref(),
+            Some("active registry snapshot")
+        );
+        assert!(status.agents.is_empty());
+    });
+}
 
-        let explain = explain(Agent::Codex, "remote-ready");
+#[test]
+fn selected_package_provenance_and_versions_are_not_website_cache_or_snapshot_hashes() {
+    with_manifest_dirs("package-provenance", || {
+        write_historical_remote(&versioned_manifest("9999.1", "working", "package-ready"));
+        let registry = selected_codex_registry();
+        let mut cache = build_manifest_cache(&registry);
+        apply_registry_provenance(&mut cache, Some(Path::new("/selected/agents")), None);
+        let local = cache_explain(&cache, "package-ready");
+        assert_eq!(local.state, AgentState::Blocked);
+        assert_eq!(
+            local.source,
+            Some(ManifestSource::LocalRegistry("/selected/agents".into()))
+        );
+        assert_eq!(local.cached_remote_version, None);
+        assert_eq!(local.manifest_version.as_deref(), Some("7.2.1"));
 
-        assert_eq!(explain.state, AgentState::Blocked);
+        let remote = test_remote_revision();
+        apply_registry_provenance(&mut cache, None, Some(&remote));
+        let accepted = cache_explain(&cache, "package-ready");
         assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
+            accepted.source,
+            Some(ManifestSource::R2 { generation: 9, .. })
         ));
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
+        assert_eq!(accepted.cached_remote_version.as_deref(), Some("7.2.1"));
         assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
+            accepted.remote_update_status.as_deref(),
+            Some("accepted_registry")
+        );
+        let fallback = cache_explain(&cache, "no match");
+        assert_eq!(fallback.manifest_version.as_deref(), Some("7.2.1"));
+        assert_eq!(fallback.cached_remote_version.as_deref(), Some("7.2.1"));
+        assert_eq!(fallback.remote_update_status, accepted.remote_update_status);
+        apply_registry_provenance(&mut cache, None, None);
+        assert_eq!(
+            cache_explain(&cache, "package-ready").source,
+            Some(ManifestSource::Bundled)
+        );
+        assert_eq!(
+            cache_explain(&cache, "package-ready").cached_remote_version,
+            None
         );
     });
 }
 
 #[test]
-fn fallback_explain_preserves_active_manifest_version() {
-    with_manifest_dirs("fallback-version", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-
-        let explain = explain(Agent::Codex, "ordinary prompt text");
-
-        assert_eq!(explain.state, AgentState::Idle);
+fn local_override_is_preserved_over_selected_local_and_r2_packages() {
+    with_manifest_dirs("override-selected-package", || {
+        let content = versioned_manifest("8.1", "working", "local-ready");
+        write_local_codex_without_reload(&content);
+        let registry = selected_codex_registry();
+        let mut cache = build_manifest_cache(&registry);
+        apply_registry_provenance(&mut cache, Some(Path::new("/selected/agents")), None);
+        let local = cache_explain(&cache, "local-ready");
+        assert_eq!(local.state, AgentState::Working);
+        assert!(matches!(local.source, Some(ManifestSource::Override(_))));
+        assert!(!local.local_override_shadowing_remote);
+        apply_registry_provenance(&mut cache, None, Some(&test_remote_revision()));
+        let remote = cache_explain(&cache, "local-ready");
+        assert_eq!(remote.manifest_version.as_deref(), Some("8.1"));
+        assert_eq!(remote.cached_remote_version.as_deref(), Some("7.2.1"));
+        assert!(remote.local_override_shadowing_remote);
         assert_eq!(
-            explain.fallback_reason.as_deref(),
-            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+            std::fs::read_to_string(override_path(Agent::Codex).unwrap()).unwrap(),
+            content
         );
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
+        // A source replacement lacking this profile cannot resurrect its override.
+        let empty = build_manifest_cache(&crate::agents::AgentRegistry::default());
+        assert!(summaries(&empty).is_empty());
+        assert_eq!(cache_explain(&empty, "local-ready").source, None);
     });
 }
 
 #[test]
-fn older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest() {
-    with_manifest_dirs("older-remote-bundled-fallback", || {
-        write_remote_codex(&remote_manifest("2026.06.10.0", "blocked", "remote-ready"));
-
-        let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("2026.06.10.0")
-        );
-        assert!(explain
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("older than bundled")));
+fn invalid_local_override_falls_back_to_selected_package_with_warning() {
+    with_manifest_dirs("invalid-override-selected", || {
+        let registry = selected_codex_registry();
+        for content in [
+            "id = ".to_string(),
+            local_manifest("working", "package-ready").replace("codex", "cursor"),
+        ] {
+            write_local_codex_without_reload(&content);
+            let mut cache = build_manifest_cache(&registry);
+            apply_registry_provenance(&mut cache, None, Some(&test_remote_revision()));
+            let explanation = cache_explain(&cache, "package-ready");
+            assert_eq!(explanation.state, AgentState::Blocked);
+            assert!(matches!(
+                explanation.source,
+                Some(ManifestSource::R2 { .. })
+            ));
+            assert!(explanation
+                .warning
+                .as_deref()
+                .unwrap()
+                .contains("ignored override"));
+            assert!(!explanation.local_override_shadowing_remote);
+            assert_eq!(explanation.cached_remote_version.as_deref(), Some("7.2.1"));
+            assert_eq!(
+                std::fs::read_to_string(override_path(Agent::Codex).unwrap()).unwrap(),
+                content
+            );
+        }
     });
 }
 
 #[test]
-fn local_override_shadows_cached_remote_manifest() {
-    with_manifest_dirs("local-shadows-remote", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-        write_local_codex(&local_manifest("idle", "local-ready"));
-
-        let explain = explain(Agent::Codex, "local-ready");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert!(matches!(explain.source, Some(ManifestSource::Override(_))));
-        assert!(explain.local_override_shadowing_remote);
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
-    });
-}
-
-#[test]
-fn invalid_local_override_falls_back_to_cached_remote_manifest() {
-    with_manifest_dirs("invalid-local-remote-fallback", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-        write_local_codex("id = ");
-
-        let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Blocked);
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-        assert!(explain.warning.is_some());
-    });
-}
-
-#[test]
-fn detection_uses_cached_manifest_until_explicit_reload() {
+fn detection_uses_cached_local_override_until_explicit_reload() {
     with_manifest_dirs("cache-boundary", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "cached-ready"));
-
-        let cached = explain(Agent::Codex, "cached-ready");
-        assert_eq!(cached.state, AgentState::Blocked);
-        assert!(matches!(cached.source, Some(ManifestSource::Remote { .. })));
+        write_local_codex(&versioned_manifest(
+            "9999.01.01.1",
+            "blocked",
+            "cached-ready",
+        ));
         assert_eq!(
-            cached.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("test")
+            explain(Agent::Codex, "cached-ready").state,
+            AgentState::Blocked
         );
-
-        write_remote_codex_without_reload(&remote_manifest("9999.01.01.2", "working", "new-ready"));
-
+        write_local_codex_without_reload(&versioned_manifest(
+            "9999.01.01.2",
+            "working",
+            "new-ready",
+        ));
         let unchanged = explain(Agent::Codex, "new-ready");
         assert_eq!(unchanged.state, AgentState::Idle);
-        assert_eq!(
-            unchanged.fallback_reason.as_deref(),
-            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-        );
-        assert_eq!(
-            unchanged.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
-
+        assert_eq!(unchanged.manifest_version.as_deref(), Some("9999.01.01.1"));
         reload_manifests();
-
         let reloaded = explain(Agent::Codex, "new-ready");
         assert_eq!(reloaded.state, AgentState::Working);
-        assert_eq!(
-            reloaded.cached_remote_version.as_deref(),
-            Some("9999.01.01.2")
-        );
-        assert_eq!(
-            reloaded.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("test")
-        );
+        assert_eq!(reloaded.manifest_version.as_deref(), Some("9999.01.01.2"));
     });
 }
 
 #[test]
-fn all_bundled_manifests_parse_and_validate() {
-    for agent in Agent::SCREEN_MANIFEST_AGENTS {
-        assert!(
-            bundled_manifest(agent).is_some(),
-            "missing bundled manifest for {}",
-            agent_label(agent)
+fn source_tree_agent_directories_and_manifests_match_registry() {
+    let agents_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/agent-registry/agents");
+    let mut source_directories = Vec::new();
+    for entry in std::fs::read_dir(&agents_root).expect("agent source directory should be readable")
+    {
+        let entry = entry.expect("agent source entry should be readable");
+        if entry
+            .file_type()
+            .expect("agent source entry type should be readable")
+            .is_dir()
+        {
+            source_directories.push(
+                entry
+                    .file_name()
+                    .into_string()
+                    .expect("agent source directory names should be UTF-8"),
+            );
+        }
+    }
+    source_directories.sort();
+
+    let registry = crate::agents::registry();
+    let mut registered_directories: Vec<_> = registry
+        .known_profiles()
+        .map(|profile| profile.canonical_id().to_string())
+        .collect();
+    registered_directories.sort();
+    assert_eq!(source_directories, registered_directories);
+
+    for profile in registry.known_profiles() {
+        let manifest_path = agents_root
+            .join(profile.canonical_id())
+            .join("detection.toml");
+        let detection = profile.detection();
+        assert_eq!(
+            manifest_path.is_file(),
+            detection.is_some(),
+            "detection file capability mismatch for {}",
+            profile.canonical_id()
         );
+
+        let Some(detection) = detection else {
+            continue;
+        };
+        let content = std::fs::read_to_string(&manifest_path)
+            .expect("registered detection manifest should be readable");
+        assert_eq!(content, detection);
+
+        let parsed = parse_manifest(&content).expect("bundled manifest should parse");
+        assert_eq!(parsed.id, profile.canonical_id());
+        assert!(bundled_manifest(&crate::agents::registry(), profile.legacy_agent()).is_some());
     }
 }
 
@@ -1263,4 +1374,241 @@ fn codex_osc_working_beats_weak_blocker_screen() {
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
         Some("osc_title_working")
     );
+}
+
+#[test]
+fn retained_snapshot_keeps_compiled_detection_after_reload() {
+    with_manifest_dirs("retained-snapshot", || {
+        write_local_codex(&versioned_manifest(
+            "9999.01.01.1",
+            "blocked",
+            "snapshot-ready",
+        ));
+        let retained = crate::agents::registry();
+        write_local_codex_without_reload(&versioned_manifest(
+            "9999.01.01.2",
+            "working",
+            "snapshot-ready",
+        ));
+        reload_manifests();
+        let current = crate::agents::registry();
+        let input = DetectionInput {
+            screen: "snapshot-ready",
+            osc_title: "",
+            osc_progress: "",
+        };
+
+        assert_eq!(
+            detect_with_registry(&retained, Agent::Codex, input).state,
+            AgentState::Blocked
+        );
+        assert_eq!(
+            detect_with_registry(&current, Agent::Codex, input).state,
+            AgentState::Working
+        );
+        assert_eq!(
+            explain_with_registry(&retained, Agent::Codex, input)
+                .manifest_version
+                .as_deref(),
+            Some("9999.01.01.1")
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &retained.registry,
+            &current.registry
+        ));
+        assert_eq!(retained.digest, current.digest);
+    });
+}
+
+#[test]
+fn selective_reload_retains_unselected_local_override_exactly() {
+    with_manifest_dirs("selective-local-snapshot", || {
+        let path = override_path(Agent::Cursor).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            local_manifest("blocked", "retained-local").replace("codex", "cursor"),
+        )
+        .unwrap();
+        reload_manifests();
+        let before = crate::agents::registry();
+        let cursor_summary = summaries(&before.manifests)
+            .into_iter()
+            .find(|summary| summary.agent == Agent::Cursor)
+            .unwrap();
+
+        // Both files change, but only Codex is part of this publication.
+        std::fs::write(
+            &path,
+            local_manifest("working", "changed-local").replace("codex", "cursor"),
+        )
+        .unwrap();
+        write_local_codex_without_reload(&versioned_manifest(
+            "9999.01.01.2",
+            "working",
+            "fresh-remote",
+        ));
+        reload_manifests_for_agents(&[Agent::Codex]);
+        let after = crate::agents::registry();
+        assert_eq!(
+            summaries(&after.manifests)
+                .into_iter()
+                .find(|summary| summary.agent == Agent::Cursor)
+                .unwrap(),
+            cursor_summary
+        );
+        assert_eq!(
+            explain(Agent::Cursor, "retained-local").state,
+            AgentState::Blocked
+        );
+        assert_eq!(
+            explain(Agent::Cursor, "changed-local").state,
+            AgentState::Idle
+        );
+        assert_eq!(
+            explain(Agent::Codex, "fresh-remote").state,
+            AgentState::Working
+        );
+        assert!(std::sync::Arc::ptr_eq(&before.registry, &after.registry));
+    });
+}
+
+#[test]
+fn candidate_alias_matching_does_not_use_published_registry() {
+    let manifest =
+        parse_manifest(&local_manifest("working", "ready").replace("codex", "claude-code"))
+            .unwrap();
+    let published = crate::agents::registry();
+    assert!(manifest_matches_agent(&published, &manifest, Agent::Claude));
+    assert!(!manifest_matches_agent(
+        &crate::agents::AgentRegistry::default(),
+        &manifest,
+        Agent::Claude
+    ));
+}
+
+#[test]
+fn empty_candidate_detection_keeps_known_agent_idle_fallback() {
+    let registry = crate::agents::AgentRegistry::default();
+    let manifests = build_manifest_cache(&registry);
+    assert!(summaries(&manifests).is_empty());
+    let explanation = explain_with_cache(
+        &manifests,
+        Agent::Codex,
+        DetectionInput {
+            screen: "anything",
+            osc_title: "",
+            osc_progress: "",
+        },
+        false,
+    );
+    assert_eq!(explanation.state, AgentState::Idle);
+    assert_eq!(explanation.source, None);
+    assert_eq!(
+        explanation.fallback_reason.as_deref(),
+        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+    );
+}
+
+#[test]
+fn strict_readiness_requires_a_screen_bound_visible_idle_rule() {
+    fn snapshot(
+        region: &str,
+        visible_idle: bool,
+    ) -> std::sync::Arc<crate::agents::RegistrySnapshot> {
+        crate::agents::store::snapshot_for_test(
+            vec![
+                (
+                    "agents/strict-test/agent.toml".into(),
+                    "schema = 1\nid = 'strict-test'\nname = 'strict-test'\naliases = []\nstartable = true\n[launch]\nunix = 'strict-test'\nwindows = 'strict-test'\n".into(),
+                ),
+                (
+                    "agents/strict-test/process.toml".into(),
+                    "names = ['strict-test']\n".into(),
+                ),
+                (
+                    "agents/strict-test/detection.toml".into(),
+                    format!(
+                        "id = 'strict-test'\nversion = '2026.06.10.1'\nmin_engine_version = 1\n[[rules]]\nid = 'idle'\nstate = 'idle'\npriority = 10\nregion = '{region}'\nvisible_idle = {visible_idle}\ncontains = ['ready']\n"
+                    ),
+                ),
+            ],
+            1,
+        )
+        .unwrap()
+    }
+
+    let agent = crate::detect::Agent::parse("strict-test").unwrap();
+    assert!(super::requires_screen_visible_idle(
+        &snapshot("bottom_non_empty_lines(4)", true),
+        agent
+    ));
+    assert!(!super::requires_screen_visible_idle(
+        &snapshot("osc_title", true),
+        agent
+    ));
+    assert!(!super::requires_screen_visible_idle(
+        &snapshot("bottom_lines(4)", false),
+        agent
+    ));
+    for (region, screen_visible_idle) in [
+        ("bottom_non_empty_lines(4)", true),
+        ("osc_title", false),
+        ("osc_progress", false),
+    ] {
+        let result = super::detect_with_registry(
+            &snapshot(region, true),
+            agent,
+            DetectionInput {
+                screen: "ready",
+                osc_title: "ready",
+                osc_progress: "ready",
+            },
+        );
+        assert_eq!(result.state, AgentState::Idle);
+        assert!(result.visible_idle, "OSC idle retains its status evidence");
+        assert_eq!(result.screen_visible_idle, screen_visible_idle, "{region}");
+    }
+}
+
+#[test]
+fn opencode_visible_idle_uses_structural_bottom_controls_at_wide_and_narrow_widths() {
+    for screen in [
+        "  ┃\n  ┃  Ask anything...\n  ┃\n  ┃  Build · model\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n  tab agents  key commands\n",
+        "  ┃\n  ┃  Build · model name\n  ┃          wrapped\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀\n  tab agents\n  other-key commands\n",
+        "  prior conversation\n  ┃\n  ┃  Build · model\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀\n  project 2 (0%) other-key\n  commands\n",
+    ] {
+        let result = super::detect(Agent::OpenCode, screen);
+        assert_eq!(result.state, AgentState::Idle);
+        assert!(result.visible_idle);
+        assert!(!result.skip_state_update);
+    }
+}
+
+#[test]
+fn opencode_priority_keeps_palette_working_and_blocked_surfaces_out_of_idle() {
+    let palette_with_controls_behind =
+        "╹▀▀▀▀▀▀▀▀▀▀▀▀\ncommands\nCommands   esc\nSearch\nSuggested\nSwitch model\n";
+    let palette = super::detect(Agent::OpenCode, palette_with_controls_behind);
+    assert_eq!(palette.state, AgentState::Unknown);
+    assert!(palette.skip_state_update);
+    assert!(!palette.visible_idle);
+
+    let working = super::detect(Agent::OpenCode, "┃\n╹▀▀▀▀▀▀▀▀▀▀▀▀\ncommands\n■■■■■■\n");
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+    assert!(!working.visible_idle);
+
+    let blocked = super::detect(
+        Agent::OpenCode,
+        "┃\n╹▀▀▀▀▀▀▀▀▀▀▀▀\ncommands\n△ Permission required\n",
+    );
+    assert_eq!(blocked.state, AgentState::Blocked);
+    assert!(blocked.visible_blocker);
+    assert!(!blocked.visible_idle);
+
+    let blank = super::detect(Agent::OpenCode, "");
+    assert_eq!(blank.state, AgentState::Unknown);
+    assert!(blank.skip_state_update);
+    assert!(!blank.visible_idle);
 }

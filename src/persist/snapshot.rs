@@ -111,6 +111,8 @@ pub struct PaneSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneAgentSessionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
     pub source: String,
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
@@ -330,7 +332,7 @@ fn capture_tab(
                     terminal.agent_name.clone(),
                     terminal
                         .managed_agent_kind()
-                        .map(|agent| crate::detect::agent_label(agent).to_string()),
+                        .map(|agent| crate::detect::agent_label(&agent).to_string()),
                 )
             })
             .unwrap_or_default();
@@ -339,6 +341,10 @@ fn capture_tab(
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {
                     return Some(PaneAgentSessionSnapshot {
+                        recipe: terminal
+                            .pinned_agent_resume_recipe
+                            .clone()
+                            .filter(|recipe| recipe.agent == authority.agent_label),
                         source: authority.source.clone(),
                         agent: authority.agent_label.clone(),
                         kind: session_ref.kind,
@@ -350,6 +356,10 @@ fn capture_tab(
                 .persisted_agent_session
                 .as_ref()
                 .map(|session| PaneAgentSessionSnapshot {
+                    recipe: terminal
+                        .pinned_agent_resume_recipe
+                        .clone()
+                        .filter(|recipe| recipe.agent == session.agent),
                     source: session.source.clone(),
                     agent: session.agent.clone(),
                     kind: session.session_ref.kind,
@@ -578,6 +588,7 @@ mod tests {
         assert_eq!(pending_pane.managed_agent_kind, None);
 
         let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_agent_process_at(crate::detect::Agent::Pi, now);
         terminal.set_detected_state(
             Some(crate::detect::Agent::Pi),
             crate::detect::AgentState::Idle,

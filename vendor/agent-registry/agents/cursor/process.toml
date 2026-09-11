@@ -1,0 +1,7 @@
+names = ["cursor", "cursor-agent"]
+
+[bundled_node]
+runtime_basename = "node.exe"
+entrypoint_basename = "index.js"
+package_directory = "cursor-agent"
+versions_directory = "versions"

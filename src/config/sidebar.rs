@@ -408,11 +408,25 @@ where
     D: serde::Deserializer<'de>,
 {
     let rows_by_agent = BTreeMap::<String, AgentSidebarRows>::deserialize(deserializer)?;
+    if rows_by_agent.is_empty() {
+        return Ok(rows_by_agent);
+    }
+    let registry = crate::agents::registry();
     for (id, rows) in &rows_by_agent {
-        if crate::detect::parse_canonical_agent_label(id).is_none() {
+        if Agent::parse(id).is_err() {
             return Err(serde::de::Error::custom(format!(
-                "unknown canonical agent id `{id}` in sidebar rows_by_agent"
+                "invalid canonical agent id `{id}` in sidebar rows_by_agent"
             )));
+        }
+        // Unknown canonical IDs are valid for remote clients. An alias known
+        // to this snapshot, however, must not shadow its canonical identity.
+        if let Some(profile) = registry.profile_by_normalized_alias(id) {
+            if profile.canonical_id() != id {
+                return Err(serde::de::Error::custom(format!(
+                    "agent alias `{id}` in sidebar rows_by_agent; use canonical id `{}`",
+                    profile.canonical_id()
+                )));
+            }
         }
         validate_sidebar_rows(rows).map_err(serde::de::Error::custom)?;
     }
@@ -432,7 +446,7 @@ pub struct AgentsSidebarConfig {
 impl AgentsSidebarConfig {
     pub(crate) fn rows_for_agent(&self, agent: Option<Agent>) -> &AgentSidebarRows {
         agent
-            .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
+            .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(&agent)))
             .unwrap_or(&self.rows)
     }
 }
@@ -704,10 +718,15 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
 
     #[test]
     fn accepts_every_canonical_agent_override_key() {
-        let agents = Agent::ALL;
+        let agents = crate::agents::registry()
+            .known_profiles()
+            .map(|profile| profile.legacy_agent())
+            .collect::<Vec<_>>();
+        assert_eq!(agents.len(), 23);
+        assert!(agents.contains(&Agent::Muse));
         let entries = agents
             .iter()
-            .map(|agent| format!("{} = [[\"agent\"]]", crate::detect::agent_label(*agent)))
+            .map(|agent| format!("{} = [[\"agent\"]]", crate::detect::agent_label(agent)))
             .collect::<Vec<_>>()
             .join("\n");
         let input = format!("[ui.sidebar.agents.rows_by_agent]\n{entries}\n");
@@ -717,8 +736,41 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
     }
 
     #[test]
-    fn rejects_alias_case_whitespace_and_unknown_override_keys() {
-        for key in ["claude-code", "Claude", "' claude '", "unknown"] {
+    fn accepts_unregistered_canonical_override_keys() {
+        let config: crate::config::Config =
+            toml::from_str("[ui.sidebar.agents.rows_by_agent]\nfuture-agent = [[\"agent\"]]\n")
+                .unwrap();
+        let agent = Agent::parse("future-agent").unwrap();
+        assert_eq!(
+            config.ui.sidebar.agents.rows_for_agent(Some(agent)),
+            &config.ui.sidebar.agents.rows_by_agent["future-agent"],
+        );
+    }
+
+    #[test]
+    fn rejects_known_alias_override_keys_in_favor_of_canonical_ids() {
+        for (alias, canonical) in [
+            ("claude-code", "claude"),
+            ("cursor-agent", "cursor"),
+            ("github-copilot", "copilot"),
+            ("antigravity", "agy"),
+        ] {
+            // All these aliases are syntactically valid IDs; only active
+            // registry resolution distinguishes them from novel IDs.
+            assert!(Agent::parse(alias).is_ok());
+            let input = format!("[ui.sidebar.agents.rows_by_agent]\n{alias} = [[\"agent\"]]\n");
+            let error = toml::from_str::<crate::config::Config>(&input).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains(&format!("use canonical id `{canonical}`")));
+            let input = format!("[ui.sidebar.agents.rows_by_agent]\n{canonical} = [[\"agent\"]]\n");
+            assert!(toml::from_str::<crate::config::Config>(&input).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_canonical_override_keys() {
+        for key in ["Claude", "' claude '", "'a_b'", "'1agent'"] {
             let input = format!("[ui.sidebar.agents.rows_by_agent]\n{key} = [[\"agent\"]]\n");
             assert!(
                 toml::from_str::<crate::config::Config>(&input).is_err(),
