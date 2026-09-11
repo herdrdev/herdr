@@ -162,14 +162,44 @@ impl ClientShellState {
         )
     }
 
+    fn active_selection_pane(&self) -> Option<PaneHit> {
+        let pane_id = if let Some(gesture) = self.word_selection_gesture.as_ref() {
+            if gesture.released {
+                return None;
+            }
+            &gesture.pane_id
+        } else {
+            &self
+                .selection
+                .as_ref()
+                .filter(|selection| selection.is_in_progress())?
+                .pane_id
+        };
+        self.hits
+            .panes
+            .iter()
+            .find(|hit| &hit.pane_id == pane_id)
+            .cloned()
+    }
+
     fn update_selection_cursor_with_metrics(
         &mut self,
         hit: &PaneHit,
         column: u16,
         row: u16,
         metrics: Option<crate::pane::ScrollMetrics>,
+        outcome: &mut ClientShellInput,
     ) {
-        if let Some(selection) = self.selection.as_mut() {
+        if self.word_selection_gesture.is_some() {
+            let viewport_row = row
+                .saturating_sub(hit.inner_rect.y)
+                .min(hit.inner_rect.height.saturating_sub(1));
+            let col = column
+                .saturating_sub(hit.inner_rect.x)
+                .min(hit.inner_rect.width.saturating_sub(1));
+            let absolute_row = crate::selection::absolute_row_for_viewport(viewport_row, metrics);
+            self.drag_word_selection((absolute_row, col), outcome);
+        } else if let Some(selection) = self.selection.as_mut() {
             selection.drag(column, row, hit.inner_rect, metrics);
         }
     }
@@ -190,8 +220,11 @@ impl ClientShellState {
             let (anchor_row, anchor_col) = selection.anchor_screen_pos(hit.inner_rect, metrics);
             anchor_row != row || anchor_col != column
         });
-        let is_dragging = was_dragging || moved_from_anchor;
-        self.update_selection_cursor_with_metrics(hit, column, row, metrics);
+        self.update_selection_cursor_with_metrics(hit, column, row, metrics, outcome);
+        let is_dragging = self
+            .word_selection_gesture
+            .as_ref()
+            .map_or(was_dragging || moved_from_anchor, |gesture| gesture.dragged);
         if is_dragging {
             if let Some(selection) = self.selection.as_mut() {
                 if selection.is_just_click() {
@@ -244,7 +277,7 @@ impl ClientShellState {
                 offset_from_bottom,
                 ..metrics
             };
-            self.update_selection_cursor_with_metrics(hit, column, row, Some(projected));
+            self.update_selection_cursor_with_metrics(hit, column, row, Some(projected), outcome);
             self.push_pane_scroll_offset(hit.pane_id.clone(), offset_from_bottom, outcome);
         }
         self.selection_autoscroll = Some(ClientSelectionAutoscroll {
@@ -268,20 +301,10 @@ impl ClientShellState {
         if !matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-        ) || !self
-            .selection
-            .as_ref()
-            .is_some_and(crate::selection::Selection::is_in_progress)
-        {
+        ) {
             return false;
         }
-        let Some(hit) = self.selection.as_ref().and_then(|selection| {
-            self.hits
-                .panes
-                .iter()
-                .find(|hit| hit.pane_id == selection.pane_id)
-                .cloned()
-        }) else {
+        let Some(hit) = self.active_selection_pane() else {
             return false;
         };
         let Some(metrics) = self.selection_scroll_metrics(&hit) else {
@@ -307,6 +330,7 @@ impl ClientShellState {
                 mouse.column,
                 mouse.row,
                 Some(projected),
+                outcome,
             );
             self.push_pane_scroll_offset(hit.pane_id, offset_from_bottom, outcome);
             outcome.repaint = true;
@@ -344,9 +368,15 @@ impl ClientShellState {
             self.selection_autoscroll_deadline = None;
             return outcome;
         };
-        if !self.selection.as_ref().is_some_and(|selection| {
-            selection.pane_id == autoscroll.pane_id && selection.is_dragging()
-        }) {
+        let dragging = self.word_selection_gesture.as_ref().map_or_else(
+            || {
+                self.selection.as_ref().is_some_and(|selection| {
+                    selection.pane_id == autoscroll.pane_id && selection.is_dragging()
+                })
+            },
+            |gesture| gesture.pane_id == autoscroll.pane_id && gesture.dragged && !gesture.released,
+        );
+        if !dragging {
             self.stop_selection_autoscroll();
             return outcome;
         }
@@ -388,6 +418,7 @@ impl ClientShellState {
             autoscroll.last_mouse_column,
             autoscroll.last_mouse_row,
             Some(metrics),
+            &mut outcome,
         );
         self.push_pane_scroll_offset(autoscroll.pane_id.clone(), next_offset, &mut outcome);
         self.selection_autoscroll = Some(autoscroll);
@@ -1659,13 +1690,7 @@ impl ClientShellState {
         }
 
         if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
-            let selection_hit = self.selection.as_ref().and_then(|selection| {
-                self.hits
-                    .panes
-                    .iter()
-                    .find(|hit| hit.pane_id == selection.pane_id)
-                    .cloned()
-            });
+            let selection_hit = self.active_selection_pane();
             if let Some(hit) = selection_hit {
                 self.update_selection_drag(&hit, mouse.column, mouse.row, outcome);
                 // Consume every motion, but do not rebuild a frame for every intermediate position.
@@ -1673,6 +1698,13 @@ impl ClientShellState {
                     || self.request_selection_drag_repaint(std::time::Instant::now());
                 return;
             }
+        }
+        if mouse.kind == MouseEventKind::Up(MouseButton::Left)
+            && self.word_selection_gesture.is_some()
+        {
+            self.finish_word_selection(outcome);
+            outcome.repaint = true;
+            return;
         }
         if mouse.kind == MouseEventKind::Up(MouseButton::Left) && self.selection.is_some() {
             self.stop_selection_autoscroll();
@@ -1854,7 +1886,7 @@ impl ClientShellState {
                 }
                 self.stop_selection_autoscroll();
                 self.selection_highlight_clear_deadline = None;
-                self.pending_word_selection = None;
+                self.word_selection_gesture = None;
                 let previous_pane_click = self.last_pane_click.take();
                 self.workspace_press = None;
                 self.tab_press = None;

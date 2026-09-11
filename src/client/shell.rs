@@ -31,7 +31,9 @@ mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
+mod word_selection;
 mod worktrees;
+use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
