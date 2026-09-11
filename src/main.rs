@@ -1,5 +1,15 @@
 use std::io;
 
+#[cfg(test)]
+#[test]
+fn ci_incremental_probe() {
+    let expected = std::env::var("HERDR_CI_PROBE_EXPECTED")
+        .expect("CI probe expectation")
+        .parse::<u32>()
+        .expect("numeric CI probe expectation");
+    assert_eq!(std::hint::black_box(1u32) + 2, expected);
+}
+
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 const NESTED_HERDR_MESSAGES: [&str; 6] = [
