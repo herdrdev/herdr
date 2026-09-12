@@ -107,6 +107,15 @@ fn full_host_palette_response_is_sent_as_one_theme_update() {
 #[test]
 fn modal_paste_shortcut_modifiers_are_platform_specific() {
     let key = |code, modifiers| crate::input::TerminalKey::new(code, modifiers);
+    for macos in [false, true] {
+        assert!(!input::is_modal_paste_shortcut_for_platform(
+            &key(
+                KeyCode::Char('v'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT
+            ),
+            macos
+        ));
+    }
 
     assert!(input::is_modal_paste_shortcut_for_platform(
         &key(KeyCode::Char('v'), KeyModifiers::CONTROL),
@@ -142,8 +151,7 @@ fn modal_paste_inserts_clipboard_text_through_overlay_text_path() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         title: "rename pane",
-        input: "replace me".into(),
-        replace_on_type: true,
+        input: TextEditor::new("replace me", true),
         target: ClientRenameTarget::Pane {
             pane_id: "pane_1".into(),
         },
@@ -159,8 +167,8 @@ fn modal_paste_inserts_clipboard_text_through_overlay_text_path() {
     assert!(outcome.repaint);
     assert!(matches!(
         state.overlay,
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay { ref input, replace_on_type: false, .. }))
-            if input == "feature/pasted"
+        Some(ClientShellOverlay::Rename(ClientRenameOverlay { ref input, .. }))
+            if input.as_str() == "feature/pasted"
     ));
 }
 

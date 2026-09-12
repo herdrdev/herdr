@@ -223,11 +223,12 @@ fn foreign_workspace_preview_blocks_paste_into_hidden_copy_search() {
     state.set_pane_surface(pane_surface);
     state.compose(100, 28).unwrap();
     assert!(state.enter_copy_mode(&mut ClientShellInput::default()));
+    enter_navigation(&mut state);
+    // Seed the hidden prompt after navigation: text editing consumes the prefix key.
     state.copy_mode.as_mut().unwrap().search_prompt = Some(ClientCopySearchPrompt {
         direction: crate::api::schema::PaneCopySearchDirection::Forward,
         query: "original".into(),
     });
-    enter_navigation(&mut state);
     preview_key(&mut state, b"\x1b[B");
     assert!(state.workspace_preview_action_blocked());
     assert!(!state.modal_paste_target_active());
@@ -241,7 +242,7 @@ fn foreign_workspace_preview_blocks_paste_into_hidden_copy_search() {
     assert!(paste.actions.is_empty() && paste.requests.is_empty());
     assert_eq!(
         state.copy_mode.unwrap().search_prompt.unwrap().query,
-        "original"
+        "original".into()
     );
 }
 

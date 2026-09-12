@@ -383,12 +383,14 @@ impl ClientShellState {
                         .saturating_sub(copy_mode.offset_from_bottom)
                         .min(u32::MAX as usize) as u32;
                     let viewport_row = copy_mode.cursor.row.saturating_sub(viewport_top);
+                    let x = hit.inner_rect.x.saturating_add(copy_mode.cursor.col);
+                    let y = hit.inner_rect.y.saturating_add(viewport_row as u16);
                     if viewport_row < u32::from(hit.inner_rect.height)
                         && copy_mode.cursor.col < hit.inner_rect.width
+                        && x < frame.width
+                        && y < frame.height
                     {
                         let mut composed = frame.to_ratatui_buffer()?;
-                        let x = hit.inner_rect.x + copy_mode.cursor.col;
-                        let y = hit.inner_rect.y + viewport_row as u16;
                         composed[(x, y)].set_style(
                             Style::default()
                                 .fg(match self.config.palette.panel_bg {

@@ -279,38 +279,18 @@ impl ClientShellState {
                 }
             }
             KeyCode::Enter => {
-                submit = Some((prompt.query.clone(), prompt.direction));
+                submit = Some((prompt.query.to_string(), prompt.direction));
                 if let Some(copy_mode) = self.copy_mode.as_mut() {
                     copy_mode.search_prompt = None;
                 }
             }
-            KeyCode::Backspace => {
-                if let Some(prompt) = self
-                    .copy_mode
-                    .as_mut()
-                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                {
-                    prompt.query.pop();
-                }
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(prompt) = self
-                    .copy_mode
-                    .as_mut()
-                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                {
-                    prompt.query.clear();
-                }
-            }
             _ => {
-                if let Some(ch) = crate::copy_mode::copy_mode_command_char(key.clone()) {
-                    if let Some(prompt) = self
-                        .copy_mode
-                        .as_mut()
-                        .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
-                    {
-                        prompt.query.push(ch);
-                    }
+                if let Some(prompt) = self
+                    .copy_mode
+                    .as_mut()
+                    .and_then(|copy_mode| copy_mode.search_prompt.as_mut())
+                {
+                    prompt.query.handle_key(key);
                 }
             }
         }
@@ -322,6 +302,13 @@ impl ClientShellState {
     }
 
     pub(super) fn insert_copy_search_text(&mut self, text: &str) -> bool {
+        if self.mode != ClientShellMode::Copy
+            || self.overlay.is_some()
+            || self.popup_terminal_id.is_some()
+            || self.popup_pending
+        {
+            return false;
+        }
         let Some(prompt) = self
             .copy_mode
             .as_mut()
@@ -329,9 +316,7 @@ impl ClientShellState {
         else {
             return false;
         };
-        prompt
-            .query
-            .extend(text.chars().filter(|character| !character.is_control()));
+        prompt.query.insert(text);
         true
     }
 
@@ -341,7 +326,7 @@ impl ClientShellState {
         };
         copy_mode.search_prompt = Some(ClientCopySearchPrompt {
             direction,
-            query: String::new(),
+            query: TextEditor::default(),
         });
     }
 

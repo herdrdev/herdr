@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn pasted_help_and_copy_queries_strip_control_characters() {
+fn pasted_help_and_copy_queries_normalize_single_line_text() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
-        query: String::new(),
+        query: TextEditor::default(),
         search_focused: true,
         scroll: 0,
     }));
@@ -13,10 +13,11 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
     assert!(matches!(
         state.overlay,
         Some(ClientShellOverlay::Help(ClientHelpOverlay { ref query, .. }))
-            if query == "workspace"
+            if query.as_str() == "work space"
     ));
 
     state.overlay = None;
+    state.mode = ClientShellMode::Copy;
     state.copy_mode = Some(ClientCopyModeState {
         pane_id: "pane_1".into(),
         content_revision: 0,
@@ -28,7 +29,7 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
         selection: None,
         search_prompt: Some(ClientCopySearchPrompt {
             direction: crate::api::schema::PaneCopySearchDirection::Forward,
-            query: String::new(),
+            query: TextEditor::default(),
         }),
         search_query: String::new(),
         search_direction: None,
@@ -47,7 +48,7 @@ fn pasted_help_and_copy_queries_strip_control_characters() {
             .as_ref()
             .and_then(|copy_mode| copy_mode.search_prompt.as_ref())
             .map(|prompt| prompt.query.as_str()),
-        Some("needle")
+        Some("needle ")
     );
 }
 
