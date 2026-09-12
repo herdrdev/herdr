@@ -67,7 +67,7 @@ Then attach with:
 herdr --remote workbox
 ```
 
-Remote attach and saved SSH machines support Linux, macOS, and Windows local clients connecting to Linux or macOS hosts on x86_64 and aarch64, or Windows hosts on x86_64. Local and remote versions do not need to match once both support the stable endpoint generation. On Linux and macOS hosts, Herdr prefers a compatible `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no compatible binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install. Windows hosts must already have a compatible Herdr package with remote host support on `PATH`; remote attach does not install or update it.
+Remote attach and saved SSH machines support Linux, macOS, and Windows local clients connecting to Linux or macOS hosts on x86_64 and aarch64, or Windows hosts on x86_64. Local and remote versions do not need to match once both support the stable endpoint generation. On Linux and macOS hosts, Herdr prefers a compatible `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. On Windows hosts, Herdr checks `PATH` and the active managed release. If no compatible binary exists, interactive runs prompt to install or update one; non-interactive runs fail instead of modifying the host. Linux and macOS installs use `~/.local/bin/herdr`; Windows installs use the complete Windows package and its app-local ConPTY runtime. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install.
 
 By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings. Existing user keepalive settings win. Linux and macOS clients also use a private per-attach control socket for connection reuse; Windows OpenSSH does not. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
 
@@ -88,9 +88,9 @@ herdr --remote workbox --handoff
 
 If you SSH into the server first and run `herdr` there, Herdr runs entirely on the server and cannot access your local desktop clipboard beyond normal terminal text paste.
 
-For Linux and macOS hosts, Herdr can copy the current local binary when the platforms match. For Homebrew, mise, and Nix installs, or when the platforms differ, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
+For Linux and macOS hosts, Herdr can copy the current local binary when the platforms match. For Homebrew, mise, and Nix installs, when the platforms differ, or for Windows hosts, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
 
-For local builds or custom binaries targeting Linux or macOS hosts, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach.
+For local builds or custom packages, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Use a bare Herdr executable for Linux or macOS targets and a complete `herdr-windows-x86_64.zip` package for Windows targets.
 
 ```bash
 HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
