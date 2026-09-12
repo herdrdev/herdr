@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::windows::{
-        io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
+        io::{AsHandle, FromRawHandle, OwnedHandle},
         process::CommandExt,
     };
     use std::process::{ChildStdin, ChildStdout, Command, Stdio};
@@ -244,9 +244,7 @@ mod tests {
                 .stderr(Stdio::inherit())
                 .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
                 .spawn()?;
-            let target_process =
-                unsafe { BorrowedHandle::borrow_raw(AsRawHandle::as_raw_handle(&child)) }
-                    .try_clone_to_owned()?;
+            let target_process = child.as_handle().try_clone_to_owned()?;
             let handles = duplicate_windows_handoff(master, handoff_child, target_process)?
                 .into_raw_handles();
             let mut input = child

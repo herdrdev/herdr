@@ -7,7 +7,7 @@ pub(crate) use unix::*;
 #[cfg(windows)]
 mod windows {
     use std::io::{Read, Write};
-    use std::os::windows::io::{AsRawHandle, BorrowedHandle, OwnedHandle};
+    use std::os::windows::io::{AsHandle, OwnedHandle};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         mpsc as std_mpsc, Arc, Condvar, Mutex,
@@ -116,12 +116,18 @@ mod windows {
             }
         }
 
-        fn resume(&self, state: ActorState) {
-            *self
+        fn resume(&self, next: ActorState) -> std::io::Result<()> {
+            let mut state = self
                 .state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if matches!(*state, ActorState::Released | ActorState::Shutdown) {
+                return Err(pty_actor_closed());
+            }
+            *state = next;
+            drop(state);
             self.resumed.notify_all();
+            Ok(())
         }
     }
 
@@ -437,8 +443,7 @@ mod windows {
             &self,
             target: &std::process::Child,
         ) -> std::io::Result<crate::pty::backend::WindowsPtyHandoff> {
-            let target_process = unsafe { BorrowedHandle::borrow_raw(target.as_raw_handle()) }
-                .try_clone_to_owned()?;
+            let target_process = target.as_handle().try_clone_to_owned()?;
             let (reply, completion) = std_mpsc::channel();
             self.control_tx
                 .send(PtyIoControlCommand::DuplicateForHandoff {
@@ -631,18 +636,14 @@ mod windows {
                                     &reader_cancel,
                                     &write_tx,
                                     deadline,
-                                );
+                                )
+                                .and_then(|()| state.resume(ActorState::Quiesced));
                                 if result.is_ok() {
                                     handoff_active = Some(active);
-                                    *state
-                                        .state
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                                        ActorState::Quiesced;
                                 } else {
                                     active.store(false, Ordering::Release);
                                     reader_pause.clear();
-                                    state.resume(ActorState::Running);
+                                    let _ = state.resume(ActorState::Running);
                                 }
                                 let _ = reply.send(result);
                                 false
@@ -688,8 +689,7 @@ mod windows {
                                         active.store(false, Ordering::Release);
                                     }
                                     reader_pause.clear();
-                                    state.resume(ActorState::Running);
-                                    Ok(())
+                                    state.resume(ActorState::Running)
                                 };
                                 let _ = reply.send(result);
                                 false
@@ -704,8 +704,7 @@ mod windows {
                                         active.store(false, Ordering::Release);
                                     }
                                     reader_pause.clear();
-                                    state.resume(ActorState::Running);
-                                    Ok(())
+                                    state.resume(ActorState::Running)
                                 } else {
                                     Err(std::io::Error::other(
                                         "PTY actor must be quiesced before activation",
@@ -724,10 +723,11 @@ mod windows {
                                         active.store(false, Ordering::Release);
                                     }
                                     reader_pause.clear();
-                                    state.resume(ActorState::Released);
-                                    write_tx
-                                        .send(PtyIoWriteCommand::Release)
-                                        .map_err(|_| pty_actor_closed())
+                                    state.resume(ActorState::Released).and_then(|()| {
+                                        write_tx
+                                            .send(PtyIoWriteCommand::Release)
+                                            .map_err(|_| pty_actor_closed())
+                                    })
                                 } else {
                                     Err(std::io::Error::other(
                                         "PTY actor must be quiesced before release",
@@ -1565,6 +1565,53 @@ mod windows {
             harness.handle.shutdown();
             drop(harness.handle);
             drop(harness.output);
+        }
+
+        #[test]
+        fn shutdown_stays_terminal_when_inflight_handoff_completes() {
+            for pause_succeeds in [true, false] {
+                let harness = actor_harness(
+                    false,
+                    true,
+                    Box::new(|_| PtyReadResult {
+                        terminal_responses: Vec::new(),
+                    }),
+                    None,
+                );
+                *harness.handle.state.state.lock().unwrap() = ActorState::Quiescing;
+                let (input_ack, input_paused) = std_mpsc::channel();
+                let (reader_ack, reader_paused) = std_mpsc::channel();
+                let (reply, completion) = std_mpsc::channel();
+                harness
+                    .handle
+                    .control_tx
+                    .send(PtyIoControlCommand::BeginHandoff {
+                        active: Arc::new(AtomicBool::new(true)),
+                        input_paused,
+                        reader_paused,
+                        deadline: Instant::now() + Duration::from_secs(1),
+                        reply,
+                    })
+                    .unwrap();
+                // Hold completion until shutdown has established the terminal state.
+                harness.handle.shutdown();
+                if pause_succeeds {
+                    input_ack.send(()).unwrap();
+                    reader_ack.send(()).unwrap();
+                }
+                drop(input_ack);
+                drop(reader_ack);
+                let result = completion.recv_timeout(Duration::from_secs(2)).unwrap();
+                let state = *harness.handle.state.state.lock().unwrap();
+                drop(harness.handle);
+                drop(harness.output);
+                assert_eq!(
+                    state,
+                    ActorState::Shutdown,
+                    "pause_succeeds={pause_succeeds}"
+                );
+                assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+            }
         }
 
         #[test]
