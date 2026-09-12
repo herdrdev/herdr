@@ -47,6 +47,19 @@ pub(super) fn dispatch_client_shell_actions(
                     }
                 }
             }
+            shell::ClientShellAction::OpenLocalFileUri(uri) => {
+                // Remote file references must not open a same-named local file.
+                if endpoints.active_id().is_local() && !super::handshake::is_remote_client_process()
+                {
+                    if let Some(path) = crate::path_links::resolve_path(&uri, None, None) {
+                        match crate::platform::open_local_file(&path) {
+                            Ok(Some(child)) => detached_process_children.push(child),
+                            Ok(None) => {}
+                            Err(err) => warn!(err = %err, "failed to open local pane file"),
+                        }
+                    }
+                }
+            }
             shell::ClientShellAction::ReplayMouse(events) => replay_mouse.extend(events),
             shell::ClientShellAction::Keybind(action) => {
                 debug!(

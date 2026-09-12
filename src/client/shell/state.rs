@@ -298,6 +298,7 @@ pub(crate) enum ClientShellAction {
         request: Box<crate::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
+    OpenLocalFileUri(String),
     OpenSafeWebUrl(String),
     ActivateEndpoint {
         endpoint_id: ClientEndpointId,

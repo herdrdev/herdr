@@ -2064,6 +2064,21 @@ pub fn read_clipboard_text() -> Option<String> {
     None
 }
 
+pub(crate) fn open_local_file_platform(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Child>> {
+    if path.is_dir() || crate::path_links::is_document(path) {
+        return open_url(&path.display().to_string());
+    }
+    // Never ShellExecute a script, shortcut or executable. Open source and
+    // unknown file types as text, using the same editor selection as scrollback.
+    let argv = scrollback_editor_argv(path)?;
+    let mut command = std::process::Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    configure_background_command_platform(&mut command);
+    command.spawn().map(Some)
+}
+
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     let operation = wide_null("open");
     let url = wide_null(url);

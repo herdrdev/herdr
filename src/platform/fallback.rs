@@ -230,6 +230,15 @@ pub fn read_clipboard_text() -> Option<String> {
 }
 
 /// Unsupported platform stub.
+pub(crate) fn open_local_file_platform(
+    _path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Child>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "opening local files is unsupported",
+    ))
+}
+
 pub fn open_url(_url: &str) -> std::io::Result<Option<std::process::Child>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

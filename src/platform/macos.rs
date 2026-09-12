@@ -523,6 +523,22 @@ pub fn read_clipboard_text() -> Option<String> {
     }
 }
 
+pub(crate) fn open_local_file_platform(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Child>> {
+    let mut command = Command::new("open");
+    if !path.is_dir() && !crate::path_links::is_document(path) {
+        command.arg("-t");
+    }
+    command
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(Some)
+}
+
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     Command::new("open")
         .arg(url)

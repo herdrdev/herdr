@@ -114,6 +114,122 @@ fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
     assert!(!state.url_click_consumes_until_up);
 }
 
+fn file_link_result(
+    url: &str,
+    handled: bool,
+    remote: bool,
+    source: ClientShellKeybindingSource,
+    released: bool,
+    changed_geometry: bool,
+) -> (ClientShellState, Vec<ClientShellAction>) {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.keybinding_source = source;
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("pane frame");
+    let pane = state.hits.panes[0].clone();
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::CONTROL,
+    };
+    let activate = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+    let [ClientShellAction::Endpoint { request, .. }] = &activate.actions[..] else {
+        panic!("expected link request");
+    };
+    let id = request.id.clone();
+    if released {
+        let release = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..down
+        })]);
+        assert!(release.actions.is_empty() && release.requests.is_empty());
+    }
+    if remote {
+        state.active_endpoint_id = ClientEndpointId::Ssh(
+            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        );
+    }
+    if changed_geometry {
+        state.hits.panes[0].inner_rect.x += 1;
+    }
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &id,
+        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+            url: Some(url.to_owned()),
+            handled,
+        }),
+    );
+    (state, actions)
+}
+
+#[test]
+fn file_link_opens_once_before_or_after_mouse_release() {
+    let path = std::env::current_dir().unwrap().join("Cargo.toml");
+    let uri = crate::path_links::path_to_file_uri(&path).unwrap();
+    for released in [false, true] {
+        let (state, actions) = file_link_result(
+            &uri,
+            false,
+            false,
+            ClientShellKeybindingSource::Local,
+            released,
+            false,
+        );
+        assert!(
+            matches!(&actions[..], [ClientShellAction::OpenLocalFileUri(value)] if value == &uri)
+        );
+        assert_eq!(state.url_click_consumes_until_up, !released);
+    }
+}
+
+#[test]
+fn file_link_preserves_plugin_precedence_and_rejects_remote_or_stale_targets() {
+    let uri =
+        crate::path_links::path_to_file_uri(&std::env::current_dir().unwrap().join("Cargo.toml"))
+            .unwrap();
+    let (_, handled) = file_link_result(
+        &uri,
+        true,
+        false,
+        ClientShellKeybindingSource::Local,
+        false,
+        false,
+    );
+    assert!(handled.is_empty());
+    for (remote, source, changed) in [
+        (true, ClientShellKeybindingSource::Local, false),
+        (false, ClientShellKeybindingSource::RemoteLocal, false),
+        (false, ClientShellKeybindingSource::Endpoint, false),
+        (false, ClientShellKeybindingSource::Local, true),
+    ] {
+        let (_, actions) = file_link_result(&uri, false, remote, source, false, changed);
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, ClientShellAction::OpenLocalFileUri(_))));
+    }
+    for invalid in [
+        "file://server/share/report.txt",
+        "file:///C:/report%00.txt",
+        "javascript:alert(1)",
+    ] {
+        let (_, actions) = file_link_result(
+            invalid,
+            false,
+            false,
+            ClientShellKeybindingSource::Local,
+            false,
+            false,
+        );
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, ClientShellAction::OpenLocalFileUri(_))));
+    }
+}
+
 #[test]
 fn ctrl_click_without_a_link_replays_the_original_gesture() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));

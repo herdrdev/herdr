@@ -1111,10 +1111,15 @@ impl AppState {
             viewport_row,
             col,
             rt.scroll_metrics(),
+            self.terminal_id_for_pane(ws_idx, pane_id)
+                .and_then(|id| self.terminals.get(&id))
+                .map(|terminal| terminal.cwd.as_path()),
         )
     }
 }
 
+// The click resolver needs both viewport geometry and the pane's launch cwd.
+#[allow(clippy::too_many_arguments)]
 fn url_at_runtime_cell(
     runtime: &crate::terminal::TerminalRuntime,
     pane_id: crate::layout::PaneId,
@@ -1122,6 +1127,7 @@ fn url_at_runtime_cell(
     viewport_row: u16,
     col: u16,
     metrics: Option<crate::pane::ScrollMetrics>,
+    launch_cwd: Option<&std::path::Path>,
 ) -> Option<String> {
     if viewport_row >= area.height || col >= area.width {
         return None;
@@ -1151,7 +1157,19 @@ fn url_at_runtime_cell(
         .find('\n')
         .map_or(visible_text.len(), |idx| logical_cell.byte_index + idx);
     let line = visible_text.get(line_start..line_end)?;
-    url_at_column(line, logical_cell.logical_col).map(str::to_owned)
+    if let Some(url) = url_at_column(line, logical_cell.logical_col) {
+        return Some(url.to_owned());
+    }
+    // Cwd and filesystem work is click-only. Keep it out of pane rendering.
+    let cwd = runtime.foreground_cwd().or_else(|| runtime.cwd());
+    let home = crate::worktree::expand_tilde_absolute_path("~");
+    let path = crate::path_links::resolve_visible_path(
+        line,
+        logical_cell.byte_index - line_start,
+        cwd.as_deref().or(launch_cwd),
+        Some(&home),
+    )?;
+    crate::path_links::path_to_file_uri(&path)
 }
 
 pub(crate) fn safe_web_url(url: &str) -> Option<&str> {
@@ -2260,7 +2278,7 @@ mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
     use crate::workspace::Workspace;
-    use ratatui::layout::Direction;
+    use ratatui::layout::{Direction, Rect};
 
     fn app_with_workspaces(names: &[&str]) -> AppState {
         let mut state = AppState::test_new();
@@ -2503,6 +2521,56 @@ mod tests {
         ] {
             assert_selects_nothing(row, click);
         }
+    }
+
+    #[tokio::test]
+    async fn file_link_hit_testing_preserves_wrapping_wide_cells_and_osc8_priority() {
+        let cwd = std::env::current_dir().unwrap();
+        let expected = crate::path_links::path_to_file_uri(&cwd.join("Cargo.toml")).unwrap();
+        for (text, width, row, col) in [
+            ("Cargo.toml:42", 80, 0, 3),
+            ("Cargo.toml:42", 8, 1, 1),
+            ("文档 Cargo.toml", 80, 0, 7),
+        ] {
+            let runtime =
+                crate::terminal::TerminalRuntime::test_with_screen_bytes(width, 6, text.as_bytes());
+            let target = url_at_runtime_cell(
+                &runtime,
+                PaneId::from_raw(1),
+                Rect::new(0, 0, width, 6),
+                row,
+                col,
+                runtime.scroll_metrics(),
+                Some(&cwd),
+            );
+            assert_eq!(target, Some(expected.clone()), "{text}");
+        }
+        let text = b"\x1b]8;;https://example.test/explicit\x1b\\Cargo.toml\x1b]8;;\x1b\\";
+        let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 6, text);
+        assert_eq!(
+            url_at_runtime_cell(
+                &runtime,
+                PaneId::from_raw(1),
+                Rect::new(0, 0, 80, 6),
+                0,
+                3,
+                runtime.scroll_metrics(),
+                Some(&cwd)
+            ),
+            Some("https://example.test/explicit".to_owned()),
+        );
+        assert_eq!(
+            url_at_runtime_cell(
+                &runtime,
+                PaneId::from_raw(1),
+                Rect::new(0, 0, 80, 6),
+                0,
+                40,
+                runtime.scroll_metrics(),
+                Some(&cwd)
+            ),
+            None,
+        );
     }
 
     #[test]

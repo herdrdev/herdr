@@ -77,6 +77,21 @@ pub(crate) fn plugin_runtime_path(path: &std::path::Path) -> std::path::PathBuf 
     plugin_runtime_path_platform(path)
 }
 
+pub(crate) fn open_local_file(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Child>> {
+    let uri = crate::path_links::path_to_file_uri(path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path cannot be represented as a local file URI",
+        )
+    })?;
+    let validated = crate::path_links::resolve_path(&uri, None, None).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "local file is unavailable")
+    })?;
+    open_local_file_platform(&validated)
+}
+
 #[cfg(not(windows))]
 fn plugin_runtime_path_platform(path: &std::path::Path) -> std::path::PathBuf {
     path.to_path_buf()

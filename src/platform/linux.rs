@@ -467,6 +467,36 @@ pub fn read_clipboard_text() -> Option<String> {
     None
 }
 
+pub(crate) fn open_local_file_platform(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::process::Child>> {
+    if path.is_dir() || crate::path_links::is_document(path) {
+        let uri = crate::path_links::path_to_file_uri(path).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid local path")
+        })?;
+        return open_url(&uri);
+    }
+    // Open executable formats as text too. Do not launch their desktop file
+    // association or interpolate a path into a shell command.
+    for editor in ["gnome-text-editor", "gedit", "kate", "mousepad", "leafpad"] {
+        match Command::new(editor)
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => return Ok(Some(child)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "no graphical text editor found for this local file",
+    ))
+}
+
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     Command::new("xdg-open")
         .arg(url)

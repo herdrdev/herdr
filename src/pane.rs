@@ -67,6 +67,7 @@ const TERMINAL_COMPRESSION_IDLE: std::time::Duration = std::time::Duration::from
 const TERMINAL_COMPRESSION_STEP: std::time::Duration = std::time::Duration::from_millis(1);
 pub(crate) const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
+const PANE_PI_HYPERLINKS: &str = "1";
 
 fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
     static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -96,6 +97,12 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
+    // Herdr preserves OSC 8 hyperlinks in its terminal layer. Tell Pi's
+    // capability detector that this pane can safely emit them without
+    // forwarding the attached outer terminal's identity.
+    if cmd.get_env("PI_HYPERLINKS").is_none() {
+        cmd.env("PI_HYPERLINKS", PANE_PI_HYPERLINKS);
+    }
     cmd.env_remove("WT_SESSION");
 }
 
@@ -3565,6 +3572,49 @@ mod tests {
         apply_pane_terminal_env(&mut cmd);
 
         assert!(cmd.get_env("WT_SESSION").is_none());
+    }
+
+    #[test]
+    fn pane_terminal_identity_advertises_osc8_to_pi() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove("PI_HYPERLINKS");
+
+        apply_pane_terminal_env(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env("PI_HYPERLINKS")
+                .and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn pane_terminal_identity_preserves_explicit_pi_osc8_setting() {
+        for value in ["0", "1", "auto"] {
+            let mut cmd = CommandBuilder::new("shell");
+            cmd.env("PI_HYPERLINKS", value);
+            apply_pane_terminal_env(&mut cmd);
+            assert_eq!(
+                cmd.get_env("PI_HYPERLINKS")
+                    .and_then(std::ffi::OsStr::to_str),
+                Some(value)
+            );
+        }
+    }
+
+    #[test]
+    fn pane_launch_env_can_override_pi_osc8_capability() {
+        let mut cmd = CommandBuilder::new("shell");
+        let launch_env = PaneLaunchEnv::from_extra(vec![("PI_HYPERLINKS".into(), "0".into())]);
+
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, &launch_env);
+
+        assert_eq!(
+            cmd.get_env("PI_HYPERLINKS")
+                .and_then(std::ffi::OsStr::to_str),
+            Some("0")
+        );
     }
 
     #[tokio::test]

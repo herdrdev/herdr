@@ -21,6 +21,12 @@ Herdr is mouse-native, so start by clicking panes, tabs, workspaces, and agents 
 
 Ctrl-click opens pane links when your terminal sends the modified click to Herdr. This works for OSC 8 hyperlinks and visible `http://` or `https://` URLs. On macOS, use Ctrl-click for Herdr-handled pane links while mouse capture is enabled; Cmd-click is only available through the terminal-native bypass path, such as Shift-Cmd-click or `ui.mouse_capture = false`.
 
+For local panes, Ctrl-click also opens existing file paths and local `file://` hyperlinks. Relative paths resolve from the pane's working directory. Paths can include spaces and a `:line` or `:line:column` suffix. Herdr opens the file, but does not currently move the editor to that line. Plugin link handlers take priority.
+
+On Windows, source files open with `VISUAL`, then `EDITOR`, then Notepad. On macOS they use the default text editor. On Linux, a supported graphical text editor must be installed. Directories, PDFs, and common raster images use their default application. Scripts and executable files open as text rather than running. Network shares and remote file links are not opened on the local client.
+
+New panes default to `PI_HYPERLINKS=1`, so Pi can render clickable Markdown labels and file-tool titles without pretending to be the outer terminal. An existing `PI_HYPERLINKS` value, a pane environment override, or Pi's explicit terminal setting takes precedence. Existing panes need a fresh shell or an explicit override before starting Pi.
+
 If you configure `ui.right_click_passthrough_modifier`, that modifier plus right-click sends right-click, hold, and drag gestures to mouse-reporting pane apps. To make normal right-click go to one pane app, choose **Send right-clicks to pane** from that pane's menu or run `herdr pane input --current --right-click pane` inside it. Right-click the pane frame to reopen Herdr's menu.
 
 ## Run an agent

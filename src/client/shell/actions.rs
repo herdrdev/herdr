@@ -663,6 +663,17 @@ impl ClientShellState {
                         self.url_click_consumes_until_up = completed_before_release;
                         (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
                     }
+                    Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+                        url: Some(url),
+                        handled: false,
+                    }) if self.active_endpoint_id.is_local()
+                        && self.config.keybinding_source == ClientShellKeybindingSource::Local
+                        && replay.is_some()
+                        && crate::path_links::file_uri_to_path(&url).is_some() =>
+                    {
+                        self.url_click_consumes_until_up = completed_before_release;
+                        (false, vec![ClientShellAction::OpenLocalFileUri(url)])
+                    }
                     Ok(crate::api::schema::ResponseResult::PaneLinkActivated { .. }) => {
                         (false, replay_action(replay))
                     }
