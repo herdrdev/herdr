@@ -285,6 +285,13 @@ jobs:
             -Session "ci-conpty-bundled-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
             -ExpectedConsoleHostPath $consoleHost
 
+      - name: Test bundled ConPTY process handoff
+        shell: pwsh
+        run: |
+          cargo test --locked --bin herdr `
+            pty::backend::tests::bundled_conpty_handoff_transfers_six_handles_between_processes `
+            -- --ignored --exact --nocapture
+
       - name: Test packaged installer and repair with Windows PowerShell 5.1
         shell: pwsh
         run: |

@@ -1,7 +1,7 @@
 use crate::{Child, ChildKiller, ExitStatus};
 use anyhow::Context as _;
 use std::io::{Error as IoError, Result as IoResult};
-use std::os::windows::io::{AsRawHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
@@ -23,6 +23,22 @@ pub struct WinChild {
 }
 
 impl WinChild {
+    /// # Safety
+    ///
+    /// `handle` must be a live process handle in the current process whose
+    /// ownership is transferred exactly once.
+    pub unsafe fn from_handoff_handle(handle: usize) -> IoResult<Self> {
+        if handle == 0 || handle == winapi::um::handleapi::INVALID_HANDLE_VALUE as usize {
+            return Err(IoError::new(
+                std::io::ErrorKind::InvalidInput,
+                "transferred child process handle is invalid",
+            ));
+        }
+        Ok(Self {
+            proc: Mutex::new(unsafe { OwnedHandle::from_raw_handle(handle as _) }),
+        })
+    }
+
     fn is_complete(&mut self) -> IoResult<Option<ExitStatus>> {
         let mut status: DWORD = 0;
         let proc = self.proc.lock().unwrap().try_clone().unwrap();

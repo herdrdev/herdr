@@ -47,6 +47,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 schemars = { version = "1.2.1", features = ["derive"] }
 
+[dev-dependencies]
+anyhow = "1.0.102"
+
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 
@@ -70,6 +73,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Console",
+    "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
     "Win32_System_Memory",

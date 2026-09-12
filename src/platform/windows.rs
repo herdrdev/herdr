@@ -151,7 +151,8 @@ use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
-            CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
+            CloseHandle, DuplicateHandle, GlobalFree, LocalFree, DUPLICATE_CLOSE_SOURCE,
+            DUPLICATE_SAME_ACCESS, ERROR_NOT_FOUND, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
             MAX_PATH, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
@@ -183,12 +184,13 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
-                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-                THREAD_SUSPEND_RESUME,
+                GetCurrentProcess, GetCurrentThread, GetExitCodeProcess, GetProcessTimes,
+                OpenProcess, OpenThread, QueryFullProcessImageNameW, ResumeThread,
+                TerminateProcess, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, THREAD_SUSPEND_RESUME,
             },
+            IO::CancelSynchronousIo,
         },
         UI::{
             Input::{
@@ -218,6 +220,99 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
 const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
 const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+
+pub(crate) struct SynchronousIoCancel {
+    thread: OwnedHandle,
+}
+
+impl SynchronousIoCancel {
+    pub(crate) fn for_current_thread() -> std::io::Result<Self> {
+        let mut thread = null_mut();
+        let current_process = unsafe { GetCurrentProcess() };
+        let duplicated = unsafe {
+            DuplicateHandle(
+                current_process,
+                GetCurrentThread(),
+                current_process,
+                &mut thread,
+                0,
+                0,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if duplicated == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            thread: unsafe { OwnedHandle::from_raw_handle(thread.cast()) },
+        })
+    }
+
+    pub(crate) fn cancel(&self) -> std::io::Result<()> {
+        if unsafe { CancelSynchronousIo(self.thread.as_raw_handle()) } != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_NOT_FOUND as i32) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn duplicate_handle_into_process(
+    source: usize,
+    target_process: usize,
+) -> std::io::Result<usize> {
+    if source == 0
+        || source == INVALID_HANDLE_VALUE as usize
+        || target_process == 0
+        || target_process == INVALID_HANDLE_VALUE as usize
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process handoff handle is invalid",
+        ));
+    }
+    let mut duplicate = null_mut();
+    let result = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            source as HANDLE,
+            target_process as HANDLE,
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(duplicate as usize)
+    }
+}
+
+pub(crate) fn close_handle_in_process(handle: usize, process: usize) -> std::io::Result<()> {
+    let mut local = null_mut();
+    let result = unsafe {
+        DuplicateHandle(
+            process as HANDLE,
+            handle as HANDLE,
+            GetCurrentProcess(),
+            &mut local,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    unsafe { CloseHandle(local) };
+    Ok(())
+}
 
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)
