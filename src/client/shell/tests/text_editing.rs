@@ -25,6 +25,7 @@ fn shell(field: usize) -> ClientShellState {
                     workspace_id: "ws_1".into(),
                 },
                 Ok(worktree_list_result(None)),
+                &mut ClientShellInput::default(),
             );
         }
         6 => {
@@ -44,6 +45,7 @@ fn shell(field: usize) -> ClientShellState {
                     workspace_id: "ws_1".into(),
                 },
                 Ok(worktree_list_result(None)),
+                &mut ClientShellInput::default(),
             );
             state.handle_input_bytes(b"/");
         }

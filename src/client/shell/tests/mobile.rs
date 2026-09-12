@@ -363,7 +363,7 @@ fn mobile_background_workspace_uses_its_own_active_tab_status() {
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
     state.mode = ClientShellMode::Navigate;
-    state.navigate_workspace_id = Some("ws_2".into());
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_2");
     let frame = state.compose(44, 20).expect("mobile switcher");
     let text = frame
         .cells
@@ -615,7 +615,10 @@ fn mobile_switcher_scroll_close_and_width_transition_clear_mobile_hits() {
         ))]);
     }
     state.compose(44, 10).expect("revealed mobile selection");
-    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_8"));
+    assert_eq!(
+        state.navigate_workspace_id,
+        state.navigation_target(&ClientEndpointId::Local, "ws_8")
+    );
     assert!(state.mobile_switcher_scroll > 2);
     assert!(state.hits.mobile_targets.iter().any(|(_, target)| {
         matches!(

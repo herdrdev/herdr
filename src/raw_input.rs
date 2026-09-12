@@ -19,9 +19,9 @@ use crate::terminal_theme::{
 };
 
 const ESC: u8 = 0x1b;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS: i32 = 10;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS: i32 = 150;
 pub(crate) const GHOSTTY_COLOR_SCHEME_DARK_REPORT: &[u8] = b"\x1b[?997;1n";
 pub(crate) const GHOSTTY_COLOR_SCHEME_LIGHT_REPORT: &[u8] = b"\x1b[?997;2n";
@@ -96,6 +96,11 @@ impl RawInputFramer {
     #[cfg(any(windows, test))]
     pub(crate) fn has_pending_bracketed_paste(&self) -> bool {
         self.byte_framer.has_pending_bracketed_paste()
+    }
+
+    #[cfg(any(windows, test))]
+    pub(crate) fn has_pending_default_mouse_sequence(&self) -> bool {
+        starts_with_incomplete_default_mouse_sequence(&self.byte_framer.buffer)
     }
 
     pub(crate) fn flush_timeout(&mut self) -> Vec<RawInputEvent> {
@@ -202,12 +207,12 @@ impl RawInputByteFramer {
         !self.buffer.is_empty()
     }
 
-    #[cfg(any(not(windows), test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_lone_escape(&self) -> bool {
         self.buffer.as_slice() == [ESC]
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
             || starts_with_incomplete_default_mouse_sequence(&self.buffer)
@@ -812,7 +817,7 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn starts_with_incomplete_default_mouse_sequence(buffer: &[u8]) -> bool {
     buffer.starts_with(b"\x1b[M") && buffer.len() < 6
 }

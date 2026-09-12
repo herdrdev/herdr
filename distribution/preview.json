@@ -1,37 +1,68 @@
 {
   "schema_version": 1,
   "channel": "preview",
-  "base_version": "0.8.2",
-  "build_id": "2026-09-06-9e9bc8a14466",
-  "commit": "9e9bc8a144667a6b7debfd4f0c7a31ff0e11493a",
-  "built_at": "2026-09-06T10:25:52Z",
+  "base_version": "0.9.0",
+  "build_id": "2026-09-08-62431dbd033b",
+  "commit": "62431dbd033bf1be2fe87fbc526df28084214e49",
+  "built_at": "2026-09-07T21:49:44Z",
   "protocol": 22,
   "endpoint_generation": 1,
-  "notes": "Preview build 2026-09-06-9e9bc8a14466\n\nBuilt from `9e9bc8a14466` on `master`.\nBase stable: v0.8.2\nCompare: https://github.com/herdrdev/herdr/compare/b1ff4582e9688f52ffb943cfa8bee4871ae122e4...9e9bc8a144667a6b7debfd4f0c7a31ff0e11493a\n\n### Added\n- Manage multiple ssh machines from one client (#3670)\n- Enable kitty graphics by default\n- Support independent multi-client tab views (#3526)\n- Add stable client endpoint compatibility (#3509)\n\n### Fixed\n- Prevent OpenCode child prompts from leaving status blocked (#3669)\n- Resolve Windows plugin pane launch paths (#3666)\n- Run the full applicable test suite on windows (#3660)\n- Keep selections visible without host colors (#2710)\n- Retain mouse selections across unrelated terminal output (#3641)\n- Preserve pixel mouse after sgr reassertion (#3637)\n- Make Windows Codex prompt delay size-aware (#3552)\n- Detect codex startup update prompts (#3636)\n- Use active release directory on PATH (#3618)\n- Persist Codex resume sessions at launch (#3617)\n- Resolve Devin config on Windows (#3595)\n- Statically link the Windows CRT (#3594)\n- Reject Android in Unix installer (#3577)\n- Preserve LF paste order (#3582)\n- Batch host palette updates (#3580)\n- Preserve ctrl+slash key identity (#3578)\n- Read Windows clipboard images in WSL (#3572)\n- Reveal newly focused spaces in the sidebar (#3554)\n- Preserve dead-key composition in kitty panes (#3548)\n- Include short viewport output in recent reads (#3448)\n- Keep direct graphics bound to its client (#3549)\n- Remove worktrees with active agent panes (#3532)\n- Stop treating claude background shells as working (#3468)\n- Preserve mouse selection during pane output (#3538)\n- Detach when terminal geometry is unavailable (#3531)\n- Reliably submit delayed agent prompts (#3506)\n- Keep openssh mouse input draining (#3512)\n- Preserve remote multiline paste (#3282)\n- Preserve native pane key identity (#3503)\n- Guide users when zig is missing (#2281)\n- Recognize durable wmi daemon jobs (#3507)\n- Reject malformed process environments (#3500)\n- Fetch crates from static CDN (#3504)\n- Parse openssh mouse reports with physical escape (#3502)\n- Launch powershell agent shims with arguments (#3455)\n- Enable mouse reporting over openssh (#3461)\n\n### Performance\n- Compress idle terminal scrollback (#3556)\n\n### Maintenance\n- Approve markjaquith as contributor\n- Allow slow documentation snapshot fixtures\n- Render the shell in the client (#3487)\n- Separate website presentation from runtime\n- Trigger private website deploys\n- Publish preview documentation\n- Stabilize headless metadata expiry check (#3453)",
+  "notes": "Preview build 2026-09-08-62431dbd033b\n\nBuilt from `62431dbd033b` on `master`.\nBase stable: v0.9.0\nCompare: https://github.com/herdrdev/herdr/compare/v0.9.0...62431dbd033bf1be2fe87fbc526df28084214e49\n\n### Fixed\n- Reduce idle ssh cpu without dropping final output (#3728)",
   "assets": {
     "linux-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-linux-x86_64",
-      "sha256": "a517cef9f178e7339d855a927ae9f3cc541c7b5d8e757c75b405fdc64a2f79ec"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-linux-x86_64",
+      "sha256": "3f56cab5d1d27b87f6cd2addfa3809bf48a58b345b13746419d1b8e951e0667d"
     },
     "linux-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-linux-aarch64",
-      "sha256": "390c596e198d5487bce08ee1e411fae0cade80e838312f594e1bcf3377548aa3"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-linux-aarch64",
+      "sha256": "47f075a0531ab6c36ec8f3144e634ea02c1307a1de405e29db3fd4d80efeb068"
     },
     "macos-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-macos-x86_64",
-      "sha256": "917800c568ef8971c7323cd35453d73cabea60ed5e62f6e3307fbbb2f78cf5d4"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-macos-x86_64",
+      "sha256": "6b68aaf84ad62198773d9a710dea3d364dbd6c1ff65abdff8eb6e5a71a57830d"
     },
     "macos-aarch64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-macos-aarch64",
-      "sha256": "889ccc0ee7d5feb9a74aa38ceb729c57ce0d64415f3b88ac0564523db17d68e0"
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-macos-aarch64",
+      "sha256": "d6b6ad08961e7b491fc19a4cd8570f0231734672cfc4d6c0db6327437ac11065"
     },
     "windows-x86_64": {
-      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-06-9e9bc8a14466/herdr-windows-x86_64.zip",
-      "sha256": "991abaf23ef7008a6ef91e6c0dbc6caac7f8bfebe9d14e54294ccc6b5352d99e",
+      "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-windows-x86_64.zip",
+      "sha256": "5904ceb4fdb3aa4c377f88ee8d2676bb39fcf62c6a8f034e6147cf21a98e6cb0",
       "format": "zip"
     }
   },
   "builds": {
+    "2026-09-08-62431dbd033b": {
+      "base_version": "0.9.0",
+      "commit": "62431dbd033bf1be2fe87fbc526df28084214e49",
+      "built_at": "2026-09-07T21:49:44Z",
+      "protocol": 22,
+      "endpoint_generation": 1,
+      "tag": "preview-2026-09-08-62431dbd033b",
+      "assets": {
+        "linux-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-linux-x86_64",
+          "sha256": "3f56cab5d1d27b87f6cd2addfa3809bf48a58b345b13746419d1b8e951e0667d"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-linux-aarch64",
+          "sha256": "47f075a0531ab6c36ec8f3144e634ea02c1307a1de405e29db3fd4d80efeb068"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-macos-x86_64",
+          "sha256": "6b68aaf84ad62198773d9a710dea3d364dbd6c1ff65abdff8eb6e5a71a57830d"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-macos-aarch64",
+          "sha256": "d6b6ad08961e7b491fc19a4cd8570f0231734672cfc4d6c0db6327437ac11065"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/herdrdev/herdr/releases/download/preview-2026-09-08-62431dbd033b/herdr-windows-x86_64.zip",
+          "sha256": "5904ceb4fdb3aa4c377f88ee8d2676bb39fcf62c6a8f034e6147cf21a98e6cb0",
+          "format": "zip"
+        }
+      }
+    },
     "2026-09-06-9e9bc8a14466": {
       "base_version": "0.8.2",
       "commit": "9e9bc8a144667a6b7debfd4f0c7a31ff0e11493a",

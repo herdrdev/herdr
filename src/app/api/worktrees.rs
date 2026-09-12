@@ -2319,8 +2319,10 @@ mod tests {
             .pending_worktree_remove_runtime_restores
             .contains_key(&pane_id));
 
-        let pane_updates =
-            app.handle_internal_event_with_pane_updates(AppEvent::PaneDied { pane_id });
+        let pane_updates = app.handle_internal_event_with_pane_updates(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
         assert!(matches!(
             pane_updates.as_slice(),
             [update] if update.agent_released && update.suppress_completion

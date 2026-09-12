@@ -747,7 +747,7 @@ fn workspace_actions_preserve_selected_target_and_client_confirmation() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot));
     state.mode = ClientShellMode::Navigate;
-    state.navigate_workspace_id = Some("ws_2".into());
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_2");
 
     let rename = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
         KeyCode::Char('w'),
@@ -773,7 +773,7 @@ fn workspace_actions_preserve_selected_target_and_client_confirmation() {
             if params.workspace_id == "ws_2" && params.label == "renamed"
     ));
 
-    state.navigate_workspace_id = Some("ws_2".into());
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_2");
     let mut close = ClientShellInput::default();
     state.record_binding(
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::CloseWorkspace),
@@ -813,13 +813,18 @@ fn desktop_workspace_navigation_reveals_overflowing_selection() {
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
     state.mode = ClientShellMode::Navigate;
-    state.navigate_workspace_id = Some("ws_1".into());
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_1");
     state.compose(106, 12).expect("overflowing sidebar");
 
     for _ in 0..6 {
         state.handle_input_bytes(b"\x1b[B");
         state.compose(106, 12).expect("revealed workspace");
-        let selected = state.navigate_workspace_id.as_deref().expect("selection");
+        let selected = state
+            .navigate_workspace_id
+            .as_ref()
+            .expect("selection")
+            .workspace_id
+            .as_str();
         assert!(
             state
                 .hits
@@ -883,16 +888,25 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
     let enter_navigate = state.handle_input_bytes(b"w");
     assert!(enter_navigate.repaint);
     assert_eq!(state.mode, ClientShellMode::Navigate);
-    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_1"));
+    assert_eq!(
+        state.navigate_workspace_id,
+        state.navigation_target(&ClientEndpointId::Local, "ws_1")
+    );
 
     let invalid = state.handle_input_bytes(b"9");
     assert!(invalid.actions.is_empty());
     assert_eq!(state.mode, ClientShellMode::Navigate);
-    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_1"));
+    assert_eq!(
+        state.navigate_workspace_id,
+        state.navigation_target(&ClientEndpointId::Local, "ws_1")
+    );
 
     let move_selection = state.handle_input_bytes(b"\x1b[B");
     assert!(move_selection.actions.is_empty());
-    assert_eq!(state.navigate_workspace_id.as_deref(), Some("ws_2"));
+    assert_eq!(
+        state.navigate_workspace_id,
+        state.navigation_target(&ClientEndpointId::Local, "ws_2")
+    );
     let frame = state.compose(106, 20).expect("navigate frame");
     let text = frame
         .cells
@@ -978,7 +992,7 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
             if params.workspace_id.as_deref() == Some("ws_1")
                 && params.branch.as_deref() == Some("feature/client-shell")
                 && params.path.is_none()
-                && params.focus
+                && !params.focus
     ));
 }
 

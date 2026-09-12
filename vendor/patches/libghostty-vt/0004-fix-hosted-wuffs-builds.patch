@@ -1,0 +1,29 @@
+--- a/vendor/libghostty-vt/pkg/wuffs/build.zig
++++ b/vendor/libghostty-vt/pkg/wuffs/build.zig
+@@ -59,6 +59,7 @@
+             .target = target,
+             .optimize = optimize,
+             .link_libc = windows,
++            .libc_file = if (b.libc_file) |path| .{ .cwd_relative = path } else null,
+         });
+ 
+         // Wuffs only needs stdlib.h and string.h from libc, and only for
+--- a/vendor/libghostty-vt/pkg/wuffs/src/main.zig
++++ b/vendor/libghostty-vt/pkg/wuffs/src/main.zig
+@@ -19,12 +19,11 @@
+ // Wuffs' generated `wuffs_foo__bar__alloc()` convenience functions are the
+ // only code that references libc's calloc/free. We never call them
+ // and linker garbage collection strips them, but that isn't guaranteed.
+-// When libc isn't linked there would be nothing to provide calloc/free if
+-// they survive, so export stubs to satisfy the link. Weak so that any real
+-// definition wins. Hidden keeps them out of the export table where the
+-// format honors it (e.g. wasm).
++// Freestanding consumers may have no allocator to resolve these symbols.
++// Never export stubs for hosted targets: hidden weak symbols in a static
++// archive can override the embedding executable's dynamically linked libc.
+ comptime {
+-    if (!builtin.link_libc) {
++    if (!builtin.link_libc and builtin.os.tag == .freestanding) {
+         @export(&callocStub, .{
+             .name = "calloc",
+             .linkage = .weak,

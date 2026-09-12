@@ -227,6 +227,16 @@ function requestMethod(request: unknown): unknown {
   return isRecord(request) ? request.method : undefined;
 }
 
+test("dual server entrypoint keeps V1 hooks and never reports from the V2 shared server", async () => {
+  const module = await import(`./herdr-agent-state.js?test=${++importCounter}`);
+  expect(module.default.server).toBe(module.HerdrAgentStatePlugin);
+  expect(await module.default.setup({})).toBeUndefined();
+  expect(requests).toHaveLength(0);
+  const hooks = await module.default.server();
+  await hooks["chat.message"]({ sessionID: "v1-root" });
+  expect(requests.map(requestState)).toEqual(["working"]);
+});
+
 function requestState(request: unknown): unknown {
   return requestParam(request, "state");
 }

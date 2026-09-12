@@ -50,6 +50,8 @@ herdr server reload-config
 
 重载会在不重启窗格的情况下应用大多数 UI 设置。仅启动时生效的设置仍需重启。
 
+主题、侧边栏布局、复制行为等显示设置来自客户端的本地配置，查看 SSH 机器时也一样。窗格默认值、worktree、集成和自定义命令属于运行窗格的服务器。UI 中的 `reload config` 会同时重载客户端本地设置和选中服务器的配置，本地按键绑定也会更新；指定 `--remote-keybindings server` 时则使用选中服务器的按键绑定。
+
 ## 无客户端终端尺寸
 
 没有客户端连接时，服务器会使用 120×40 的虚拟终端进行布局并创建新窗格。可通过以下配置更改用于无客户端编排的回退尺寸：
@@ -294,6 +296,8 @@ text = "#cdd6f4"
 
 侧边栏是 Herdr 的主仪表盘。在[配置参考](/docs/config-reference/)中搜索 `ui.`，可查看尺寸、折叠模式、Agent 面板排序、鼠标行为、窗格边框和其他显示设置。
 
+`ui.pane_borders` 接受 `"auto"`（默认值，仅为分割窗格显示边框）、`"always"`（也为单个窗格显示边框）或 `"off"`。单窗格的所有边都是外边，因此还需要 `ui.pane_outer_borders = true` 才会显示边框。旧的布尔值仍然有效：`true` 对应 `"auto"`，`false` 对应 `"off"`。
+
 在 `[ui]` 下设置 `tab_bar_position = "bottom"`，可将桌面标签栏放到终端窗格下方。Prefix、Navigate、Copy 和 Resize 模式栏会在显示期间临时替换底部标签栏。默认值为 `"top"`。
 
 可在标签栏右侧配置一个类似 tmux 的有序状态区：
@@ -312,7 +316,7 @@ tab_bar_right_separator = " · "
 
 状态区默认为空。添加 `zoom` 后，活动标签页处于缩放状态时会显示固定的 `ZOOM` 标记；它与现有的逐标签页 `Z` 标记相互独立。`hostname`、`datetime` 和 `command` 在 Herdr 服务器上解析，因此使用 `herdr --remote` 时会显示远程机器的值。日期时间条目使用 `strftime` 格式。由于该值是服务器本地的墙上时钟时间，需要 UTC 偏移量或 Unix 时间戳的 `%z`、`%s` 等指令会被拒绝。
 
-命令条目会立即运行，之后按 `interval_seconds` 刷新，不会阻塞渲染，也不会与上一次运行重叠。间隔范围为 1–31,536,000 秒，超时范围为 1–3,600 秒。Herdr 使用成功输出的最后一行；执行失败、输出为空或超过 `timeout_seconds` 后会清除该值。命令会获得与自定义命令按键绑定相同的活动工作区、标签页、窗格、socket、二进制文件和工作目录上下文。Linux、macOS 和 Windows 均支持命令条目；Linux 和 macOS 使用 `/bin/sh -lc`，Windows 使用 `cmd.exe /d /c`。
+命令条目会立即运行，之后按 `interval_seconds` 刷新，不会阻塞渲染，也不会与上一次运行重叠。间隔范围为 1–31,536,000 秒，超时范围为 1–3,600 秒。Herdr 使用成功输出的最后一行，并移除以 ESC 开头的终端控制序列，而不将其解释为样式；执行失败、输出为空或超过 `timeout_seconds` 后会清除该值。命令会获得与自定义命令按键绑定相同的活动工作区、标签页、窗格、socket、二进制文件和工作目录上下文。Linux、macOS 和 Windows 均支持命令条目；Linux 和 macOS 使用 `/bin/sh -lc`，Windows 使用 `cmd.exe /d /c`。
 
 分隔符只会出现在可见条目之间。设置 `tab_bar_right_separator = ""` 可直接连接条目。标签栏较窄时，整个状态区会让位给标签页及其控件。
 
@@ -395,6 +399,25 @@ rows = [
 ```
 
 `fg` 只接受严格的 `#RGB` 或 `#RRGGBB`，`bold` 和 `dim` 接受布尔值。省略字段会保留上下文样式；显式 `false` 会移除对应修饰。样式只作用于当前出现位置。为 `git_status` 设置 `fg` 后，ahead 和 behind 会使用同一种颜色，而不是默认的绿色和红色。token 样式不会改变分隔符或行背景。
+
+文本值 token 还可以包含最多 16 条有序的 `rules`。每条规则必须恰好包含一个条件：`equals`、`contains`、`starts_with`、`gt` 或 `lt`，并可选地覆盖 `fg`、`bold` 和 `dim`：
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace", "tab"],
+  [{ token = "machine", fg = "#fff", rules = [{ equals = "Local", fg = "#f55" }, { equals = "Fedora", ignore_case = true, fg = "#51a2da" }] }, "agent"],
+  [{ token = "$load", fg = "#fff", rules = [{ gt = 80, fg = "#f55", bold = true }, { gt = 50, fg = "#fc0" }] }],
+]
+```
+
+只有第一条匹配的规则生效。指定的样式字段覆盖当前位置的默认值，未指定的字段保持继承。没有规则匹配时保留默认样式。匹配使用显示截断前的完整值。在规则中设置 `hide = true` 可移除匹配的 token 及其分隔符；没有剩余 token 的行也会消失。例如，`{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }` 会在机器标签恰好为 `Local` 时隐藏机器 token。它比较的是标签，而不是连接类型。设置 `hide = false` 或省略时，token 保持可见。没有覆盖字段的规则一旦匹配，仍会停止后续匹配并保留默认值。
+
+`equals`、`contains` 和 `starts_with` 接受字符串，默认区分大小写。添加 `ignore_case = true` 可忽略 ASCII 大小写，非 ASCII 字符仍区分大小写。空字符串遵循普通字符串匹配：空的 `equals` 只匹配空值，空的 `contains` 或 `starts_with` 匹配任何已存在的值。
+
+`gt` 和 `lt` 接受有限数值阈值，分别进行严格大于和小于比较，不包含等于。整个值必须能解析为有限数值；支持小数和指数形式，但带空白、单位、`NaN` 或无穷大的值不会匹配。数值规则不接受 `ignore_case`。比较使用浮点数，不保证大整数的精确比较。
+
+规则适用于 Agent 行、`rows_by_agent` 覆盖和 Space 行中的文本值内置 token 及自定义 `$name` token。上例中，`$load` 报告 `"90"` 时显示红色粗体，`"60"` 时显示黄色，`"90%"` 时保持白色。未报告的 token 仍然不显示。`state_icon` 和复合 token `git_status` 仅接受固定样式，不支持规则。未知条件或格式错误的规则会在加载配置时被拒绝；不支持正则表达式、模糊匹配或脚本。
 
 `row_gap` 分别控制 Agent 和 Space 面板中条目之间的空白终端行数。默认值为 `0`，会紧密排列条目；设为 `1` 可恢复之前的间距。它不会在 `rows` 声明的内容行之间添加间距。连续缩进的 worktree 子项仍会作为一个 Space 组紧密排列。
 

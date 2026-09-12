@@ -346,6 +346,20 @@ mod tests {
 
     #[test]
     fn deferred_repaint_survives_real_scrollback_pruning() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(None);
+    }
+
+    #[test]
+    fn deferred_repaint_survives_real_scrollback_pruning_resize_rows() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(Some((2, 40)));
+    }
+
+    #[test]
+    fn deferred_repaint_survives_real_scrollback_pruning_resize_both_axes() {
+        assert_deferred_repaint_survives_real_scrollback_pruning(Some((2, 20)));
+    }
+
+    fn assert_deferred_repaint_survives_real_scrollback_pruning(resize: Option<(u16, u16)>) {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(40, 1, 1).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
@@ -387,6 +401,9 @@ mod tests {
             .collect::<String>();
         pane.process_pty_bytes(pane_id, 0, batch.as_bytes(), &tx);
         assert_eq!(state(), (before, true));
+        if let Some((rows, cols)) = resize {
+            pane.resize(rows, cols, 8, 16);
+        }
         let mut core = pane.core.lock().unwrap();
         let fallback =
             super::super::finish_recent_snapshot(&mut core, String::new(), CACHE_LINES, false);

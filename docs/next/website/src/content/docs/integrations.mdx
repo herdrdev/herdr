@@ -215,7 +215,11 @@ Install the OpenCode plugin:
 herdr integration install opencode
 ```
 
-Herdr writes the plugin to `~/.config/opencode/plugins/herdr-agent-state.js`. The OpenCode config directory must already exist. Uninstall removes only that plugin file.
+The integration supports OpenCode V1 `1.18.29` or later and OpenCode V2 (tested with beta `19242`). The OpenCode config directory must already exist. Herdr installs the server entrypoint at `~/.config/opencode/plugins/herdr-agent-state.js`, the shared TUI plugin at `herdr-tui-session.js`, and a V2 TUI entrypoint at `herdr-opencode/tui.js` in that config directory.
+
+Install registers the V1 TUI plugin in `tui.jsonc` and the V2 TUI plugin in `cli.json`, preserving other preferences and plugins. If OpenCode still has V1 TUI preferences to import (`tui.json` or `kv.json`), Herdr defers registration so the first-start migration can run; start `opencode2` once and reinstall the integration afterward. Otherwise Herdr creates `cli.json` with the plugin registration. Restart the OpenCode TUI after installation. Uninstall removes the managed plugin files and their configuration entries.
+
+V2 lifecycle reporting runs in the pane-local TUI, which associates events with its selected root session even when multiple panes share one OpenCode server. Completion and interruption clear the working state; pending permission requests, pending forms, and failed executions keep the pane blocked. V2 Mini and headless clients do not run the TUI plugin and therefore do not provide this lifecycle reporting.
 
 The plugin reports lifecycle state and session identity while OpenCode runs inside a Herdr pane. After OpenCode emits a session-bearing event, Herdr can use the reported session id to resume the pane with `opencode --session <id>`. Native screen manifest detection remains available when the plugin is not installed.
 

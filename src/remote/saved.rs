@@ -17,10 +17,7 @@ pub(crate) fn connect_saved_ssh(
     target: &str,
     session: &str,
 ) -> io::Result<SavedSshStream> {
-    validate_profile_path_id(profile_id)?;
-    crate::session::validate_name(session)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let ssh = RemoteSsh::new_noninteractive(target.to_owned());
+    let ssh = validated_saved_ssh(profile_id, target, session)?;
     let remote_herdr = find_installed_remote_herdr(&ssh)?;
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
@@ -38,9 +35,46 @@ pub(crate) fn connect_saved_ssh(
     })
 }
 
+pub(crate) struct SavedSshApiBridge {
+    path: PathBuf,
+    bridge: SshStdioBridge,
+}
+
+impl SavedSshApiBridge {
+    pub(crate) fn start(profile_id: &str, target: &str, session: &str) -> io::Result<Self> {
+        let ssh = validated_saved_ssh(profile_id, target, session)?;
+        let remote_herdr = super::attach::find_installed_remote_api_herdr(&ssh, session)?;
+        let command = super::attach::remote_api_bridge_command(&remote_herdr, session, false);
+        let path = crate::platform::remote_bridge_endpoint_path(
+            &format!("herdr-api-ssh-{}-{profile_id}.sock", std::process::id()),
+            &format!(
+                "herdr-api-{}-{}.sock",
+                std::process::id(),
+                &profile_id[..16]
+            ),
+        );
+        let bridge = SshStdioBridge::start_command(
+            target.to_owned(),
+            command,
+            path.clone(),
+            ssh.options(),
+            true,
+        )?;
+        Ok(Self { path, bridge })
+    }
+
+    pub(crate) fn socket_path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub(crate) fn reported_failure(&self) -> Option<io::Error> {
+        self.bridge.reported_failure()
+    }
+}
+
 pub(crate) fn saved_ssh_bootstrap_command(target: &str, session: &str) -> String {
     format!(
-        "herdr --remote {} --session {} --handoff",
+        "herdr --remote {} --session {}",
         super::shell_quote(target),
         super::shell_quote(session)
     )
@@ -80,6 +114,13 @@ fn saved_bridge_path(profile_id: &str) -> PathBuf {
     crate::platform::remote_bridge_endpoint_path(&readable, &short)
 }
 
+fn validated_saved_ssh(profile_id: &str, target: &str, session: &str) -> io::Result<RemoteSsh> {
+    validate_profile_path_id(profile_id)?;
+    crate::session::validate_name(session)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    Ok(RemoteSsh::new_noninteractive(target.to_owned()))
+}
+
 fn validate_profile_path_id(profile_id: &str) -> io::Result<()> {
     if profile_id.len() == 32
         && profile_id
@@ -112,7 +153,7 @@ mod tests {
     fn bootstrap_command_preserves_the_explicit_remote_session() {
         assert_eq!(
             saved_ssh_bootstrap_command("build host", "agent work"),
-            "herdr --remote 'build host' --session 'agent work' --handoff"
+            "herdr --remote 'build host' --session 'agent work'"
         );
     }
 

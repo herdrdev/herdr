@@ -1,3 +1,7 @@
+mod rules;
+
+pub use rules::SidebarTokenRule;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -115,6 +119,7 @@ pub enum AgentSidebarToken {
     Styled {
         token: Box<AgentSidebarToken>,
         style: SidebarTokenStyle,
+        rules: Vec<SidebarTokenRule>,
     },
 }
 
@@ -129,22 +134,37 @@ pub enum SpaceSidebarToken {
     Styled {
         token: Box<SpaceSidebarToken>,
         style: SidebarTokenStyle,
+        rules: Vec<SidebarTokenRule>,
     },
 }
 
 impl AgentSidebarToken {
+    pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
+        match self {
+            Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
+            _ => Some(SidebarTokenStyle::default()),
+        }
+    }
+
     pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
         match self {
-            Self::Styled { token, style } => (token, *style),
+            Self::Styled { token, style, .. } => (token, *style),
             token => (token, SidebarTokenStyle::default()),
         }
     }
 }
 
 impl SpaceSidebarToken {
+    pub(crate) fn style_for_value(&self, value: &str) -> Option<SidebarTokenStyle> {
+        match self {
+            Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
+            _ => Some(SidebarTokenStyle::default()),
+        }
+    }
+
     pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
         match self {
-            Self::Styled { token, style } => (token, *style),
+            Self::Styled { token, style, .. } => (token, *style),
             token => (token, SidebarTokenStyle::default()),
         }
     }
@@ -160,6 +180,8 @@ struct RawStyledSidebarToken {
     bold: Option<bool>,
     #[serde(default)]
     dim: Option<bool>,
+    #[serde(default)]
+    rules: Vec<SidebarTokenRule>,
 }
 
 #[derive(Deserialize)]
@@ -170,17 +192,28 @@ enum RawSidebarToken {
 }
 
 impl RawSidebarToken {
-    fn parts(self) -> (String, Option<SidebarTokenStyle>) {
+    fn parts(self) -> Result<(String, Option<SidebarTokenStyle>, Vec<SidebarTokenRule>), String> {
         match self {
-            Self::Plain(token) => (token, None),
-            Self::Styled(token) => (
-                token.token,
-                Some(SidebarTokenStyle {
-                    fg: token.fg,
-                    bold: token.bold,
-                    dim: token.dim,
-                }),
-            ),
+            Self::Plain(token) => Ok((token, None, Vec::new())),
+            Self::Styled(token) => {
+                if token.rules.len() > 16 {
+                    return Err("sidebar tokens may contain at most 16 rules".into());
+                }
+                if !token.rules.is_empty()
+                    && matches!(token.token.as_str(), "state_icon" | "git_status")
+                {
+                    return Err("sidebar rules require a text-valued token".into());
+                }
+                Ok((
+                    token.token,
+                    Some(SidebarTokenStyle {
+                        fg: token.fg,
+                        bold: token.bold,
+                        dim: token.dim,
+                    }),
+                    token.rules,
+                ))
+            }
         }
     }
 }
@@ -211,6 +244,7 @@ where
 fn serialize_styled_token<S>(
     name: String,
     style: SidebarTokenStyle,
+    rules: &[SidebarTokenRule],
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -227,6 +261,9 @@ where
     }
     if let Some(dim) = style.dim {
         map.serialize_entry("dim", &dim)?;
+    }
+    if !rules.is_empty() {
+        map.serialize_entry("rules", rules)?;
     }
     map.end()
 }
@@ -265,9 +302,11 @@ impl Serialize for AgentSidebarToken {
         S: serde::Serializer,
     {
         match self {
-            Self::Styled { token, style } => {
-                serialize_styled_token(agent_token_name(token), *style, serializer)
-            }
+            Self::Styled {
+                token,
+                style,
+                rules,
+            } => serialize_styled_token(agent_token_name(token), *style, rules, serializer),
             token => serializer.serialize_str(&agent_token_name(token)),
         }
     }
@@ -284,7 +323,9 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
     where
         D: serde::Deserializer<'de>,
     {
-        let (value, style) = RawSidebarToken::deserialize(deserializer)?.parts();
+        let (value, style, rules) = RawSidebarToken::deserialize(deserializer)?
+            .parts()
+            .map_err(serde::de::Error::custom)?;
         let token = parse_sidebar_token(
             value,
             &[
@@ -303,6 +344,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
         Ok(style.map_or(token.clone(), |style| Self::Styled {
             token: Box::new(token),
             style,
+            rules,
         }))
     }
 }
@@ -313,9 +355,11 @@ impl Serialize for SpaceSidebarToken {
         S: serde::Serializer,
     {
         match self {
-            Self::Styled { token, style } => {
-                serialize_styled_token(space_token_name(token), *style, serializer)
-            }
+            Self::Styled {
+                token,
+                style,
+                rules,
+            } => serialize_styled_token(space_token_name(token), *style, rules, serializer),
             token => serializer.serialize_str(&space_token_name(token)),
         }
     }
@@ -332,7 +376,9 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
     where
         D: serde::Deserializer<'de>,
     {
-        let (value, style) = RawSidebarToken::deserialize(deserializer)?.parts();
+        let (value, style, rules) = RawSidebarToken::deserialize(deserializer)?
+            .parts()
+            .map_err(serde::de::Error::custom)?;
         let token = parse_sidebar_token(
             value,
             &[
@@ -347,6 +393,7 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
         Ok(style.map_or(token.clone(), |style| Self::Styled {
             token: Box::new(token),
             style,
+            rules,
         }))
     }
 }
@@ -560,6 +607,58 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
         let (token, style) = config.ui.sidebar.spaces.rows[1][0].parts();
         assert_eq!(token, &SpaceSidebarToken::Custom("jj".into()));
         assert_eq!(style.bold, Some(true));
+    }
+
+    #[test]
+    fn conditional_sidebar_rules_round_trip() {
+        let input = r##"
+[agents]
+rows = [[{ token = "machine", fg = "#fff", rules = [{ equals = "Local", fg = "#f00" }, { starts_with = "fed", ignore_case = true, bold = true }] }]]
+[agents.rows_by_agent]
+pi = [[{ token = "$load", rules = [{ gt = 80, dim = false }, { lt = 20.5, dim = true }] }]]
+[spaces]
+rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
+"##;
+        let config: SidebarConfig = toml::from_str(input).expect("conditional sidebar config");
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("rules"));
+        assert_eq!(toml::from_str::<SidebarConfig>(&encoded).unwrap(), config);
+    }
+
+    #[test]
+    fn conditional_sidebar_rules_reject_invalid_conditions_and_nontext_tokens() {
+        for rule in [
+            "{ bold = true }",
+            "{ equals = 'x', contains = 'x' }",
+            "{ regex = 'x' }",
+            "{ gt = '80' }",
+            "{ equals = 80 }",
+            "{ gt = nan }",
+            "{ lt = inf }",
+            "{ gt = 80, ignore_case = false }",
+            "{ equals = 'x', underline = true }",
+            "{ equals = 'x', fg = 'red' }",
+        ] {
+            let input = format!("[agents]\nrows = [[{{ token = 'machine', rules = [{rule}] }}]]");
+            assert!(toml::from_str::<SidebarConfig>(&input).is_err(), "{rule}");
+        }
+        for (section, token) in [
+            ("agents", "state_icon"),
+            ("spaces", "state_icon"),
+            ("spaces", "git_status"),
+        ] {
+            let input = format!(
+                "[{section}]\nrows = [[{{ token = '{token}', rules = [{{ equals = 'x' }}] }}]]"
+            );
+            assert!(toml::from_str::<SidebarConfig>(&input).is_err());
+        }
+        for count in [16, 17] {
+            let rules = std::iter::repeat_n("{ equals = 'x' }", count)
+                .collect::<Vec<_>>()
+                .join(",");
+            let input = format!("[agents]\nrows = [[{{ token = 'machine', rules = [{rules}] }}]]");
+            assert_eq!(toml::from_str::<SidebarConfig>(&input).is_ok(), count == 16);
+        }
     }
 
     #[test]

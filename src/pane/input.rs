@@ -218,7 +218,7 @@ fn ghostty_unshifted_codepoint(key: &crate::input::TerminalKey) -> Option<u32> {
 fn ghostty_key_from_crossterm_key_code(
     code: crossterm::event::KeyCode,
     shifted_codepoint: Option<u32>,
-) -> Option<u32> {
+) -> Option<crate::ghostty::ffi::GhosttyKey> {
     use crate::ghostty::ffi;
     use crossterm::event::KeyCode;
 
@@ -257,7 +257,10 @@ fn ghostty_key_from_crossterm_key_code(
     }
 }
 
-fn ghostty_key_from_char(c: char, shifted_codepoint: Option<u32>) -> Option<u32> {
+fn ghostty_key_from_char(
+    c: char,
+    shifted_codepoint: Option<u32>,
+) -> Option<crate::ghostty::ffi::GhosttyKey> {
     use crate::ghostty::ffi;
 
     let base = if let Some(shifted) = shifted_codepoint.and_then(char::from_u32) {

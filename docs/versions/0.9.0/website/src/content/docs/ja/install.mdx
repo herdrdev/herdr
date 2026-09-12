@@ -1,0 +1,154 @@
+---
+title: Herdr のインストール
+description: Linux、macOS、Windows での Herdr のインストール、アップデート、動作確認。
+---
+
+Herdr は Linux、macOS、Windows 向けに安定版チャンネルのバイナリを提供しています。Windows 対応は正式提供されており、プラットフォーム固有の既知の制限と継続的な修正があります。
+
+## インストール
+
+Linux または macOS では次を実行します:
+
+```bash
+curl -fsSL https://herdr.dev/install.sh | sh
+```
+
+Windows では次を実行します:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+```
+
+エンドポイントセキュリティによってこのファイルレス PowerShell コマンドがブロックされる場合は、コマンドプロンプトを開いて次を実行します：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
+インストーラーはプラットフォームに合ったリリースバイナリをダウンロードして PATH 上に配置します。新しい直接インストールは安定版アップデートチャンネルを使います。既存の Windows プレビューインストールは、`herdr channel set stable` で切り替えるまでプレビューに残ります。Windows では PATH が有効なバージョン付きリリースディレクトリを指し、インストーラーは互換性のため `current` と安定した `bin` エイリアスも更新します。そのため、アップデート時に実行中の `herdr.exe` を上書きする必要がありません。
+
+## Homebrew でインストール
+
+すでに Homebrew を使っている場合:
+
+```bash
+brew install herdr
+```
+
+## mise でインストール
+
+すでに mise を使っている場合:
+
+```bash
+mise use -g herdr
+```
+
+mise が `herdr not found in mise tool registry` と報告する場合は、mise をアップデートして再試行してください。古い mise は Herdr のレジストリ登録より前のバージョンです。一時的な回避策として `mise use -g github:herdrdev/herdr` も使えます。
+
+## Nix でインストール
+
+すでに Nix を使っている場合、Herdr はソースからビルドする flake を提供しています:
+
+```bash
+nix run github:herdrdev/herdr/v0.x.y
+nix build github:herdrdev/herdr/v0.x.y
+nix profile install github:herdrdev/herdr/v0.x.y
+```
+
+`v0.x.y` は最新のリリースタグに置き換えてください。タグを省略すると `master` を追跡できますが、通常のインストールにはリリースタグを推奨します。
+
+flake は開発用シェルも公開しています:
+
+```bash
+nix develop github:herdrdev/herdr
+```
+
+アップデートは、Herdr のインストールに使ったのと同じ Nix ワークフローで行います。プロファイルインストールの場合は、プロファイルのエントリを一覧して Herdr のエントリをアップグレードします:
+
+```bash
+nix profile list
+nix profile upgrade <index-or-name>
+```
+
+Herdr が自分の flake の input になっている場合は、その input を更新してシステム、Home Manager、または開発環境を再ビルドします:
+
+```bash
+nix flake update herdr
+```
+
+## 手動でダウンロード
+
+[GitHub releases](https://github.com/herdrdev/herdr/releases) からバイナリをダウンロードすることもできます。
+
+システムに合ったアセットを選んでください:
+
+| システム | アセット |
+| --- | --- |
+| Linux x86_64 | `herdr-linux-x86_64` |
+| Linux aarch64 | `herdr-linux-aarch64` |
+| macOS Intel | `herdr-macos-x86_64` |
+| macOS Apple silicon | `herdr-macos-aarch64` |
+| Windows x86_64 | `herdr-windows-x86_64.zip` |
+
+Linux または macOS では、実行可能にして PATH 上のどこかに移動します。
+
+```bash
+chmod +x herdr-linux-x86_64
+mv herdr-linux-x86_64 ~/.local/bin/herdr
+```
+
+### Windows アーカイブ
+
+安定版リリースとプレビュープレリリースの両方に `herdr-windows-x86_64.zip` が含まれます。アーカイブには `herdr.exe` とアプリローカルの ConPTY ランタイムが含まれます。展開したディレクトリをまとめて保持し、`herdr.exe` だけをコピーしないでください。
+
+## 動作確認
+
+Herdr を起動します:
+
+```bash
+herdr
+```
+
+シェルが `herdr` を見つけられない場合は、ターミナルを再起動するか、インストール先ディレクトリが PATH に含まれているか確認してください。
+
+## アップデート
+
+Herdr は新しいリリースをチェックし、アプリ内で通知します。手動でアップデートすることもできます:
+
+```bash
+herdr update
+```
+
+`herdr update` は Herdr 自身のインストーラーで管理されているインストール向けです。Homebrew、mise、Nix のインストールは、それぞれのパッケージマネージャーでアップデートしてください。
+
+Linux、macOS、Windows の直接インストールは、デフォルトで安定版アップデートチャンネルを使います。`master` からのプレビュービルドにオプトインするには、チャンネルを設定します:
+
+```bash
+herdr channel set preview
+```
+
+直接インストールを安定版に戻すのも同じ方法です:
+
+```bash
+herdr channel set stable
+```
+
+直接インストールの場合、チャンネルの変更はそのチャンネルをチェックして最新バイナリをインストールします。そのアップデートが失敗した場合は、`herdr update` を実行して設定済みチャンネルから再試行してください。
+
+プレビュービルドは、現在の開発ブランチから定期的に公開される GitHub プレリリースです。次の安定版リリースより前に修正が欲しいときに便利ですが、リグレッションの可能性があります。Homebrew、mise、Nix のインストールはプレビューチャンネルを使いません。
+
+Windows の通常利用には安定版を推奨します。プレビューでは修正をより早く受け取れますが、リグレッションの可能性があるため、そのトレードオフを望む場合に限りオプトインしてください。既存の Windows プレビューインストールは、明示的に切り替えるまでプレビューに残ります。古いプレビュービルドで `herdr channel set stable` が拒否される場合は、プレビューのまま一度 `herdr update` を実行してから、チャンネル切り替えを再試行してください。
+
+デフォルトでは、`herdr update` は新しいバイナリをインストールし、エンドポイント世代 1 のサーバーとペインプロセスを動かしたままにします。再度 Herdr を起動すると、更新済みクライアントで再接続します。クライアントだけの変更はすぐに使えます。新しいサーバー側アクションは、そのサーバーを更新して再起動するまで利用できず、クライアントは切断せずに通知を表示します。エンドポイント世代 1 より前のサーバーだけは、更新時に最後の 1 回の停止が必要です。
+
+対応する実行中セッションで実験的なライブサーバーハンドオフにオプトインするには:
+
+```bash
+herdr update --handoff
+```
+
+ライブハンドオフは Homebrew、mise、Nix のパッケージマネージャー経由のアップデートには適用されません。それらのインストールではパッケージマネージャーで更新し、再度 Herdr を実行して更新済みクライアントで再接続します。互換性のある古いサーバーは動き続けます。新しいリリースのサーバー側変更が必要になったときだけ、`herdr server stop` または `herdr session stop <name>` で後から再起動してください。
+
+## 動作要件
+
+安定版チャンネルのバイナリは Linux、macOS、Windows x86_64 で利用できます。サポートされるワークフローと既知の制限は [Windows サポート](/ja/docs/windows-beta/)を参照してください。Windows ARM64 では x86_64 ビルドが Windows のエミュレーション上で動作します。

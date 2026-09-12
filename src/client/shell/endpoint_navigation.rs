@@ -59,16 +59,16 @@ impl ClientShellState {
         point: (u16, u16),
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let Some(endpoint_id) = self
+        let Some(hit) = self
             .hits
             .machines
             .iter()
             .find(|hit| super::contains(hit.rect, point))
-            .map(|hit| hit.endpoint_id.clone())
         else {
             return false;
         };
-        if endpoint_id == self.active_endpoint_id {
+        let endpoint_id = hit.endpoint_id.clone();
+        if super::contains(hit.collapse_toggle, point) || endpoint_id == self.active_endpoint_id {
             if !self.collapsed_endpoints.remove(&endpoint_id) {
                 self.collapsed_endpoints.insert(endpoint_id);
             }

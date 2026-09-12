@@ -162,7 +162,7 @@ fn summaryTable(pages: *const PageList) void {
     );
     _ = cimgui.c.ImGui_TableSetColumnIndex(2);
     var limit_buf: [64]u8 = undefined;
-    const limit = formatBytes(&limit_buf, pages.maxSize());
+    const limit = formatBytes(&limit_buf, pages.limits.max(.bytes));
     cimgui.c.ImGui_TextUnformatted(limit.ptr);
 
     cimgui.c.ImGui_TableNextRow();

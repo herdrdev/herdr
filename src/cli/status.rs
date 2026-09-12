@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::api;
-use crate::api::client::{ApiClient, ApiClientError};
+use crate::api::client::ApiClientError;
 
 pub(super) fn run_status_command(args: &[String]) -> std::io::Result<i32> {
     let Some((scope, json)) = parse_status_args(args) else {
@@ -164,33 +164,29 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
                 "{indent}private_protocol_compatible: {}",
                 compatibility_label(*protocol)
             );
-            println!("{indent}socket: {}", api::socket_path().display());
+            println!("{indent}socket: {}", super::target::socket_label());
         }
         ServerRuntimeStatus::NotRunning => {
             println!("{indent}status: not running");
-            println!("{indent}socket: {}", api::socket_path().display());
+            println!("{indent}socket: {}", super::target::socket_label());
         }
     }
 }
 
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
-    match ApiClient::local().status() {
+    match super::target::api_client()?.status() {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,
             capabilities: status.capabilities,
         }),
+        Err(err) if super::target::is_remote() => Err(super::target::remote_error(
+            super::api_client_error_to_io(err),
+        )),
         Err(ApiClientError::Io(err)) if super::server_not_running_error(&err) => {
             Ok(ServerRuntimeStatus::NotRunning)
         }
-        Err(err) => Err(api_client_error_to_io(err)),
-    }
-}
-
-fn api_client_error_to_io(err: ApiClientError) -> std::io::Error {
-    match err {
-        ApiClientError::Io(err) => err,
-        err => std::io::Error::other(err),
+        Err(err) => Err(super::api_client_error_to_io(err)),
     }
 }
 
@@ -307,7 +303,7 @@ fn client_status_json() -> ClientStatusJson {
 }
 
 fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
-    match server {
+    let mut status = match server {
         ServerRuntimeStatus::Running {
             version,
             protocol,
@@ -350,7 +346,13 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             restart_needed: Some(false),
             server_binary_stale: Some(false),
         },
+    };
+    if let Some((_, session)) = super::target::remote_identity() {
+        status.socket = super::target::socket_label();
+        status.session = Some(session);
+        status.server_binary_stale = None;
     }
+    status
 }
 
 fn update_status_json(server: &ServerRuntimeStatus) -> UpdateStatusJson {

@@ -217,7 +217,11 @@ Herdr 的 Droid 钩子使用 `~/.factory`。Factory 配置目录必须已经存�
 herdr integration install opencode
 ```
 
-Herdr 把插件写入 `~/.config/opencode/plugins/herdr-agent-state.js`。OpenCode 配置目录必须已经存在。卸载只删除那个插件文件。
+该集成支持 OpenCode V1 `1.18.29` 及更高版本，以及 OpenCode V2（已验证 beta `19242`）。OpenCode 配置目录必须已经存在。Herdr 将服务端入口安装到 `~/.config/opencode/plugins/herdr-agent-state.js`，并在该配置目录安装共享 TUI 插件 `herdr-tui-session.js` 和 V2 TUI 入口 `herdr-opencode/tui.js`。
+
+安装会在 `tui.jsonc` 中注册 V1 TUI 插件，并在 `cli.json` 中注册 V2 TUI 插件，同时保留其他设置和插件。如果 OpenCode 仍有 V1 TUI 偏好需要迁移(`tui.json` 或 `kv.json`),Herdr 会推迟注册，以便首次启动时执行迁移；此时请先启动一次 `opencode2`，然后重新安装集成。否则 Herdr 会创建 `cli.json` 并注册插件。安装后请重启 OpenCode TUI。卸载会删除受管理的插件文件及其配置条目。
+
+V2 生命周期上报在窗格本地的 TUI 中运行。即使多个窗格共享同一个 OpenCode 服务端，事件也只归属于该 TUI 选中的根会话。完成和中断会清除工作状态；待处理的权限请求、表单以及执行失败会使窗格保持阻塞。V2 Mini 和无界面客户端不运行 TUI 插件，因此不提供此生命周期上报。
 
 该插件在 OpenCode 运行于 Herdr 窗格内时上报生命周期状态和会话身份。在 OpenCode 发出携带会话信息的事件后,Herdr 可以用上报的会话 id 通过 `opencode --session <id>` 恢复该窗格。插件未安装时,屏幕清单检测仍然可用。
 

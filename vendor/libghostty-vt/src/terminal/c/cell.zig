@@ -10,6 +10,12 @@ const Result = @import("result.zig").Result;
 /// C: GhosttyCell
 pub const CCell = u64;
 
+/// C: GhosttyCellsView
+pub const CellsView = extern struct {
+    ptr: ?[*]const CCell,
+    len: usize,
+};
+
 /// C: GhosttyCellContentTag
 pub const ContentTag = enum(c_int) {
     codepoint = 0,
@@ -105,7 +111,7 @@ pub fn get(
     out: ?*anyopaque,
 ) callconv(lib.calling_conv) Result {
     if (comptime std.debug.runtime_safety) {
-        _ = std.meta.intToEnum(CellData, @intFromEnum(data)) catch {
+        _ = std.enums.fromInt(CellData, @intFromEnum(data)) orelse {
             return .invalid_value;
         };
     }
@@ -158,7 +164,7 @@ fn getTyped(
         .has_hyperlink => out.* = cell.hyperlink,
         .protected => out.* = cell.protected,
         .semantic_content => out.* = @enumFromInt(@intFromEnum(cell.semantic_content)),
-        .color_palette => out.* = cell.content.color_palette,
+        .color_palette => out.* = cell.content.color_palette.data,
         .color_rgb => {
             const rgb = cell.content.color_rgb;
             out.* = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };

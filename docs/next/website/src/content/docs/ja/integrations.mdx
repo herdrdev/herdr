@@ -217,7 +217,11 @@ OpenCode プラグインをインストールします:
 herdr integration install opencode
 ```
 
-Herdr はプラグインを `~/.config/opencode/plugins/herdr-agent-state.js` に書き込みます。OpenCode の設定ディレクトリはあらかじめ存在している必要があります。アンインストールはそのプラグインファイルだけを削除します。
+この連携は OpenCode V1 `1.18.29` 以降と OpenCode V2（beta `19242` で検証済み）に対応します。OpenCode の設定ディレクトリはあらかじめ存在している必要があります。Herdr はサーバー側のエントリポイントを `~/.config/opencode/plugins/herdr-agent-state.js` に、共通 TUI プラグインを同じ設定ディレクトリの `herdr-tui-session.js` に、V2 TUI エントリポイントを `herdr-opencode/tui.js` にインストールします。
+
+インストール時、V1 TUI プラグインを `tui.jsonc` に、V2 TUI プラグインを `cli.json` に登録し、他の設定やプラグインは保持します。OpenCode に移行すべき V1 TUI 設定(`tui.json` または `kv.json`)が残っている場合、Herdr は初回起動時の移行を妨げないよう登録を見送ります。その場合は一度 `opencode2` を起動してから連携を再インストールしてください。それ以外の場合は Herdr が `cli.json` を作成してプラグインを登録します。インストール後は OpenCode TUI を再起動してください。アンインストールは管理対象のプラグインファイルと設定項目を削除します。
+
+V2 のライフサイクル報告はペイン内の TUI で実行され、複数のペインが同じ OpenCode サーバーを共有する場合も、選択されたルートセッションにイベントを対応付けます。完了時または中断時に working 状態を解除し、未処理の権限要求やフォーム、実行失敗は blocked 状態を維持します。V2 Mini とヘッドレスクライアントは TUI プラグインを実行しないため、このライフサイクル報告は利用できません。
 
 このプラグインは、OpenCode が Herdr のペイン内で動いている間、ライフサイクル状態とセッション識別を報告します。OpenCode がセッション情報を含むイベントを発行した後、Herdr は報告されたセッション id を使って `opencode --session <id>` でペインを resume できます。プラグインがインストールされていないときは、スクリーンマニフェスト検出が引き続き利用できます。
 

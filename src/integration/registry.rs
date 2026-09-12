@@ -427,6 +427,18 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
             config_dir,
             super::OPENCODE_TUI_PLUGIN_SPEC,
         )
+        && (!config_dir.join("cli.json").exists()
+            || (super::opencode_config::cli_plugin_is_configured(
+                config_dir,
+                super::OPENCODE_V2_TUI_PLUGIN_SPEC,
+            ) && fs::read_to_string(
+                config_dir
+                    .join(super::OPENCODE_V2_TUI_PLUGIN_DIR)
+                    .join("tui.js"),
+            )
+            .ok()
+            .and_then(|content| parse_integration_version(&content))
+            .is_some_and(|version| version >= expected_version)))
 }
 
 pub(crate) fn integration_status_at(

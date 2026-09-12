@@ -134,6 +134,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
     std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
     #[cfg(windows)]
     std::env::remove_var("APPDATA");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
@@ -2301,7 +2302,101 @@ fn install_opencode_writes_server_and_tui_plugins() {
     let tui_config: Value =
         serde_json::from_str(&fs::read_to_string(&installed.tui_config_path).unwrap()).unwrap();
     assert_eq!(tui_config["plugin"], json!([OPENCODE_TUI_PLUGIN_SPEC]));
+    let cli_config_path = installed
+        .cli_config_path
+        .expect("cli.json should be created when OpenCode has nothing to migrate");
+    assert_eq!(cli_config_path, opencode_dir.join("cli.json"));
+    let cli_config: Value =
+        serde_json::from_str(&fs::read_to_string(&cli_config_path).unwrap()).unwrap();
+    assert_eq!(cli_config["plugins"], json!([OPENCODE_V2_TUI_PLUGIN_SPEC]));
 
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_install_defers_v2_registration_while_migration_pending() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let opencode_dir = home.join(".config/opencode");
+    fs::create_dir_all(&opencode_dir).unwrap();
+    fs::write(opencode_dir.join("tui.json"), "{}").unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_opencode().unwrap();
+
+    assert!(installed.cli_config_path.is_none());
+    assert!(!opencode_dir.join("cli.json").exists());
+    assert!(opencode_dir
+        .join(OPENCODE_V2_TUI_PLUGIN_DIR)
+        .join("tui.js")
+        .is_file());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let cli = dir.join("cli.json");
+    fs::write(
+        &cli,
+        r#"{"theme":{"name":"catppuccin"},"plugins":["other"]}"#,
+    )
+    .unwrap();
+    let installed = install_opencode().unwrap();
+    assert_eq!(installed.cli_config_path, Some(cli.clone()));
+    let status = || {
+        integration_status_at(
+            crate::api::schema::IntegrationTarget::Opencode,
+            installed.plugin_path.clone(),
+            OPENCODE_INTEGRATION_VERSION,
+        )
+        .state
+    };
+    assert_eq!(status(), IntegrationStatusKind::Current);
+    let entry = dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js");
+    assert_eq!(
+        fs::read_to_string(&entry).unwrap(),
+        OPENCODE_V2_TUI_PLUGIN_ASSET
+    );
+    fs::remove_file(&entry).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+    install_opencode().unwrap();
+    super::opencode_config::remove_cli_plugin(&dir, OPENCODE_V2_TUI_PLUGIN_SPEC).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+    install_opencode().unwrap();
+    uninstall_opencode().unwrap();
+    assert!(!entry.exists());
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(cli).unwrap()).unwrap(),
+        json!({"theme":{"name":"catppuccin"},"plugins":["other"]})
+    );
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_invalid_cli_config_does_not_overwrite_existing_plugins() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::env::set_var("HOME", &home);
+    let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin, "previous integration").unwrap();
+    fs::write(dir.join("cli.json"), r#"{"plugins":{}}"#).unwrap();
+    assert!(install_opencode().is_err());
+    assert_eq!(fs::read_to_string(plugin).unwrap(), "previous integration");
+    assert!(!dir.join("tui.jsonc").exists());
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }

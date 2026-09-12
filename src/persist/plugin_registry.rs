@@ -31,7 +31,33 @@ fn with_registry_lock<T>(operation: impl FnOnce() -> std::io::Result<T>) -> std:
     operation()
 }
 
+// Resolve the file link before replacing it, including a missing target in a
+// stow-managed directory. Keep this separate from session persistence, which
+// has its own write/error behavior.
+fn resolve_write_target(path: &Path) -> std::io::Result<PathBuf> {
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        let metadata = match std::fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(target),
+            Err(err) => return Err(err),
+        };
+        if !metadata.file_type().is_symlink() {
+            return Ok(target);
+        }
+        let link = std::fs::read_link(&target)?;
+        target = if link.is_absolute() {
+            link
+        } else {
+            target.parent().unwrap_or_else(|| Path::new(".")).join(link)
+        };
+    }
+    Err(std::io::Error::other("too many plugin registry symlinks"))
+}
+
 fn save_json_to_path<T: serde::Serialize + ?Sized>(path: &Path, value: &T) -> std::io::Result<()> {
+    let target = resolve_write_target(path)?;
+    let path = target.as_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -267,6 +293,137 @@ mod tests {
         );
         assert_eq!(result[0].source.owner.as_deref(), Some("ogulcancelik"));
         assert!(result[0].warnings.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_relative_registry_symlink() {
+        let path = temp_registry_path("relative-symlink");
+        let root = path.parent().unwrap();
+        let target = root.join("dotfiles/herdr/plugins.json");
+        save_to_path(&target, &[sample_plugin("example.first")]).unwrap();
+        std::os::unix::fs::symlink("dotfiles/herdr/plugins.json", &path).unwrap();
+
+        let result = save_to_path(&path, &[sample_plugin("example.second")]);
+        let preserved = std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink();
+        let link_text = std::fs::read_link(&path);
+        let loaded = load_from_path(&target);
+        let same_content = std::fs::read(&path).unwrap() == std::fs::read(&target).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+
+        result.unwrap();
+        assert!(preserved, "saving the registry must preserve its symlink");
+        assert_eq!(link_text.unwrap(), Path::new("dotfiles/herdr/plugins.json"));
+        assert!(same_content);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].plugin_id, "example.second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_follows_absolute_and_relative_links_to_missing_target() {
+        let path = temp_registry_path("dangling-chain");
+        let root = path.parent().unwrap();
+        let middle = root.join("links/registry.json");
+        let target = root.join("dotfiles/herdr/plugins.json");
+        std::fs::create_dir_all(middle.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&middle, &path).unwrap();
+        std::os::unix::fs::symlink("../dotfiles/herdr/plugins.json", &middle).unwrap();
+
+        save_to_path(&path, &[sample_plugin("example.new")]).unwrap();
+
+        assert_eq!(std::fs::read_link(&path).unwrap(), middle);
+        assert_eq!(
+            std::fs::read_link(&middle).unwrap(),
+            Path::new("../dotfiles/herdr/plugins.json")
+        );
+        assert_eq!(load_from_path(&target)[0].plugin_id, "example.new");
+        assert!(!target.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlink_cycle_without_replacing_links() {
+        let path = temp_registry_path("cycle");
+        let root = path.parent().unwrap();
+        let other = root.join("other.json");
+        std::fs::create_dir_all(root).unwrap();
+        std::os::unix::fs::symlink("other.json", &path).unwrap();
+        std::os::unix::fs::symlink("plugins.json", &other).unwrap();
+
+        assert!(save_to_path(&path, &[sample_plugin("example.new")]).is_err());
+
+        assert_eq!(std::fs::read_link(&path).unwrap(), Path::new("other.json"));
+        assert_eq!(
+            std::fs::read_link(&other).unwrap(),
+            Path::new("plugins.json")
+        );
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_failure_preserves_symlink_and_target_directory() {
+        let path = temp_registry_path("invalid-target");
+        let root = path.parent().unwrap();
+        let target = root.join("directory");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), "unchanged").unwrap();
+        std::os::unix::fs::symlink("directory", &path).unwrap();
+
+        assert!(save_to_path(&path, &[sample_plugin("example.new")]).is_err());
+
+        assert_eq!(std::fs::read_link(&path).unwrap(), Path::new("directory"));
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep")).unwrap(),
+            "unchanged"
+        );
+        assert!(!target.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_preserves_symlink_and_existing_plugin_settings() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let base = temp_registry_path("update");
+        let base = base.parent().unwrap();
+        let previous_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", base);
+        let path = registry_path();
+        let target = base.join("dotfiles/plugins.json");
+        let mut existing = sample_plugin("example.existing");
+        existing.enabled = false;
+        existing.source.kind = crate::api::schema::PluginSourceKind::Github;
+        existing.source.owner = Some("example".into());
+        save_to_path(&target, &[existing.clone()]).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let result = update(|plugins| plugins.push(sample_plugin("example.added")));
+        match previous_config_home {
+            Some(previous) => std::env::set_var("XDG_CONFIG_HOME", previous),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        let (_, entries) = result.unwrap();
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(entries[0].plugin_id, "example.added");
+        assert_eq!(
+            serde_json::to_value(&entries[1]).unwrap(),
+            serde_json::to_value(existing).unwrap()
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            std::fs::read(&target).unwrap()
+        );
+        assert_eq!(load_from_path(&target).len(), 2);
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

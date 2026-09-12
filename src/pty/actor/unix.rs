@@ -570,10 +570,7 @@ impl PtyIoActorRunner {
             }
         }
 
-        self.fail_active_submission(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            "PTY actor closed during input submission",
-        ));
+        self.close_input_queue();
         if let Some(on_reader_exit) = self.on_reader_exit.take() {
             on_reader_exit();
         }
@@ -921,6 +918,16 @@ impl PtyIoActorRunner {
         }
     }
 
+    fn close_input_queue(&mut self) {
+        self.data_rx.close();
+        self.fail_active_submission(input_submission_closed_error());
+        while let Some(command) = self.data_rx.blocking_recv() {
+            if let PtyIoDataCommand::SubmitUserInput { reply, .. } = command {
+                let _ = reply.send(Err(input_submission_closed_error()));
+            }
+        }
+    }
+
     fn flush_pending_writes_once(&mut self) -> std::io::Result<Option<SubmissionBoundary>> {
         while let Some(write) = self.pending_writes.front() {
             let chunk = &write.bytes[self.current_write_offset..];
@@ -1017,6 +1024,13 @@ impl PtyIoActorRunner {
             debug!(pane = self.pane_id, err = %err, "PTY resize failed");
         }
     }
+}
+
+fn input_submission_closed_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        "PTY actor closed during input submission",
+    )
 }
 
 #[cfg(test)]
@@ -1259,6 +1273,92 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("actor reports peer closure")
             .expect_err("peer closure fails the active submission");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn actor_fails_buffered_submissions_on_exit() {
+        let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
+        let active = handle
+            .queue_user_input_submission(
+                Bytes::from_static(b"first"),
+                Bytes::from_static(b"\r"),
+                Duration::from_secs(1),
+            )
+            .expect("first submission queues");
+        let mut prompt = [0; 5];
+        peer.read_exact(&mut prompt).expect("peer receives prompt");
+        let buffered = handle
+            .queue_user_input_submission(
+                Bytes::from_static(b"second"),
+                Bytes::from_static(b"\r"),
+                Duration::ZERO,
+            )
+            .expect("second submission queues");
+
+        drop(peer);
+        let active_err = active
+            .recv_timeout(Duration::from_secs(1))
+            .expect("actor reports active submission")
+            .expect_err("peer closure fails active submission");
+        let buffered_err = buffered
+            .recv_timeout(Duration::from_secs(1))
+            .expect("actor reports buffered submission")
+            .expect_err("peer closure fails buffered submission");
+
+        assert_eq!(active_err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert_eq!(buffered_err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn actor_rejects_submission_after_io_loop_exits() {
+        let (actor_socket, peer) = UnixStream::pair().expect("socket pair");
+        actor_socket
+            .set_nonblocking(true)
+            .expect("actor socket nonblocking");
+        let owned = unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) };
+        let handle_slot = Arc::new(Mutex::new(None::<PtyIoActorHandle>));
+        let (attempt_tx, attempt_rx) = std_mpsc::channel();
+        let config = PtyIoActorConfig {
+            pane_id: 1,
+            master_fd: owned,
+            initially_quiesced: false,
+            on_read: Box::new(|_| PtyReadResult::empty()),
+            on_reader_exit: Some(Box::new({
+                let handle_slot = Arc::clone(&handle_slot);
+                move || {
+                    let handle = handle_slot
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .as_ref()
+                        .expect("actor handle installed")
+                        .clone();
+                    let attempt = handle.queue_user_input_submission(
+                        Bytes::from_static(b"prompt"),
+                        Bytes::from_static(b"\r"),
+                        Duration::ZERO,
+                    );
+                    attempt_tx.send(attempt).expect("attempt receiver alive");
+                }
+            })),
+        };
+        let handle = PtyIoActor::spawn(config).expect("actor spawn");
+        *handle_slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
+
+        drop(peer);
+        let err = match attempt_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reader exit callback attempts submission")
+        {
+            Ok(completion) => completion
+                .recv_timeout(Duration::from_secs(1))
+                .expect("actor reports submission")
+                .expect_err("closed actor rejects submission"),
+            Err(err) => err,
+        };
+
         assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
     }
 

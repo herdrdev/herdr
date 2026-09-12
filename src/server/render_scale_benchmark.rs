@@ -39,10 +39,13 @@ struct RenderPipeline {
 
 impl RenderPipeline {
     fn new(workspaces: Vec<Workspace>) -> Self {
-        let config = Config::default();
+        Self::with_config(workspaces, &Config::default())
+    }
+
+    fn with_config(workspaces: Vec<Workspace>, config: &Config) -> Self {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
-            &config,
+            config,
             AppPolicy::TEST,
             None,
             api_rx,
@@ -53,7 +56,7 @@ impl RenderPipeline {
         app.state.selected = 0;
         app.state.pane_scrollbars = true;
 
-        let mut client = ClientShellState::new(ClientShellConfig::from_config(&config));
+        let mut client = ClientShellState::new(ClientShellConfig::from_config(config));
         client.set_snapshot(Box::new(super::client_shell::snapshot(
             &app,
             "bench-boot",
@@ -171,7 +174,10 @@ fn summarize(mut samples: Vec<Duration>) -> StageStats {
 }
 
 fn profile(build: fn(usize) -> Vec<Workspace>, count: usize) -> PipelineStats {
-    let mut pipeline = RenderPipeline::new(build(count));
+    profile_pipeline(RenderPipeline::new(build(count)))
+}
+
+fn profile_pipeline(mut pipeline: RenderPipeline) -> PipelineStats {
     for _ in 0..WARMUP_COUNT {
         black_box(pipeline.render_once());
     }
@@ -263,6 +269,49 @@ fn print_snapshot_encoding_profiles(label: &str, build: fn(usize) -> Vec<Workspa
     }
 }
 
+fn print_token_rule_profiles() {
+    let rules = std::iter::repeat_n(
+        "{ contains = 'NO-MATCH', ignore_case = true, bold = true }",
+        15,
+    )
+    .chain(std::iter::once("{ starts_with = 'bench', bold = true }"))
+    .collect::<Vec<_>>()
+    .join(",");
+    for (label, build) in [
+        ("background", workspaces as fn(usize) -> Vec<Workspace>),
+        ("active", active_panes),
+    ] {
+        for conditional in [false, true] {
+            let config: Config = toml::from_str(&format!(
+                "[ui.sidebar.agents]\nrows = [[{{ token = 'workspace', rules = [{}] }}]]\n[ui.sidebar.spaces]\nrows = [[{{ token = 'workspace', rules = [{}] }}]]",
+                if conditional { &rules } else { "" }, if conditional { &rules } else { "" },
+            )).unwrap();
+            let rows = [1, 15].map(|count| {
+                let mut pipeline = RenderPipeline::with_config(build(count), &config);
+                pipeline.app.state.ensure_test_terminals();
+                for terminal in pipeline.app.state.terminals.values_mut() {
+                    terminal.detected_agent = Some(crate::detect::Agent::Pi);
+                }
+                pipeline
+                    .client
+                    .set_snapshot(Box::new(super::client_shell::snapshot(
+                        &pipeline.app,
+                        "bench-boot",
+                        1,
+                        None,
+                        None,
+                    )));
+                (count, profile_pipeline(pipeline))
+            });
+            println!(
+                "token rules {label}: populated agents, rules_per_token={}",
+                if conditional { 16 } else { 0 }
+            );
+            print_stage("client shell composition", &rows, |stats| stats.client);
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "manual client-rendered pipeline scaling profile"]
 async fn render_scale_profile() {
@@ -270,4 +319,5 @@ async fn render_scale_profile() {
     print_snapshot_encoding_profiles("background workspaces", workspaces);
     print_profiles("active panes (one workspace)", active_panes);
     print_snapshot_encoding_profiles("active panes", active_panes);
+    print_token_rule_profiles();
 }

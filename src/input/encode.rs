@@ -16,10 +16,10 @@ pub fn encode_key(key: KeyEvent, protocol: KeyboardProtocol) -> Vec<u8> {
 }
 
 pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<u8> {
-    // A zero Unicode value on this Windows character event means the host layout is
-    // still composing a dead key. Kitty panes must not receive its physical fallback.
+    // The host layout has not committed text for this Windows dead key. Neither
+    // legacy nor Kitty panes should receive its physical character fallback.
     // Legacy Windows panes take the native ConPTY fallback before reaching this encoder.
-    if matches!(protocol, KeyboardProtocol::Kitty { .. }) && key.is_windows_shift_dead_key() {
+    if key.is_windows_dead_key() {
         return Vec::new();
     }
 
@@ -569,6 +569,36 @@ mod tests {
         assert_eq!(actual.modifiers, modifiers);
         assert_eq!(actual.kind, kind);
         assert_eq!(actual.shifted_codepoint, shifted_codepoint);
+    }
+
+    #[test]
+    fn kitty_all_keys_does_not_encode_windows_altgr_dead_key_phases() {
+        use crossterm::event::KeyEventKind;
+
+        let key = TerminalKey::new(KeyCode::Char('4'), KeyModifiers::empty()).with_windows_record(
+            crate::input::WindowsKeyRecord {
+                key_down: true,
+                repeat_count: 1,
+                virtual_key_code: 52,
+                virtual_scan_code: 5,
+                unicode: 0,
+                control_key_state: 9,
+            },
+        );
+        for kind in [
+            KeyEventKind::Press,
+            KeyEventKind::Repeat,
+            KeyEventKind::Release,
+        ] {
+            assert!(
+                encode_terminal_key(
+                    key.clone().with_kind(kind),
+                    KeyboardProtocol::Kitty { flags: 31 },
+                )
+                .is_empty(),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

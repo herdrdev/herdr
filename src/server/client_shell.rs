@@ -364,7 +364,7 @@ pub(super) fn render_pane_surface(
         .filter_map(|split| {
             let hit_rect = split_hit_rect(
                 split,
-                app.state.pane_borders,
+                app.state.pane_borders.draws_borders(),
                 app.state.pane_gaps,
                 &pane_frames,
             )?;

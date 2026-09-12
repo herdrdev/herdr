@@ -1,6 +1,6 @@
 [package]
 name = "herdr"
-version = "0.8.2"
+version = "0.9.0"
 edition = "2021"
 build = "build.rs"
 description = "terminal workspace manager for AI coding agents"

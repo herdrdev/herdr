@@ -55,9 +55,9 @@ pub(crate) fn update_file_at(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create config directory: {error}"))?;
     }
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+    let content = match super::io::read_optional_config(path) {
+        Ok(Some(content)) => content,
+        Ok(None) => String::new(),
         Err(error) => {
             return Err(format!(
                 "failed to read config before saving {description}: {error}"
@@ -72,4 +72,38 @@ pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
     update_file_at(&super::config_path(), edit.description(), |content| {
         edit.apply(content)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_file_at_does_not_move_a_leading_bom_into_the_file() {
+        let dir = std::env::temp_dir().join(format!("herdr-config-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            b"\xEF\xBB\xBF[terminal]\ndefault_shell = \"pwsh.exe\"\n",
+        )
+        .unwrap();
+
+        update_file_at(&path, "onboarding setting", |content| {
+            crate::config::upsert_top_level_bool(content, "onboarding", false)
+        })
+        .unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+
+        assert!(
+            !written.contains('\u{feff}'),
+            "unexpected BOM in {written:?}"
+        );
+        assert!(
+            toml::from_str::<toml::Value>(&written).is_ok(),
+            "written config is not valid TOML: {written:?}"
+        );
+    }
 }

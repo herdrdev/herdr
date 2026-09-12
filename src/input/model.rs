@@ -78,7 +78,7 @@ pub struct TerminalKey {
     pub shifted_codepoint: Option<u32>,
     pub generated_text: Option<String>,
     physical_identity_hint: bool,
-    windows_shift_dead_key: bool,
+    windows_dead_key: bool,
     source: KeySource,
 }
 
@@ -92,7 +92,7 @@ impl TerminalKey {
             shifted_codepoint: None,
             generated_text: None,
             physical_identity_hint: false,
-            windows_shift_dead_key: false,
+            windows_dead_key: false,
             source: KeySource::Synthesized,
         }
     }
@@ -160,8 +160,10 @@ impl TerminalKey {
         mut self,
         record: Option<WindowsKeyRecord>,
     ) -> Self {
-        self.windows_shift_dead_key = matches!(self.code, KeyCode::Char(_))
-            && self.modifiers == KeyModifiers::SHIFT
+        // AltGr is normalized to text-only modifiers by the Windows input mapper.
+        // Command chords can also have zero Unicode, so retain their fallback keys.
+        self.windows_dead_key = matches!(self.code, KeyCode::Char(_))
+            && self.modifiers.difference(KeyModifiers::SHIFT).is_empty()
             && record.is_some_and(|record| record.unicode == 0);
         self
     }
@@ -189,8 +191,8 @@ impl TerminalKey {
         None
     }
 
-    pub(crate) fn is_windows_shift_dead_key(&self) -> bool {
-        self.windows_shift_dead_key
+    pub(crate) fn is_windows_dead_key(&self) -> bool {
+        self.windows_dead_key
     }
 
     pub(crate) fn identity(&self) -> KeyIdentity {
@@ -420,6 +422,46 @@ mod tests {
             Some(true)
         );
         assert_eq!(key.repeat_count, 1);
+    }
+
+    #[test]
+    fn windows_composition_hint_requires_uncommitted_text_not_a_command() {
+        let record = WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 52,
+            virtual_scan_code: 5,
+            unicode: 0,
+            control_key_state: 9,
+        };
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+        ] {
+            let key = TerminalKey::new(KeyCode::Char('4'), modifiers)
+                .with_windows_composition_hint(Some(record));
+            assert!(
+                !key.is_windows_dead_key(),
+                "command modifiers: {modifiers:?}"
+            );
+        }
+        for (code, source) in [
+            (KeyCode::Left, Some(record)),
+            (KeyCode::Char('4'), None),
+            (
+                KeyCode::Char('~'),
+                Some(WindowsKeyRecord {
+                    unicode: 126,
+                    ..record
+                }),
+            ),
+        ] {
+            let key =
+                TerminalKey::new(code, KeyModifiers::empty()).with_windows_composition_hint(source);
+            assert!(!key.is_windows_dead_key(), "{code:?}, {source:?}");
+        }
     }
 
     #[test]
