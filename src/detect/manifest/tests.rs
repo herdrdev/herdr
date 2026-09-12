@@ -1195,6 +1195,46 @@ fn codex_weak_blocker_ignores_wrapped_current_prompt_text() {
 }
 
 #[test]
+fn codex_sparkle_prompt_preserves_live_states() {
+    for marker in ["› ", "›⠁", "›⠂", "›⠄", "›⠈", "›⠐", "›⠠", "›⡀", "›⢀"]
+    {
+        let screen = format!("Do you want to proceed? [y/n]\n{marker}unsent draft\n");
+        let result = osc_explain(Agent::Codex, &screen, "project | Ready", "");
+        assert_eq!(result.state, AgentState::Idle, "{marker}");
+
+        let working = format!(
+            "Do you want to proceed? [y/n]\n• Working (4s • esc to interrupt)\n{marker}draft\n"
+        );
+        let result = osc_explain(Agent::Codex, &working, "project", "");
+        assert_eq!(result.state, AgentState::Working, "{marker}");
+
+        let approval = format!("{screen}Press enter to confirm or esc to cancel\n");
+        let result = osc_explain(Agent::Codex, &approval, "project", "");
+        assert_eq!(result.state, AgentState::Blocked, "{marker}");
+        assert!(result.visible_blocker);
+
+        for response_marker in ['•', '■', '✗', '✓'] {
+            let response = format!("{screen}{response_marker} Do you want to proceed? [y/n]\n");
+            let result = osc_explain(Agent::Codex, &response, "project", "");
+            assert_eq!(
+                result.state,
+                AgentState::Blocked,
+                "{marker} {response_marker}"
+            );
+        }
+    }
+}
+
+#[test]
+fn codex_weak_blocker_does_not_ignore_arbitrary_prompt_suffixes() {
+    for line in ["›text", "›⠋draft", "›⠀draft", " ›⠁draft", "quoted ›⠁draft"] {
+        let screen = format!("Do you want to proceed? [y/n]\n{line}\n");
+        let result = osc_explain(Agent::Codex, &screen, "project", "");
+        assert_eq!(result.state, AgentState::Blocked, "{line}");
+    }
+}
+
+#[test]
 fn codex_transcript_viewer_outranks_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         › transcript\n\

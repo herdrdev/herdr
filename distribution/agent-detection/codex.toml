@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.09.05.1"
+version = "2026.09.12.1"
 min_engine_version = 3
-updated_at = "2026-09-05T00:00:00Z"
+updated_at = "2026-09-12T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -69,6 +69,8 @@ id = "weak_blocker"
 state = "blocked"
 priority = 600
 region = "whole_recent_without_current_prompt_marker"
+# Sparkles can replace the space after ›. A later response marker makes that prompt stale.
+not = [{ regex = ['(?m)^›[⠁⠂⠄⠈⠐⠠⡀⢀][^\n]*(?:\n(?:[^•■✗✓\n][^\n]*)?)*\z'] }]
 any = [
   { contains = ["[y/n]"] },
   { contains = ["yes (y)"] },
