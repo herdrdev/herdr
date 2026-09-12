@@ -163,11 +163,23 @@ fn write_frame(
     stopped: &AtomicBool,
 ) -> io::Result<()> {
     let deadline = Instant::now() + WRITE_TIMEOUT;
+    #[cfg(windows)]
+    let mut deadline = deadline;
     while !frame.is_empty() && !stopped.load(Ordering::Acquire) {
-        match writer.write(frame) {
+        // Match interprocess's 512-byte pipe buffer hint: larger nonblocking Windows
+        // writes can make no progress when the peer polls instead of blocking on read.
+        #[cfg(windows)]
+        let chunk = &frame[..frame.len().min(512)];
+        #[cfg(not(windows))]
+        let chunk = frame;
+        match writer.write(chunk) {
             Ok(0) => {}
             Ok(written) => {
                 frame = &frame[written..];
+                #[cfg(windows)]
+                {
+                    deadline = Instant::now() + WRITE_TIMEOUT;
+                }
                 continue;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -276,7 +288,24 @@ mod tests {
 
     #[test]
     fn native_endpoint_flush_drains_large_frames_before_detach() {
-        let (stream, mut peer, path) = streams();
+        // The SSH bridge polls for available bytes instead of posting a blocking read.
+        struct PollingPeer(LocalStream);
+        impl io::Read for PollingPeer {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                loop {
+                    match crate::ipc::poll_local_stream_read_count(&mut self.0, buffer)? {
+                        crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
+                        crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
+                        crate::ipc::LocalStreamReadCount::Pending => {
+                            std::thread::sleep(IO_POLL_INTERVAL);
+                        }
+                    }
+                }
+            }
+        }
+        let (stream, peer, path) = streams();
+        peer.set_nonblocking(true).unwrap();
+        let mut peer = PollingPeer(peer);
         let mut transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
         let (done, received) = mpsc::channel();
         let reader = std::thread::spawn(move || {
