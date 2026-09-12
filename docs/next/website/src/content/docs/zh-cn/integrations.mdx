@@ -53,6 +53,35 @@ herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
 ```
 
+在 Linux 和 macOS 上，共享的智能体配置会完整写入临时文件，再进行原子替换。Windows 上的现有配置则先备份，再原地更新，以保留文件所有者和访问规则；更新中断后可能需要恢复。所有平台的新文件都使用临时文件方式创建。Herdr 会跟随符号链接，并在修改钩子文件之前拒绝具有多个硬链接的配置；请改用独立文件或符号链接后重试。这是单文件保护，不是整个安装的事务、并发编辑控制或断电持久性保证。后续失败仍可能留下之前已完成的安装变更。
+
+<details>
+<summary>Windows 配置恢复</summary>
+
+修改现有配置前，Herdr 会将原始内容保存并同步到私有的 `<config>.herdr-backup` 文件。写入失败时会保留此恢复副本并报告两个路径。即使配置已丢失或无效，后续更新也不会覆盖尚未处理的恢复副本。对于现有的 EFS 加密配置，Herdr 会拒绝更新并保持原样，而不是创建明文备份。
+
+`.herdr-backup.pending` 是未完成的备份，**不能作为恢复来源**。对应的原地写入尚未开始。请检查配置后再删除未完成文件并重试。更新成功后，如果清理失败或中断，完整备份也可能留下；仅凭备份存在不能判断当前配置已损坏。
+
+需要恢复时，请先关闭智能体，将备份的**内容写回现有配置文件**，不要移动备份来替换它。在 PowerShell 中，将 `$config` 设置为 Herdr 报告的配置路径：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$config = 'C:\path\to\cli.json'
+$backup = "$config.herdr-backup"
+$bytes = [System.IO.File]::ReadAllBytes($backup)
+$file = [System.IO.File]::Open($config, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write)
+try {
+    $file.SetLength(0)
+    $file.Write($bytes, 0, $bytes.Length)
+    $file.Flush($true)
+} finally {
+    $file.Dispose()
+}
+```
+
+恢复失败时请保留备份。确认配置正确后，运行 `Remove-Item -LiteralPath $backup` 删除完整备份，再重试集成更新。如果原文件已丢失，还需恢复其预期权限；创建替代文件不会自动保留原权限。
+</details>
+
 ## Herdr 如何使用集成
 
 Herdr 以两种不同方式使用集成:

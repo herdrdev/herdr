@@ -19,6 +19,7 @@ use super::config_edit::{
     remove_direct_hook_commands, remove_flat_command_hook, remove_hermes_plugin_enabled,
     remove_hook_commands, remove_kimi_config_block, remove_simple_command_hook,
 };
+use super::config_file::{check_config_targets, write_config};
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
     grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, mastracode_dir, omp_extension_dir,
@@ -121,6 +122,7 @@ pub(crate) fn remove_legacy_pi_extension_from_omp_dir(dir: &Path) -> io::Result<
 
 pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     let dir = claude_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "claude directory not found at {}. install claude code first",
@@ -145,7 +147,7 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
     remove_legacy_bash_hook_file(&hook_path)?;
 
     if updated_settings != existing_settings {
-        fs::write(&settings_path, updated_settings)?;
+        write_config(&settings_path, updated_settings)?;
     }
 
     Ok(ClaudeInstallPaths {
@@ -156,6 +158,7 @@ pub(crate) fn install_claude() -> io::Result<ClaudeInstallPaths> {
 
 pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     let dir = codex_dir()?;
+    check_config_targets(&dir, &["hooks.json", "config.toml"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "codex config directory not found at {}. install codex first",
@@ -197,7 +200,7 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     )?;
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
     let config_path = dir.join("config.toml");
     let existing_config = if config_path.is_file() {
@@ -207,7 +210,7 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     };
     let new_config = build_codex_config_with_hooks(&existing_config);
     if new_config != existing_config {
-        fs::write(&config_path, new_config)?;
+        write_config(&config_path, new_config)?;
     }
 
     Ok(CodexInstallPaths {
@@ -219,6 +222,7 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
 
 pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
     let dir = kimi_dir()?;
+    check_config_targets(&dir, &["config.toml"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "kimi code config directory not found at {}. install kimi code first",
@@ -241,7 +245,7 @@ pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
     };
     let new_config = build_kimi_config_with_hooks(&existing_config, &hook_path);
     if new_config != existing_config {
-        fs::write(&config_path, new_config)?;
+        write_config(&config_path, new_config)?;
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
@@ -253,6 +257,7 @@ pub(crate) fn install_kimi() -> io::Result<KimiInstallPaths> {
 
 pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
     let dir = copilot_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "copilot config directory not found at {}. install github copilot cli first",
@@ -297,7 +302,7 @@ pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     Ok(CopilotInstallPaths {
         hook_path,
@@ -307,6 +312,7 @@ pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
 
 pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
     let dir = devin_dir()?;
+    check_config_targets(&dir, &["config.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "devin config directory not found at {}. install devin cli first",
@@ -353,7 +359,7 @@ pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     Ok(DevinInstallPaths {
         hook_path,
@@ -363,6 +369,7 @@ pub(crate) fn install_devin() -> io::Result<DevinInstallPaths> {
 
 pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
     let dir = droid_dir()?;
+    check_config_targets(&dir, &["settings.json", "hooks.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "droid config directory not found at {}. install droid first",
@@ -413,7 +420,7 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     let hooks_path = dir.join("hooks.json");
     let mut updated_legacy_hooks = false;
@@ -439,7 +446,7 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
             }
         }
         if updated_legacy_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 
@@ -453,6 +460,7 @@ pub(crate) fn install_droid() -> io::Result<DroidInstallPaths> {
 
 pub(crate) fn install_opencode() -> io::Result<OpenCodeInstallPaths> {
     let dir = opencode_dir()?;
+    check_config_targets(&dir, &["tui.jsonc", "cli.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "opencode config directory not found at {}. install opencode first",
@@ -506,6 +514,7 @@ pub(crate) fn install_kilo() -> io::Result<KiloInstallPaths> {
 
 pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     let dir = hermes_dir()?;
+    check_config_targets(&dir, &["config.yaml"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "hermes config directory not found at {}. install hermes agent first",
@@ -532,7 +541,7 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     };
     let new_config = ensure_hermes_plugin_enabled(&existing_config);
     if new_config != existing_config {
-        fs::write(&config_path, new_config)?;
+        write_config(&config_path, new_config)?;
     }
 
     Ok(HermesInstallPaths {
@@ -562,8 +571,10 @@ pub(crate) fn uninstall_omp() -> io::Result<OmpUninstallResult> {
 }
 
 pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
-    let hook_path = claude_dir()?.join("hooks").join(CLAUDE_HOOK_INSTALL_NAME);
-    let settings_path = claude_dir()?.join("settings.json");
+    let dir = claude_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(CLAUDE_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
     let mut updated_settings = false;
 
     if settings_path.is_file() {
@@ -572,7 +583,7 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
             uninstall_claude_settings(&existing_settings, &settings_path, &hook_path)?;
         updated_settings = new_settings != existing_settings;
         if updated_settings {
-            fs::write(&settings_path, new_settings)?;
+            write_config(&settings_path, new_settings)?;
         }
     }
 
@@ -589,6 +600,7 @@ pub(crate) fn uninstall_claude() -> io::Result<ClaudeUninstallResult> {
 
 pub(crate) fn uninstall_codex() -> io::Result<CodexUninstallResult> {
     let codex_dir = codex_dir()?;
+    check_config_targets(&codex_dir, &["hooks.json"])?;
     let hook_path = codex_dir.join(CODEX_HOOK_INSTALL_NAME);
     let hooks_path = codex_dir.join("hooks.json");
     let config_path = codex_dir.join("config.toml");
@@ -619,7 +631,7 @@ pub(crate) fn uninstall_codex() -> io::Result<CodexUninstallResult> {
         }
 
         if updated_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 
@@ -637,6 +649,7 @@ pub(crate) fn uninstall_codex() -> io::Result<CodexUninstallResult> {
 
 pub(crate) fn uninstall_kimi() -> io::Result<KimiUninstallResult> {
     let kimi_dir = kimi_dir()?;
+    check_config_targets(&kimi_dir, &["config.toml"])?;
     let hook_path = kimi_dir.join("hooks").join(KIMI_HOOK_INSTALL_NAME);
     let config_path = kimi_dir.join("config.toml");
     let mut updated_config = false;
@@ -645,7 +658,7 @@ pub(crate) fn uninstall_kimi() -> io::Result<KimiUninstallResult> {
         let existing_config = fs::read_to_string(&config_path)?;
         let new_config = remove_kimi_config_block(&existing_config);
         if new_config != existing_config {
-            fs::write(&config_path, new_config)?;
+            write_config(&config_path, new_config)?;
             updated_config = true;
         }
     }
@@ -663,6 +676,7 @@ pub(crate) fn uninstall_kimi() -> io::Result<KimiUninstallResult> {
 
 pub(crate) fn uninstall_copilot() -> io::Result<CopilotUninstallResult> {
     let copilot_dir = copilot_dir()?;
+    check_config_targets(&copilot_dir, &["settings.json"])?;
     let hook_path = copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME);
     let settings_path = copilot_dir.join("settings.json");
     let mut updated_settings = false;
@@ -691,7 +705,7 @@ pub(crate) fn uninstall_copilot() -> io::Result<CopilotUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 
@@ -708,6 +722,7 @@ pub(crate) fn uninstall_copilot() -> io::Result<CopilotUninstallResult> {
 
 pub(crate) fn uninstall_devin() -> io::Result<DevinUninstallResult> {
     let devin_dir = devin_dir()?;
+    check_config_targets(&devin_dir, &["config.json"])?;
     let hook_path = devin_dir.join(DEVIN_HOOK_INSTALL_NAME);
     let settings_path = devin_dir.join("config.json");
     let mut updated_settings = false;
@@ -736,7 +751,7 @@ pub(crate) fn uninstall_devin() -> io::Result<DevinUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 
@@ -753,6 +768,7 @@ pub(crate) fn uninstall_devin() -> io::Result<DevinUninstallResult> {
 
 pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
     let droid_dir = droid_dir()?;
+    check_config_targets(&droid_dir, &["settings.json", "hooks.json"])?;
     let hook_path = droid_dir.join("hooks").join(DROID_HOOK_INSTALL_NAME);
     let hooks_path = droid_dir.join("hooks.json");
     let settings_path = droid_dir.join("settings.json");
@@ -780,7 +796,7 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
         }
 
         if updated_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 
@@ -808,7 +824,7 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 
@@ -827,6 +843,7 @@ pub(crate) fn uninstall_droid() -> io::Result<DroidUninstallResult> {
 
 pub(crate) fn uninstall_opencode() -> io::Result<OpenCodeUninstallResult> {
     let dir = opencode_dir()?;
+    check_config_targets(&dir, &["tui.jsonc", "cli.json"])?;
     let tui_config_path = tui_config_path(&dir);
     let plugin_path = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
     let tui_plugin_path = dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME);
@@ -882,6 +899,7 @@ pub(crate) fn uninstall_kilo() -> io::Result<KiloUninstallResult> {
 
 pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
     let dir = hermes_dir()?;
+    check_config_targets(&dir, &["config.yaml"])?;
     let plugin_dir = hermes_plugin_dir()?;
     let config_path = dir.join("config.yaml");
 
@@ -891,7 +909,7 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
         let existing_config = fs::read_to_string(&config_path)?;
         let new_config = remove_hermes_plugin_enabled(&existing_config);
         if new_config != existing_config {
-            fs::write(&config_path, new_config)?;
+            write_config(&config_path, new_config)?;
             updated_config = true;
         }
     }
@@ -906,6 +924,7 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
 
 pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
     let dir = qodercli_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "qodercli config directory not found at {}. install qodercli first",
@@ -960,7 +979,7 @@ pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     Ok(QodercliInstallPaths {
         hook_path,
@@ -970,6 +989,7 @@ pub(crate) fn install_qodercli() -> io::Result<QodercliInstallPaths> {
 
 pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     let dir = qwen_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "qwen code config directory not found at {}. install qwen code first",
@@ -1013,7 +1033,7 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
         )?;
     }
 
-    fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
     Ok(QwenInstallPaths {
         hook_path,
@@ -1023,6 +1043,7 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
 
 pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
     let dir = cursor_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "cursor config directory not found at {}. install cursor agent cli first",
@@ -1069,7 +1090,7 @@ pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
     remove_simple_command_hook(hooks, "sessionEnd", &session_command)?;
     ensure_simple_command_hook(hooks, "sessionStart", session_command)?;
 
-    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
     Ok(CursorInstallPaths {
         hook_path,
@@ -1078,10 +1099,10 @@ pub(crate) fn install_cursor() -> io::Result<CursorInstallPaths> {
 }
 
 pub(crate) fn uninstall_qodercli() -> io::Result<QodercliUninstallResult> {
-    let hook_path = qodercli_dir()?
-        .join("hooks")
-        .join(QODERCLI_HOOK_INSTALL_NAME);
-    let settings_path = qodercli_dir()?.join("settings.json");
+    let dir = qodercli_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(QODERCLI_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
     let mut updated_settings = false;
 
     if settings_path.is_file() {
@@ -1108,7 +1129,7 @@ pub(crate) fn uninstall_qodercli() -> io::Result<QodercliUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 
@@ -1124,8 +1145,10 @@ pub(crate) fn uninstall_qodercli() -> io::Result<QodercliUninstallResult> {
 }
 
 pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
-    let hook_path = qwen_dir()?.join("hooks").join(QWEN_HOOK_INSTALL_NAME);
-    let settings_path = qwen_dir()?.join("settings.json");
+    let dir = qwen_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
+    let hook_path = dir.join("hooks").join(QWEN_HOOK_INSTALL_NAME);
+    let settings_path = dir.join("settings.json");
     let mut updated_settings = false;
 
     if settings_path.is_file() {
@@ -1149,7 +1172,7 @@ pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 
@@ -1165,6 +1188,7 @@ pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
 
 pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
     let cursor_home = cursor_dir()?;
+    check_config_targets(&cursor_home, &["hooks.json"])?;
     let hook_path = cursor_home.join(CURSOR_HOOK_INSTALL_NAME);
     let hooks_path = cursor_home.join("hooks.json");
     let mut updated_hooks = false;
@@ -1194,7 +1218,7 @@ pub(crate) fn uninstall_cursor() -> io::Result<CursorUninstallResult> {
         }
 
         if updated_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 
@@ -1221,6 +1245,7 @@ pub(crate) fn mastracode_hook_command(hook_path: &Path, action: &str) -> String 
 
 pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
     let mastracode_home = mastracode_dir()?;
+    check_config_targets(&mastracode_home, &["hooks.json"])?;
     let hook_dir = mastracode_home.join("hooks");
     fs::create_dir_all(&hook_dir)?;
 
@@ -1258,7 +1283,7 @@ pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
         )?;
     }
 
-    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
     Ok(MastracodeInstallPaths {
         hook_path,
@@ -1268,6 +1293,7 @@ pub(crate) fn install_mastracode() -> io::Result<MastracodeInstallPaths> {
 
 pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
     let mastracode_home = mastracode_dir()?;
+    check_config_targets(&mastracode_home, &["hooks.json"])?;
     let hook_path = mastracode_home
         .join("hooks")
         .join(MASTRACODE_HOOK_INSTALL_NAME);
@@ -1300,7 +1326,7 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
         }
 
         if updated_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 
@@ -1316,6 +1342,7 @@ pub(crate) fn uninstall_mastracode() -> io::Result<MastracodeUninstallResult> {
 
 pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths> {
     let dir = antigravity_cli_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "antigravity cli config directory not found at {}. install antigravity cli first",
@@ -1353,7 +1380,7 @@ pub(crate) fn install_antigravity_cli() -> io::Result<AntigravityCliInstallPaths
         antigravity_cli_hook_block(&hook_path),
     );
 
-    fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
 
     Ok(AntigravityCliInstallPaths {
         hook_path,
@@ -1391,6 +1418,7 @@ fn antigravity_cli_hook_block(hook_path: &Path) -> Value {
 
 pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallResult> {
     let dir = antigravity_cli_dir()?;
+    check_config_targets(&dir, &["hooks.json"])?;
     let hook_path = dir.join("hooks").join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME);
     let hooks_path = dir.join("hooks.json");
     let mut updated_hooks = false;
@@ -1411,7 +1439,7 @@ pub(crate) fn uninstall_antigravity_cli() -> io::Result<AntigravityCliUninstallR
         updated_hooks = hooks.remove(ANTIGRAVITY_CLI_HOOK_BLOCK_NAME).is_some();
 
         if updated_hooks {
-            fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+            write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
         }
     }
 

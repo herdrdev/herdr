@@ -51,6 +51,35 @@ herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
 ```
 
+On Linux and macOS, shared agent configuration is staged in a temporary file and atomically replaced after a complete write. Existing Windows configs are instead backed up before being updated in place, preserving their ownership and access rules; interrupted updates may require recovery. New files use staged replacement on every platform. Herdr follows symlinks and rejects configurations with multiple hard links before changing hook files; use a separate file or a symlink before retrying. Protection is per file, not an installation transaction, concurrency control, or a power-loss durability guarantee. Later failures can leave earlier installation changes in place.
+
+<details>
+<summary>Windows config recovery</summary>
+
+Before changing an existing config, Herdr saves and syncs its original contents in a private `<config>.herdr-backup` file. A failed write retains this recovery copy and reports both paths. Further updates refuse to overwrite it, even if the config is missing or invalid. Existing EFS-encrypted configs are rejected unchanged rather than creating plaintext backups.
+
+A `.herdr-backup.pending` file is an unfinished backup, **not a recovery source**. The in-place write has not started for that backup. Inspect the config before removing the unfinished file and retrying. A completed backup can also remain after a successful update if cleanup failed or was interrupted; its presence alone does not mean the current config is damaged.
+
+If recovery is needed, close the agent and restore the backup's **contents into the existing config**, not by moving the backup over it. In PowerShell, set `$config` to the config path reported by Herdr:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$config = 'C:\path\to\cli.json'
+$backup = "$config.herdr-backup"
+$bytes = [System.IO.File]::ReadAllBytes($backup)
+$file = [System.IO.File]::Open($config, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write)
+try {
+    $file.SetLength(0)
+    $file.Write($bytes, 0, $bytes.Length)
+    $file.Flush($true)
+} finally {
+    $file.Dispose()
+}
+```
+
+Keep the backup if restoration fails. After verifying the config is correct, remove the completed backup with `Remove-Item -LiteralPath $backup` before retrying the integration update. If the original file is missing, restore its intended permissions as well; creating a replacement file does not preserve them automatically.
+</details>
+
 ## How Herdr uses integrations
 
 Herdr uses integrations in two ways:

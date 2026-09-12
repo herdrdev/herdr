@@ -20,6 +20,9 @@ pub(crate) use super::unix_common::{
     wait_client_stream_readable, StatusCommandGuard,
 };
 
+#[cfg(test)]
+mod config_file_tests;
+
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
 const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
@@ -34,6 +37,134 @@ enum ProcessDetectionMode {
 struct ProcGroupMember {
     pid: u32,
     comm: String,
+}
+
+pub(crate) fn config_file_link_count(path: &std::path::Path) -> std::io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(std::fs::metadata(path)?.nlink())
+}
+
+pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+pub(crate) fn write_existing_config(
+    _target: &std::path::Path,
+    _contents: &[u8],
+) -> std::io::Result<bool> {
+    // Unix keeps atomic replacement for existing files too.
+    Ok(false)
+}
+
+pub(crate) fn create_config_temporary(
+    path: &std::path::Path,
+    private: bool,
+) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(if private { 0o600 } else { 0o666 })
+        .open(path)
+}
+
+pub(crate) fn write_config_temporary(
+    source: Option<&std::path::Path>,
+    temporary: &std::path::Path,
+    contents: &[u8],
+) -> std::io::Result<()> {
+    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(temporary)?;
+    if let Some(source) = source {
+        let input = std::fs::File::open(source)?;
+        let metadata = input.metadata()?;
+        let current = output.metadata()?;
+        if (metadata.uid(), metadata.gid()) != (current.uid(), current.gid()) {
+            // Keep ownership before restoring mode/ACLs; chown can clear mode bits.
+            if unsafe { libc::fchown(output.as_raw_fd(), metadata.uid(), metadata.gid()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        // Replace inherited ACLs before enabling the original mode. Prepare all
+        // access controls while the temporary is empty, before writing secrets.
+        copy_config_xattrs(input.as_raw_fd(), output.as_raw_fd())?;
+        output.set_permissions(metadata.permissions())?;
+    }
+    output.write_all(contents)?;
+    output.sync_all()
+}
+
+// Access ACLs and security labels live in xattrs on Linux. Mode bits alone can
+// silently broaden access, especially with a default ACL on the parent directory.
+fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> {
+    use std::ffi::CStr;
+    fn names(fd: RawFd) -> std::io::Result<Vec<u8>> {
+        let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+        if size < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENOTSUP) {
+                return Ok(Vec::new());
+            }
+            return Err(error);
+        }
+        let mut buffer = vec![0; size as usize];
+        let read = unsafe { libc::flistxattr(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        buffer.truncate(read as usize);
+        Ok(buffer)
+    }
+    fn value(fd: RawFd, name: &CStr) -> std::io::Result<Vec<u8>> {
+        let size = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+        if size < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut buffer = vec![0; size as usize];
+        let read =
+            unsafe { libc::fgetxattr(fd, name.as_ptr(), buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        buffer.truncate(read as usize);
+        Ok(buffer)
+    }
+    let source_names = names(source)?;
+    for bytes in names(destination)?.split_inclusive(|byte| *byte == 0) {
+        if !source_names
+            .split_inclusive(|byte| *byte == 0)
+            .any(|name| name == bytes)
+        {
+            let name = CStr::from_bytes_with_nul(bytes).map_err(std::io::Error::other)?;
+            if unsafe { libc::fremovexattr(destination, name.as_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
+    for bytes in source_names.split_inclusive(|byte| *byte == 0) {
+        let name = CStr::from_bytes_with_nul(bytes).map_err(std::io::Error::other)?;
+        let original = value(source, name)?;
+        // Avoid requiring relabel privileges when the inherited label already matches.
+        if value(destination, name).is_ok_and(|current| current == original) {
+            continue;
+        }
+        if unsafe {
+            libc::fsetxattr(
+                destination,
+                name.as_ptr(),
+                original.as_ptr().cast(),
+                original.len(),
+                0,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 pub fn raise_server_nofile_limit() {}

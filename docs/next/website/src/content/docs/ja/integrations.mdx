@@ -53,6 +53,35 @@ herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
 ```
 
+Linux と macOS では、共有エージェント設定を一時ファイルに完全に書き込んでからアトミックに置き換えます。Windows の既存設定は、所有者とアクセス規則を維持するため、バックアップ後に同じファイルを更新します。中断された更新には復旧が必要な場合があります。新規ファイルはすべてのプラットフォームで一時ファイルを使って作成します。Herdr はシンボリックリンクをたどり、複数のハードリンクがある設定はフックファイルの変更前に拒否します。独立したファイルまたはシンボリックリンクに変更して再試行してください。これはファイル単位の保護であり、インストール全体のトランザクション、同時編集の制御、停電時の永続性は保証しません。後から失敗すると、それまでのインストール変更が残る場合があります。
+
+<details>
+<summary>Windows の設定の復旧</summary>
+
+既存設定を変更する前に、Herdr は元の内容を非公開の `<config>.herdr-backup` に保存して同期します。書き込みが失敗すると、この復旧用コピーを保持し、両方のパスを通知します。設定が存在しない場合や無効な場合も、コピーが残っている間は再更新を拒否します。EFS で暗号化された既存設定は、平文バックアップを作らず、変更せずに拒否します。
+
+`.herdr-backup.pending` は未完了のバックアップであり、**復旧元として使わないでください**。そのバックアップに対応する設定への書き込みはまだ始まっていません。設定を確認してから未完了ファイルを削除し、再試行してください。更新成功後でも、後処理の失敗や中断により完成済みバックアップが残ることがあります。バックアップの存在だけでは、現在の設定が壊れているとは判断できません。
+
+復旧が必要ならエージェントを終了し、バックアップを移動して置き換えるのではなく、**既存設定ファイルに内容を書き戻してください**。PowerShell で `$config` を Herdr が通知した設定パスに変更します。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$config = 'C:\path\to\cli.json'
+$backup = "$config.herdr-backup"
+$bytes = [System.IO.File]::ReadAllBytes($backup)
+$file = [System.IO.File]::Open($config, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write)
+try {
+    $file.SetLength(0)
+    $file.Write($bytes, 0, $bytes.Length)
+    $file.Flush($true)
+} finally {
+    $file.Dispose()
+}
+```
+
+復旧に失敗したらバックアップを保持してください。設定が正しいことを確認した後、`Remove-Item -LiteralPath $backup` で完成済みバックアップを削除してから統合の更新を再試行します。元のファイルが存在しない場合は、意図したアクセス権も復元してください。新しいファイルを作るだけでは元の権限は保持されません。
+</details>
+
 ## Herdr がインテグレーションをどう使うか
 
 Herdr はインテグレーションを 2 つの異なる方法で使います:
