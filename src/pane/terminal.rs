@@ -5607,6 +5607,23 @@ mod tests {
     }
 
     #[test]
+    fn enabling_in_band_size_reports_after_alt_screen_resize_reports_current_size() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(91, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[?1049h", &tx);
+        assert!(pane.resize(24, 92, 9, 18).is_empty());
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?2048h", &tx);
+
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b[48;24;92;432;828t")]
+        );
+    }
+
+    #[test]
     fn resize_returns_in_band_size_report_response() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
