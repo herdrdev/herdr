@@ -555,6 +555,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
         target: "dev@example.com".into(),
         session: "main".into(),
         enabled: true,
+        windows_desktop: false,
     };
     let target_id = ClientEndpointId::Ssh(profile.id.clone());
     let mut shell = crate::client::ClientShellState::new(

@@ -16,9 +16,10 @@ pub(crate) fn connect_saved_ssh(
     profile_id: &str,
     target: &str,
     session: &str,
+    windows_desktop: bool,
 ) -> io::Result<SavedSshStream> {
     let ssh = validated_saved_ssh(profile_id, target, session)?;
-    let remote_herdr = find_installed_remote_herdr(&ssh)?;
+    let remote_herdr = find_installed_remote_herdr(&ssh, windows_desktop)?;
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
@@ -41,9 +42,15 @@ pub(crate) struct SavedSshApiBridge {
 }
 
 impl SavedSshApiBridge {
-    pub(crate) fn start(profile_id: &str, target: &str, session: &str) -> io::Result<Self> {
+    pub(crate) fn start(
+        profile_id: &str,
+        target: &str,
+        session: &str,
+        windows_desktop: bool,
+    ) -> io::Result<Self> {
         let ssh = validated_saved_ssh(profile_id, target, session)?;
-        let remote_herdr = super::attach::find_installed_remote_api_herdr(&ssh, session)?;
+        let remote_herdr =
+            super::attach::find_installed_remote_api_herdr(&ssh, session, windows_desktop)?;
         let command = super::attach::remote_api_bridge_command(&remote_herdr, session, false);
         let path = crate::platform::remote_bridge_endpoint_path(
             &format!("herdr-api-ssh-{}-{profile_id}.sock", std::process::id()),
@@ -72,11 +79,20 @@ impl SavedSshApiBridge {
     }
 }
 
-pub(crate) fn saved_ssh_bootstrap_command(target: &str, session: &str) -> String {
+pub(crate) fn saved_ssh_bootstrap_command(
+    target: &str,
+    session: &str,
+    windows_desktop: bool,
+) -> String {
     format!(
-        "herdr --remote {} --session {}",
+        "herdr --remote {} --session {}{}",
         super::shell_quote(target),
-        super::shell_quote(session)
+        super::shell_quote(session),
+        if windows_desktop {
+            " --remote-desktop"
+        } else {
+            ""
+        }
     )
 }
 
@@ -152,7 +168,7 @@ mod tests {
     #[test]
     fn bootstrap_command_preserves_the_explicit_remote_session() {
         assert_eq!(
-            saved_ssh_bootstrap_command("build host", "agent work"),
+            saved_ssh_bootstrap_command("build host", "agent work", false),
             "herdr --remote 'build host' --session 'agent work'"
         );
     }

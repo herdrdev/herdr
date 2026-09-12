@@ -114,6 +114,7 @@ impl EndpointSupervisors {
                     && profile.enabled
                     && profile.target == previous.target
                     && profile.session == previous.session
+                    && profile.windows_desktop == previous.windows_desktop
             });
             if !keep {
                 retired.push(endpoint_id.clone());
@@ -257,9 +258,9 @@ fn connect_once(
             (stream, Box::new(()))
         }
         ConnectTarget::Ssh(profile) => {
-            let connected = crate::remote::connect_saved_ssh(profile.id.as_str(), &profile.target, &profile.session).map_err(|error| {
+            let connected = crate::remote::connect_saved_ssh(profile.id.as_str(), &profile.target, &profile.session, profile.windows_desktop).map_err(|error| {
                 if failure_needs_attention(&error) {
-                    std::io::Error::new(error.kind(), format!("{error}. Run `{}` interactively to approve setup, then restart this client", crate::remote::saved_ssh_bootstrap_command(&profile.target, &profile.session)))
+                    std::io::Error::new(error.kind(), format!("{error}. Run `{}` interactively to approve setup, then restart this client", crate::remote::saved_ssh_bootstrap_command(&profile.target, &profile.session, profile.windows_desktop)))
                 } else { error }
             })?;
             (connected.stream, Box::new(connected.bridge))
@@ -352,6 +353,7 @@ mod tests {
             target: "build".into(),
             session: "agents".into(),
             enabled: true,
+            windows_desktop: false,
         }
     }
 
@@ -417,6 +419,25 @@ mod tests {
         supervisors.endpoints.get_mut(&id).unwrap().generation = Some(2);
         supervisors.endpoints.get_mut(&other_id).unwrap().generation = Some(3);
         changed.session = "another-session".into();
+        assert_eq!(
+            supervisors.reconcile_profiles(&[changed, other], now),
+            vec![id.clone()]
+        );
+        assert_eq!(supervisors.endpoints[&id].generation, None);
+        assert_eq!(supervisors.endpoints[&other_id].generation, Some(3));
+    }
+
+    #[test]
+    fn live_catalog_desktop_change_retires_only_that_machine() {
+        let now = Instant::now();
+        let mut changed = profile();
+        let other = super::super::SavedSshEndpoint::new("Other", "other", "main").unwrap();
+        let id = ClientEndpointId::Ssh(changed.id.clone());
+        let other_id = ClientEndpointId::Ssh(other.id.clone());
+        let mut supervisors = EndpointSupervisors::new(&[changed.clone(), other.clone()], now);
+        supervisors.endpoints.get_mut(&id).unwrap().generation = Some(2);
+        supervisors.endpoints.get_mut(&other_id).unwrap().generation = Some(3);
+        changed.windows_desktop = true;
         assert_eq!(
             supervisors.reconcile_profiles(&[changed, other], now),
             vec![id.clone()]

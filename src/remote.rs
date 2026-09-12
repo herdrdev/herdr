@@ -11,29 +11,42 @@ pub(crate) use host::run_remote_client_bridge;
 pub(crate) use saved::*;
 
 pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
-    match args {
-        [] => {
-            let path = crate::api::socket_path();
-            let stream = crate::ipc::connect_local_stream(&path).map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "failed to connect to remote Herdr API socket {}: {error}",
-                        path.display()
-                    ),
-                )
-            })?;
-            crate::platform::forward_remote_bridge_stdio(stream)
+    let (check, require_desktop) = match args {
+        [] => (false, false),
+        [flag] if flag == "--check" => (true, false),
+        [flag] if flag == "--require-desktop" => (false, true),
+        [desktop, check] if desktop == "--require-desktop" && check == "--check" => (true, true),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "usage: herdr remote-api-bridge [--require-desktop] [--check]",
+            ))
         }
-        [flag] if flag == "--check" => {
-            println!("herdr-api-bridge-v1");
-            Ok(())
+    };
+    if check {
+        if require_desktop && !cfg!(windows) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Windows desktop hosting is unavailable on this platform",
+            ));
         }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "usage: herdr remote-api-bridge [--check]",
-        )),
+        println!("herdr-api-bridge-v1");
+        return Ok(());
     }
+    let path = crate::api::socket_path();
+    let stream = crate::ipc::connect_local_stream(&path).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "failed to connect to remote Herdr API socket {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if require_desktop {
+        crate::platform::verify_remote_desktop_stream(&stream)?;
+    }
+    crate::platform::forward_remote_bridge_stdio(stream)
 }
 
 pub(crate) fn print_saved_ssh_error_hint(err: &std::io::Error, target: &str) {
