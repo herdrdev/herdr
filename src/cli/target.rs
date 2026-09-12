@@ -79,6 +79,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
                     target.profile.id.as_str(),
                     &target.profile.target,
                     &target.profile.session,
+                    target.profile.windows_desktop,
                 )
                 .map_err(|error| {
                     io::Error::new(

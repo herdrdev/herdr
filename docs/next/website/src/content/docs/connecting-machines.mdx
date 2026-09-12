@@ -58,6 +58,7 @@ When a connection is lost, the last workspace and agent state remains visible bu
 Read profile IDs from the list rather than deriving them from labels or hostnames:
 
 ```bash
+herdr machine add windows-workbox --label "Desktop agents" --remote-desktop
 herdr machine list
 herdr machine rename <profile-id> --label "New name"
 herdr machine disable <profile-id>

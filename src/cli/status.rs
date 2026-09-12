@@ -252,6 +252,7 @@ struct ClientStatusJson {
     protocol: u32,
     endpoint_protocol_generation: u32,
     endpoint_capabilities: Vec<&'static str>,
+    remote_desktop_host: bool,
     binary: String,
     session: Option<String>,
 }
@@ -297,6 +298,7 @@ fn client_status_json() -> ClientStatusJson {
             crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY,
             crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY,
         ],
+        remote_desktop_host: cfg!(windows),
         binary: current_exe_label(),
         session: crate::session::active_name(),
     }

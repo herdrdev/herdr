@@ -14,6 +14,10 @@ use std::{
 };
 
 mod clipboard_image;
+mod desktop_bootstrap;
+pub(crate) use desktop_bootstrap::*;
+mod desktop_host;
+pub(crate) use desktop_host::*;
 
 pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::ChildExitReason {
     // STATUS_CONTROL_C_EXIT is reported without a Unix signal by portable-pty.
@@ -1137,7 +1141,7 @@ pub fn current_process_is_detached_server_daemon() -> bool {
         return false;
     }
 
-    matches!(current_process_is_in_job(), Ok(false))
+    matches!(current_job_kills_processes_on_close(), Ok(false))
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
@@ -3030,10 +3034,11 @@ mod tests {
             fs::write(
                 capture,
                 format!(
-                    "{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}",
                     cwd.display(),
                     unsafe { GetConsoleWindow() }.is_null(),
-                    !super::current_job_kills_processes_on_close().expect("inspect WMI daemon job")
+                    !super::current_job_kills_processes_on_close().expect("inspect WMI daemon job"),
+                    super::current_process_is_detached_server_daemon()
                 ),
             )
             .expect("write WMI daemon test capture");
@@ -3064,7 +3069,7 @@ mod tests {
             .expect("launch detached process through WMI");
         assert_ne!(pid, 0, "WMI returned an invalid process id");
 
-        let expected = format!("{}\ntrue\ntrue", base.display());
+        let expected = format!("{}\ntrue\ntrue\ntrue", base.display());
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if fs::read_to_string(&capture).is_ok_and(|captured| captured == expected) {

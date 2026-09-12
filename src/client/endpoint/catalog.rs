@@ -23,6 +23,8 @@ pub(crate) struct SavedSshEndpoint {
     pub(crate) target: String,
     pub(crate) session: String,
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) windows_desktop: bool,
 }
 
 impl SavedSshEndpoint {
@@ -37,6 +39,7 @@ impl SavedSshEndpoint {
             target: target.into(),
             session: session.into(),
             enabled: true,
+            windows_desktop: false,
         };
         profile.validate()?;
         Ok(profile)
@@ -162,11 +165,13 @@ impl EndpointCatalog {
         label: impl Into<String>,
         target: impl Into<String>,
         session: impl Into<String>,
+        windows_desktop: bool,
     ) -> Result<ProfileId, String> {
         if self.ssh.len() >= MAX_PROFILES {
             return Err(format!("at most {MAX_PROFILES} SSH endpoints can be saved"));
         }
-        let profile = SavedSshEndpoint::new(label, target, session)?;
+        let mut profile = SavedSshEndpoint::new(label, target, session)?;
+        profile.windows_desktop = windows_desktop;
         let id = profile.id.clone();
         self.ssh.push(profile);
         Ok(id)
@@ -397,7 +402,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
         let mut catalog = EndpointCatalog::default();
         let id = catalog
-            .add_ssh("Build", "ssh://dev@build.example:2222", "agents")
+            .add_ssh("Build", "ssh://dev@build.example:2222", "agents", true)
             .unwrap();
         assert!(catalog.select_ssh(&id));
         catalog.store_to_path(&path).unwrap();
@@ -409,14 +414,35 @@ mod tests {
         let loaded = EndpointCatalog::load_from_path(&path).unwrap();
         assert_eq!(loaded, catalog);
         assert_eq!(loaded.ssh[0].id, id);
+        assert!(loaded.ssh[0].windows_desktop);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn catalogs_from_before_desktop_hosting_default_to_normal_ssh() {
+        let catalog: EndpointCatalog = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "ssh": [{
+                "id": "0123456789abcdef0123456789abcdef",
+                "label": "Build",
+                "target": "build",
+                "session": "default",
+                "enabled": true
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!catalog.ssh[0].windows_desktop);
+        catalog.validate().unwrap();
     }
 
     #[test]
     fn duplicate_target_and_session_profiles_keep_distinct_opaque_ids() {
         let mut catalog = EndpointCatalog::default();
-        let first = catalog.add_ssh("One", "build", "default").unwrap();
-        let second = catalog.add_ssh("Two", "build", "default").unwrap();
+        let first = catalog.add_ssh("One", "build", "default", false).unwrap();
+        let second = catalog.add_ssh("Two", "build", "default", false).unwrap();
         assert_ne!(first, second);
     }
 
@@ -424,21 +450,21 @@ mod tests {
     fn catalog_rejects_passwords_embedded_in_ssh_targets() {
         let mut catalog = EndpointCatalog::default();
         assert!(catalog
-            .add_ssh("Build", "ssh://dev:secret@build.example", "default")
+            .add_ssh("Build", "ssh://dev:secret@build.example", "default", false)
             .unwrap_err()
             .contains("must not contain a password"));
         assert!(catalog
-            .add_ssh("Build", "dev:secret@build.example", "default")
+            .add_ssh("Build", "dev:secret@build.example", "default", false)
             .is_err());
         assert!(catalog
-            .add_ssh("Build", "ssh://dev@[::1]:2222", "default")
+            .add_ssh("Build", "ssh://dev@[::1]:2222", "default", false)
             .is_ok());
     }
 
     #[test]
     fn interactive_bootstrap_matches_only_enabled_target_and_session() {
         let mut catalog = EndpointCatalog::default();
-        let id = catalog.add_ssh("Build", "build", "agents").unwrap();
+        let id = catalog.add_ssh("Build", "build", "agents", false).unwrap();
         assert!(catalog.contains_enabled_target_session("build", "agents"));
         assert!(!catalog.contains_enabled_target_session("build", "default"));
         assert!(catalog.set_enabled(&id, false));
@@ -448,7 +474,7 @@ mod tests {
     #[test]
     fn rename_changes_only_the_machine_label() {
         let mut catalog = EndpointCatalog::default();
-        let id = catalog.add_ssh("Old", "build", "agents").unwrap();
+        let id = catalog.add_ssh("Old", "build", "agents", false).unwrap();
         let original = catalog.ssh[0].clone();
 
         assert!(catalog.rename_ssh(&id, "New").unwrap());
@@ -463,7 +489,7 @@ mod tests {
     #[test]
     fn removal_and_disable_return_selection_to_local() {
         let mut catalog = EndpointCatalog::default();
-        let first = catalog.add_ssh("One", "one", "default").unwrap();
+        let first = catalog.add_ssh("One", "one", "default", false).unwrap();
         assert!(catalog.select_ssh(&first));
         assert!(catalog.set_enabled(&first, false));
         assert_eq!(catalog.selected_profile, None);
@@ -506,7 +532,7 @@ mod tests {
         let selection_path = catalog_path.with_file_name("selection.json");
         let _ = std::fs::remove_dir_all(catalog_path.parent().unwrap());
         let mut catalog = EndpointCatalog::default();
-        let id = catalog.add_ssh("Build", "build", "agents").unwrap();
+        let id = catalog.add_ssh("Build", "build", "agents", false).unwrap();
         catalog.store_to_path(&catalog_path).unwrap();
         let profiles_before = std::fs::read(&catalog_path).unwrap();
 
@@ -530,7 +556,7 @@ mod tests {
         let selection_path = catalog_path.with_file_name("selection.json");
         let _ = std::fs::remove_dir_all(catalog_path.parent().unwrap());
         let mut catalog = EndpointCatalog::default();
-        let id = catalog.add_ssh("Build", "build", "agents").unwrap();
+        let id = catalog.add_ssh("Build", "build", "agents", false).unwrap();
         catalog.store_to_path(&catalog_path).unwrap();
         std::fs::write(&selection_path, b"not json").unwrap();
 
@@ -547,7 +573,7 @@ mod tests {
         let selection_path = catalog_path.with_file_name("selection.json");
         let _ = std::fs::remove_dir_all(catalog_path.parent().unwrap());
         let mut catalog = EndpointCatalog::default();
-        let saved = catalog.add_ssh("Build", "build", "agents").unwrap();
+        let saved = catalog.add_ssh("Build", "build", "agents", false).unwrap();
         catalog.store_to_path(&catalog_path).unwrap();
         let missing = ProfileId::parse("fedcba9876543210fedcba9876543210").unwrap();
         store_private_json(

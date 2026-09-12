@@ -4,7 +4,7 @@ use crate::client::endpoint::{EndpointCatalog, ProfileId};
 
 const HELP: &str = "Usage:
   herdr machine list [--json]
-  herdr machine add <ssh-target> --label <label> [--remote-session <name>]
+  herdr machine add <ssh-target> --label <label> [--remote-session <name>] [--remote-desktop]
   herdr machine rename <profile-id> --label <label>
   herdr machine remove <profile-id>
   herdr machine enable <profile-id>
@@ -14,7 +14,7 @@ Add prepares the remote Herdr installation and starts its server before saving.
 Missing or incompatible installations require approval in an interactive terminal.
 Changes apply automatically to open local Herdr clients.
 Removing or disabling a machine leaves its remote sessions running.
-Saved machines contain only a label, SSH target, explicit Herdr session, and enabled state.
+Saved machines contain a label, SSH target, explicit Herdr session, enabled state, and desktop hosting choice.
 SSH credentials and key material remain owned by OpenSSH.";
 
 #[derive(Serialize)]
@@ -25,6 +25,7 @@ struct MachineListRow<'a> {
     session: &'a str,
     enabled: bool,
     selected: bool,
+    windows_desktop: bool,
 }
 
 pub(super) fn run_machine_command(args: &[String]) -> std::io::Result<i32> {
@@ -66,6 +67,7 @@ fn list(args: &[String]) -> std::io::Result<i32> {
             session: &profile.session,
             enabled: profile.enabled,
             selected: catalog.selected_profile.as_ref() == Some(&profile.id),
+            windows_desktop: profile.windows_desktop,
         })
         .collect::<Vec<_>>();
     if json {
@@ -94,6 +96,7 @@ struct AddArgs {
     target: String,
     label: String,
     session: String,
+    windows_desktop: bool,
 }
 
 fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
@@ -101,6 +104,7 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
     let mut target = None;
     let mut label = None;
     let mut session = None;
+    let mut windows_desktop = false;
     let mut index = 0;
     while index < args.len() {
         let (name, value) = match args[index].as_str() {
@@ -111,6 +115,12 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
                 index += 2;
                 (args[index - 2].as_str(), value.clone())
             }
+            "--remote-desktop" if !windows_desktop => {
+                windows_desktop = true;
+                index += 1;
+                continue;
+            }
+            "--remote-desktop" => return Err("--remote-desktop can only be specified once".into()),
             positional if !positional.starts_with('-') && target.is_none() => {
                 target = Some(positional.to_owned());
                 index += 1;
@@ -141,6 +151,7 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         target,
         label,
         session,
+        windows_desktop,
     })
 }
 
@@ -149,6 +160,7 @@ fn add(args: &[String]) -> std::io::Result<i32> {
         target,
         label,
         session,
+        windows_desktop,
     } = match parse_add_args(args) {
         Ok(args) => args,
         Err(error) => {
@@ -157,14 +169,14 @@ fn add(args: &[String]) -> std::io::Result<i32> {
         }
     };
     let mut catalog = load_catalog()?;
-    match catalog.add_ssh(label.clone(), &target, session.clone()) {
+    match catalog.add_ssh(label.clone(), &target, session.clone(), windows_desktop) {
         Ok(_) => {}
         Err(error) => {
             eprintln!("error: {error}");
             return Ok(2);
         }
     }
-    if let Err(error) = crate::remote::prepare_saved_ssh(&target, &session) {
+    if let Err(error) = crate::remote::prepare_saved_ssh(&target, &session, windows_desktop) {
         eprintln!("error: {error}; machine was not saved");
         crate::remote::print_saved_ssh_error_hint(&error, &target);
         return Ok(1);
@@ -175,7 +187,7 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             "remote prepared, but machine was not saved: {error}"
         ))
     })?;
-    let id = match catalog.add_ssh(label, target, session) {
+    let id = match catalog.add_ssh(label, target, session, windows_desktop) {
         Ok(id) => id,
         Err(error) => {
             eprintln!("error: {error}");
@@ -324,6 +336,7 @@ mod tests {
                     target: "workstation.coder".into(),
                     label: "coder".into(),
                     session: session.into(),
+                    windows_desktop: false,
                 },
                 "{args:?}"
             );
@@ -373,6 +386,7 @@ mod tests {
             session: "agents",
             enabled: true,
             selected: false,
+            windows_desktop: false,
         })
         .unwrap();
         assert!(!encoded.contains("password"));
