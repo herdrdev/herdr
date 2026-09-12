@@ -1073,8 +1073,15 @@ pub(super) fn prepare_remote_herdr(
 ) -> io::Result<PreparedRemoteHerdr> {
     let platform = detect_remote_platform(ssh)?;
     let remote_herdr = RemoteHerdr::for_platform(platform);
+    if remote_herdr.platform.is_windows() {
+        return prepare_windows_remote_herdr(
+            ssh,
+            remote_herdr,
+            live_handoff_enabled,
+            require_surface_interest,
+        );
+    }
     let override_binary = remote_binary_override_path()?;
-    let custom_package = override_binary.is_some();
     let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
 
     if override_binary.is_none() {
@@ -1088,13 +1095,11 @@ pub(super) fn prepare_remote_herdr(
                 });
             }
         }
-        if !remote_herdr.platform.is_windows()
-            && remote_binary_supports_endpoint_requirement(
-                ssh,
-                &remote_herdr,
-                require_surface_interest,
-            )?
-        {
+        if remote_binary_supports_endpoint_requirement(
+            ssh,
+            &remote_herdr,
+            require_surface_interest,
+        )? {
             return Ok(PreparedRemoteHerdr {
                 remote_herdr,
                 stop_after_install_approved: false,
@@ -1104,9 +1109,8 @@ pub(super) fn prepare_remote_herdr(
 
     let mut stop_after_install_approved = false;
     if let Some(status_probe_herdr) = remote_binary_candidates.first().or_else(|| {
-        (!remote_herdr.platform.is_windows())
-            .then(|| remote_binary_exists(ssh, &remote_herdr).ok())
-            .flatten()
+        remote_binary_exists(ssh, &remote_herdr)
+            .ok()
             .and_then(|exists| exists.then_some(&remote_herdr))
     }) {
         stop_after_install_approved = confirm_remote_install_with_running_server(
@@ -1124,32 +1128,17 @@ pub(super) fn prepare_remote_herdr(
         )?;
     }
     let source = resolve_install_source(&remote_herdr.platform, override_binary)?;
-    let install_result = (|| {
-        if remote_herdr.platform.is_windows() {
-            let sha256 = crate::checksum::file_sha256(&source.path)?;
-            ssh.install_windows_herdr(
-                &remote_herdr,
-                &source.path,
-                &windows_package_identity(custom_package, &sha256),
-                &sha256,
-            )
-        } else {
-            ssh.install_herdr(&remote_herdr, &source.path)?;
-            Ok(remote_herdr.clone())
-        }
-    })();
+    let install_result = ssh.install_herdr(&remote_herdr, &source.path);
     source.cleanup();
-    let remote_herdr = install_result?;
+    install_result?;
 
     if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it does not support the required remote hosting capabilities",
+            "installed remote herdr at {}, but it does not support saved SSH endpoint federation",
             remote_herdr.executable.display()
         )));
     }
-    if !remote_herdr.platform.is_windows() {
-        warn_if_remote_bin_not_on_path(ssh)?;
-    }
+    warn_if_remote_bin_not_on_path(ssh)?;
 
     Ok(PreparedRemoteHerdr {
         remote_herdr,
@@ -1174,6 +1163,75 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
             ssh.target()
         ),
     ))
+}
+
+fn prepare_windows_remote_herdr(
+    ssh: &RemoteSsh,
+    remote_herdr: RemoteHerdr,
+    live_handoff_enabled: bool,
+    require_surface_interest: bool,
+) -> io::Result<PreparedRemoteHerdr> {
+    let override_package = remote_binary_override_path()?;
+    let custom_package = override_package.is_some();
+    let candidates = remote_binary_candidates(ssh, &remote_herdr)?;
+    if !custom_package {
+        for candidate in &candidates {
+            if remote_binary_supports_endpoint_requirement(
+                ssh,
+                candidate,
+                require_surface_interest,
+            )? {
+                return Ok(PreparedRemoteHerdr {
+                    remote_herdr: candidate.clone(),
+                    stop_after_install_approved: false,
+                });
+            }
+        }
+    }
+
+    let stop_after_install_approved = if let Some(candidate) = candidates.first() {
+        confirm_remote_install_with_running_server(
+            ssh,
+            candidate,
+            live_handoff_enabled,
+            require_surface_interest,
+        )?
+    } else {
+        false
+    };
+    if !stop_after_install_approved {
+        confirm_remote_install(
+            &ssh.destination(),
+            &remote_herdr,
+            &install_source_description(&remote_herdr.platform, override_package.as_deref()),
+        )?;
+    }
+    // Windows needs the complete package, including its app-local ConPTY runtime.
+    let source = match override_package {
+        Some(path) => InstallSource::persistent(path),
+        None => download_release_asset(&remote_herdr.platform)?,
+    };
+    let install_result = (|| {
+        let sha256 = crate::checksum::file_sha256(&source.path)?;
+        ssh.install_windows_herdr(
+            &remote_herdr,
+            &source.path,
+            &windows_package_identity(custom_package, &sha256),
+            &sha256,
+        )
+    })();
+    source.cleanup();
+    let remote_herdr = install_result?;
+    if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
+        return Err(io::Error::other(format!(
+            "installed remote herdr at {}, but it does not support the required remote hosting capabilities",
+            remote_herdr.executable.display()
+        )));
+    }
+    Ok(PreparedRemoteHerdr {
+        remote_herdr,
+        stop_after_install_approved,
+    })
 }
 
 pub(super) fn find_installed_remote_api_herdr(
@@ -1554,7 +1612,7 @@ fn resolve_install_source(
         return Ok(InstallSource::persistent(path));
     }
 
-    if !platform.is_windows() && *platform == RemotePlatform::local() {
+    if *platform == RemotePlatform::local() {
         let path = std::env::current_exe()?;
         if !crate::update::is_package_manager_managed_exe_path(&path) {
             return Ok(InstallSource::persistent(path));
