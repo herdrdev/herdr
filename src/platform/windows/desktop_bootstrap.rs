@@ -56,11 +56,15 @@ fn extract_bootstrap_args(
 pub(crate) fn run_remote_desktop_command(args: &[String]) -> io::Result<()> {
     match args {
         [operation] if operation == "inspect" => {
-            println!(
-                "{}",
-                serde_json::to_string(&super::inspect_remote_desktop_host()?)
-                    .map_err(io::Error::other)?
-            );
+            let mut report = serde_json::to_value(super::inspect_remote_desktop_host()?)
+                .map_err(io::Error::other)?;
+            report["account_sid"] = base64::engine::general_purpose::STANDARD
+                .encode(super::desktop_host::desktop_account_sid()?)
+                .into();
+            report["host"] = super::hostname()
+                .ok_or_else(|| io::Error::other("Windows host name is unavailable"))?
+                .into();
+            println!("{report}");
             Ok(())
         }
         [operation, flag, raw_session] if operation == "start" && flag == "--windows-session" => {

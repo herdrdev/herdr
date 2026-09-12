@@ -777,7 +777,6 @@ fn main() -> io::Result<()> {
                 "server",
                 "client",
                 "remote-client-bridge",
-                "remote-desktop",
                 "update",
                 "status",
                 "config",

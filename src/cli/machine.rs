@@ -176,11 +176,15 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     }
-    if let Err(error) = crate::remote::prepare_saved_ssh(&target, &session, windows_desktop) {
-        eprintln!("error: {error}; machine was not saved");
-        crate::remote::print_saved_ssh_error_hint(&error, &target);
-        return Ok(1);
-    }
+    let windows_desktop = match crate::remote::prepare_saved_ssh(&target, &session, windows_desktop)
+    {
+        Ok(desktop) => desktop,
+        Err(error) => {
+            eprintln!("error: {error}; machine was not saved");
+            crate::remote::print_saved_ssh_error_hint(&error, &target);
+            return Ok(1);
+        }
+    };
     // Setup can wait for human approval. Do not overwrite catalog edits made meanwhile.
     let mut catalog = load_catalog().map_err(|error| {
         std::io::Error::other(format!(

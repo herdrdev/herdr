@@ -45,14 +45,6 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let program = std::env::args()
         .next()
         .unwrap_or_else(|| "herdr".to_string());
-    let reattach_command = reattach_command(
-        &program,
-        &remote.target,
-        &session_name,
-        remote.keybindings,
-        remote.live_handoff,
-        remote.windows_desktop,
-    );
     let manage_ssh_config = crate::config::Config::load()
         .config
         .remote
@@ -72,6 +64,15 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         remote.windows_desktop,
     )?;
 
+    let reattach_command = reattach_command(
+        &program,
+        &remote.target,
+        &session_name,
+        remote.keybindings,
+        remote.live_handoff,
+        remote_herdr.require_desktop,
+    );
+
     let _bridge = SshStdioBridge::start(
         remote.target,
         remote_herdr,
@@ -88,7 +89,7 @@ pub(crate) fn prepare_saved_ssh(
     target: &str,
     session_name: &str,
     windows_desktop: bool,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     super::validate_remote_target(target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     crate::session::validate_name(session_name)
@@ -125,7 +126,7 @@ pub(crate) fn prepare_saved_ssh(
         )
         .is_none() =>
         {
-            Ok(())
+            Ok(remote_herdr.require_desktop)
         }
         _ => Err(io::Error::other(
             "remote server is not ready for saved machines",
@@ -881,16 +882,13 @@ impl InstallSource {
     }
 }
 
-pub(super) fn prepare_remote_herdr(
+fn prepare_remote_herdr(
     ssh: &RemoteSsh,
     live_handoff_enabled: bool,
     require_surface_interest: bool,
+    platform: RemotePlatform,
 ) -> io::Result<PreparedRemoteHerdr> {
-    let platform = detect_remote_platform(ssh)?;
     let remote_herdr = RemoteHerdr::for_platform(platform);
-    if remote_herdr.platform.is_windows() {
-        return prepare_windows_remote_herdr(ssh, remote_herdr, require_surface_interest);
-    }
     let override_binary = remote_binary_override_path()?;
     let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
 
@@ -960,15 +958,14 @@ pub(super) fn find_installed_remote_herdr(
     ssh: &RemoteSsh,
     require_desktop: bool,
 ) -> io::Result<RemoteHerdr> {
-    if require_desktop {
-        return find_desktop_remote_herdr(ssh, true);
-    }
     let platform = detect_remote_platform(ssh)?;
-    let remote_herdr = RemoteHerdr::for_platform(platform);
-    if remote_herdr.platform.is_windows() {
-        return prepare_windows_remote_herdr(ssh, remote_herdr, true)
-            .map(|prepared| prepared.remote_herdr);
+    if platform.is_windows() {
+        let mut remote = find_windows_remote_host(ssh, platform, true, require_desktop)?;
+        // Capability discovery does not change a saved profile's placement requirement.
+        remote.require_desktop = require_desktop;
+        return Ok(remote);
     }
+    let remote_herdr = remote_host_for_platform(platform, require_desktop)?;
     let candidates = remote_binary_candidates(ssh, &remote_herdr)?;
     for candidate in candidates {
         if remote_binary_supports_endpoint_requirement(ssh, &candidate, true)? {
@@ -985,33 +982,6 @@ pub(super) fn find_installed_remote_herdr(
     ))
 }
 
-fn prepare_windows_remote_herdr(
-    ssh: &RemoteSsh,
-    remote_herdr: RemoteHerdr,
-    require_surface_interest: bool,
-) -> io::Result<PreparedRemoteHerdr> {
-    if !remote_binary_exists(ssh, &remote_herdr)? {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "herdr.exe is not installed or is not on PATH on Windows host {}; install a compatible Windows package with remote host support and retry",
-                ssh.target()
-            ),
-        ));
-    }
-    if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
-        return Err(io::Error::other(format!(
-            "herdr.exe on Windows host {} does not support saved SSH endpoint federation; install a compatible Windows package with remote host support and retry",
-            ssh.target()
-        )));
-    }
-
-    Ok(PreparedRemoteHerdr {
-        remote_herdr,
-        stop_after_install_approved: false,
-    })
-}
-
 pub(super) fn find_installed_remote_api_herdr(
     ssh: &RemoteSsh,
     session: &str,
@@ -1019,10 +989,8 @@ pub(super) fn find_installed_remote_api_herdr(
 ) -> io::Result<RemoteHerdr> {
     let platform = detect_remote_platform(ssh)?;
     let remote_herdr = remote_host_for_platform(platform, require_desktop)?;
-    let candidates = if require_desktop {
+    let candidates = if remote_herdr.platform.is_windows() {
         desktop_binary_candidates(ssh, &remote_herdr)?
-    } else if remote_herdr.platform.is_windows() {
-        vec![remote_herdr]
     } else {
         remote_binary_candidates(ssh, &remote_herdr)?
     };

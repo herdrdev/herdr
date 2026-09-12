@@ -34,7 +34,10 @@ use windows_sys::Win32::{
         SID_NAME_USE, TOKEN_QUERY, TOKEN_USER,
     },
     System::{
-        Console::{FreeConsole, GetConsoleProcessList},
+        Console::{
+            FreeConsole, GetConsoleProcessList, SetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
+        },
         RemoteDesktop::{
             WTSActive, WTSDomainName, WTSEnumerateSessionsW, WTSFreeMemory,
             WTSQuerySessionInformationW, WTSUserName, WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
@@ -63,6 +66,13 @@ pub(crate) fn detach_remote_desktop_console() -> io::Result<()> {
     if unsafe { FreeConsole() } == 0 {
         return Err(io::Error::last_os_error());
     }
+    // FreeConsole leaves stale handles that can be recycled before the startup banner writes.
+    // Rust treats null standard handles as detached streams and silently accepts writes.
+    for handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        if unsafe { SetStdHandle(handle, std::ptr::null_mut()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
     Ok(())
 }
 
@@ -80,6 +90,10 @@ pub(crate) enum RemoteDesktopInspection {
     Conflict { pid: u32, windows_session: u32 },
     NoLogin,
     MultipleLogins,
+}
+
+pub(super) fn desktop_account_sid() -> io::Result<Vec<u8>> {
+    Ok(current_process_identity()?.sid)
 }
 
 pub(crate) fn inspect_remote_desktop_host() -> io::Result<RemoteDesktopInspection> {
@@ -154,6 +168,7 @@ fn eligible_desktop_sessions(current_sid: &[u8]) -> io::Result<Vec<u32>> {
     };
     let mut eligible = Vec::new();
     for entry in entries.iter().filter(|entry| entry.State == WTSActive) {
+        // An unreadable session may belong to this account; do not infer a unique login.
         if session_account_sid(entry.SessionId)?.as_deref() == Some(current_sid) {
             eligible.push(entry.SessionId);
         }
@@ -529,7 +544,9 @@ fn token_identity(token: HANDLE) -> io::Result<ProcessIdentity> {
     {
         return Err(io::Error::last_os_error());
     }
-    let sid_ptr = unsafe { (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
+    let sid_ptr = unsafe { std::ptr::read_unaligned(user.as_ptr().cast::<TOKEN_USER>()) }
+        .User
+        .Sid;
     let sid_len = unsafe { GetLengthSid(sid_ptr) } as usize;
     if sid_len == 0 {
         return Err(io::Error::last_os_error());
@@ -560,5 +577,46 @@ impl Drop for WtsMemory {
         if !self.0.is_null() {
             unsafe { WTSFreeMemory(self.0) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Write as _, process::Command};
+    use windows_sys::Win32::System::Console::GetStdHandle;
+
+    #[test]
+    fn desktop_console_detach_clears_stale_standard_handles() {
+        const CHILD: &str = "HERDR_TEST_DESKTOP_CONSOLE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let mut process_ids = [0_u32; 2];
+            assert_eq!(
+                unsafe { GetConsoleProcessList(process_ids.as_mut_ptr(), 2) },
+                1
+            );
+            assert_eq!(process_ids[0], std::process::id());
+            detach_remote_desktop_console().expect("detach owned console");
+            assert_eq!(
+                unsafe { GetConsoleProcessList(process_ids.as_mut_ptr(), 2) },
+                0
+            );
+            for handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+                assert!(unsafe { GetStdHandle(handle) }.is_null());
+            }
+            std::io::stdout()
+                .write_all(b"ready\n")
+                .expect("detached stdout");
+            std::io::stderr()
+                .write_all(b"ready\n")
+                .expect("detached stderr");
+            return;
+        }
+        let mut child = Command::new(std::env::current_exe().expect("test executable"));
+        child
+            .arg("desktop_console_detach_clears_stale_standard_handles")
+            .env(CHILD, "1");
+        crate::platform::configure_background_command(&mut child);
+        assert!(child.status().expect("console test child").success());
     }
 }

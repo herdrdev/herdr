@@ -50,15 +50,17 @@ herdr --remote ssh://you@server:2222
 
 In this mode, the remote server owns the running panes and sends their terminal content and session state over SSH. Your local Herdr draws the UI, including its sidebar, menus, and theme. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
 
-Windows SSH normally starts processes outside the signed-in desktop. To let agents on a Windows target interact with desktop apps, opt in explicitly:
+Windows SSH normally starts processes outside the signed-in desktop. With a desktop-capable Windows Herdr package installed, the normal connection command offers desktop access before starting a server:
 
 ```bash
-herdr --remote windows-workbox --remote-desktop
+herdr --remote windows-workbox
 ```
 
-Install a Windows Herdr package that supports desktop hosting first. Herdr checks `PATH` and the active managed package, but this option does not install or update the remote binary.
+Choose **y** to allow this start once, **a** to remember approval for this SSH target and Windows host/account, or **n** (the default) to continue without desktop access. Herdr uses a temporary Task Scheduler task to launch in the account's single active desktop login, then removes the task. Remembered approval applies to future interactive connections; automatic reconnects only attach and never start desktop servers. To forget remembered approvals, remove `remote-desktop-approvals` from the client's state directory.
 
-To start a desktop server, Herdr requires exactly one active desktop login for the SSH account. It asks for confirmation, creates a one-time Windows task to launch the server in that login, and removes the task after the server is ready. Automatic reconnects only attach; they do not create tasks or start a server. A server with the same Herdr session name in Windows Session 0 or another login is left running and reported as a conflict. Use a different `--session` or stop that server explicitly. This option does not sign in, unlock Windows, or move existing panes between Windows sessions.
+An existing desktop server is reused. An ordinary server stays running, with an explanation that switching requires stopping it explicitly or choosing another `--session`. Without a unique active desktop login or desktop-capable package, ordinary SSH mode remains available. Desktop discovery must be able to identify active sessions; a query or account lookup failure is reported rather than guessing which login to use. Desktop hosting does not sign in, unlock Windows, or move existing panes between Windows sessions.
+
+Herdr checks `PATH` and the active managed Windows package; it does not install or update Windows packages. `--remote-desktop` remains available when desktop placement is required: declining or finding an ordinary server fails instead of falling back.
 
 By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. After editing local keybindings, use the UI's `reload config` action to apply them without detaching. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
 
@@ -77,7 +79,7 @@ Then attach with:
 herdr --remote workbox
 ```
 
-Remote attach and saved SSH machines support Linux, macOS, and Windows local clients connecting to Linux or macOS hosts on x86_64 and aarch64, or Windows hosts on x86_64. Local and remote versions do not need to match once both support the stable endpoint generation. On Linux and macOS hosts, Herdr prefers a compatible `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no compatible binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install. Windows hosts must already have a compatible Herdr package with remote host support on `PATH`; remote attach does not install or update it.
+Remote attach and saved SSH machines support Linux, macOS, and Windows local clients connecting to Linux or macOS hosts on x86_64 and aarch64, or Windows hosts on x86_64. Local and remote versions do not need to match once both support the stable endpoint generation. On Linux and macOS hosts, Herdr prefers a compatible `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. If no compatible binary exists, interactive runs prompt to install one to `~/.local/bin/herdr`; non-interactive runs fail instead of modifying the host. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install. Windows hosts must already have a compatible Herdr package with remote host support on `PATH` or in the active managed package; remote attach does not install or update it.
 
 By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings. Existing user keepalive settings win. Linux and macOS clients also use a private per-attach control socket for connection reuse; Windows OpenSSH does not. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
 

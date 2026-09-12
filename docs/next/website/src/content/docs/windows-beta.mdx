@@ -33,7 +33,7 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 | Native panes through ConPTY | supported |
 | Windows Terminal / PowerShell app attach | supported |
 | `herdr --remote` and saved SSH machines to Linux/macOS/Windows hosts | supported; Windows requires a compatible package with remote host support on `PATH` |
-| Remote agents in the signed-in Windows desktop | supported with `--remote-desktop`; install a desktop-capable package first |
+| Remote agents in the signed-in Windows desktop | offered during remote setup; install a desktop-capable package first |
 | Remote clipboard images and image-file drops | supported |
 | `cmd.exe` panes | supported |
 | Native keyboard and mouse input | supported |
@@ -50,7 +50,7 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 
 Local persistent sessions continue running after the client detaches or its terminal window closes. Servers and pane processes launched through Windows OpenSSH also survive logout; run `herdr` again to reconnect.
 
-Windows OpenSSH starts its normal server in Windows Session 0. Add `--remote-desktop` to a direct remote attach or `machine add` command when agents must interact with apps in the SSH account's active desktop login. Herdr asks before it uses a one-time Windows task for the initial start, removes the task after readiness, and leaves an existing server in another Windows session untouched.
+Windows OpenSSH starts its normal server in Windows Session 0. Normal remote attach and `machine add` offer desktop access before launching when the SSH account has one active desktop login. Choose once, always for this machine/account, or no (the default). Herdr launches through a temporary Task Scheduler task and removes it after readiness. Existing ordinary servers stay running; switching requires an explicit stop or another Herdr session. See [Remote attach over SSH](/docs/persistence-remote/#remote-attach-over-ssh) for remembered approval and reconnect behavior.
 
 Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers, including npm/Node and Git Bash process chains. It follows Git Bash-launched agents across emulated `exec` boundaries, but it is not the same as Unix foreground process-group detection.
 
@@ -133,7 +133,7 @@ From Windows Terminal, use the same remote command as Linux and macOS:
 herdr --remote workbox
 ```
 
-The target host can run Linux, macOS, or Windows. Windows hosts must already have a compatible Herdr package with remote host support on `PATH`; remote attach does not install or update it. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
+The target host can run Linux, macOS, or Windows. Windows hosts must already have a compatible Herdr package with remote host support on `PATH` or in the active managed package; remote attach does not install or update it. Herdr uses the installed Windows OpenSSH client and your SSH configuration. Windows OpenSSH does not use Herdr's Unix control-socket reuse, so key authentication through Windows `ssh-agent` is recommended to avoid repeated prompts during remote setup.
 
 Windows updates run through the Windows installer and update the active versioned release path. New terminals and reconnected SSH sessions receive that path; start Herdr there to use the updated client. Compatible running servers keep their panes alive. Restart a server later only when you need server-side changes from the release. Live handoff is Unix-only.
 
