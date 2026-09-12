@@ -13,6 +13,16 @@ fn client_shell_snapshot(message: ServerMessage) -> Box<crate::protocol::ClientS
     Box::new(serde_json::from_str(&data).expect("decode client shell snapshot"))
 }
 
+fn client_agent_view_projection(
+    message: ServerMessage,
+) -> crate::protocol::endpoint::EndpointAgentViewProjection {
+    let ServerMessage::EndpointControl { kind, data } = message else {
+        panic!("expected client agent view projection");
+    };
+    assert_eq!(kind, crate::protocol::endpoint::AGENT_VIEW_PROJECTION_KIND);
+    serde_json::from_str(&data).expect("decode client agent view projection")
+}
+
 fn test_headless_server() -> HeadlessServer {
     test_headless_server_with_event_hub(api::EventHub::default())
 }
@@ -734,6 +744,94 @@ fn terminal_client_endpoint_request_error_removes_client() {
         })
     );
     assert!(!server.clients.contains_key(&client_id));
+}
+
+#[tokio::test]
+async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots() {
+    use crate::api::schema::{
+        AgentViewBuiltinField, AgentViewField, AgentViewFilter, AgentViewSetParams, AgentViewValue,
+    };
+
+    let mut server = test_headless_server();
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            client_id: 77,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: false,
+            writer,
+        })
+    );
+    let initial = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("initial snapshot"),
+    ));
+
+    let mut view = AgentViewSetParams {
+        source: "example.views".into(),
+        label: Some("focus".into()),
+        filter: Some(AgentViewFilter::Eq {
+            field: AgentViewField::Builtin(AgentViewBuiltinField::Status),
+            value: AgentViewValue::String("working".into()),
+        }),
+        sort: Vec::new(),
+    };
+    server.app.state.agent_view_override = Some(view.clone());
+    server.render_and_stream();
+    let set = client_agent_view_projection(read_server_message(
+        control_rx.recv().expect("set projection"),
+    ));
+    let set_snapshot = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("set snapshot"),
+    ));
+    assert!(set.revision > initial.revision);
+    assert_eq!(set.revision, set_snapshot.revision);
+    assert_eq!(
+        set.view.map(serde_json::from_value).transpose().unwrap(),
+        Some(view.clone())
+    );
+
+    view.filter = Some(AgentViewFilter::Eq {
+        field: AgentViewField::Builtin(AgentViewBuiltinField::Status),
+        value: AgentViewValue::String("blocked".into()),
+    });
+    server.app.state.agent_view_override = Some(view.clone());
+    server.render_and_stream();
+    let replacement = client_agent_view_projection(read_server_message(
+        control_rx.recv().expect("replacement projection"),
+    ));
+    let replacement_snapshot = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("replacement snapshot"),
+    ));
+    assert!(replacement.revision > set.revision);
+    assert_eq!(replacement.revision, replacement_snapshot.revision);
+    assert_eq!(
+        replacement
+            .view
+            .map(serde_json::from_value)
+            .transpose()
+            .unwrap(),
+        Some(view)
+    );
+
+    server.app.state.agent_view_override = None;
+    server.render_and_stream();
+    let cleared = client_agent_view_projection(read_server_message(
+        control_rx.recv().expect("clear projection"),
+    ));
+    let cleared_snapshot = client_shell_snapshot(read_server_message(
+        control_rx.recv().expect("clear snapshot"),
+    ));
+    assert!(cleared.revision > replacement.revision);
+    assert_eq!(cleared.revision, cleared_snapshot.revision);
+    assert!(cleared.view.is_none());
+    assert!(cleared_snapshot.agent_view_label.is_none());
 }
 
 #[tokio::test]

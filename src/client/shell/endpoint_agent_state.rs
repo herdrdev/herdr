@@ -71,14 +71,16 @@ impl EndpointAgentPresentation {
         changed
     }
 
+    pub(super) fn seen(&self, agent: &ClientShellAgent) -> bool {
+        self.acknowledged
+            .get(&agent.pane_id)
+            .is_some_and(|sequence| *sequence >= agent.state_change_seq)
+    }
+
     fn projected_status(&self, agent: &ClientShellAgent) -> AgentStatus {
         match agent.agent_status {
             AgentStatus::Idle | AgentStatus::Done => {
-                if self
-                    .acknowledged
-                    .get(&agent.pane_id)
-                    .is_some_and(|sequence| *sequence >= agent.state_change_seq)
-                {
+                if self.seen(agent) {
                     AgentStatus::Idle
                 } else {
                     AgentStatus::Done

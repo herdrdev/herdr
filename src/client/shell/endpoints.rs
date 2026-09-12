@@ -1,6 +1,14 @@
 use super::*;
 
 #[derive(Clone, Debug)]
+pub(crate) struct ClientEndpointAgentViewProjection {
+    generation: Option<u64>,
+    boot_id: String,
+    revision: u64,
+    pub(crate) view: Result<Option<crate::api::schema::AgentViewSetParams>, ()>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct ClientShellEndpoint {
     pub(crate) endpoint_id: ClientEndpointId,
     pub(crate) label: String,
@@ -10,6 +18,9 @@ pub(crate) struct ClientShellEndpoint {
     pub(crate) snapshot_generation: Option<u64>,
     pub(crate) agent_recency: HashMap<String, u64>,
     pub(super) agent_presentation: super::endpoint_agent_state::EndpointAgentPresentation,
+    pub(crate) agent_view_projection: Option<ClientEndpointAgentViewProjection>,
+    pending_agent_view_projection: Option<ClientEndpointAgentViewProjection>,
+    pub(crate) agent_view_projection_supported: bool,
     pub(crate) methods: Option<HashSet<String>>,
 }
 
@@ -64,6 +75,12 @@ impl ClientShellState {
                 agent_presentation: previous
                     .map(|endpoint| endpoint.agent_presentation.clone())
                     .unwrap_or_default(),
+                agent_view_projection: previous
+                    .and_then(|endpoint| endpoint.agent_view_projection.clone()),
+                pending_agent_view_projection: previous
+                    .and_then(|endpoint| endpoint.pending_agent_view_projection.clone()),
+                agent_view_projection_supported: previous
+                    .is_some_and(|endpoint| endpoint.agent_view_projection_supported),
                 methods: previous.and_then(|endpoint| endpoint.methods.clone()),
             });
         }
@@ -103,6 +120,9 @@ impl ClientShellState {
             endpoint.methods = None;
             endpoint.agent_recency.clear();
             endpoint.agent_presentation = Default::default();
+            endpoint.agent_view_projection = None;
+            endpoint.pending_agent_view_projection = None;
+            endpoint.agent_view_projection_supported = false;
         }
     }
 
@@ -130,6 +150,24 @@ impl ClientShellState {
             self.pending_integration_installs = 0;
             self.pane_scroll_in_flight.clear();
             self.pane_scroll_queued.clear();
+        }
+    }
+
+    pub(crate) fn set_endpoint_agent_view_projection_supported(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        supported: bool,
+    ) {
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+        {
+            endpoint.agent_view_projection_supported = supported;
+            if !supported {
+                endpoint.agent_view_projection = None;
+                endpoint.pending_agent_view_projection = None;
+            }
         }
     }
 
@@ -249,6 +287,120 @@ impl ClientShellState {
             .snapshot
             .as_deref()
             .map(|snapshot| (snapshot.boot_id.as_str(), snapshot.revision))
+    }
+
+    pub(crate) fn set_endpoint_agent_view_projection_for_generation(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        generation: u64,
+        projection: crate::client::endpoint::DecodedAgentViewProjection,
+    ) {
+        self.set_endpoint_agent_view_projection(
+            endpoint_id,
+            Some(generation),
+            projection.boot_id,
+            projection.revision,
+            projection.view,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_endpoint_agent_view(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        view: Option<crate::api::schema::AgentViewSetParams>,
+    ) {
+        let Some((boot_id, revision)) = self
+            .endpoints
+            .iter()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+            .and_then(|endpoint| {
+                endpoint
+                    .snapshot
+                    .as_deref()
+                    .map(|snapshot| (snapshot.boot_id.clone(), snapshot.revision))
+            })
+        else {
+            return;
+        };
+        self.set_endpoint_agent_view_projection_supported(endpoint_id, true);
+        self.set_endpoint_agent_view_projection(endpoint_id, None, boot_id, revision, Ok(view));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_endpoint_agent_view_projection(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        boot_id: &str,
+        revision: u64,
+        view: Option<crate::api::schema::AgentViewSetParams>,
+    ) {
+        self.set_endpoint_agent_view_projection(
+            endpoint_id,
+            None,
+            boot_id.to_owned(),
+            revision,
+            Ok(view),
+        );
+    }
+
+    fn set_endpoint_agent_view_projection(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        generation: Option<u64>,
+        boot_id: String,
+        revision: u64,
+        view: Result<Option<crate::api::schema::AgentViewSetParams>, ()>,
+    ) {
+        let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+        else {
+            return;
+        };
+        if endpoint.snapshot_generation == generation
+            && endpoint
+                .snapshot
+                .as_deref()
+                .is_some_and(|snapshot| snapshot.boot_id == boot_id && snapshot.revision > revision)
+        {
+            return;
+        }
+        let next = ClientEndpointAgentViewProjection {
+            generation,
+            boot_id,
+            revision,
+            view,
+        };
+        let matches_snapshot = endpoint.snapshot_generation == next.generation
+            && endpoint.snapshot.as_deref().is_some_and(|snapshot| {
+                snapshot.boot_id == next.boot_id && snapshot.revision == next.revision
+            });
+        let slot = if matches_snapshot {
+            &mut endpoint.agent_view_projection
+        } else {
+            &mut endpoint.pending_agent_view_projection
+        };
+        if slot.as_ref().is_some_and(|current| {
+            current.generation == next.generation
+                && current.boot_id == next.boot_id
+                && current.revision >= next.revision
+        }) {
+            return;
+        }
+        *slot = Some(next);
+    }
+
+    pub(crate) fn endpoint_agent_view(
+        endpoint: &ClientShellEndpoint,
+    ) -> Option<&Result<Option<crate::api::schema::AgentViewSetParams>, ()>> {
+        let snapshot = endpoint.snapshot.as_deref()?;
+        let projection = endpoint.agent_view_projection.as_ref()?;
+        (projection.generation == endpoint.snapshot_generation
+            && projection.boot_id == snapshot.boot_id
+            && projection.revision == snapshot.revision)
+            .then_some(&projection.view)
     }
 
     /// A terminal normally starts focused. `None` means this host cannot report focus events,
@@ -420,6 +572,35 @@ impl ClientShellState {
         endpoint.agent_recency = recency;
         endpoint.snapshot_generation = generation;
         endpoint.snapshot = Some(snapshot);
+        let pending_matches =
+            endpoint
+                .pending_agent_view_projection
+                .as_ref()
+                .is_some_and(|projection| {
+                    projection.generation == generation
+                        && endpoint.snapshot.as_deref().is_some_and(|snapshot| {
+                            projection.boot_id == snapshot.boot_id
+                                && projection.revision == snapshot.revision
+                        })
+                });
+        if pending_matches {
+            endpoint.agent_view_projection = endpoint.pending_agent_view_projection.take();
+        } else {
+            endpoint.pending_agent_view_projection = None;
+            if endpoint
+                .agent_view_projection
+                .as_ref()
+                .is_some_and(|projection| {
+                    projection.generation != generation
+                        || endpoint.snapshot.as_deref().is_some_and(|snapshot| {
+                            projection.boot_id != snapshot.boot_id
+                                || projection.revision != snapshot.revision
+                        })
+                })
+            {
+                endpoint.agent_view_projection = None;
+            }
+        }
     }
 
     pub(crate) fn acknowledge_active_surface_agents(&mut self, surface: &PaneSurfaceFrame) -> bool {
@@ -502,6 +683,9 @@ pub(super) fn local_endpoint() -> ClientShellEndpoint {
         snapshot_generation: None,
         agent_recency: HashMap::new(),
         agent_presentation: Default::default(),
+        agent_view_projection: None,
+        pending_agent_view_projection: None,
+        agent_view_projection_supported: false,
         methods: None,
     }
 }

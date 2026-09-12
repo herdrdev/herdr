@@ -461,9 +461,13 @@ Built-in filter fields are `status`, `workspace_id`, `tab_id`, `pane_id`,
 `agent`, `seen`, and `state_change_seq`. Use `{"token":"name"}` as a field to
 filter plugin-reported pane metadata. Values are strings, booleans, unsigned
 numbers, or a context object. Context values are `current_workspace_id` and
-`current_tab_id`, and may only be compared to the matching ID field. Effective
-status values are `idle`, `working`, `blocked`, `done`, and `unknown`; `done`
-means idle and not yet seen.
+`current_tab_id`, and may only be compared to the matching ID field. In a
+saved-machine client, the selected server's view applies to the combined agent
+list. Current workspace and tab context includes that selected machine, so an
+identical ID on another machine does not match; independent filter branches,
+such as `status` being `blocked`, still match agents on any connected machine.
+Effective status values are `idle`, `working`, `blocked`, `done`, and `unknown`;
+`done` means idle and not yet seen.
 
 Sort fields are `workspace_order`, `tab_order`, `pane_order`, `attention`,
 `status`, `agent`, `seen`, `state_change_seq`, or `{"token":"name"}`. Sorts are
