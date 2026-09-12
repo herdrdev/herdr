@@ -111,6 +111,14 @@ pub struct PaneSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneAgentSessionSnapshot {
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::agents::session::deserialize_resume_options"
+    )]
+    pub resume_options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
     pub source: String,
     pub agent: String,
     pub kind: crate::agent_resume::AgentSessionRefKind,
@@ -330,31 +338,35 @@ fn capture_tab(
                     terminal.agent_name.clone(),
                     terminal
                         .managed_agent_kind()
-                        .map(|agent| crate::detect::agent_label(agent).to_string()),
+                        .map(|agent| crate::detect::agent_label(&agent).to_string()),
                 )
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
-            if let Some(authority) = terminal.hook_authority.as_ref() {
-                if let Some(session_ref) = authority.session_ref.as_ref() {
-                    return Some(PaneAgentSessionSnapshot {
+            let hook_session = terminal.hook_authority.as_ref().and_then(|authority| {
+                authority.session_ref.as_ref().map(|session_ref| {
+                    crate::agent_resume::PersistedAgentSession {
                         source: authority.source.clone(),
                         agent: authority.agent_label.clone(),
-                        kind: session_ref.kind,
-                        value: session_ref.value.clone(),
-                    });
-                }
-            }
-            terminal
-                .persisted_agent_session
-                .as_ref()
-                .map(|session| PaneAgentSessionSnapshot {
-                    source: session.source.clone(),
-                    agent: session.agent.clone(),
-                    kind: session.session_ref.kind,
-                    value: session.session_ref.value.clone(),
+                        session_ref: session_ref.clone(),
+                    }
                 })
+            });
+            let session = hook_session
+                .as_ref()
+                .or(terminal.persisted_agent_session.as_ref())?;
+            Some(PaneAgentSessionSnapshot {
+                resume_options: terminal.resume_options_for_session(session).to_vec(),
+                recipe: terminal
+                    .pinned_agent_resume_recipe
+                    .clone()
+                    .filter(|recipe| recipe.agent == session.agent),
+                source: session.source.clone(),
+                agent: session.agent.clone(),
+                kind: session.session_ref.kind,
+                value: session.session_ref.value.clone(),
+            })
         });
         panes.insert(
             id.raw(),
@@ -578,6 +590,7 @@ mod tests {
         assert_eq!(pending_pane.managed_agent_kind, None);
 
         let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_agent_process_at(crate::detect::Agent::Pi, now);
         terminal.set_detected_state(
             Some(crate::detect::Agent::Pi),
             crate::detect::AgentState::Idle,

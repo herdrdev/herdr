@@ -41,7 +41,7 @@ Detected but less thoroughly tested: Gemini CLI and Cline. Unsupported agents st
 
 Herdr first detects the foreground process in each pane. After that, each pane has one status authority.
 
-For agents with complete lifecycle hooks, the integration is authoritative when it is installed and actively reporting for the running pane. Herdr uses those hook reports for `idle`, `working`, `blocked`, and session identity. It does not also run screen manifest fallback for that same lifecycle authority. This avoids two competing sources of truth.
+For agents with complete lifecycle hooks, the integration is authoritative when it is installed and actively reporting for the running pane. Herdr uses those hook reports for `idle`, `working`, `blocked`, and session identity. Screen fallback does not compete with that lifecycle authority. During managed startup, Herdr may still inspect the screen to verify that input controls are painted before accepting prompts.
 
 For agents without complete lifecycle hooks, Herdr identifies the foreground process and reads the live bottom-buffer screen snapshot. It evaluates TOML manifests against that snapshot to classify `idle`, `working`, and `blocked`. For agents that emit them, manifests can also match terminal title and progress (OSC) sequences as detection evidence; when that evidence is absent, screen rules carry detection on their own.
 
@@ -63,19 +63,25 @@ This means unusual new agent prompts may initially show as `idle` instead of `bl
 
 ## Detection manifests
 
-Bundled manifests live inside Herdr. Herdr also checks herdr.dev for remote manifest updates and applies valid per-agent rule updates automatically without requiring a Herdr restart. Remote manifests are stored in Herdr's state directory. Set `[update] manifest_check = false` to disable background remote manifest checks.
+Herdr starts offline with its bundled registry or a saved last-known-good snapshot. Release builds then check `registry.herdr.dev` in the background at startup and every 30 minutes, validating, saving, and hot-activating compatible updates without restarting. Automatic checks follow the last successfully selected registry channel, or `stable` initially. Set `[update] manifest_check = false` to disable automatic checks; a check already in progress may finish. Debug builds do not run automatic checks.
 
-Local overrides can replace a remote or bundled manifest from the platform config directory:
+Manual updates remain available: `herdr registry check` validates an available full-registry snapshot without activating it, and `herdr registry update` downloads and hot-activates it in the selected server. Invalid or incompatible updates leave the last working snapshot active. Historical website manifest caches are ignored and left untouched.
+
+New registry packages can add agent IDs, launch definitions, process recognition, and detection rules without rebuilding Herdr. They can also deliver versioned updates to existing integration files, which users apply from settings or the integration CLI. Trusted reporters and installation procedures remain compiled capabilities; a snapshot containing incompatible installation layouts or invalid integration versions is rejected as a whole.
+
+Local detection overrides use the existing platform config directory:
 
 ```text
 ~/.config/herdr/agent-detection/<agent>.toml
 ```
 
-Local overrides always win. Without a local override, Herdr uses the newer compatible manifest between the cached remote manifest and the bundled manifest in the running binary. On debug builds, the same config helper may use a development directory such as `herdr-dev`. Invalid override files are ignored with a warning and Herdr falls back to the cached remote or bundled manifest for that agent.
+A valid local override wins over the selected registry package. Invalid overrides produce a warning and fall back to that package. Overrides cannot add an agent absent from the selected registry. Debug builds may use a development config directory such as `herdr-dev`. Registry updates never overwrite these files. After editing an override, run `herdr server reload-agent-manifests` to refresh it offline.
 
-Remote manifests patch detection rules for agents Herdr already knows how to identify. Adding a completely new agent still requires a Herdr binary update for process detection, labels, and integration behavior.
+For registry development, `herdr registry reload /path/to/agent-registry` selects a complete local package set, not a merge with the remote registry. While local mode is selected, R2 updates are rejected. `herdr registry reset` returns to the bundled registry and re-enables R2 updates without changing local files or your automatic-check setting. An explicit `HERDR_AGENT_REGISTRY_SOURCE` server environment setting selects local mode again on restart.
 
-The running server loads active manifests into memory on startup. Automatic remote manifest updates reload that in-memory cache after new rules are written. Run `herdr server update-agent-manifests` to fetch remote manifest updates immediately and reload the running server. After editing a local override manually, restart Herdr or run `herdr server reload-agent-manifests` to apply the file to the running server.
+If a Herdr upgrade cannot use the saved packages, it keeps your local-source selection and accepted update history while using compatible source or bundled definitions. It does not silently switch a selected local registry to R2. Detection override files remain untouched.
+
+R2 channel pointers are fetched fresh; immutable snapshots are addressed by their exact byte digest. Malformed, incompatible, interrupted, or stale updates leave the complete active snapshot unchanged. Activation updates running detection asynchronously; it does not rename live agents or replace their pinned resume instructions. A queued restore is authorized when its plan is created: its command and readiness policy stay pinned even if a registry update arrives before it starts. Removing a package prevents new admissions, not already-authorized queued restores.
 
 Use `herdr agent explain` when a pane shows the wrong state:
 
@@ -106,6 +112,8 @@ herdr integration status
 ```
 
 Each supported agent has its own integration name and behavior. See [Integrations](/docs/integrations/) for the per-agent details and the full install list. If you are building an agent, the [custom integration guide](/docs/integrations/#integrate-your-own-agent) shows how to report lifecycle state without adding native support to Herdr.
+
+Agent authors can also [contribute a package to the registry](https://github.com/herdrdev/agent-registry). Native API reporting and registry packages complement each other: reports provide lifecycle state and metadata; a package supplies launch definitions, process recognition, and optional screen detection. Package updates can reach users without a new Herdr binary. Neither route automatically grants trusted native session ownership or a compiled installer adapter.
 
 ## Custom agent labels
 

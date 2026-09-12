@@ -1,0 +1,13 @@
+schema = 1
+id = "agy"
+name = "agy"
+aliases = ["antigravity", "antigravity-cli"]
+startable = true
+
+[launch]
+unix = "agy"
+windows = "agy"
+
+[sound]
+key = "agy"
+default = "default"

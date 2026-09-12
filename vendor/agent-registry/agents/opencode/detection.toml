@@ -1,0 +1,75 @@
+id = "opencode"
+version = "2026.09.05.1"
+min_engine_version = 1
+updated_at = "2026-09-05T00:00:00Z"
+aliases = ["open-code", "herdr:opencode"]
+
+[[rules]]
+id = "permission_required"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+any = [
+  { contains = ["△ Permission required"] },
+  { contains = ["esc dismiss"], any = [{ contains = ["enter confirm"] }, { contains = ["enter submit"] }, { contains = ["enter toggle"] }], all = [{ any = [{ contains = ["↑↓ select"] }, { contains = ["⇆ tab"] }] }] },
+]
+
+[[rules]]
+id = "command_palette"
+state = "unknown"
+priority = 250
+region = "bottom_non_empty_lines(20)"
+skip_state_update = true
+all = [
+  { line_regex = ['^\s*Commands\s+esc\s*$'] },
+  { line_regex = ['^\s*Search\s*$'] },
+  { line_regex = ['^\s*(Suggested|System)\s*$'] },
+]
+
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 110
+region = "bottom_non_empty_lines(20)"
+visible_working = true
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["ctrl+c to interrupt"] },
+  { contains = ["press esc to interrupt"] },
+  { line_regex = ['(?i).*opencode.*esc (again to )?interrupt'] },
+]
+
+[[rules]]
+id = "progress_bar_working"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(20)"
+visible_working = true
+regex = ['(■|⬝){4,}']
+
+[[rules]]
+id = "home_composer_idle"
+state = "idle"
+priority = 20
+region = "bottom_non_empty_lines(12)"
+visible_idle = true
+contains = ["agents", "commands"]
+line_regex = ['^\s*╹▀{8,}\s*$']
+
+[[rules]]
+id = "session_composer_idle"
+state = "idle"
+priority = 10
+region = "bottom_non_empty_lines(12)"
+visible_idle = true
+contains = ["commands"]
+line_regex = ['^\s*╹▀{8,}\s*$']
+
+[[rules]]
+id = "retain_unknown_surface"
+state = "unknown"
+priority = -1000
+region = "bottom_lines(1)"
+skip_state_update = true
+regex = ['(?s).*']

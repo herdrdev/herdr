@@ -6,12 +6,350 @@ use super::registry::*;
 use super::targets::*;
 use super::types::*;
 use super::version::*;
-use super::*;
+
+use crate::integration::builtin::agy::{
+    HOOK_ASSET as ANTIGRAVITY_CLI_HOOK_ASSET, HOOK_BLOCK_NAME as ANTIGRAVITY_CLI_HOOK_BLOCK_NAME,
+    HOOK_EVENTS as ANTIGRAVITY_CLI_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as ANTIGRAVITY_CLI_HOOK_INSTALL_NAME,
+    HOOK_TIMEOUT_SEC as ANTIGRAVITY_CLI_HOOK_TIMEOUT_SEC,
+};
+use crate::integration::builtin::claude::{
+    HOOK_ASSET as CLAUDE_HOOK_ASSET, HOOK_INSTALL_NAME as CLAUDE_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::codex::{
+    executable_name as codex_executable_name, HOOK_ASSET as CODEX_HOOK_ASSET,
+    HOOK_INSTALL_NAME as CODEX_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::copilot::{
+    HOOK_ASSET as COPILOT_HOOK_ASSET, HOOK_INSTALL_NAME as COPILOT_HOOK_INSTALL_NAME,
+    REMOVED_LIFECYCLE_HOOK_EVENTS as COPILOT_REMOVED_LIFECYCLE_HOOK_EVENTS,
+};
+use crate::integration::builtin::cursor::{
+    HOOK_ASSET as CURSOR_HOOK_ASSET, HOOK_INSTALL_NAME as CURSOR_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::devin::{
+    HOOK_ASSET as DEVIN_HOOK_ASSET, HOOK_EVENTS as DEVIN_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as DEVIN_HOOK_INSTALL_NAME,
+    REMOVED_LIFECYCLE_HOOK_EVENTS as DEVIN_REMOVED_LIFECYCLE_HOOK_EVENTS,
+};
+use crate::integration::builtin::droid::{
+    HOOK_ASSET as DROID_HOOK_ASSET, HOOK_EVENTS as DROID_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as DROID_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::grok::{
+    HOOK_ASSET as GROK_HOOK_ASSET, HOOK_CONFIG_INSTALL_NAME as GROK_HOOK_CONFIG_INSTALL_NAME,
+    HOOK_INSTALL_NAME as GROK_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::hermes::{
+    PLUGIN_INIT_ASSET as HERMES_PLUGIN_INIT_ASSET,
+    PLUGIN_INIT_INSTALL_NAME as HERMES_PLUGIN_INIT_INSTALL_NAME,
+    PLUGIN_INSTALL_NAME as HERMES_PLUGIN_INSTALL_NAME,
+    PLUGIN_MANIFEST_ASSET as HERMES_PLUGIN_MANIFEST_ASSET,
+    PLUGIN_MANIFEST_INSTALL_NAME as HERMES_PLUGIN_MANIFEST_INSTALL_NAME,
+};
+use crate::integration::builtin::kilo::{
+    PLUGIN_ASSET as KILO_PLUGIN_ASSET, PLUGIN_INSTALL_NAME as KILO_PLUGIN_INSTALL_NAME,
+};
+use crate::integration::builtin::kimi::{
+    ASK_USER_QUESTION_MATCHER as KIMI_ASK_USER_QUESTION_MATCHER,
+    CONFIG_BLOCK_BEGIN as KIMI_CONFIG_BLOCK_BEGIN, CONFIG_BLOCK_END as KIMI_CONFIG_BLOCK_END,
+    HOOK_ASSET as KIMI_HOOK_ASSET, HOOK_EVENTS as KIMI_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as KIMI_HOOK_INSTALL_NAME, MIN_VERSION as KIMI_MIN_VERSION,
+    OTHER_TOOL_MATCHER as KIMI_OTHER_TOOL_MATCHER,
+};
+use crate::integration::builtin::mastracode::{
+    HOOK_ASSET as MASTRACODE_HOOK_ASSET, HOOK_EVENTS as MASTRACODE_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as MASTRACODE_HOOK_INSTALL_NAME,
+    HOOK_TIMEOUT_MS as MASTRACODE_HOOK_TIMEOUT_MS,
+};
+use crate::integration::builtin::omp::{
+    EXTENSION_ASSET as OMP_EXTENSION_ASSET, EXTENSION_INSTALL_NAME as OMP_EXTENSION_INSTALL_NAME,
+};
+use crate::integration::builtin::opencode::{
+    PLUGIN_ASSET as OPENCODE_PLUGIN_ASSET, PLUGIN_INSTALL_NAME as OPENCODE_PLUGIN_INSTALL_NAME,
+    TUI_PLUGIN_ASSET as OPENCODE_TUI_PLUGIN_ASSET,
+    TUI_PLUGIN_INSTALL_NAME as OPENCODE_TUI_PLUGIN_INSTALL_NAME,
+    TUI_PLUGIN_SPEC as OPENCODE_TUI_PLUGIN_SPEC, V2_TUI_PLUGIN_DIR as OPENCODE_V2_TUI_PLUGIN_DIR,
+    V2_TUI_PLUGIN_SPEC as OPENCODE_V2_TUI_PLUGIN_SPEC,
+};
+use crate::integration::builtin::pi::{
+    EXTENSION_ASSET as PI_EXTENSION_ASSET, EXTENSION_INSTALL_NAME as PI_EXTENSION_INSTALL_NAME,
+};
+use crate::integration::builtin::qodercli::{
+    HOOK_ASSET as QODERCLI_HOOK_ASSET, HOOK_EVENTS as QODERCLI_HOOK_EVENTS,
+    HOOK_INSTALL_NAME as QODERCLI_HOOK_INSTALL_NAME,
+};
+use crate::integration::builtin::qwen::{
+    HOOK_ASSET as QWEN_HOOK_ASSET, HOOK_INSTALL_NAME as QWEN_HOOK_INSTALL_NAME,
+};
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
+
+fn integration_profile(
+    target: crate::api::schema::IntegrationTarget,
+) -> std::sync::Arc<crate::agents::integration::IntegrationProfile> {
+    crate::agents::registry()
+        .profile_by_integration_target(target)
+        .and_then(|profile| profile.integration())
+        .cloned()
+        .expect("integration target profile")
+}
+
+macro_rules! bundled_installers {
+    ($($install:ident, $target:ident, $result:ty);+ $(;)?) => {$ (
+        fn $install() -> std::io::Result<$result> {
+            super::targets::$install(&integration_profile(crate::api::schema::IntegrationTarget::$target))
+        }
+    )+};
+}
+
+bundled_installers! {
+    install_pi, Pi, PathBuf;
+    install_omp, Omp, OmpInstallPaths;
+    install_claude, Claude, ClaudeInstallPaths;
+    install_codex, Codex, CodexInstallPaths;
+    install_copilot, Copilot, CopilotInstallPaths;
+    install_devin, Devin, DevinInstallPaths;
+    install_droid, Droid, DroidInstallPaths;
+    install_kimi, Kimi, KimiInstallPaths;
+    install_opencode, Opencode, OpenCodeInstallPaths;
+    install_kilo, Kilo, KiloInstallPaths;
+    install_hermes, Hermes, HermesInstallPaths;
+    install_qodercli, Qodercli, QodercliInstallPaths;
+    install_qwen, Qwen, QwenInstallPaths;
+    install_cursor, Cursor, CursorInstallPaths;
+    install_mastracode, Mastracode, MastracodeInstallPaths;
+    install_antigravity_cli, AntigravityCli, AntigravityCliInstallPaths;
+    install_grok, Grok, GrokInstallPaths;
+}
+
+fn expected_integration_version(target: crate::api::schema::IntegrationTarget) -> u32 {
+    integration_profile(target).expected_version()
+}
+
+#[test]
+fn integration_registry_routes_current_platform_metadata_and_adapters() {
+    let expected_targets = crate::api::schema::IntegrationTarget::ALL;
+    let registry = crate::agents::registry();
+    let profiles = registry
+        .integration_capable_profiles()
+        .map(|profile| profile.integration().expect("integration metadata"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.target())
+            .collect::<Vec<_>>(),
+        expected_targets
+    );
+    for profile in &profiles {
+        let target = profile.target();
+        assert_eq!(integration_target_label(target), profile.cli_label());
+        assert_eq!(
+            integration_target_command_names(target),
+            profile.command_names()
+        );
+        assert_eq!(
+            integration_target_command(target),
+            profile.command_names()[0]
+        );
+        assert_eq!(integration_target_supported(target), profile.supported());
+        let _adapter = profile.adapter();
+    }
+}
+
+#[test]
+fn builtin_bindings_match_registry_integration_targets() {
+    let unknown = crate::detect::Agent::parse("future-agent").unwrap();
+    assert!(super::builtin::binding(unknown).is_none());
+    let registry = crate::agents::registry();
+    for agent in crate::detect::Agent::ALL {
+        let profile = registry.profile_for_agent(agent);
+        let binding = super::builtin::binding(agent);
+        assert_eq!(
+            binding.map(|(target, _)| target),
+            profile
+                .integration()
+                .map(|integration| integration.target()),
+            "trusted integration target for {agent:?}"
+        );
+        assert_eq!(
+            super::builtin::adapter(agent).is_some(),
+            profile.integration().is_some(),
+            "trusted integration adapter for {agent:?}"
+        );
+    }
+}
+
+// Parse only embedded metadata: compatibility checks must not consult HOME,
+// installed agent layouts, the global registry, or any subprocess.
+fn builtin_contract_packages() -> Vec<crate::agents::source::Package> {
+    macro_rules! package {
+        ($id:literal) => {
+            crate::agents::source::Package {
+                identity: toml::from_str(include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/vendor/agent-registry/agents/",
+                    $id,
+                    "/agent.toml"
+                )))
+                .unwrap(),
+                integration: Some(
+                    toml::from_str(include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/vendor/agent-registry/agents/",
+                        $id,
+                        "/integration.toml"
+                    )))
+                    .unwrap(),
+                ),
+                process: None,
+                resume: None,
+                assets: Default::default(),
+                detection: None,
+            }
+        };
+    }
+    vec![
+        package!("agy"),
+        package!("claude"),
+        package!("codex"),
+        package!("copilot"),
+        package!("cursor"),
+        package!("devin"),
+        package!("droid"),
+        package!("grok"),
+        package!("hermes"),
+        package!("kilo"),
+        package!("kimi"),
+        package!("mastracode"),
+        package!("omp"),
+        package!("opencode"),
+        package!("pi"),
+        package!("qodercli"),
+        package!("qwen"),
+    ]
+}
+
+#[test]
+fn builtin_asset_contracts_accept_bundled_metadata_and_reordering() {
+    for mut package in builtin_contract_packages() {
+        super::builtin::validate_package(&package).unwrap();
+        package.integration.as_mut().unwrap().assets.reverse();
+        super::builtin::validate_package(&package).unwrap();
+    }
+}
+
+#[test]
+fn builtin_asset_contracts_reject_ignored_metadata_changes_on_both_platforms() {
+    for package in builtin_contract_packages() {
+        let integration = package.integration.as_ref().unwrap();
+        for index in 0..integration.assets.len() {
+            for field in ["install_name", "path", "role", "platform"] {
+                let mut changed = package.clone();
+                let asset = &mut changed.integration.as_mut().unwrap().assets[index];
+                match field {
+                    "install_name" => asset.install_name = "renamed-reporter.js".into(),
+                    "path" => asset.path = "assets/renamed-reporter.js".into(),
+                    "role" => {
+                        asset.role = if asset.role == "reporter" {
+                            "manifest"
+                        } else {
+                            "reporter"
+                        }
+                        .into()
+                    }
+                    "platform" => {
+                        asset.platform = if asset.platform == "unix" {
+                            "windows"
+                        } else {
+                            "unix"
+                        }
+                        .into()
+                    }
+                    _ => unreachable!(),
+                }
+                let error = super::builtin::validate_package(&changed).unwrap_err();
+                assert!(error.contains(&package.identity.id));
+                assert!(
+                    error.contains("asset contract mismatch"),
+                    "{field}: {error}"
+                );
+            }
+        }
+        for unix in [true, false] {
+            let mut changed = package.clone();
+            let support = &mut changed.integration.as_mut().unwrap().supported;
+            if unix {
+                support.unix = false;
+            } else {
+                support.windows = false;
+            }
+            assert!(super::builtin::validate_package(&changed).is_err());
+        }
+        let mut missing = package.clone();
+        missing.integration.as_mut().unwrap().assets.pop();
+        assert!(super::builtin::validate_package(&missing).is_err());
+        let mut extra = package.clone();
+        extra
+            .integration
+            .as_mut()
+            .unwrap()
+            .assets
+            .push(integration.assets[0].clone());
+        assert!(super::builtin::validate_package(&extra).is_err());
+        if integration.assets.len() > 1 {
+            let mut duplicate = package.clone();
+            duplicate.integration.as_mut().unwrap().assets[1] = integration.assets[0].clone();
+            assert!(super::builtin::validate_package(&duplicate).is_err());
+        }
+    }
+}
+
+#[test]
+fn builtin_asset_contracts_allow_new_bytes_versions_and_inert_unknown_packages() {
+    const IDENTITY: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry/agents/pi/agent.toml"
+    ));
+    const INTEGRATION: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry/agents/pi/integration.toml"
+    ));
+    let mut metadata: toml::Value = toml::from_str(INTEGRATION).unwrap();
+    let version = metadata["versions"]["unix"].as_integer().unwrap() + 1;
+    metadata["versions"]["unix"] = version.into();
+    metadata["versions"]["windows"] = version.into();
+    let definition = toml::to_string(&metadata).unwrap();
+    let asset = format!("// HERDR_INTEGRATION_ID=pi\n// HERDR_INTEGRATION_VERSION={version}\n// new reporter bytes\n");
+    let packages = crate::agents::source::load_packages(&[
+        ("agents/pi/agent.toml", IDENTITY),
+        ("agents/pi/integration.toml", &definition),
+        ("agents/pi/assets/herdr-agent-state.ts", &asset),
+    ])
+    .unwrap();
+    super::builtin::validate_package(&packages[0]).unwrap();
+
+    let identity = IDENTITY.replace("\"pi\"", "\"future-agent\"");
+    let definition = definition
+        .replace("\"pi\"", "\"future-agent\"")
+        .replace("herdr-agent-state.ts", "custom-reporter.ts");
+    let asset = asset.replace(
+        "HERDR_INTEGRATION_ID=pi",
+        "HERDR_INTEGRATION_ID=future-agent",
+    );
+    let packages = crate::agents::source::load_packages(&[
+        ("agents/future-agent/agent.toml", &identity),
+        ("agents/future-agent/integration.toml", &definition),
+        ("agents/future-agent/assets/custom-reporter.ts", &asset),
+    ])
+    .unwrap();
+    super::builtin::validate_package(&packages[0]).unwrap();
+}
 
 #[test]
 fn windows_powershell_encoded_hook_command_preserves_script_invocation() {
@@ -72,13 +410,21 @@ fn extract_version_triple_orders_versions() {
 }
 
 #[test]
-fn agent_version_requirement_only_set_for_kimi() {
-    let requirement = agent_version_requirement(crate::api::schema::IntegrationTarget::Kimi)
+fn agent_version_requirement_only_set_for_kimi_adapter() {
+    let requirement = integration_profile(crate::api::schema::IntegrationTarget::Kimi)
+        .adapter()
+        .agent_version_requirement()
         .expect("kimi must have a version requirement");
     assert_eq!(requirement.binary, "kimi");
     assert_eq!(requirement.min_version, KIMI_MIN_VERSION);
-    assert!(agent_version_requirement(crate::api::schema::IntegrationTarget::Claude).is_none());
-    assert!(agent_version_requirement(crate::api::schema::IntegrationTarget::Codex).is_none());
+    for target in crate::api::schema::IntegrationTarget::ALL {
+        if target != crate::api::schema::IntegrationTarget::Kimi {
+            assert!(integration_profile(target)
+                .adapter()
+                .agent_version_requirement()
+                .is_none());
+        }
+    }
 }
 
 #[test]
@@ -402,7 +748,7 @@ fn hermes_layout_makes_target_available() {
     std::env::set_var("LOCALAPPDATA", &local_app_data);
     std::env::set_var("PATH", "");
 
-    assert!(hermes_install_layout_available());
+    assert!(crate::integration::builtin::hermes::install_layout_available());
     assert!(integration_target_available(
         crate::api::schema::IntegrationTarget::Hermes
     ));
@@ -509,8 +855,8 @@ fn integration_recommendations_mark_standalone_codex_available() {
 fn integration_recommendation_installs_available_or_outdated_targets() {
     let mut recommendation = IntegrationRecommendation {
         target: crate::api::schema::IntegrationTarget::Claude,
-        label: "claude",
-        command: "claude",
+        label: "claude".into(),
+        command: "claude".into(),
         available: false,
         path: PathBuf::from("/tmp/herdr-agent-state.sh"),
         state: IntegrationStatusKind::NotInstalled,
@@ -527,6 +873,181 @@ fn integration_recommendation_installs_available_or_outdated_targets() {
     recommendation.available = true;
     recommendation.state = IntegrationStatusKind::Current;
     assert!(!recommendation.needs_install());
+}
+
+fn newer_integration_files(id: &str) -> Vec<(String, String)> {
+    let root = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry"
+    ));
+    let mut files = crate::agents::files::read_source(root).unwrap();
+    files.retain(|(path, _)| path.starts_with(&format!("agents/{id}/")));
+    let metadata = files
+        .iter_mut()
+        .find(|(path, _)| path.ends_with("/integration.toml"))
+        .unwrap();
+    let mut definition: toml::Value = toml::from_str(&metadata.1).unwrap();
+    let previous = definition["versions"]["unix"].as_integer().unwrap();
+    assert_eq!(
+        definition["versions"]["windows"].as_integer(),
+        Some(previous)
+    );
+    definition["versions"]["unix"] = (previous + 1).into();
+    definition["versions"]["windows"] = (previous + 1).into();
+    metadata.1 = toml::to_string(&definition).unwrap();
+    for (path, text) in &mut files {
+        if path.contains("/assets/") {
+            *text = text.replace(
+                &format!("HERDR_INTEGRATION_VERSION={previous}"),
+                &format!("HERDR_INTEGRATION_VERSION={}", previous + 1),
+            );
+        }
+    }
+    files
+}
+
+#[test]
+fn registry_refresh_exposes_pi_update_without_installing_until_explicit_application() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".pi/agent/extensions")).unwrap();
+    std::env::set_var("HOME", &home);
+    let old = integration_profile(crate::api::schema::IntegrationTarget::Pi);
+    let path = super::targets::install_pi(&old).unwrap();
+    let previous = fs::read_to_string(&path).unwrap();
+    let store = crate::agents::store::RegistryStore::new(
+        newer_integration_files("pi"),
+        base.join("active.json"),
+    )
+    .unwrap();
+    let current = store.snapshot();
+    let selected = current.profile_by_id("pi").unwrap().integration().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), previous);
+    let recommendation = integration_recommendations_with_registry(&current)
+        .pop()
+        .unwrap();
+    assert_eq!(recommendation.state, IntegrationStatusKind::Outdated);
+    selected.adapter().install(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        selected.asset(PI_EXTENSION_INSTALL_NAME).unwrap()
+    );
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Current
+    );
+    assert_eq!(old.asset(PI_EXTENSION_INSTALL_NAME).unwrap(), previous);
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn selected_claude_assets_preserve_unrelated_settings_and_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".claude");
+    fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let settings_path = dir.join("settings.json");
+    let settings = json!({"model":"user-choice", "hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"}]}]}});
+    fs::write(&settings_path, serde_json::to_string(&settings).unwrap()).unwrap();
+    let current =
+        crate::agents::store::snapshot_for_test(newer_integration_files("claude"), 2).unwrap();
+    let selected = current
+        .profile_by_id("claude")
+        .unwrap()
+        .integration()
+        .unwrap();
+    let installed = super::targets::install_claude(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.hook_path).unwrap(),
+        selected.asset(CLAUDE_HOOK_INSTALL_NAME).unwrap()
+    );
+    let actual: Value = serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(actual["model"], "user-choice");
+    assert!(actual["hooks"]["Stop"]
+        .as_array()
+        .unwrap()
+        .contains(&settings["hooks"]["Stop"][0]));
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn selected_opencode_update_keeps_v2_entrypoint_on_the_selected_version() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("cli.json"), r#"{"plugins":["other"]}"#).unwrap();
+    std::env::set_var("HOME", &home);
+    install_opencode().unwrap();
+    let current =
+        crate::agents::store::snapshot_for_test(newer_integration_files("opencode"), 2).unwrap();
+    let selected = current
+        .profile_by_id("opencode")
+        .unwrap()
+        .integration()
+        .unwrap();
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Outdated
+    );
+    let installed = super::targets::install_opencode(selected).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.plugin_path).unwrap(),
+        selected.asset(OPENCODE_PLUGIN_INSTALL_NAME).unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(installed.tui_plugin_path).unwrap(),
+        selected.asset(OPENCODE_TUI_PLUGIN_INSTALL_NAME).unwrap()
+    );
+    let entry = fs::read_to_string(dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js")).unwrap();
+    assert_eq!(
+        parse_integration_version(&entry),
+        Some(selected.expected_version())
+    );
+    assert!(entry.contains("export { default } from \"../herdr-tui-session.js\";"));
+    assert_eq!(
+        integration_recommendations_with_registry(&current)[0].state,
+        IntegrationStatusKind::Current
+    );
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn missing_companion_asset_fails_before_any_opencode_install_mutation() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::env::set_var("HOME", &home);
+    let plugin_path = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin_path, "previous plugin").unwrap();
+    let files = newer_integration_files("opencode");
+    let borrowed: Vec<_> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let mut packages = crate::agents::validate_packages(&borrowed).unwrap();
+    packages[0].assets.remove("assets/herdr-tui-session.js");
+    let registry = crate::agents::AgentRegistry::from_packages(packages).unwrap();
+    let selected = registry
+        .profile_by_id("opencode")
+        .unwrap()
+        .integration()
+        .unwrap();
+    assert!(super::targets::install_opencode(selected).is_err());
+    assert_eq!(fs::read_to_string(&plugin_path).unwrap(), "previous plugin");
+    assert!(!dir.join(OPENCODE_TUI_PLUGIN_INSTALL_NAME).exists());
+    assert!(!dir.join("tui.json").exists());
+    std::env::remove_var("HOME");
+    fs::remove_dir_all(base).unwrap();
 }
 
 #[test]
@@ -834,7 +1355,10 @@ fn outdated_integrations_treat_missing_version_marker_as_legacy() {
     );
     assert_eq!(outdated[0].path, extension_path);
     assert_eq!(outdated[0].installed_version, None);
-    assert_eq!(outdated[0].expected_version, PI_INTEGRATION_VERSION);
+    assert_eq!(
+        outdated[0].expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Pi)
+    );
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -864,7 +1388,10 @@ fn outdated_integrations_detect_previous_pi_version() {
     );
     assert_eq!(outdated[0].path, extension_path);
     assert_eq!(outdated[0].installed_version, Some(4));
-    assert_eq!(outdated[0].expected_version, PI_INTEGRATION_VERSION);
+    assert_eq!(
+        outdated[0].expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Pi)
+    );
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -894,7 +1421,10 @@ fn outdated_integrations_detect_previous_omp_version() {
     );
     assert_eq!(outdated[0].path, extension_path);
     assert_eq!(outdated[0].installed_version, Some(4));
-    assert_eq!(outdated[0].expected_version, OMP_INTEGRATION_VERSION);
+    assert_eq!(
+        outdated[0].expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Omp)
+    );
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1127,7 +1657,10 @@ fn claude_v1_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(
+        claude.expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Claude)
+    );
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1157,7 +1690,10 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(
+        claude.expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Claude)
+    );
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1290,7 +1826,10 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 8);
+    assert_eq!(
+        codex.expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Codex)
+    );
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1725,7 +2264,10 @@ fn copilot_v1_integration_status_is_outdated() {
 
     assert_eq!(copilot.path, hook_path);
     assert_eq!(copilot.installed_version, Some(1));
-    assert_eq!(copilot.expected_version, COPILOT_INTEGRATION_VERSION);
+    assert_eq!(
+        copilot.expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Copilot)
+    );
     assert_eq!(copilot.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2184,7 +2726,10 @@ fn droid_v1_integration_status_is_outdated() {
 
     assert_eq!(droid.path, hook_path);
     assert_eq!(droid.installed_version, Some(1));
-    assert_eq!(droid.expected_version, DROID_INTEGRATION_VERSION);
+    assert_eq!(
+        droid.expected_version,
+        expected_integration_version(crate::api::schema::IntegrationTarget::Droid)
+    );
     assert_eq!(droid.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2339,6 +2884,10 @@ fn opencode_install_defers_v2_registration_while_migration_pending() {
 
 #[test]
 fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
+    assert_eq!(
+        crate::integration::builtin::opencode::v2_tui_entrypoint(12),
+        include_str!("assets/opencode/tui.js")
+    );
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -2357,7 +2906,12 @@ fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
         integration_status_at(
             crate::api::schema::IntegrationTarget::Opencode,
             installed.plugin_path.clone(),
-            OPENCODE_INTEGRATION_VERSION,
+            crate::agents::registry()
+                .profile_by_agent(crate::detect::Agent::OpenCode)
+                .unwrap()
+                .integration()
+                .unwrap()
+                .expected_version(),
         )
         .state
     };
@@ -2365,7 +2919,14 @@ fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
     let entry = dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js");
     assert_eq!(
         fs::read_to_string(&entry).unwrap(),
-        OPENCODE_V2_TUI_PLUGIN_ASSET
+        crate::integration::builtin::opencode::v2_tui_entrypoint(
+            crate::agents::registry()
+                .profile_by_agent(crate::detect::Agent::OpenCode)
+                .unwrap()
+                .integration()
+                .unwrap()
+                .expected_version()
+        )
     );
     fs::remove_file(&entry).unwrap();
     assert_eq!(status(), IntegrationStatusKind::Outdated);
@@ -2414,7 +2975,7 @@ fn opencode_status_requires_the_tui_plugin_and_config_entry() {
         integration_status_at(
             crate::api::schema::IntegrationTarget::Opencode,
             installed.plugin_path.clone(),
-            OPENCODE_INTEGRATION_VERSION,
+            expected_integration_version(crate::api::schema::IntegrationTarget::Opencode),
         )
         .state
     };
@@ -2860,48 +3421,36 @@ fn install_hermes_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn bundled_integration_asset_versions_match_expected_versions() {
-    for (name, asset, expected_version) in [
-        ("pi", PI_EXTENSION_ASSET, PI_INTEGRATION_VERSION),
-        ("omp", OMP_EXTENSION_ASSET, OMP_INTEGRATION_VERSION),
-        ("claude", CLAUDE_HOOK_ASSET, CLAUDE_INTEGRATION_VERSION),
-        ("codex", CODEX_HOOK_ASSET, CODEX_INTEGRATION_VERSION),
-        ("kimi", KIMI_HOOK_ASSET, KIMI_INTEGRATION_VERSION),
-        ("copilot", COPILOT_HOOK_ASSET, COPILOT_INTEGRATION_VERSION),
-        ("devin", DEVIN_HOOK_ASSET, DEVIN_INTEGRATION_VERSION),
-        ("droid", DROID_HOOK_ASSET, DROID_INTEGRATION_VERSION),
+fn bundled_integration_asset_versions_match_current_platform_registry_versions() {
+    use crate::api::schema::IntegrationTarget;
+
+    for (target, asset) in [
+        (IntegrationTarget::Pi, PI_EXTENSION_ASSET),
+        (IntegrationTarget::Omp, OMP_EXTENSION_ASSET),
+        (IntegrationTarget::Claude, CLAUDE_HOOK_ASSET),
+        (IntegrationTarget::Codex, CODEX_HOOK_ASSET),
+        (IntegrationTarget::Copilot, COPILOT_HOOK_ASSET),
+        (IntegrationTarget::Devin, DEVIN_HOOK_ASSET),
+        (IntegrationTarget::Droid, DROID_HOOK_ASSET),
+        (IntegrationTarget::Kimi, KIMI_HOOK_ASSET),
+        (IntegrationTarget::Opencode, OPENCODE_PLUGIN_ASSET),
+        (IntegrationTarget::Kilo, KILO_PLUGIN_ASSET),
+        (IntegrationTarget::Hermes, HERMES_PLUGIN_INIT_ASSET),
+        (IntegrationTarget::Qodercli, QODERCLI_HOOK_ASSET),
+        (IntegrationTarget::Qwen, QWEN_HOOK_ASSET),
+        (IntegrationTarget::Cursor, CURSOR_HOOK_ASSET),
+        (IntegrationTarget::Mastracode, MASTRACODE_HOOK_ASSET),
         (
-            "opencode",
-            OPENCODE_PLUGIN_ASSET,
-            OPENCODE_INTEGRATION_VERSION,
-        ),
-        ("kilo", KILO_PLUGIN_ASSET, KILO_INTEGRATION_VERSION),
-        (
-            "hermes",
-            HERMES_PLUGIN_INIT_ASSET,
-            HERMES_INTEGRATION_VERSION,
-        ),
-        (
-            "qodercli",
-            QODERCLI_HOOK_ASSET,
-            QODERCLI_INTEGRATION_VERSION,
-        ),
-        ("cursor", CURSOR_HOOK_ASSET, CURSOR_INTEGRATION_VERSION),
-        (
-            "antigravity_cli",
+            IntegrationTarget::AntigravityCli,
             ANTIGRAVITY_CLI_HOOK_ASSET,
-            ANTIGRAVITY_CLI_INTEGRATION_VERSION,
         ),
-        (
-            "mastracode",
-            MASTRACODE_HOOK_ASSET,
-            MASTRACODE_INTEGRATION_VERSION,
-        ),
+        (IntegrationTarget::Grok, GROK_HOOK_ASSET),
     ] {
+        let profile = integration_profile(target);
         assert_eq!(
             parse_integration_version(asset),
-            Some(expected_version),
-            "{name} asset version must match its integration version constant"
+            Some(profile.expected_version()),
+            "{target:?} asset version must match its current-platform registry version"
         );
     }
 }
@@ -3470,7 +4019,12 @@ fn cursor_v1_integration_status_is_current() {
         .find(|status| status.target == crate::api::schema::IntegrationTarget::Cursor)
         .expect("cursor integration status");
     assert_eq!(cursor.state, IntegrationStatusKind::Current);
-    assert_eq!(cursor.installed_version, Some(CURSOR_INTEGRATION_VERSION));
+    assert_eq!(
+        cursor.installed_version,
+        Some(expected_integration_version(
+            crate::api::schema::IntegrationTarget::Cursor
+        ))
+    );
 
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
@@ -4071,7 +4625,12 @@ fn grok_v1_integration_status_is_current() {
         .find(|status| status.target == crate::api::schema::IntegrationTarget::Grok)
         .expect("grok integration status");
     assert_eq!(grok.state, IntegrationStatusKind::Current);
-    assert_eq!(grok.installed_version, Some(GROK_INTEGRATION_VERSION));
+    assert_eq!(
+        grok.installed_version,
+        Some(expected_integration_version(
+            crate::api::schema::IntegrationTarget::Grok
+        ))
+    );
 
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);

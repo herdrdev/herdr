@@ -282,7 +282,7 @@ pub(super) fn agent_rows(
             let canonical_agent = agent
                 .agent
                 .as_deref()
-                .and_then(crate::detect::parse_agent_label);
+                .and_then(|id| crate::detect::Agent::parse(id).ok());
             let rows = crate::ui::sidebar_agent_rows(
                 &config.agents,
                 crate::ui::AgentTokenContext {

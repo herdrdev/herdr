@@ -1528,25 +1528,69 @@ impl App {
         )
     }
 
+    fn select_bound_report_session(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        source: &str,
+        agent: &str,
+        id: Option<String>,
+        path: Option<String>,
+    ) -> Option<crate::agent_resume::AgentSessionRef> {
+        let terminal_id = self
+            .state
+            .workspaces
+            .iter()
+            .find_map(|ws| ws.terminal_id(pane_id))
+            .cloned()?;
+        let reference = self
+            .state
+            .terminals
+            .get_mut(&terminal_id)?
+            .session_ref_from_bound_report(source, agent, id, path)?;
+        // A one-shot startup report may beat the detector. Associate it only
+        // with a foreground process lifetime observed now, never with a future
+        // process that happens to report the same canonical agent identity.
+        if let Some(identity) = self
+            .terminal_runtimes
+            .get(&terminal_id)
+            .and_then(|runtime| report_foreground_process_identity(runtime, agent))
+        {
+            self.state
+                .terminals
+                .get_mut(&terminal_id)?
+                .record_report_process_proof(agent, &reference, identity);
+        }
+        Some(reference)
+    }
+
     pub(super) fn handle_pane_report_agent(
         &mut self,
         id: String,
         params: PaneReportAgentParams,
     ) -> String {
+        if params.source == "herdr:launch" {
+            return encode_error(
+                id,
+                "invalid_agent_source",
+                "launch provenance is internal only",
+            );
+        }
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        let session_ref = self.select_bound_report_session(
+            pane_id,
+            &params.source,
+            &agent_label,
+            params.agent_session_id,
+            params.agent_session_path,
+        );
         self.handle_internal_event(crate::events::AppEvent::HookStateReported {
             pane_id,
-            session_ref: crate::agent_resume::session_ref_from_report(
-                &params.source,
-                &agent_label,
-                params.agent_session_id,
-                params.agent_session_path,
-            ),
+            session_ref,
             source: params.source,
             agent_label,
             state: detect_state_from_api(params.state),
@@ -1562,20 +1606,29 @@ impl App {
         id: String,
         params: PaneReportAgentSessionParams,
     ) -> String {
+        if params.source == "herdr:launch" {
+            return encode_error(
+                id,
+                "invalid_agent_source",
+                "launch provenance is internal only",
+            );
+        }
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        let session_ref = self.select_bound_report_session(
+            pane_id,
+            &params.source,
+            &agent_label,
+            params.agent_session_id,
+            params.agent_session_path,
+        );
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
-            session_ref: crate::agent_resume::session_ref_from_report(
-                &params.source,
-                &agent_label,
-                params.agent_session_id,
-                params.agent_session_path,
-            ),
+            session_ref,
             source: params.source,
             agent_label,
             seq: params.seq,
@@ -2198,6 +2251,29 @@ fn invalid_agent(id: String) -> String {
     encode_error(id, "invalid_agent", "agent label must not be empty")
 }
 
+fn report_foreground_process_identity(
+    runtime: &crate::terminal::TerminalRuntime,
+    agent: &str,
+) -> Option<crate::platform::ProcessIdentity> {
+    let registry = crate::agents::registry();
+    let job = crate::platform::foreground_job_with_registry(&registry, runtime.child_pid()?, None)?;
+    job.processes.iter().find_map(|process| {
+        let identified = crate::detect::identify_agent_in_job_with_registry(
+            &registry,
+            &crate::platform::ForegroundJob {
+                process_group_id: process.pid,
+                processes: vec![process.clone()],
+            },
+        )
+        .map(|(agent, _)| agent)
+        .or_else(|| crate::platform::process_agent_hint_with_registry(&registry, process.pid));
+        if identified.is_none_or(|identified| identified.as_str() != agent) {
+            return None;
+        }
+        crate::platform::process_identity(process.pid)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2222,6 +2298,41 @@ mod tests {
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         (app, public_pane_id)
+    }
+
+    #[test]
+    fn agent_reports_cannot_claim_internal_launch_provenance() {
+        let (mut app, _) = app_with_test_workspace();
+        app.state = crate::app::AppState::test_with_adversarial_identity_state();
+        let workspace = &app.state.workspaces[0];
+        let pane_id = app
+            .public_pane_id(0, workspace.tabs[workspace.active_tab].root_pane)
+            .unwrap();
+        let params = serde_json::json!({
+            "pane_id": pane_id,
+            "source": "herdr:launch",
+            "agent": "novel-agent",
+            "state": "working",
+            "agent_session_id": "forged-id"
+        });
+        let state_response = app.handle_pane_report_agent(
+            "state".into(),
+            serde_json::from_value(params.clone()).unwrap(),
+        );
+        let mut session_params = params;
+        session_params.as_object_mut().unwrap().remove("state");
+        let session_response = app.handle_pane_report_agent_session(
+            "session".into(),
+            serde_json::from_value(session_params).unwrap(),
+        );
+        for response in [state_response, session_response] {
+            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["error"]["code"], "invalid_agent_source");
+        }
+        assert!(app.state.terminals.values().all(|terminal| {
+            terminal.hook_authority.is_none() && terminal.persisted_agent_session.is_none()
+        }));
+        app.state.assert_invariants_for_test();
     }
 
     #[test]

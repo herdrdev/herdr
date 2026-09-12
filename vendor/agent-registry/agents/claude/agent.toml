@@ -1,0 +1,13 @@
+schema = 1
+id = "claude"
+name = "claude"
+aliases = ["claude-code"]
+startable = true
+
+[launch]
+unix = "claude"
+windows = "claude"
+
+[sound]
+key = "claude"
+default = "default"

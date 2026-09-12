@@ -1,0 +1,26 @@
+cli_name = "codex"
+aliases = []
+
+[commands]
+unix = ["codex"]
+windows = ["codex"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 8
+windows = 8
+
+[[assets]]
+path = "assets/herdr-agent-state.ps1"
+platform = "windows"
+role = "reporter"
+install_name = "herdr-agent-state.ps1"
+
+[[assets]]
+path = "assets/herdr-agent-state.sh"
+platform = "unix"
+role = "reporter"
+install_name = "herdr-agent-state.sh"

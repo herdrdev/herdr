@@ -1,6 +1,6 @@
 use std::{
     collections::{HashSet, VecDeque},
-    io::Write,
+    io::{Read, Write},
     os::fd::RawFd,
     path::PathBuf,
     process::{Command, Stdio},
@@ -13,8 +13,8 @@ use super::{
 };
 
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
-    create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
+    configure_status_command, create_private_file, create_remote_private_dir,
+    create_remote_ssh_config_dir, hostname, local_datetime, remote_bridge_endpoint_path,
     remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, status_commands_supported,
     wait_client_stream_readable, StatusCommandGuard,
@@ -366,15 +366,19 @@ fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
 
 fn process_argv(pid: u32) -> Option<Vec<String>> {
     let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    parse_proc_cmdline(&bytes)
+}
+
+fn parse_proc_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
     if bytes.is_empty() {
         return None;
     }
-    let parts: Vec<String> = bytes
-        .split(|&b| b == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).into_owned())
-        .collect();
-    (!parts.is_empty()).then_some(parts)
+    bytes
+        .strip_suffix(&[0])
+        .unwrap_or(bytes)
+        .split(|&byte| byte == 0)
+        .map(|part| std::str::from_utf8(part).map(str::to_owned).ok())
+        .collect()
 }
 
 /// Get the current working directory of a process.
@@ -388,11 +392,18 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
 
 /// Read a Herdr agent identity hint from a process environment.
 pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
+    process_agent_hint_with_registry(&crate::agents::registry(), pid)
+}
+
+pub(crate) fn process_agent_hint_with_registry(
+    registry: &crate::agents::AgentRegistry,
+    pid: u32,
+) -> Option<crate::detect::Agent> {
     if pid == 0 {
         return None;
     }
     let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    super::parse_agent_env_hint(&environ)
+    super::parse_agent_env_hint_with_registry(registry, &environ)
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {
@@ -435,6 +446,59 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
             libc::kill(pid as i32, sig);
         }
     }
+}
+
+/// Query only when acquiring or revalidating a bound process, not once per
+/// process candidate. The token and `/proc` read use fixed-size stack storage.
+pub(crate) fn process_identity(pid: u32) -> Option<super::ProcessIdentity> {
+    if pid == 0 {
+        return None;
+    }
+    let mut path = [0u8; 32];
+    let path_len = {
+        let mut writer = std::io::Cursor::new(path.as_mut_slice());
+        write!(&mut writer, "/proc/{pid}/stat").ok()?;
+        writer.position() as usize
+    };
+    let path = std::str::from_utf8(&path[..path_len]).ok()?;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut stat = [0u8; 4096];
+    let length = file.read(&mut stat).ok()?;
+    if length == stat.len() {
+        return None;
+    }
+    process_identity_from_stat(pid, &stat[..length])
+}
+
+fn process_identity_from_stat(pid: u32, stat: &[u8]) -> Option<super::ProcessIdentity> {
+    let name_start = stat.iter().position(|&byte| byte == b'(')?;
+    let observed_pid = std::str::from_utf8(&stat[..name_start])
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    if pid == 0 || observed_pid != pid {
+        return None;
+    }
+    // comm can contain spaces, newlines, closing parens, and non-UTF-8 bytes.
+    // Numeric stat fields after its final ')' cannot contain parens.
+    let name_end = stat.iter().rposition(|&byte| byte == b')')?;
+    if name_end <= name_start {
+        return None;
+    }
+    let mut fields = stat[name_end + 1..]
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty());
+    let state = fields.next()?;
+    if state.len() != 1 || matches!(state, b"Z" | b"X" | b"x") {
+        return None;
+    }
+    // state is field 3; starttime is field 22 (the nineteenth following field).
+    let birth_token = std::str::from_utf8(fields.nth(18)?)
+        .ok()?
+        .parse::<u64>()
+        .ok()?;
+    Some(super::ProcessIdentity { pid, birth_token })
 }
 
 pub fn process_exists(pid: u32) -> bool {
@@ -842,6 +906,26 @@ mod tests {
     }
 
     #[test]
+    fn process_argv_preserves_exact_argument_boundaries() {
+        assert_eq!(
+            parse_proc_cmdline(b"agent\0--model\0model name\0\0\0"),
+            Some(vec![
+                "agent".into(),
+                "--model".into(),
+                "model name".into(),
+                "".into(),
+                "".into()
+            ])
+        );
+        assert_eq!(parse_proc_cmdline(b"agent\0\xff\0"), None);
+        assert_eq!(parse_proc_cmdline(b""), None);
+        assert_eq!(
+            process_argv(std::process::id()),
+            Some(std::env::args().collect())
+        );
+    }
+
+    #[test]
     fn wsl_marker_detection_matches_kernel_release_text() {
         assert!(text_indicates_wsl("5.15.167.4-microsoft-standard-WSL2"));
         assert!(text_indicates_wsl("4.4.0-19041-Microsoft"));
@@ -1071,6 +1155,84 @@ mod tests {
         assert_eq!(discover(), vec![200]);
         children.borrow_mut().insert((100, 100), vec![200, 201]);
         assert_eq!(discover(), vec![200, 201]);
+    }
+
+    fn identity_stat(pid: u32, name: &[u8], state: u8, birth: &str) -> Vec<u8> {
+        let mut stat = format!("{pid} (").into_bytes();
+        stat.extend_from_slice(name);
+        stat.extend_from_slice(
+            format!(") {} {}{birth} 0 0\n", char::from(state), "0 ".repeat(18)).as_bytes(),
+        );
+        stat
+    }
+
+    #[test]
+    fn process_identity_stat_ignores_mutable_names_and_distinguishes_birth_ticks() {
+        let first =
+            process_identity_from_stat(123, &identity_stat(123, b"worker", b'S', "456")).unwrap();
+        assert_eq!(
+            first,
+            super::super::ProcessIdentity {
+                pid: 123,
+                birth_token: 456
+            }
+        );
+        assert_eq!(
+            Some(first),
+            process_identity_from_stat(123, &identity_stat(123, b"renamed ) (\n\xff", b'R', "456"))
+        );
+        assert_ne!(
+            Some(first),
+            process_identity_from_stat(123, &identity_stat(123, b"worker", b'S', "457"))
+        );
+    }
+
+    #[test]
+    fn process_identity_stat_rejects_exits_mismatches_and_malformed_ticks() {
+        for state in [b'Z', b'X', b'x'] {
+            assert_eq!(
+                process_identity_from_stat(123, &identity_stat(123, b"worker", state, "456")),
+                None
+            );
+        }
+        for birth in ["-1", "18446744073709551616", "not-a-number", ""] {
+            let mut stat = identity_stat(123, b"worker", b'S', birth);
+            if birth.is_empty() {
+                stat.truncate(stat.len() - 5);
+            }
+            assert_eq!(process_identity_from_stat(123, &stat), None);
+        }
+        assert_eq!(
+            process_identity_from_stat(124, &identity_stat(123, b"worker", b'S', "456")),
+            None
+        );
+        assert_eq!(
+            process_identity_from_stat(123, b"123 (truncated) S 1 2"),
+            None
+        );
+        assert_eq!(
+            process_identity_from_stat(0, &identity_stat(0, b"worker", b'S', "456")),
+            None
+        );
+    }
+
+    #[test]
+    fn process_identity_survives_native_thread_title_changes() {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u32;
+        let before = process_identity(tid).expect("current thread birth ticks");
+        let mut original = [0u8; 16];
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_NAME, original.as_mut_ptr()) },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NAME, c"renamed) worker".as_ptr()) },
+            0
+        );
+        let after = process_identity(tid);
+        let restored = unsafe { libc::prctl(libc::PR_SET_NAME, original.as_ptr()) };
+        assert_eq!(restored, 0);
+        assert_eq!(after, Some(before));
     }
 
     #[test]

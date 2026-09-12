@@ -13,8 +13,8 @@ use super::{
 };
 
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
-    create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
+    configure_status_command, create_private_file, create_remote_private_dir,
+    create_remote_ssh_config_dir, hostname, local_datetime, remote_bridge_endpoint_path,
     remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, status_commands_supported,
     wait_client_stream_readable, StatusCommandGuard,
@@ -797,11 +797,18 @@ fn process_argv(pid: u32) -> Option<Vec<String>> {
 
 /// Read a Herdr agent identity hint from a process environment.
 pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
+    process_agent_hint_with_registry(&crate::agents::registry(), pid)
+}
+
+pub(crate) fn process_agent_hint_with_registry(
+    registry: &crate::agents::AgentRegistry,
+    pid: u32,
+) -> Option<crate::detect::Agent> {
     if pid == 0 {
         return None;
     }
     let buf = kern_procargs2(pid)?;
-    super::parse_agent_env_hint(procargs2_env(&buf)?)
+    super::parse_agent_env_hint_with_registry(registry, procargs2_env(&buf)?)
 }
 
 fn procargs2_argv_start(rest: &[u8]) -> Option<usize> {
@@ -828,7 +835,7 @@ fn procargs2_argv(buf: &[u8]) -> Option<Vec<String>> {
     }
 
     let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    if argc < 1 {
+    if argc < 1 || argc as usize > buf.len() {
         return None;
     }
 
@@ -843,12 +850,8 @@ fn procargs2_argv(buf: &[u8]) -> Option<Vec<String>> {
         let end = rest[current..]
             .iter()
             .position(|&b| b == 0)
-            .map(|offset| current + offset)
-            .unwrap_or(rest.len());
-        if end == current {
-            return None;
-        }
-        argv.push(String::from_utf8_lossy(&rest[current..end]).into_owned());
+            .map(|offset| current + offset)?;
+        argv.push(std::str::from_utf8(&rest[current..end]).ok()?.to_owned());
         current = end + 1;
     }
 
@@ -983,6 +986,33 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
+/// Query only on bound-process acquisition/revalidation, not in candidate
+/// recognition loops. BSD start seconds/microseconds form an allocation-free token.
+pub(crate) fn process_identity(pid: u32) -> Option<super::ProcessIdentity> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return None;
+    }
+    process_identity_from_bsdinfo(pid, &process_bsdinfo(pid)?)
+}
+
+fn process_identity_from_bsdinfo(
+    pid: u32,
+    info: &libc::proc_bsdinfo,
+) -> Option<super::ProcessIdentity> {
+    if pid == 0
+        || info.pbi_pid != pid
+        || info.pbi_status == libc::SZOMB
+        || info.pbi_start_tvusec >= 1_000_000
+    {
+        return None;
+    }
+    let birth_token = info
+        .pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(info.pbi_start_tvusec)?;
+    Some(super::ProcessIdentity { pid, birth_token })
+}
+
 pub fn process_exists(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -997,6 +1027,35 @@ pub fn process_exists(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn process_identity_bsd_start_time_ignores_name_and_rejects_reused_pid() {
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        info.pbi_pid = 123;
+        info.pbi_start_tvsec = 100;
+        info.pbi_start_tvusec = 456;
+        let first = super::process_identity_from_bsdinfo(123, &info).unwrap();
+        assert_eq!(first.birth_token, 100_000_456);
+        info.pbi_comm[0] = b'x' as libc::c_char;
+        assert_eq!(
+            super::process_identity_from_bsdinfo(123, &info),
+            Some(first)
+        );
+        info.pbi_start_tvusec += 1;
+        assert_ne!(
+            super::process_identity_from_bsdinfo(123, &info),
+            Some(first)
+        );
+        assert_eq!(super::process_identity_from_bsdinfo(124, &info), None);
+        info.pbi_status = libc::SZOMB;
+        assert_eq!(super::process_identity_from_bsdinfo(123, &info), None);
+        info.pbi_status = 0;
+        info.pbi_start_tvusec = 1_000_000;
+        assert_eq!(super::process_identity_from_bsdinfo(123, &info), None);
+        info.pbi_start_tvusec = 0;
+        info.pbi_start_tvsec = u64::MAX;
+        assert_eq!(super::process_identity_from_bsdinfo(123, &info), None);
+    }
+
     use super::*;
 
     #[test]
@@ -1052,6 +1111,25 @@ mod tests {
         assert_eq!(argv, vec!["node", "/Users/can/.local/bin/pi"]);
         assert_eq!(argv.join(" "), "node /Users/can/.local/bin/pi");
         assert!(!argv.join(" ").contains("codex.system"));
+    }
+
+    #[test]
+    fn procargs2_argv_preserves_exact_arguments_and_rejects_lossy_or_truncated_input() {
+        let args = ["agent", "--model", "model name", "", ""];
+        let buf = build_procargs2("/bin/agent", &args, &[]);
+        assert_eq!(procargs2_argv(&buf), Some(args.map(str::to_owned).to_vec()));
+        let mut invalid = build_procargs2("/bin/agent", &["agent", "value"], &[]);
+        let value = invalid
+            .windows(5)
+            .position(|bytes| bytes == b"value")
+            .unwrap();
+        invalid[value] = 0xff;
+        assert!(procargs2_argv(&invalid).is_none());
+        let mut truncated = build_procargs2("/bin/agent", &["agent", "value"], &[]);
+        while truncated.last() == Some(&0) {
+            truncated.pop();
+        }
+        assert!(procargs2_argv(&truncated).is_none());
     }
 
     #[test]

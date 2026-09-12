@@ -162,7 +162,11 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        if !super::super::agents::runtime_hosts_agent(runtime, expected_agent) {
+        if !super::super::agents::runtime_hosts_agent(
+            runtime,
+            expected_agent,
+            terminal.live_agent_resume_binding.as_ref(),
+        ) {
             return Err(encode_error(
                 id,
                 "agent_not_ready",
@@ -276,7 +280,9 @@ impl App {
         let Some(terminal) = self.state.terminals.get(terminal_id) else {
             return agent_not_found(id, &target.target);
         };
-        if terminal.full_lifecycle_hook_authority_active() {
+        if terminal.full_lifecycle_hook_authority_active()
+            && !terminal.screen_detection_required_for_managed_startup()
+        {
             let explain = serde_json::json!({
                 "agent": terminal.effective_agent_label().unwrap_or("unknown"),
                 "state": crate::detect::manifest::agent_state_label(terminal.state),
@@ -355,7 +361,14 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
-        if !super::super::agents::runtime_hosts_agent(runtime, expected_agent) {
+        if !super::super::agents::runtime_hosts_agent(
+            runtime,
+            expected_agent,
+            self.state
+                .terminals
+                .get(terminal_id)
+                .and_then(|terminal| terminal.live_agent_resume_binding.as_ref()),
+        ) {
             return agent_not_ready(id, &params.target);
         }
         let encoded = match super::super::api_helpers::encode_api_keys(runtime, &params.keys) {

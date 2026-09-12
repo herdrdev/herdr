@@ -1689,6 +1689,14 @@
           ],
           "type": "object"
         },
+        "Channel": {
+          "enum": [
+            "stable",
+            "preview",
+            "staging"
+          ],
+          "type": "string"
+        },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
           "properties": {
@@ -3923,6 +3931,31 @@
           ],
           "type": "string"
         },
+        "RegistryReloadParams": {
+          "additionalProperties": false,
+          "description": "Reload the selected session's registry. Omission reuses its configured source.\nThis does not install integrations or grant report authority.",
+          "properties": {
+            "source": {
+              "description": "Absolute local source directory (at most 4096 UTF-8 bytes), not a URL.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "RegistryUpdateParams": {
+          "additionalProperties": false,
+          "description": "Explicit remote check/update. Never starts an automatic update schedule.",
+          "properties": {
+            "channel": {
+              "$ref": "#/schemas/request/$defs/Channel",
+              "default": "stable"
+            }
+          },
+          "type": "object"
+        },
         "ReleaseNotesDismissParams": {
           "properties": {
             "version": {
@@ -4831,6 +4864,86 @@
           "properties": {
             "method": {
               "const": "server.reload_agent_manifests",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "registry.status",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "registry.reload",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RegistryReloadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "registry.check",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RegistryUpdateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "registry.update",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/RegistryUpdateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "registry.reset",
               "type": "string"
             },
             "params": {
@@ -6832,6 +6945,79 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "AgentSummary": {
+          "properties": {
+            "detection": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "integration": {
+              "type": "boolean"
+            },
+            "process": {
+              "type": "boolean"
+            },
+            "resume": {
+              "type": "boolean"
+            },
+            "startable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "startable",
+            "process",
+            "detection",
+            "resume",
+            "integration"
+          ],
+          "type": "object"
+        },
+        "Channel": {
+          "enum": [
+            "stable",
+            "preview",
+            "staging"
+          ],
+          "type": "string"
+        },
+        "ChannelPointer": {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/schemas/success_response/$defs/Channel"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot_sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "channel",
+            "generation",
+            "snapshot_sha256",
+            "snapshot_bytes"
+          ],
+          "type": "object"
         },
         "ClientWindowTitleReason": {
           "enum": [
@@ -9187,6 +9373,102 @@
           ],
           "type": "string"
         },
+        "RegistryStatus": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentSummary"
+              },
+              "type": "array"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "last_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "remote": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/RemoteRevision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "description": "Local source directory; None selects the managed bundled/R2 source.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "generation",
+            "digest",
+            "agents"
+          ],
+          "type": "object"
+        },
+        "RegistryUpdateCheck": {
+          "properties": {
+            "active_digest": {
+              "type": "string"
+            },
+            "active_generation": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "content_sha256": {
+              "type": "string"
+            },
+            "remote": {
+              "$ref": "#/schemas/success_response/$defs/RemoteRevision"
+            },
+            "update_available": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "active_generation",
+            "active_digest",
+            "remote",
+            "content_sha256",
+            "update_available"
+          ],
+          "type": "object"
+        },
+        "RemoteRevision": {
+          "additionalProperties": false,
+          "properties": {
+            "commit": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string"
+            },
+            "pointer": {
+              "$ref": "#/schemas/success_response/$defs/ChannelPointer"
+            }
+          },
+          "required": [
+            "origin",
+            "pointer",
+            "commit"
+          ],
+          "type": "object"
+        },
         "ResponseResult": {
           "oneOf": [
             {
@@ -9456,6 +9738,38 @@
               "required": [
                 "type",
                 "tabs"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "registry": {
+                  "$ref": "#/schemas/success_response/$defs/RegistryStatus"
+                },
+                "type": {
+                  "const": "agent_registry",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "registry"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "registry_update": {
+                  "$ref": "#/schemas/success_response/$defs/RegistryUpdateCheck"
+                },
+                "type": {
+                  "const": "registry_update_check",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "registry_update"
               ],
               "type": "object"
             },

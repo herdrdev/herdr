@@ -128,7 +128,7 @@ herdr server update-agent-manifests [--json]
 herdr server reload-agent-manifests
 ```
 
-`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows the active agent detection manifest sources, cached remote versions, and last remote update results. `update-agent-manifests` fetches remote manifest updates immediately, reloads them into the running server, and prints the updated manifest status; pass `--json` for the raw status response. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
+`herdr server` runs the headless server explicitly. Use it for supervised or service-style setups. `reload-config` applies reloadable settings without restarting panes. `agent-manifests` shows active detection sources and versions from the accepted registry. `update-agent-manifests` is a compatibility alias for `registry update`: it fetches and activates a **full R2 registry snapshot**, including agent IDs and CLI definitions, not just detection rules. It then prints the update result and manifest status; `--json` preserves the legacy manifest-status response shape. Use `registry status` for full update provenance and errors. `reload-agent-manifests` reloads agent detection manifests into the running server after local override edits.
 
 ## Notifications
 
@@ -344,9 +344,11 @@ herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 
 Agent targets are either a unique live agent name or the pane ID that currently hosts the agent. Terminal IDs and bare agent-kind labels are not agent targets. Agents started through `agent start` require a name; manually launched agents remain unnamed and use their pane ID.
 
-`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
+`agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Bundled kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
 
-A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
+A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`. For agents with screen-based input detection, including OpenCode, prompts remain unavailable until the input controls are visible and no blocker is active; an `idle` report alone is insufficient. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
+
+Cold-restored agents remain queued until their resume command is sent. They then pass the same startup readiness checks before accepting prompts; restoring a saved name or session does not itself make the agent ready.
 
 `agent prompt` honors live bracketed-paste mode and writes text followed by delayed Enter as one ordered submission, including while the agent is working. Success without `--wait` acknowledges the writes, not the start of a turn. On Windows, Codex receives a paste boundary before Enter so submission does not depend on prompt size; the caller timeout includes submission time. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, a prompt sent from another non-working state has up to five seconds after submission to produce an observed `working` or `blocked` state or Herdr returns `agent_prompt_stalled`; if the caller timeout expires first, Herdr returns the normal `timeout` error. This prevents unrelated `idle`, `done`, or session changes from completing the wait. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
 
@@ -435,6 +437,29 @@ herdr integration uninstall mastracode
 herdr integration uninstall grok
 herdr integration status [--outdated-only]
 ```
+
+## Agent registry
+
+```sh
+herdr registry validate /path/to/agent-registry
+herdr registry validate-snapshot /path/to/snapshot.json --runtime-compatible
+herdr --session work registry status
+herdr --session work registry check [--channel stable|preview|staging]
+herdr --session work registry update [--channel stable|preview|staging]
+herdr --session work registry reload /path/to/agent-registry
+herdr --session work registry reload
+herdr --session work registry reset
+```
+
+`validate` checks local packages, detection rules, and integration assets without connecting to a server or installing anything. `validate-snapshot` also checks a bounded, immutable JSON snapshot's hashes and provenance; `--runtime-compatible` checks its assets against the current binary's compiled installers. `status` shows the selected server's active agents, generation, local or remote provenance, and last error.
+
+`check` fetches and validates a complete R2 snapshot without activating it. `update` explicitly activates it after validation and durable storage. Both run on the selected server and default to `stable`; `preview` and `staging` must be selected explicitly. An empty or unavailable channel is an error, not an up-to-date result. Channel pointers are fetched fresh, while immutable snapshots use digest-addressed URLs. Check/update do not install integrations or start an automatic update schedule.
+
+`reload DIRECTORY` activates a complete local registry for that session, replacing rather than merging the previous package set. New agent IDs, CLI definitions, and detection rules become available without rebuilding or restarting Herdr. `agent start --kind` resolves against the selected server's active registry, including newly activated kinds. Relative paths are resolved from the caller's working directory; the directory must be accessible to the selected server. With no directory, `reload` rereads the selected local source or revalidates the retained managed snapshot offline; it never fetches R2. Local mode rejects remote checks/updates. Use `reset` to return to bundled/managed mode without deleting local source or detection override files.
+
+A malformed package rejects the entire update and leaves the previous registry active. Successful activation saves a last-known-good package snapshot for restart, even if the source directory later disappears. Existing running agents keep their identity; detection catches up asynchronously after activation.
+
+Herdr starts with its pinned bundled packages unless a saved snapshot exists. `HERDR_AGENT_REGISTRY_SOURCE` explicitly selects a complete local source; only a saved snapshot belonging to that source can satisfy startup. Without an explicit setting, the last accepted local or managed source is restored. Reloading never downloads binaries, installs integrations, runs hooks, or grants trusted reporting privileges to a new agent. Integration installers and report authority remain explicitly supported by Herdr. Supported integration files can update through the registry without a new Herdr build. Apply an available update from Settings → Integrations or rerun `herdr integration install <target>`; registry refresh alone never changes installed files. The CLI uses the selected local session's saved registry even when its server is stopped. New installation layouts or reporting capabilities still require explicit Herdr support.
 
 ## Plugins
 

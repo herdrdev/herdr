@@ -1,0 +1,13 @@
+schema = 1
+id = "grok"
+name = "grok"
+aliases = ["grok-build"]
+startable = true
+
+[launch]
+unix = "grok"
+windows = "grok"
+
+[sound]
+key = "grok"
+default = "default"

@@ -56,9 +56,7 @@ pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::i
     ))
 }
 
-pub(crate) fn create_remote_ssh_config_file(
-    path: &std::path::Path,
-) -> std::io::Result<std::fs::File> {
+pub(crate) fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -215,6 +213,11 @@ pub fn session_processes(_child_pid: u32) -> Vec<u32> {
 pub fn signal_processes(_pids: &[u32], _signal: Signal) {}
 
 /// Unsupported platform stub.
+/// Unsupported platforms cannot prove that a PID still names a bound process.
+pub(crate) fn process_identity(_pid: u32) -> Option<super::ProcessIdentity> {
+    None
+}
+
 pub fn process_exists(_pid: u32) -> bool {
     false
 }

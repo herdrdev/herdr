@@ -35,7 +35,7 @@ mod xtgettcap;
 
 use self::agent_detection::{
     decide_detection_screen_read, decide_screen_detection_publish,
-    detection_update_for_publish_with_osc, mark_detection_content_changed,
+    detection_update_for_publish_with_registry, mark_detection_content_changed,
     observe_detection_content_change, DetectionPublishDecision, DetectionScreenReadDecision,
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
@@ -205,10 +205,12 @@ fn active_pending_release(
 }
 
 async fn publish_state_changed_event(
+    registry_generation: u64,
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
     agent: Option<Agent>,
     state: AgentState,
+    visible_idle: bool,
     visible_blocker: bool,
     visible_working: bool,
     process_exited: bool,
@@ -218,14 +220,18 @@ async fn publish_state_changed_event(
     // Waiting for queue space here preserves correctness-critical state transitions
     // without blocking pane I/O.
     if let Err(e) = state_events
-        .send(AppEvent::StateChanged {
-            pane_id,
-            agent,
-            state,
-            visible_blocker,
-            visible_working,
-            process_exited,
-            observed_at,
+        .send(AppEvent::AgentDetection {
+            registry_generation,
+            observation: Box::new(AppEvent::StateChanged {
+                pane_id,
+                agent,
+                state,
+                visible_idle,
+                visible_blocker,
+                visible_working,
+                process_exited,
+                observed_at,
+            }),
         })
         .await
     {
@@ -238,16 +244,20 @@ async fn publish_state_changed_event(
 }
 
 async fn publish_agent_process_detected_event(
+    registry_generation: u64,
     state_events: mpsc::Sender<AppEvent>,
     pane_id: PaneId,
     agent: Agent,
     observed_at: std::time::Instant,
-) {
+) -> bool {
     if let Err(e) = state_events
-        .send(AppEvent::AgentProcessDetected {
-            pane_id,
-            agent,
-            observed_at,
+        .send(AppEvent::AgentDetection {
+            registry_generation,
+            observation: Box::new(AppEvent::AgentProcessDetected {
+                pane_id,
+                agent,
+                observed_at,
+            }),
         })
         .await
     {
@@ -256,13 +266,17 @@ async fn publish_agent_process_detected_event(
             err = %e,
             "failed to deliver AgentProcessDetected event"
         );
+        return false;
     }
+    true
 }
 
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPublishUpdate {
+    registry_generation: u64,
     state: AgentState,
     visible_idle: bool,
+    screen_visible_idle: bool,
     visible_blocker: bool,
     visible_working: bool,
     process_exited: bool,
@@ -294,10 +308,12 @@ async fn apply_agent_detection_publish_update(
         *foreground_shell_exit_reported = true;
     }
     publish_state_changed_event(
+        update.registry_generation,
         state_events,
         pane_id,
         agent,
         update.state,
+        update.screen_visible_idle,
         update.visible_blocker,
         update.visible_working,
         update.process_exited,
@@ -570,8 +586,291 @@ fn sync_content_change_acquisition(
     }
 }
 
+/// Registry lifetime is independent of the detector's legacy membership reset.
+/// Only the bound *observed process* can use a retired profile; acquisitions always
+/// use `active`, even while a removed agent is still waiting for exit confirmation.
+struct DetectionRegistryState {
+    active: Arc<crate::agents::store::RegistrySnapshot>,
+    bound: Option<BoundDetectionProcess>,
+    needs_publish: bool,
+    read_process_identity: fn(u32) -> Option<crate::platform::ProcessIdentity>,
+}
+
+struct BoundDetectionProcess {
+    agent: Agent,
+    process: crate::platform::ForegroundProcess,
+    process_group_id: u32,
+    profile: Arc<crate::agents::store::RegistrySnapshot>,
+    resume_recipe: Option<crate::agent_resume::PinnedAgentResumeRecipe>,
+    identity: Option<crate::platform::ProcessIdentity>,
+    resume_registry: Arc<crate::agents::store::RegistrySnapshot>,
+    resume_options: Option<crate::agent_resume::ProcessResumeOptions>,
+}
+
+impl BoundDetectionProcess {
+    fn observe_resume_options(
+        &self,
+        processes: &[crate::platform::ForegroundProcess],
+        read_identity: fn(u32) -> Option<crate::platform::ProcessIdentity>,
+    ) -> Option<crate::agent_resume::ProcessResumeOptions> {
+        let identity = self.identity?;
+        let policy = &self
+            .resume_registry
+            .profile_by_agent(self.agent)?
+            .session()?
+            .resume_options;
+        if policy.flags.is_empty() && policy.options.is_empty() {
+            return None;
+        }
+        let candidates = processes
+            .iter()
+            .filter(|process| process.pid == self.process.pid)
+            .chain(
+                processes
+                    .iter()
+                    .filter(|process| process.pid != self.process.pid),
+            );
+        for process in candidates {
+            let Some(args) =
+                crate::detect::structured_resume_args(&self.resume_registry, process, self.agent)
+            else {
+                continue;
+            };
+            let argv_owner = if process.pid == identity.pid {
+                identity
+            } else {
+                read_identity(process.pid)?
+            };
+            return Some(crate::agent_resume::ProcessResumeOptions {
+                argv_owner,
+                options: policy.filter(args),
+            });
+        }
+        None
+    }
+}
+
+impl DetectionRegistryState {
+    fn new(active: Arc<crate::agents::store::RegistrySnapshot>) -> Self {
+        Self {
+            active,
+            bound: None,
+            needs_publish: false,
+            read_process_identity: crate::platform::process_identity,
+        }
+    }
+
+    fn refresh(
+        &mut self,
+        generation: u64,
+        acquire: impl FnOnce() -> Arc<crate::agents::store::RegistrySnapshot>,
+        has_process_probe: &mut bool,
+        last_screen_scan: &mut Option<u64>,
+    ) -> bool {
+        if self.active.generation == generation {
+            return false;
+        }
+        self.active = acquire();
+        // Invalidate both positive and negative probe/screen scheduling caches,
+        // without touching identity, authority, OSC, startup grace or pending idle.
+        *has_process_probe = false;
+        self.request_screen_republish(last_screen_scan);
+        if let Some(bound) = &mut self.bound {
+            if self.active.profile_by_agent(bound.agent).is_some() {
+                bound.profile = self.active.clone();
+            }
+        }
+        true
+    }
+
+    fn request_screen_republish(&mut self, last_screen_scan: &mut Option<u64>) {
+        *last_screen_scan = None;
+        self.needs_publish = true;
+    }
+
+    async fn publish_resume_binding(
+        &self,
+        events: &mpsc::Sender<AppEvent>,
+        pane_id: PaneId,
+        now: std::time::Instant,
+    ) {
+        if let Some(bound) = &self.bound {
+            let _ = events
+                .send(AppEvent::AgentResumeProcessBound {
+                    pane_id,
+                    binding: Box::new(crate::agent_resume::LiveAgentResumeBinding {
+                        agent: bound.agent,
+                        recipe: bound.identity.and(bound.resume_recipe.clone()),
+                        process: Some((bound.process_group_id, bound.process.clone())),
+                        process_identity: bound.identity,
+                        observed_at: now,
+                        managed_admission: false,
+                        resume_options_owner: None,
+                        report_proof: None,
+                        resume_options: bound.resume_options.clone(),
+                    }),
+                })
+                .await;
+        }
+    }
+
+    fn bound_process(
+        &self,
+    ) -> Option<(
+        &crate::platform::ForegroundProcess,
+        &crate::agents::AgentRegistry,
+    )> {
+        self.bound
+            .as_ref()
+            .map(|bound| (&bound.process, &*bound.resume_registry.registry))
+    }
+
+    fn screen_snapshot(&self, agent: Option<Agent>) -> &crate::agents::store::RegistrySnapshot {
+        self.bound
+            .as_ref()
+            .filter(|bound| Some(bound.agent) == agent)
+            .map_or(&self.active, |bound| &bound.profile)
+    }
+
+    fn retained_probe(
+        &self,
+        job: &crate::platform::ForegroundJob,
+        pid: u32,
+    ) -> Option<ProcessProbeResult> {
+        let bound = self.bound.as_ref()?;
+        if !job
+            .processes
+            .iter()
+            .any(|process| process.pid == bound.process.pid)
+            || bound.identity.is_none()
+            || (self.read_process_identity)(bound.process.pid) != bound.identity
+        {
+            return None;
+        }
+        Some(process_probe_result(
+            job,
+            pid,
+            bound.agent,
+            bound.process.name.clone(),
+        ))
+    }
+
+    /// Confirms that a probe taken after a registry refresh still describes the
+    /// process binding owned by this detector. Callers gate this on an actual
+    /// generation change; this method deliberately rechecks PID membership and
+    /// birth identity instead of promoting an event queued by the old generation.
+    fn revalidated_bound_agent(
+        &self,
+        probe: &ProcessProbeResult,
+        current_agent: Option<Agent>,
+    ) -> Option<Agent> {
+        let agent = current_agent?;
+        let bound = self.bound.as_ref()?;
+        (probe.agent == Some(agent)
+            && bound.agent == agent
+            && probe.process_group_id == Some(bound.process_group_id)
+            && probe
+                .processes
+                .iter()
+                .any(|process| process.pid == bound.process.pid)
+            && (self.read_process_identity)(bound.process.pid) == bound.identity)
+            .then_some(agent)
+    }
+
+    fn bind(&mut self, probe: &ProcessProbeResult, agent: Option<Agent>) -> bool {
+        let Some(agent) = agent else {
+            return self.bound.take().is_some();
+        };
+        if let Some(bound) = &mut self.bound {
+            if bound.agent == agent
+                && probe.process_group_id.is_some()
+                && probe
+                    .processes
+                    .iter()
+                    .any(|process| process.pid == bound.process.pid)
+                && bound.identity.is_some()
+                && (self.read_process_identity)(bound.process.pid) == bound.identity
+            {
+                let options =
+                    bound.observe_resume_options(&probe.processes, self.read_process_identity);
+                let changed = probe.process_group_id != Some(bound.process_group_id)
+                    || options != bound.resume_options;
+                bound.resume_options = options;
+                if let Some(process) = probe
+                    .processes
+                    .iter()
+                    .find(|process| process.pid == bound.process.pid)
+                {
+                    bound.process = process.clone();
+                }
+                if let Some(pgid) = probe.process_group_id {
+                    bound.process_group_id = pgid;
+                }
+                return changed;
+            }
+            // Unknown birth identity grants no retained recipe or old-profile
+            // matching. Repeated negative evidence need not allocate an event.
+            if bound.identity.is_none()
+                && bound.agent == agent
+                && probe.process_group_id == Some(bound.process_group_id)
+                && probe
+                    .processes
+                    .iter()
+                    .any(|process| process.pid == bound.process.pid)
+                && (self.read_process_identity)(bound.process.pid).is_none()
+            {
+                return false;
+            }
+        }
+        // The previous binding must never classify a new PID/command, including
+        // a new process with the same name after its profile has been removed.
+        if probe.agent != Some(agent) {
+            return false;
+        }
+        self.bound = None;
+        let Some(process_group_id) = probe.process_group_id else {
+            return false;
+        };
+        let process = probe.processes.iter().find(|process| {
+            crate::platform::process_agent_hint_with_registry(&self.active, process.pid)
+                == Some(agent)
+                || crate::detect::identify_agent_in_job_with_registry(
+                    &self.active,
+                    &crate::platform::ForegroundJob {
+                        process_group_id: process.pid,
+                        processes: vec![(*process).clone()],
+                    },
+                )
+                .is_some_and(|(identified, _)| identified == agent)
+        });
+        if let Some(process) = process {
+            let identity = (self.read_process_identity)(process.pid);
+            let mut bound = BoundDetectionProcess {
+                agent,
+                process: process.clone(),
+                identity,
+                process_group_id,
+                resume_recipe: identity.and_then(|_| {
+                    self.active
+                        .profile_by_agent(agent)
+                        .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
+                }),
+                profile: self.active.clone(),
+                resume_registry: self.active.clone(),
+                resume_options: None,
+            };
+            bound.resume_options =
+                bound.observe_resume_options(&probe.processes, self.read_process_identity);
+            self.bound = Some(bound);
+            return true;
+        }
+        false
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ProcessProbeResult {
+    processes: Vec<crate::platform::ForegroundProcess>,
     process_group_id: Option<u32>,
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
@@ -597,6 +896,7 @@ fn agent_hint_for_non_leader_foreground_job_members(
 }
 
 fn identify_process_group_leader_in_job(
+    registry: &crate::agents::AgentRegistry,
     job: &crate::platform::ForegroundJob,
 ) -> Option<(Agent, String)> {
     let leader = job
@@ -607,7 +907,7 @@ fn identify_process_group_leader_in_job(
         process_group_id: job.process_group_id,
         processes: vec![leader.clone()],
     };
-    crate::detect::identify_agent_in_job(&leader_job)
+    crate::detect::identify_agent_in_job_with_registry(registry, &leader_job)
 }
 
 fn process_probe_result(
@@ -617,6 +917,7 @@ fn process_probe_result(
     process_name: String,
 ) -> ProcessProbeResult {
     ProcessProbeResult {
+        processes: job.processes.clone(),
         process_group_id: Some(job.process_group_id),
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
@@ -634,10 +935,11 @@ fn hinted_process_probe_result(
         job,
         pid,
         agent,
-        crate::detect::agent_label(agent).to_string(),
+        crate::detect::agent_label(&agent).to_string(),
     ))
 }
 
+#[cfg(test)]
 fn probe_foreground_process_from_jobs(
     pid: u32,
     foreground_pgid: Option<u32>,
@@ -645,26 +947,66 @@ fn probe_foreground_process_from_jobs(
     foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
     read_hint: impl Fn(u32) -> Option<Agent> + Copy,
 ) -> ProcessProbeResult {
+    probe_foreground_process_from_jobs_with_registry(
+        &DetectionRegistryState::new(crate::agents::registry()),
+        pid,
+        foreground_pgid,
+        leader_job,
+        foreground_job,
+        read_hint,
+    )
+}
+
+fn probe_foreground_process_from_jobs_with_registry(
+    registry: &DetectionRegistryState,
+    pid: u32,
+    foreground_pgid: Option<u32>,
+    leader_job: Option<crate::platform::ForegroundJob>,
+    foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
+    read_hint: impl Fn(u32) -> Option<Agent> + Copy,
+) -> ProcessProbeResult {
+    // A leader-only fast path may miss the bound child. While bound, inspect
+    // the complete observed job before allowing another package to acquire it.
+    let mut foreground_job = Some(foreground_job);
+    let full_job = if registry.bound.is_some() {
+        Some(foreground_job.take().expect("foreground job reader")())
+    } else {
+        None
+    };
+    if let Some(job) = full_job
+        .as_ref()
+        .and_then(|job| job.as_ref())
+        .or(leader_job.as_ref())
+    {
+        if let Some(retained) = registry.retained_probe(job, pid) {
+            return retained;
+        }
+    }
     if let Some(job) = leader_job.as_ref() {
         if let Some(hinted) = hinted_process_probe_result(job, pid, read_hint) {
             return hinted;
         }
-        if let Some((agent, process_name)) = crate::detect::identify_agent_in_job(job) {
+        if let Some((agent, process_name)) =
+            crate::detect::identify_agent_in_job_with_registry(&registry.active, job)
+        {
             return process_probe_result(job, pid, agent, process_name);
         }
     }
 
-    let foreground_job = foreground_job();
+    let foreground_job =
+        full_job.unwrap_or_else(|| foreground_job.take().expect("foreground job reader")());
     if let Some(job) = foreground_job.as_ref() {
         if let Some(agent) = read_hint(job.process_group_id) {
             return process_probe_result(
                 job,
                 pid,
                 agent,
-                crate::detect::agent_label(agent).to_string(),
+                crate::detect::agent_label(&agent).to_string(),
             );
         }
-        if let Some((agent, process_name)) = identify_process_group_leader_in_job(job) {
+        if let Some((agent, process_name)) =
+            identify_process_group_leader_in_job(&registry.active, job)
+        {
             return process_probe_result(job, pid, agent, process_name);
         }
         if let Some(agent) = agent_hint_for_non_leader_foreground_job_members(job, read_hint) {
@@ -672,12 +1014,13 @@ fn probe_foreground_process_from_jobs(
                 job,
                 pid,
                 agent,
-                crate::detect::agent_label(agent).to_string(),
+                crate::detect::agent_label(&agent).to_string(),
             );
         }
 
-        let identified = crate::detect::identify_agent_in_job(job);
+        let identified = crate::detect::identify_agent_in_job_with_registry(&registry.active, job);
         return ProcessProbeResult {
+            processes: job.processes.clone(),
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
             agent: identified.as_ref().map(|(agent, _)| *agent),
@@ -686,6 +1029,7 @@ fn probe_foreground_process_from_jobs(
     }
 
     ProcessProbeResult {
+        processes: Vec::new(),
         process_group_id: foreground_pgid,
         foreground_is_pane_shell: false,
         agent: None,
@@ -693,13 +1037,24 @@ fn probe_foreground_process_from_jobs(
     }
 }
 
-fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessProbeResult {
-    probe_foreground_process_from_jobs(
+fn probe_foreground_process(
+    registry: &DetectionRegistryState,
+    pid: u32,
+    foreground_pgid: Option<u32>,
+) -> ProcessProbeResult {
+    probe_foreground_process_from_jobs_with_registry(
+        registry,
         pid,
         foreground_pgid,
         foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
-        || crate::detect::foreground_job(pid),
-        crate::platform::process_agent_hint,
+        || {
+            crate::platform::foreground_job_with_registry(
+                &registry.active,
+                pid,
+                registry.bound_process(),
+            )
+        },
+        |pid| crate::platform::process_agent_hint_with_registry(&registry.active, pid),
     )
 }
 
@@ -725,6 +1080,7 @@ fn spawn_basic_detection_task(
         let mut agent_presence = AgentDetectionPresence::from_agent(None);
         let mut state = AgentState::Unknown;
         let mut last_visible_idle = false;
+        let mut last_screen_visible_idle = false;
         let mut last_visible_blocker = false;
         let mut last_visible_working = false;
         let mut last_visible_signal_refresh = None;
@@ -739,7 +1095,9 @@ fn spawn_basic_detection_task(
         let mut last_detection_text = String::new();
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
+        let mut pending_acquisition_republish = false;
         let mut pending_idle = PendingIdleConfirmation::default();
+        let mut registry = DetectionRegistryState::new(crate::agents::registry());
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -751,8 +1109,10 @@ fn spawn_basic_detection_task(
                 _ = tokio::time::sleep(sleep_duration) => {}
                 _ = detect_reset.notified() => {
                     agent_presence = AgentDetectionPresence::from_agent(None);
+                    registry.bound = None;
                     state = AgentState::Unknown;
                     last_visible_idle = false;
+                    last_screen_visible_idle = false;
                     last_visible_blocker = false;
                     last_visible_working = false;
                     last_visible_signal_refresh = None;
@@ -767,10 +1127,21 @@ fn spawn_basic_detection_task(
                     last_detection_text.clear();
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
+                    pending_acquisition_republish = false;
                     pending_idle.clear();
                 }
             }
 
+            let registry_changed = registry.refresh(
+                crate::agents::store::generation(),
+                crate::agents::registry,
+                &mut has_process_probe,
+                &mut last_screen_scan_detection_content_seq,
+            );
+            if registry_changed {
+                last_screen_visible_idle = false;
+                pending_acquisition_republish |= agent_presence.current_agent().is_some();
+            }
             let now = std::time::Instant::now();
             let suppressed_agent = active_pending_release(&pending_release_for_task, now);
             if suppressed_agent.is_none() && release_was_active {
@@ -785,7 +1156,13 @@ fn spawn_basic_detection_task(
             let lifecycle_authority_active =
                 full_lifecycle_authority_active.load(Ordering::Acquire);
             let foreground_pgid = (pid > 0)
-                .then(|| crate::detect::foreground_process_group_id(pid))
+                .then(|| {
+                    crate::platform::foreground_process_group_id_with_registry(
+                        &registry.active,
+                        pid,
+                        registry.bound_process(),
+                    )
+                })
                 .flatten();
             let process_group_changed =
                 foreground_group_changed(foreground_pgid, last_foreground_pgid);
@@ -802,17 +1179,19 @@ fn spawn_basic_detection_task(
                     pending_restore_probe: false,
                     elapsed_since_process_check: now.duration_since(last_process_check),
                 };
-                !should_skip_process_probe_for_lifecycle_authority(
-                    lifecycle_authority_active,
-                    process_probe_input,
-                ) && should_probe_foreground_job(process_probe_input)
+                pending_acquisition_republish
+                    || registry_changed
+                    || (!should_skip_process_probe_for_lifecycle_authority(
+                        lifecycle_authority_active,
+                        process_probe_input,
+                    ) && should_probe_foreground_job(process_probe_input))
             };
 
             if should_check_process {
                 last_process_check = now;
                 let had_process_probe = has_process_probe;
                 has_process_probe = true;
-                let probe = probe_foreground_process(pid, foreground_pgid);
+                let probe = probe_foreground_process(&registry, pid, foreground_pgid);
                 let process_group_id = probe.process_group_id;
                 let tracked_process_group_id =
                     process_group_for_change_tracking(foreground_pgid, process_group_id);
@@ -840,6 +1219,16 @@ fn spawn_basic_detection_task(
                     &mut pending_foreground_shell_clear,
                     &mut foreground_shell_exit_reported,
                 );
+                if registry.bind(&probe, agent_presence.current_agent()) {
+                    registry
+                        .publish_resume_binding(&state_events, pane_id, now)
+                        .await;
+                }
+                let refreshed_process_acquisition = pending_acquisition_republish
+                    .then(|| {
+                        registry.revalidated_bound_agent(&probe, agent_presence.current_agent())
+                    })
+                    .flatten();
                 last_foreground_pgid = tracked_process_group_id;
                 if new_agent.is_some() {
                     acquisition_started_at = None;
@@ -866,19 +1255,39 @@ fn spawn_basic_detection_task(
                             agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
                             state = AgentState::Unknown;
                             last_visible_idle = false;
+                            last_screen_visible_idle = false;
                             last_visible_blocker = false;
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
-                            publish_agent_process_detected_event(
+                            if publish_agent_process_detected_event(
+                                registry.active.generation,
                                 state_events.clone(),
                                 pane_id,
                                 agent,
                                 now,
                             )
-                            .await;
+                            .await
+                            {
+                                pending_acquisition_republish = false;
+                            }
                         } else {
                             agent_startup_grace_until = None;
+                            pending_acquisition_republish = false;
                         }
+                    }
+                } else if let Some(agent) = refreshed_process_acquisition {
+                    if publish_agent_process_detected_event(
+                        registry.active.generation,
+                        state_events.clone(),
+                        pane_id,
+                        agent,
+                        now,
+                    )
+                    .await
+                    {
+                        pending_acquisition_republish = false;
+                        registry
+                            .request_screen_republish(&mut last_screen_scan_detection_content_seq);
                     }
                 }
             }
@@ -892,21 +1301,22 @@ fn spawn_basic_detection_task(
                 continue;
             }
 
-            if let Some(until) = agent_startup_grace_until {
+            let startup_grace_active = if let Some(until) = agent_startup_grace_until {
                 if process_exited {
                     agent_startup_grace_until = None;
                     pending_idle.clear();
+                    false
+                } else if now < until {
+                    true
                 } else {
-                    if now < until {
-                        pending_idle.clear();
-                        continue;
-                    }
                     agent_startup_grace_until = None;
                     last_screen_scan_detection_content_seq = None;
                     pending_idle.clear();
                     continue;
                 }
-            }
+            } else {
+                false
+            };
 
             let current_detection_content_seq = if agent.is_some() {
                 Some(detection_content_seq.load(Ordering::Relaxed))
@@ -930,10 +1340,6 @@ fn spawn_basic_detection_task(
             last_screen_scan_detection_content_seq = current_detection_content_seq;
             let content_changed = content != last_detection_text;
             last_detection_text.clone_from(&content);
-            if !process_exited && crate::detect::should_skip_state_update(agent, &content) {
-                pending_idle.clear();
-                continue;
-            }
             sync_content_change_acquisition(
                 agent_presence.current_agent(),
                 suppressed_agent,
@@ -946,7 +1352,8 @@ fn spawn_basic_detection_task(
 
             let osc_title = terminal.agent_osc_title();
             let osc_progress = terminal.agent_osc_progress();
-            let Some(screen_detection) = detection_update_for_publish_with_osc(
+            let Some(screen_detection) = detection_update_for_publish_with_registry(
+                registry.screen_snapshot(agent),
                 agent,
                 &content,
                 &osc_title,
@@ -958,14 +1365,17 @@ fn spawn_basic_detection_task(
             };
             match decide_screen_detection_publish(
                 ScreenDetectionPublishInput {
+                    force_publish: registry.needs_publish,
                     screen_detection,
                     current_state: state,
                     last_visible_idle,
+                    last_screen_visible_idle,
                     last_visible_blocker,
                     last_visible_working,
                     last_visible_signal_refresh,
                     process_exited,
                     agent_changed,
+                    startup_grace_active,
                     now,
                 },
                 &mut pending_idle,
@@ -974,17 +1384,21 @@ fn spawn_basic_detection_task(
                 DetectionPublishDecision::Publish {
                     state: new_state,
                     visible_idle,
+                    screen_visible_idle,
                     visible_blocker,
                     visible_working,
                     process_exited: publish_process_exited,
                 } => {
+                    last_screen_visible_idle = screen_visible_idle;
                     apply_agent_detection_publish_update(
                         state_events.clone(),
                         pane_id,
                         agent,
                         AgentDetectionPublishUpdate {
+                            registry_generation: registry.active.generation,
                             state: new_state,
                             visible_idle,
+                            screen_visible_idle,
                             visible_blocker,
                             visible_working,
                             process_exited: publish_process_exited,
@@ -998,6 +1412,10 @@ fn spawn_basic_detection_task(
                         &mut foreground_shell_exit_reported,
                     )
                     .await;
+                    if publish_process_exited {
+                        pending_acquisition_republish = false;
+                    }
+                    registry.needs_publish = false;
                 }
             }
         }
@@ -2416,7 +2834,6 @@ impl PaneRuntime {
         let (detect_handle, detect_reset_notify, pending_release) = if agent_detection
             == AgentDetection::Enabled
         {
-            use crate::detect;
             use std::time::{Duration, Instant};
 
             const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
@@ -2440,6 +2857,7 @@ impl PaneRuntime {
                     AgentDetectionPresence::from_agent(initial_state.detected_agent);
                 let mut state = AgentState::Idle;
                 let mut last_visible_idle = initial_state.detected_agent.is_some();
+                let mut last_screen_visible_idle = false;
                 let mut last_process_check = Instant::now();
                 #[cfg(windows)]
                 let mut last_observation = (Instant::now(), Some(0));
@@ -2457,7 +2875,9 @@ impl PaneRuntime {
                 let mut last_detection_text = String::new();
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
+                let mut pending_acquisition_republish = false;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                let mut registry = DetectionRegistryState::new(crate::agents::registry());
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2479,8 +2899,10 @@ impl PaneRuntime {
                         _ = tokio::time::sleep(tick) => {}
                         _ = detect_reset.notified() => {
                             agent_presence = AgentDetectionPresence::from_agent(None);
+                            registry.bound = None;
                             state = AgentState::Unknown;
                             last_visible_idle = false;
+                            last_screen_visible_idle = false;
                             last_foreground_pgid = None;
                             has_process_probe = false;
                             acquisition_started_at = None;
@@ -2495,10 +2917,21 @@ impl PaneRuntime {
                             last_detection_text.clear();
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
+                            pending_acquisition_republish = false;
                             pending_idle.clear();
                         }
                     }
 
+                    let registry_changed = registry.refresh(
+                        crate::agents::store::generation(),
+                        crate::agents::registry,
+                        &mut has_process_probe,
+                        &mut last_screen_scan_detection_content_seq,
+                    );
+                    if registry_changed {
+                        last_screen_visible_idle = false;
+                        pending_acquisition_republish |= agent_presence.current_agent().is_some();
+                    }
                     let now = Instant::now();
                     let suppressed_agent = active_pending_release(&pending_release_for_task, now);
                     if suppressed_agent.is_none() && release_was_active {
@@ -2528,19 +2961,25 @@ impl PaneRuntime {
                     #[cfg(windows)]
                     let last_content_seq = last_observation.1;
                     #[cfg(windows)]
-                    let foreground_observation_due = should_observe_foreground_process_group(
-                        lifecycle_authority_active,
-                        last_content_seq != Some(content_seq)
-                            && (last_content_seq.is_some()
-                                || now.duration_since(last_observation.0) >= TICK_IDENTIFIED),
-                        now.duration_since(last_observation.0),
-                        process_probe_input,
-                    );
+                    let foreground_observation_due = pending_acquisition_republish
+                        || registry_changed
+                        || should_observe_foreground_process_group(
+                            lifecycle_authority_active,
+                            last_content_seq != Some(content_seq)
+                                && (last_content_seq.is_some()
+                                    || now.duration_since(last_observation.0) >= TICK_IDENTIFIED),
+                            now.duration_since(last_observation.0),
+                            process_probe_input,
+                        );
                     #[cfg(not(windows))]
                     let foreground_observation_due = true;
                     let foreground_pgid = match (pid, foreground_observation_due) {
                         (0, _) => None,
-                        (_, true) => detect::foreground_process_group_id(pid),
+                        (_, true) => crate::platform::foreground_process_group_id_with_registry(
+                            &registry.active,
+                            pid,
+                            registry.bound_process(),
+                        ),
                         _ => last_foreground_pgid,
                     };
                     #[cfg(windows)]
@@ -2556,10 +2995,12 @@ impl PaneRuntime {
                             foreground_pgid,
                             ..process_probe_input
                         };
-                        !should_skip_process_probe_for_lifecycle_authority(
-                            lifecycle_authority_active,
-                            process_probe_input,
-                        ) && should_probe_foreground_job(process_probe_input)
+                        pending_acquisition_republish
+                            || registry_changed
+                            || (!should_skip_process_probe_for_lifecycle_authority(
+                                lifecycle_authority_active,
+                                process_probe_input,
+                            ) && should_probe_foreground_job(process_probe_input))
                     };
 
                     let mut agent_changed = false;
@@ -2568,8 +3009,8 @@ impl PaneRuntime {
                         let had_process_probe = has_process_probe;
                         has_process_probe = true;
                         if pid > 0 {
-                            let probe = probe_foreground_process(pid, foreground_pgid);
-                            let process_name = probe.process_name;
+                            let probe = probe_foreground_process(&registry, pid, foreground_pgid);
+                            let process_name = probe.process_name.clone();
                             let process_group_id = probe.process_group_id;
                             let tracked_process_group_id = process_group_for_change_tracking(
                                 foreground_pgid,
@@ -2603,6 +3044,19 @@ impl PaneRuntime {
                                 &mut pending_foreground_shell_clear,
                                 &mut foreground_shell_exit_reported,
                             );
+                            if registry.bind(&probe, agent_presence.current_agent()) {
+                                registry
+                                    .publish_resume_binding(&state_events, pane_id, now)
+                                    .await;
+                            }
+                            let refreshed_process_acquisition = pending_acquisition_republish
+                                .then(|| {
+                                    registry.revalidated_bound_agent(
+                                        &probe,
+                                        agent_presence.current_agent(),
+                                    )
+                                })
+                                .flatten();
                             last_foreground_pgid = tracked_process_group_id;
                             if new_agent.is_some() {
                                 acquisition_started_at = None;
@@ -2635,18 +3089,24 @@ impl PaneRuntime {
                                             Some(now + AGENT_STARTUP_GRACE_WINDOW);
                                         state = AgentState::Unknown;
                                         last_visible_idle = false;
+                                        last_screen_visible_idle = false;
                                         last_visible_blocker = false;
                                         last_visible_working = false;
                                         last_visible_signal_refresh = None;
-                                        publish_agent_process_detected_event(
+                                        if publish_agent_process_detected_event(
+                                            registry.active.generation,
                                             state_events.clone(),
                                             pane_id,
                                             agent,
                                             now,
                                         )
-                                        .await;
+                                        .await
+                                        {
+                                            pending_acquisition_republish = false;
+                                        }
                                     } else {
                                         agent_startup_grace_until = None;
+                                        pending_acquisition_republish = false;
                                     }
                                 }
                                 if let Some(process_name) = process_name {
@@ -2668,6 +3128,21 @@ impl PaneRuntime {
                                     );
                                 }
                                 agent_changed = true;
+                            } else if let Some(agent) = refreshed_process_acquisition {
+                                if publish_agent_process_detected_event(
+                                    registry.active.generation,
+                                    state_events.clone(),
+                                    pane_id,
+                                    agent,
+                                    now,
+                                )
+                                .await
+                                {
+                                    pending_acquisition_republish = false;
+                                    registry.request_screen_republish(
+                                        &mut last_screen_scan_detection_content_seq,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2690,21 +3165,22 @@ impl PaneRuntime {
                         continue;
                     }
 
-                    if let Some(until) = agent_startup_grace_until {
+                    let startup_grace_active = if let Some(until) = agent_startup_grace_until {
                         if process_exited {
                             agent_startup_grace_until = None;
                             last_screen_scan_detection_content_seq = None;
                             pending_idle.clear();
+                            false
+                        } else if now < until {
+                            true
                         } else {
-                            if now < until {
-                                pending_idle.clear();
-                                continue;
-                            }
                             agent_startup_grace_until = None;
                             pending_idle.clear();
                             continue;
                         }
-                    }
+                    } else {
+                        false
+                    };
 
                     let current_detection_content_seq = if agent.is_some() {
                         Some(detection_content_seq.load(Ordering::Relaxed))
@@ -2728,10 +3204,6 @@ impl PaneRuntime {
                     last_screen_scan_detection_content_seq = current_detection_content_seq;
                     let content_changed = content != last_detection_text;
                     last_detection_text.clone_from(&content);
-                    if detect::should_skip_state_update(agent, &content) {
-                        pending_idle.clear();
-                        continue;
-                    }
                     sync_content_change_acquisition(
                         agent_presence.current_agent(),
                         suppressed_agent,
@@ -2744,7 +3216,8 @@ impl PaneRuntime {
 
                     let osc_title = terminal.agent_osc_title();
                     let osc_progress = terminal.agent_osc_progress();
-                    let Some(screen_detection) = detection_update_for_publish_with_osc(
+                    let Some(screen_detection) = detection_update_for_publish_with_registry(
+                        registry.screen_snapshot(agent),
                         agent,
                         &content,
                         &osc_title,
@@ -2756,14 +3229,17 @@ impl PaneRuntime {
                     };
                     match decide_screen_detection_publish(
                         ScreenDetectionPublishInput {
+                            force_publish: registry.needs_publish,
                             screen_detection,
                             current_state: state,
                             last_visible_idle,
+                            last_screen_visible_idle,
                             last_visible_blocker,
                             last_visible_working,
                             last_visible_signal_refresh,
                             process_exited,
                             agent_changed,
+                            startup_grace_active,
                             now,
                         },
                         &mut pending_idle,
@@ -2772,17 +3248,21 @@ impl PaneRuntime {
                         DetectionPublishDecision::Publish {
                             state: new_state,
                             visible_idle,
+                            screen_visible_idle,
                             visible_blocker,
                             visible_working,
                             process_exited: publish_process_exited,
                         } => {
+                            last_screen_visible_idle = screen_visible_idle;
                             apply_agent_detection_publish_update(
                                 state_events.clone(),
                                 pane_id,
                                 agent,
                                 AgentDetectionPublishUpdate {
+                                    registry_generation: registry.active.generation,
                                     state: new_state,
                                     visible_idle,
+                                    screen_visible_idle,
                                     visible_blocker,
                                     visible_working,
                                     process_exited: publish_process_exited,
@@ -2796,6 +3276,10 @@ impl PaneRuntime {
                                 &mut foreground_shell_exit_reported,
                             )
                             .await;
+                            if publish_process_exited {
+                                pending_acquisition_republish = false;
+                            }
+                            registry.needs_publish = false;
                         }
                     }
                 }
@@ -4360,6 +4844,620 @@ mod tests {
         );
     }
 
+    fn test_detection_registry(
+        snapshot: Arc<crate::agents::RegistrySnapshot>,
+    ) -> DetectionRegistryState {
+        let mut registry = DetectionRegistryState::new(snapshot);
+        registry.read_process_identity = |pid| {
+            Some(crate::platform::ProcessIdentity {
+                pid,
+                birth_token: 1,
+            })
+        };
+        registry
+    }
+
+    #[test]
+    fn resume_options_capture_is_birth_pinned_and_clears_on_unreadable_argv() {
+        use crate::agent_resume::resume_options_test_registry;
+        let initial = resume_options_test_registry(1, "options=['--model']");
+        let expanded = resume_options_test_registry(2, "options=['--model']\nflags=['--yolo']");
+        let mut registry = test_detection_registry(initial);
+        let mut probe = fixture_probe(&registry, 99_999_999, "options-cli");
+        probe.processes[0].argv = Some(vec![
+            "options-cli".into(),
+            "--model".into(),
+            "model name".into(),
+            "--yolo".into(),
+        ]);
+        assert!(registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--model", "model name"]
+        );
+        assert!(!registry.bind(&probe, probe.agent));
+        registry.refresh(2, || expanded, &mut true, &mut Some(1));
+        assert!(!registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--model", "model name"]
+        );
+        probe.processes[0].argv = None;
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(registry.bound.as_ref().unwrap().resume_options.is_none());
+        probe.processes[0].pid -= 1;
+        probe.process_group_id = Some(probe.processes[0].pid);
+        probe.processes[0].argv = Some(vec!["options-cli".into(), "--yolo".into()]);
+        assert!(registry.bind(&probe, probe.agent));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_options
+                .as_ref()
+                .unwrap()
+                .options,
+            ["--yolo"]
+        );
+    }
+
+    #[test]
+    fn resume_options_use_concrete_descendant_argv_not_opaque_wrapper_text() {
+        let mut registry = test_detection_registry(
+            crate::agent_resume::resume_options_test_registry(1, "options=['--model']"),
+        );
+        let mut probe = fixture_probe(&registry, 99_999_999, "options-cli");
+        probe.processes[0].name = "cmd.exe".into();
+        probe.processes[0].argv = Some(vec![
+            "cmd.exe".into(),
+            "/C".into(),
+            "options-cli --model untrusted".into(),
+        ]);
+        let mut descendant = foreground_process(99_999_998, "node");
+        descendant.argv = Some(vec![
+            "node".into(),
+            "/bin/options-cli".into(),
+            "--model".into(),
+            "exact ' value".into(),
+        ]);
+        probe.processes.push(descendant);
+        assert!(registry.bind(&probe, probe.agent));
+        let options = registry
+            .bound
+            .as_ref()
+            .unwrap()
+            .resume_options
+            .as_ref()
+            .unwrap();
+        assert_eq!(options.argv_owner.pid, 99_999_998);
+        assert_eq!(options.options, ["--model", "exact ' value"]);
+        probe.processes.pop();
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(registry.bound.as_ref().unwrap().resume_options.is_none());
+    }
+
+    fn detection_registry_fixture(
+        generation: u64,
+        profiles: &[(&str, &str)],
+    ) -> Arc<crate::agents::store::RegistrySnapshot> {
+        let mut files = Vec::new();
+        for (id, process) in profiles {
+            files.push((format!("agents/{id}/agent.toml"), format!(
+                "schema = 1\nid = '{id}'\nname = '{id}'\naliases = []\nstartable = true\n[launch]\nunix = '{id}'\nwindows = '{id}'\n"
+            )));
+            files.push((
+                format!("agents/{id}/process.toml"),
+                format!("names = ['{process}']\n"),
+            ));
+            files.push((format!("agents/{id}/detection.toml"), format!(
+                "id = '{id}'\nversion = '2026.06.10.1'\nmin_engine_version = 1\n[[rules]]\nid = 'working'\nstate = 'working'\npriority = 100\nregion = 'whole_recent'\ncontains = ['Working...']\n"
+            )));
+        }
+        crate::agents::store::snapshot_for_test(files, generation).unwrap()
+    }
+
+    fn fixture_probe(
+        registry: &DetectionRegistryState,
+        process_pid: u32,
+        name: &str,
+    ) -> ProcessProbeResult {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: process_pid,
+            processes: vec![foreground_process(process_pid, name)],
+        };
+        probe_foreground_process_from_jobs_with_registry(
+            registry,
+            42,
+            Some(process_pid),
+            Some(job.clone()),
+            || Some(job),
+            |_| None,
+        )
+    }
+
+    #[test]
+    fn resume_binding_survives_profile_reload_but_same_id_replacement_acquires_new_recipe() {
+        let snapshot = |generation, executable: &str| {
+            crate::agents::store::snapshot_for_test(vec![
+                ("agents/codex/agent.toml".into(), format!("schema = 1\nid = 'codex'\nname = 'codex'\naliases = []\nstartable = true\n[launch]\nunix = '{executable}'\nwindows = '{executable}'\n")),
+                ("agents/codex/process.toml".into(), format!("names = ['{executable}']\n")),
+                ("agents/codex/resume.toml".into(), "accepted_references = ['id']\npreferred_reference = 'id'\nstrategy = 'subcommand'\ntoken = 'resume'\n".into()),
+            ], generation).unwrap()
+        };
+        let mut registry = test_detection_registry(snapshot(1, "old-cli"));
+        let probe = fixture_probe(&registry, 101, "old-cli");
+        registry.bind(&probe, Some(Agent::Codex));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_recipe
+                .as_ref()
+                .unwrap()
+                .executable,
+            "old-cli"
+        );
+        registry.refresh(2, || snapshot(2, "new-cli"), &mut true, &mut None);
+        let probe = fixture_probe(&registry, 101, "old-cli");
+        registry.bind(&probe, Some(Agent::Codex));
+        assert_eq!(registry.bound.as_ref().unwrap().profile.generation, 2);
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_recipe
+                .as_ref()
+                .unwrap()
+                .executable,
+            "old-cli"
+        );
+        let probe = fixture_probe(&registry, 102, "new-cli");
+        registry.bind(&probe, Some(Agent::Codex));
+        assert_eq!(
+            registry
+                .bound
+                .as_ref()
+                .unwrap()
+                .resume_recipe
+                .as_ref()
+                .unwrap()
+                .executable,
+            "new-cli"
+        );
+    }
+
+    #[tokio::test]
+    async fn generation_refresh_transient_miss_recovers_and_republishes_same_id_process_acquisition(
+    ) {
+        let original = Agent::parse("zeta-agent").unwrap();
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let probe = fixture_probe(&registry, 101, "worker");
+        assert!(registry.bind(&probe, Some(original)));
+        let old_recipe = crate::agent_resume::PinnedAgentResumeRecipe::unavailable("zeta-agent");
+        registry.bound.as_mut().unwrap().resume_recipe = Some(old_recipe.clone());
+        let old_identity = registry.bound.as_ref().unwrap().identity;
+
+        assert!(registry.refresh(
+            2,
+            || detection_registry_fixture(2, &[("zeta-agent", "worker")]),
+            &mut true,
+            &mut Some(10),
+        ));
+        let mut pending_acquisition_republish = true;
+        let transient_miss = ProcessProbeResult {
+            processes: Vec::new(),
+            process_group_id: Some(101),
+            foreground_is_pane_shell: false,
+            agent: None,
+            process_name: None,
+        };
+        assert!(!registry.bind(&transient_miss, Some(original)));
+        assert_eq!(
+            pending_acquisition_republish
+                .then(|| registry.revalidated_bound_agent(&transient_miss, Some(original)))
+                .flatten(),
+            None
+        );
+        assert!(
+            pending_acquisition_republish,
+            "a transient miss must leave generation reacquisition pending"
+        );
+
+        let refreshed_probe = fixture_probe(&registry, 101, "worker");
+        assert!(!registry.bind(&refreshed_probe, Some(original)));
+        let reacquired = pending_acquisition_republish
+            .then(|| registry.revalidated_bound_agent(&refreshed_probe, Some(original)))
+            .flatten();
+        assert_eq!(reacquired, Some(original));
+        assert_eq!(registry.bound.as_ref().unwrap().identity, old_identity);
+        assert_eq!(
+            registry.bound.as_ref().unwrap().resume_recipe.as_ref(),
+            Some(&old_recipe)
+        );
+
+        let pane_id = PaneId::from_raw(42);
+        let observed_at = std::time::Instant::now();
+        let (events, mut received) = mpsc::channel(1);
+        if publish_agent_process_detected_event(
+            registry.active.generation,
+            events,
+            pane_id,
+            reacquired.unwrap(),
+            observed_at,
+        )
+        .await
+        {
+            pending_acquisition_republish = false;
+        }
+        assert!(!pending_acquisition_republish);
+        let AppEvent::AgentDetection {
+            registry_generation,
+            observation,
+        } = received.recv().await.unwrap()
+        else {
+            panic!("expected guarded process acquisition");
+        };
+        assert_eq!(registry_generation, 2);
+        assert!(matches!(
+            *observation,
+            AppEvent::AgentProcessDetected {
+                pane_id: detected_pane,
+                agent: detected_agent,
+                observed_at: detected_at,
+            } if detected_pane == pane_id
+                && detected_agent == original
+                && detected_at == observed_at
+        ));
+
+        let mut terminal = crate::terminal::TerminalState::new(
+            crate::terminal::TerminalId::alloc(),
+            "/var/tmp".into(),
+        );
+        let injected_at = observed_at - std::time::Duration::from_millis(2);
+        terminal.begin_managed_agent_with_readiness(
+            Some("recovering".into()),
+            original,
+            true,
+            injected_at,
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(30),
+        );
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(original),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            injected_at + std::time::Duration::from_millis(1),
+        );
+        terminal.set_detected_agent_process_at(original, observed_at);
+        terminal.reconcile_managed_agent_at(observed_at, false);
+        assert!(!terminal.managed_agent_interactive_ready());
+
+        // The miss already published idle for this unchanged content sequence.
+        registry.needs_publish = false;
+        let mut last_scan = Some(10);
+        registry.request_screen_republish(&mut last_scan);
+        assert_eq!(
+            decide_detection_screen_read(DetectionScreenReadInput {
+                state: AgentState::Idle,
+                agent: Some(original),
+                pending_idle_active: false,
+                agent_changed: false,
+                process_exited: false,
+                current_detection_content_seq: Some(10),
+                last_screen_scan_detection_content_seq: last_scan,
+            }),
+            DetectionScreenReadDecision::Read
+        );
+        let decision = decide_screen_detection_publish(
+            ScreenDetectionPublishInput {
+                force_publish: registry.needs_publish,
+                current_state: AgentState::Idle,
+                last_visible_idle: true,
+                last_screen_visible_idle: true,
+                last_visible_blocker: false,
+                last_visible_working: false,
+                last_visible_signal_refresh: Some(observed_at),
+                screen_detection: crate::detect::AgentDetection {
+                    state: AgentState::Idle,
+                    skip_state_update: false,
+                    visible_idle: true,
+                    screen_visible_idle: true,
+                    visible_blocker: false,
+                    visible_working: false,
+                },
+                process_exited: false,
+                agent_changed: false,
+                startup_grace_active: true,
+                now: observed_at,
+            },
+            &mut PendingIdleConfirmation::default(),
+        );
+        let DetectionPublishDecision::Publish {
+            state,
+            screen_visible_idle,
+            visible_blocker,
+            visible_working,
+            process_exited,
+            ..
+        } = decision
+        else {
+            panic!("reacquisition must republish unchanged painted input");
+        };
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(original),
+            state,
+            visible_blocker,
+            screen_visible_idle,
+            visible_working,
+            process_exited,
+            observed_at,
+        );
+        terminal.reconcile_managed_agent_at(observed_at, false);
+        assert!(terminal.managed_agent_interactive_ready());
+    }
+
+    #[test]
+    fn generation_refresh_republication_rejects_stale_birth_evidence() {
+        let original = Agent::parse("zeta-agent").unwrap();
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let old_probe = fixture_probe(&registry, 101, "worker");
+        assert!(registry.bind(&old_probe, Some(original)));
+        assert!(registry.refresh(
+            2,
+            || detection_registry_fixture(2, &[("zeta-agent", "worker")]),
+            &mut true,
+            &mut Some(10),
+        ));
+        registry.read_process_identity = |pid| {
+            Some(crate::platform::ProcessIdentity {
+                pid,
+                birth_token: 2,
+            })
+        };
+
+        assert_eq!(
+            registry.revalidated_bound_agent(&old_probe, Some(original)),
+            None,
+            "an old-generation probe must not become new acquisition evidence after PID reuse"
+        );
+    }
+
+    #[test]
+    fn retained_birth_identity_survives_pgid_change_without_reacquiring_current_recipe() {
+        let original = Agent::parse("zeta-agent").unwrap();
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let probe = fixture_probe(&registry, 101, "worker");
+        assert!(registry.bind(&probe, Some(original)));
+        let old_recipe = crate::agent_resume::PinnedAgentResumeRecipe::unavailable("zeta-agent");
+        registry.bound.as_mut().unwrap().resume_recipe = Some(old_recipe.clone());
+        registry.refresh(
+            2,
+            || detection_registry_fixture(2, &[("alpha-agent", "worker")]),
+            &mut true,
+            &mut None,
+        );
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 999,
+            processes: probe.processes.clone(),
+        };
+        let retained = registry.retained_probe(&job, 42).unwrap();
+        assert_eq!(retained.agent, Some(original));
+        assert!(
+            registry.bind(&retained, Some(original)),
+            "group bookkeeping change must reach terminal state"
+        );
+        assert_eq!(registry.bound.as_ref().unwrap().process_group_id, 999);
+        assert_eq!(
+            registry.bound.as_ref().unwrap().resume_recipe.as_ref(),
+            Some(&old_recipe)
+        );
+        assert!(!registry.bind(&retained, Some(original)));
+    }
+
+    #[test]
+    fn binding_change_detection_uses_birth_identity_not_mutable_process_text() {
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let probe = fixture_probe(&registry, 999, "worker");
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(!registry.bind(&probe, probe.agent));
+        let mut changed = probe.clone();
+        changed.processes[0].name = "renamed".into();
+        changed.processes[0].argv = Some(vec!["different title".into()]);
+        assert!(!registry.bind(&changed, probe.agent));
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 999,
+            processes: changed.processes,
+        };
+        assert!(registry.retained_probe(&job, 42).is_some());
+        registry.read_process_identity = |pid| {
+            Some(crate::platform::ProcessIdentity {
+                pid,
+                birth_token: 2,
+            })
+        };
+        assert!(registry.retained_probe(&job, 42).is_none());
+        assert!(registry.bind(&probe, probe.agent));
+        registry.read_process_identity = |_| None;
+        assert!(registry.retained_probe(&job, 42).is_none());
+        assert!(registry.bind(&probe, probe.agent));
+        assert!(registry.bound.as_ref().unwrap().resume_recipe.is_none());
+        assert!(!registry.bind(&probe, probe.agent));
+    }
+
+    #[test]
+    fn generation_switch_invalidates_both_caches_without_content_or_identity_reset() {
+        let first = detection_registry_fixture(1, &[("zeta-agent", "worker")]);
+        let second =
+            detection_registry_fixture(2, &[("alpha-agent", "other"), ("zeta-agent", "worker")]);
+        let mut registry = test_detection_registry(first);
+        let mut has_probe = true;
+        let mut last_scan = Some(10);
+        assert!(!registry.refresh(
+            1,
+            || panic!("unchanged generation must not acquire"),
+            &mut has_probe,
+            &mut last_scan
+        ));
+        assert!(has_probe);
+        assert_eq!(last_scan, Some(10));
+        assert!(registry.refresh(2, || second.clone(), &mut has_probe, &mut last_scan));
+        assert!(!has_probe);
+        assert_eq!(last_scan, None);
+        assert!(registry.needs_publish);
+        assert_eq!(
+            decide_detection_screen_read(DetectionScreenReadInput {
+                state: AgentState::Idle,
+                agent: Some(Agent::parse("zeta-agent").unwrap()),
+                pending_idle_active: false,
+                agent_changed: false,
+                process_exited: false,
+                current_detection_content_seq: Some(10),
+                last_screen_scan_detection_content_seq: last_scan,
+            }),
+            DetectionScreenReadDecision::Read
+        );
+    }
+
+    #[test]
+    fn registry_reorder_and_reassigned_matcher_cannot_steal_bound_process() {
+        let original = Agent::parse("zeta-agent").unwrap();
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let probe = fixture_probe(&registry, 99_999_999, "worker");
+        registry.bind(&probe, probe.agent);
+        assert_eq!(probe.agent, Some(original));
+        let replacement =
+            detection_registry_fixture(2, &[("alpha-agent", "worker"), ("zeta-agent", "other")]);
+        registry.refresh(2, || replacement, &mut true, &mut Some(10));
+        assert_eq!(
+            fixture_probe(&registry, 99_999_999, "worker").agent,
+            Some(original)
+        );
+        assert_eq!(registry.screen_snapshot(Some(original)).generation, 2);
+        // A different PID is a genuine acquisition, not a continuation.
+        assert_eq!(
+            fixture_probe(&registry, 99_999_998, "worker").agent,
+            Some(Agent::parse("alpha-agent").unwrap())
+        );
+    }
+
+    #[test]
+    fn removed_bound_profile_is_pinned_but_never_used_for_new_processes() {
+        let original = Agent::parse("zeta-agent").unwrap();
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("zeta-agent", "worker")]));
+        let probe = fixture_probe(&registry, 99_999_999, "worker");
+        registry.bind(&probe, probe.agent);
+        let replacement = detection_registry_fixture(2, &[("alpha-agent", "other")]);
+        registry.refresh(2, || replacement, &mut true, &mut Some(10));
+        assert_eq!(
+            fixture_probe(&registry, 99_999_999, "worker").agent,
+            Some(original)
+        );
+        assert_eq!(registry.screen_snapshot(Some(original)).generation, 1);
+        let retained_detection = detection_update_for_publish_with_registry(
+            registry.screen_snapshot(Some(original)),
+            Some(original),
+            "Working...",
+            "",
+            "",
+            false,
+        )
+        .unwrap();
+        assert_eq!(retained_detection.state, AgentState::Working);
+        assert_eq!(fixture_probe(&registry, 99_999_998, "worker").agent, None);
+        let shell_probe = fixture_probe(&registry, 42, "sh");
+        let mut presence = AgentDetectionPresence::from_agent(Some(original));
+        let action = foreground_shell_agent_action(
+            Some(original),
+            shell_probe.agent,
+            shell_probe.foreground_is_pane_shell,
+            false,
+        );
+        assert_eq!(action, ForegroundShellAgentAction::ReportProcessExit);
+        let mut pending_clear = false;
+        let mut exit_reported = false;
+        apply_foreground_shell_agent_action(
+            &mut presence,
+            action,
+            Some(original),
+            None,
+            &mut pending_clear,
+            &mut exit_reported,
+        );
+        assert!(pending_clear);
+        assert_eq!(presence.current_agent(), Some(original));
+        // The ordinary idle exit transition still precedes clearing identity.
+        let detection = detection_update_for_publish_with_registry(
+            registry.screen_snapshot(Some(original)),
+            Some(original),
+            "Working...",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+        assert_eq!(detection.state, AgentState::Idle);
+        exit_reported = true;
+        let action = foreground_shell_agent_action(Some(original), None, true, exit_reported);
+        assert_eq!(action, ForegroundShellAgentAction::ClearAgent);
+        apply_foreground_shell_agent_action(
+            &mut presence,
+            action,
+            Some(original),
+            None,
+            &mut pending_clear,
+            &mut exit_reported,
+        );
+        registry.bind(&shell_probe, presence.current_agent());
+        assert_eq!(presence.current_agent(), None);
+        assert!(registry.bound.is_none());
+    }
+
+    #[test]
+    fn unknown_pane_acquires_new_package_after_generation_switch_without_output() {
+        let mut registry =
+            test_detection_registry(detection_registry_fixture(1, &[("alpha-agent", "other")]));
+        assert_eq!(fixture_probe(&registry, 99_999_999, "worker").agent, None);
+        let replacement = detection_registry_fixture(2, &[("zeta-agent", "worker")]);
+        let mut has_probe = true;
+        let mut last_scan = Some(10);
+        assert!(registry.refresh(2, || replacement, &mut has_probe, &mut last_scan));
+        assert!(should_probe_foreground_job(ProcessProbeInput {
+            current_agent: None,
+            has_process_probe: has_probe,
+            ..process_probe_input()
+        }));
+        assert_eq!(
+            fixture_probe(&registry, 99_999_999, "worker").agent,
+            Some(Agent::parse("zeta-agent").unwrap())
+        );
+    }
+
     #[test]
     fn foreground_agent_hint_wins_over_process_name_detection() {
         let job = crate::platform::ForegroundJob {
@@ -5048,10 +6146,12 @@ mod tests {
         .unwrap();
 
         let publish = publish_state_changed_event(
+            crate::agents::store::generation(),
             tx.clone(),
             pane_id,
             Some(Agent::Pi),
             AgentState::Idle,
+            false,
             false,
             false,
             false,
@@ -5085,11 +6185,12 @@ mod tests {
             .expect("queue should yield second event")
             .expect("sender still alive");
         assert!(matches!(
-            second,
+            second.into_current_detection(crate::agents::store::generation()).unwrap(),
             AppEvent::StateChanged {
                 pane_id: delivered_pane,
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
+                visible_idle: false,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: false,

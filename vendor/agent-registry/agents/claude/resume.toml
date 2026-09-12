@@ -1,0 +1,18 @@
+accepted_references = ["id"]
+preferred_reference = "id"
+strategy = "separate_flag"
+token = "--resume"
+
+[resume_options]
+flags = [
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--bare",
+  "--safe-mode",
+  "--chrome",
+  "--no-chrome",
+  "--disable-slash-commands",
+  "--ide",
+  "--verbose",
+]
+options = ["--agent", "--autocompact", "--effort", "--model", "--name", "--permission-mode"]

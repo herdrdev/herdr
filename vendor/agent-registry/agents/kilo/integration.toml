@@ -1,0 +1,20 @@
+cli_name = "kilo"
+aliases = []
+
+[commands]
+unix = ["kilo", "kilo-code"]
+windows = ["kilo", "kilo-code"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 4
+windows = 4
+
+[[assets]]
+path = "assets/herdr-agent-state.js"
+platform = "all"
+role = "reporter"
+install_name = "herdr-agent-state.js"

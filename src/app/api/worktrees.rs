@@ -1195,6 +1195,7 @@ mod tests {
     async fn deferred_api_worktree_create_completes_after_source_workspace_changes() {
         let event_hub = crate::api::EventHub::default();
         let mut app = test_app_with_event_hub(event_hub.clone());
+        app.state.default_shell = test_shell().into();
         let repo = create_committed_repo("api-worktree-create-changed-source-repo");
         let checkout = unique_temp_path("api-worktree-create-changed-source-checkout");
         std::fs::create_dir_all(&checkout).unwrap();
@@ -2270,6 +2271,7 @@ mod tests {
             pane_id,
             agent: Some(crate::detect::Agent::Codex),
             state: crate::detect::AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: true,
             visible_working: false,
             process_exited: false,

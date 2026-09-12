@@ -1589,6 +1589,30 @@ impl AppState {
 
     pub fn handle_app_event(&mut self, event: AppEvent) -> Vec<PaneStateUpdate> {
         match event {
+            AppEvent::AgentResumeProcessBound { pane_id, binding } => {
+                let mut recipe_changed = false;
+                for ws in &self.workspaces {
+                    if let Some(id) = ws.terminal_id(pane_id) {
+                        if let Some(terminal) = self.terminals.get_mut(id) {
+                            let previous = terminal.pinned_agent_resume_recipe.clone();
+                            let options_changed = terminal.bind_agent_resume_process(*binding);
+                            recipe_changed =
+                                options_changed || previous != terminal.pinned_agent_resume_recipe;
+                        }
+                        break;
+                    }
+                }
+                if recipe_changed {
+                    self.mark_session_dirty();
+                }
+                Vec::new()
+            }
+            event @ AppEvent::AgentDetection { .. } => {
+                match event.into_current_detection(crate::agents::store::generation()) {
+                    Some(observation) => self.handle_app_event(observation),
+                    None => Vec::new(),
+                }
+            }
             AppEvent::PaneDied { pane_id, .. } => {
                 self.handle_pane_died(pane_id);
                 Vec::new()
@@ -1616,38 +1640,6 @@ impl AppState {
                 }
                 Vec::new()
             }
-            AppEvent::AgentDetectionManifestsUpdated {
-                updated, status, ..
-            } => {
-                self.agent_manifest_update_status = status;
-                self.refresh_agent_manifest_summaries();
-                if !updated.is_empty()
-                    && matches!(
-                        self.toast_config.delivery,
-                        crate::config::ToastDelivery::Herdr
-                    )
-                {
-                    let agent_list = updated
-                        .iter()
-                        .map(|item| {
-                            format!(
-                                "{} {}",
-                                crate::detect::agent_label(item.agent),
-                                item.version
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.toast = Some(ToastNotification {
-                        kind: ToastKind::UpdateInstalled,
-                        title: "Agent detection rules updated".to_string(),
-                        context: agent_list,
-                        position: None,
-                        target: None,
-                    });
-                }
-                Vec::new()
-            }
             AppEvent::AgentProcessDetected {
                 pane_id,
                 agent,
@@ -1662,6 +1654,7 @@ impl AppState {
                 pane_id,
                 agent,
                 state,
+                visible_idle,
                 visible_blocker,
                 visible_working,
                 process_exited,
@@ -1672,7 +1665,7 @@ impl AppState {
                         agent,
                         state,
                         visible_blocker,
-                        false,
+                        visible_idle,
                         visible_working,
                         process_exited,
                         observed_at,
@@ -2923,6 +2916,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -2938,6 +2932,49 @@ mod tests {
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
         assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+    }
+
+    #[test]
+    fn state_changed_propagates_visible_idle_into_strict_managed_readiness() {
+        let mut state = app_with_workspaces(&["strict"]);
+        let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let terminal_id = state.workspaces[0]
+            .panes
+            .get(&pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        let injected_at = std::time::Instant::now();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .begin_managed_agent_with_readiness(
+                Some("reviewer".into()),
+                Agent::OpenCode,
+                true,
+                injected_at,
+                std::time::Duration::from_secs(3),
+                std::time::Duration::from_secs(30),
+            );
+        state.handle_app_event(AppEvent::AgentProcessDetected {
+            pane_id,
+            agent: Agent::OpenCode,
+            observed_at: injected_at,
+        });
+        assert!(!state.terminals[&terminal_id].managed_agent_interactive_ready());
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::OpenCode),
+            state: AgentState::Idle,
+            visible_idle: true,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: injected_at + std::time::Duration::from_millis(1),
+        });
+        assert!(state.terminals[&terminal_id].managed_agent_interactive_ready());
+        state.assert_invariants_for_test();
     }
 
     #[test]
@@ -2961,6 +2998,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -2994,6 +3032,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3016,6 +3055,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3037,6 +3077,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Unknown,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3046,6 +3087,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3073,6 +3115,7 @@ mod tests {
                 pane_id,
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
+                visible_idle: false,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: false,
@@ -3092,6 +3135,7 @@ mod tests {
                 pane_id,
                 agent: Some(Agent::Pi),
                 state: agent_state,
+                visible_idle: false,
                 visible_blocker: agent_state == AgentState::Blocked,
                 visible_working: agent_state == AgentState::Working,
                 process_exited: false,
@@ -3103,6 +3147,7 @@ mod tests {
                 pane_id,
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
+                visible_idle: false,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: false,
@@ -3127,6 +3172,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Codex),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: true,
             process_exited: false,
@@ -3137,6 +3183,7 @@ mod tests {
                 pane_id,
                 agent: Some(Agent::Codex),
                 state: AgentState::Idle,
+                visible_idle: false,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: true,
@@ -3182,6 +3229,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3206,6 +3254,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3238,6 +3287,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3249,6 +3299,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: true,
             process_exited: false,
@@ -3272,6 +3323,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3297,6 +3349,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3324,6 +3377,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3380,6 +3434,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3398,6 +3453,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Codex),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: true,
             visible_working: false,
             process_exited: false,
@@ -3428,6 +3484,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Claude),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3451,6 +3508,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Claude),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3477,6 +3535,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: true,
             process_exited: false,
@@ -3537,6 +3596,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Devin),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3669,6 +3729,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Droid),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3698,6 +3759,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3724,6 +3786,7 @@ mod tests {
             pane_id: bg_pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3747,6 +3810,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3768,6 +3832,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -3827,36 +3892,6 @@ mod tests {
             toast.context,
             "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
         );
-    }
-
-    #[test]
-    fn agent_detection_manifest_update_event_updates_status_and_toast() {
-        let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        let status = crate::detect::manifest_update::ManifestUpdateStatus {
-            last_result: Some("checked".to_string()),
-            ..Default::default()
-        };
-
-        let updates = state.handle_app_event(AppEvent::AgentDetectionManifestsUpdated {
-            updated: vec![crate::detect::manifest_update::ManifestUpdateCommit {
-                agent: Agent::Codex,
-                version: crate::detect::manifest_update::ManifestVersion::parse("2026.06.10.1")
-                    .unwrap(),
-            }],
-            activated: Vec::new(),
-            status,
-        });
-
-        assert!(updates.is_empty());
-        assert_eq!(
-            state.agent_manifest_update_status.last_result.as_deref(),
-            Some("checked")
-        );
-        let toast = state.toast.as_ref().expect("manifest update toast");
-        assert_eq!(toast.kind, ToastKind::UpdateInstalled);
-        assert_eq!(toast.title, "Agent detection rules updated");
-        assert_eq!(toast.context, "codex 2026.06.10.1");
     }
 
     #[test]

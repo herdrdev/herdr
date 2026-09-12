@@ -1,0 +1,13 @@
+schema = 1
+id = "codex"
+name = "codex"
+aliases = []
+startable = true
+
+[launch]
+unix = "codex"
+windows = "codex"
+
+[sound]
+key = "codex"
+default = "default"

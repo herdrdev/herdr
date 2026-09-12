@@ -183,7 +183,13 @@ pub(crate) fn create_remote_ssh_config_dir(control_socket_name: &str) -> std::io
     ))
 }
 
-pub(crate) fn create_remote_ssh_config_file(path: &Path) -> std::io::Result<std::fs::File> {
+/// Sync directory entries after a durable file has been atomically replaced.
+/// Failure occurs after the caller's commit point and must not imply rollback.
+pub(crate) fn sync_directory_after_replace(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+pub(crate) fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
     std::fs::OpenOptions::new()

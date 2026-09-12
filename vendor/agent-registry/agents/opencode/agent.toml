@@ -1,0 +1,13 @@
+schema = 1
+id = "opencode"
+name = "opencode"
+aliases = ["opencode2", "open-code"]
+startable = true
+
+[launch]
+unix = "opencode"
+windows = "opencode"
+
+[sound]
+key = "open_code"
+default = "default"

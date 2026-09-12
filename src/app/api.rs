@@ -29,6 +29,9 @@ enum RuntimeExitAction {
 
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
+        let Some(ev) = ev.into_current_detection(crate::agents::store::generation()) else {
+            return false;
+        };
         match ev {
             AppEvent::GitStatusRefreshed {
                 results,
@@ -83,6 +86,9 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        let Some(ev) = ev.into_current_detection(crate::agents::store::generation()) else {
+            return Vec::new();
+        };
         let mut worktree_restore_failed = false;
         let ev = match ev {
             AppEvent::WorktreeRuntimeRestoreFailed {
@@ -303,12 +309,6 @@ impl App {
         } else {
             None
         };
-        let manifest_update_agents =
-            if let AppEvent::AgentDetectionManifestsUpdated { activated, .. } = &ev {
-                Some(activated.clone())
-            } else {
-                None
-            };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
@@ -317,9 +317,6 @@ impl App {
         }
         if checkpointed_pane_exit {
             self.finish_checkpointed_pane_exit();
-        }
-        if let Some(agents) = manifest_update_agents {
-            self.reset_agent_detection_for_agents(&agents);
         }
         if let Some((pane_id, agent)) = released_agent {
             if pane_updates.iter().any(|update| update.pane_id == pane_id) {
@@ -367,23 +364,6 @@ impl App {
         self.shutdown_detached_terminal_runtimes();
         pane_updates.extend(worktree_restore_updates);
         pane_updates
-    }
-
-    fn reset_agent_detection_for_agents(&self, agents: &[crate::detect::Agent]) {
-        if agents.is_empty() {
-            return;
-        }
-        for (terminal_id, terminal) in &self.state.terminals {
-            let Some(agent) = terminal.effective_known_agent().or(terminal.detected_agent) else {
-                continue;
-            };
-            if !agents.contains(&agent) {
-                continue;
-            }
-            if let Some(runtime) = self.terminal_runtimes.get(terminal_id) {
-                runtime.reset_agent_detection();
-            }
-        }
     }
 
     fn reset_all_agent_detection_runtimes(&self) {
@@ -448,7 +428,8 @@ impl App {
                         continue;
                     };
                     runtime.set_full_lifecycle_authority_active(
-                        terminal.full_lifecycle_hook_authority_active(),
+                        terminal.full_lifecycle_hook_authority_active()
+                            && !terminal.screen_detection_required_for_managed_startup(),
                     );
                 }
             }
@@ -921,7 +902,7 @@ impl App {
             }
             Method::ServerAgentManifests(_) => {
                 self.state.refresh_agent_manifest_summaries();
-                let update_status = crate::detect::manifest_update::load_status();
+                let update_status = crate::detect::manifest_compat::load_status();
                 SuccessResponse {
                     id: request.id,
                     result: ResponseResult::AgentManifestStatus {
@@ -940,7 +921,7 @@ impl App {
             Method::ServerReloadAgentManifests(_) => {
                 let summaries = crate::detect::manifest::reload_manifests();
                 self.state.agent_manifest_summaries = summaries.clone();
-                let update_status = crate::detect::manifest_update::load_status();
+                let update_status = crate::detect::manifest_compat::load_status();
                 self.reset_all_agent_detection_runtimes();
                 SuccessResponse {
                     id: request.id,
@@ -951,6 +932,10 @@ impl App {
                             .collect(),
                     },
                 }
+            }
+            Method::RegistryPresentationRefresh(_) => {
+                self.refresh_registry_integration_recommendations();
+                return responses::encode_success(request.id, ResponseResult::Ok {});
             }
             Method::NotificationShow(params) => {
                 return self.handle_notification_show(request.id, params);
@@ -1327,11 +1312,11 @@ fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> 
 
 fn agent_manifest_info(
     summary: crate::detect::manifest::AgentManifestSummary,
-    update_status: &crate::detect::manifest_update::ManifestUpdateStatus,
+    update_status: &crate::detect::manifest_compat::ManifestUpdateStatus,
 ) -> crate::api::schema::AgentManifestInfo {
     let remote = update_status.agent_status(summary.agent);
     crate::api::schema::AgentManifestInfo {
-        agent: crate::detect::agent_label(summary.agent).to_string(),
+        agent: crate::detect::agent_label(&summary.agent).to_string(),
         source: summary.active_source.label(),
         source_kind: summary.active_source.kind().to_string(),
         active_version: summary.active_version,
@@ -1411,8 +1396,8 @@ mod tests {
         app
     }
 
-    #[tokio::test]
-    async fn manifest_activation_event_resets_matching_agent_detection_runtime() {
+    #[test]
+    fn stale_registry_detection_is_rejected_before_identity_or_state_mutation() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &crate::config::Config::default(),
@@ -1421,33 +1406,44 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reset")];
+        let workspace = crate::workspace::Workspace::test_new("stale-detection");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
         app.state
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .detected_agent = Some(Agent::Codex);
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
-
-        app.handle_internal_event(AppEvent::AgentDetectionManifestsUpdated {
-            updated: Vec::new(),
-            activated: vec![Agent::Codex],
-            status: crate::detect::manifest_update::ManifestUpdateStatus::default(),
+            .set_detected_state(Some(Agent::Pi), AgentState::Working);
+        let stale_generation = crate::agents::store::generation().wrapping_sub(1);
+        let updates = app.handle_internal_event_with_pane_updates(AppEvent::AgentDetection {
+            registry_generation: stale_generation,
+            observation: Box::new(AppEvent::StateChanged {
+                pane_id,
+                agent: None,
+                state: AgentState::Unknown,
+                visible_idle: false,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: true,
+                observed_at: Instant::now(),
+            }),
         });
-
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            reset_notify.notified(),
-        )
-        .await
-        .expect("matching agent detection runtime should be reset");
+        assert!(updates.is_empty());
+        assert!(
+            !app.handle_internal_event_with_render_impact(AppEvent::AgentDetection {
+                registry_generation: stale_generation,
+                observation: Box::new(AppEvent::AgentProcessDetected {
+                    pane_id,
+                    agent: Agent::Codex,
+                    observed_at: Instant::now(),
+                }),
+            })
+        );
+        let terminal = app.state.terminals.get(&terminal_id).unwrap();
+        assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+        assert_eq!(terminal.fallback_state, AgentState::Working);
     }
 
     #[test]
@@ -1843,6 +1839,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -1852,6 +1849,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -1936,6 +1934,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -1945,6 +1944,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -2061,6 +2061,7 @@ mod tests {
                 pane_id,
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
+                visible_idle: false,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: true,
@@ -2115,6 +2116,7 @@ mod tests {
             pane_id,
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: true,
@@ -2295,6 +2297,7 @@ mod tests {
             pane_id,
             agent: Some(crate::detect::Agent::OpenCode),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: true,
@@ -2419,6 +2422,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Working,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,
@@ -2439,6 +2443,7 @@ mod tests {
             pane_id: root,
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
+            visible_idle: false,
             visible_blocker: false,
             visible_working: false,
             process_exited: false,

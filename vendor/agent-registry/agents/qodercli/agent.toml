@@ -1,0 +1,13 @@
+schema = 1
+id = "qodercli"
+name = "qodercli"
+aliases = ["qoderclicn", "qoder", "qodercn"]
+startable = true
+
+[launch]
+unix = "qodercli"
+windows = "qodercli"
+
+[sound]
+key = "qodercli"
+default = "default"

@@ -1,0 +1,20 @@
+cli_name = "omp"
+aliases = []
+
+[commands]
+unix = ["omp"]
+windows = ["omp"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 9
+windows = 9
+
+[[assets]]
+path = "assets/herdr-agent-state.ts"
+platform = "all"
+role = "reporter"
+install_name = "herdr-omp-agent-state.ts"

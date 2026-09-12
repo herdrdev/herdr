@@ -1,0 +1,13 @@
+schema = 1
+id = "amp"
+name = "amp"
+aliases = ["amp-local"]
+startable = true
+
+[launch]
+unix = "amp"
+windows = "amp"
+
+[sound]
+key = "amp"
+default = "default"

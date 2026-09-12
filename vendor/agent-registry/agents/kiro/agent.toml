@@ -1,0 +1,13 @@
+schema = 1
+id = "kiro"
+name = "kiro"
+aliases = ["kiro-cli"]
+startable = true
+
+[launch]
+unix = "kiro-cli"
+windows = "kiro-cli"
+
+[sound]
+key = "kiro"
+default = "default"

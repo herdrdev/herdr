@@ -753,10 +753,18 @@ pub(crate) struct ClientShellEndpointError {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClientNotificationSoundProfile {
+    /// Only legacy servers require the client-local registry fallback.
+    LocalRegistry,
+    Resolved(Option<crate::protocol::endpoint::NotificationSoundProfile>),
+}
+
 pub(crate) enum ClientShellNotificationEffect {
     Sound {
         sound: crate::sound::Sound,
         agent: Option<String>,
+        sound_profile: ClientNotificationSoundProfile,
     },
     Terminal {
         title: String,
@@ -771,6 +779,7 @@ pub(crate) enum ClientShellNotificationEffect {
 pub(super) struct ClientPendingNotification {
     pub(super) endpoint_id: ClientEndpointId,
     pub(super) event: SemanticNotification,
+    pub(super) sound_profile: ClientNotificationSoundProfile,
     pub(super) deadline: std::time::Instant,
     pub(super) expires_at: std::time::Instant,
     pub(super) validate_state: bool,

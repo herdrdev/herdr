@@ -379,6 +379,61 @@ fn handle_request(
         );
     }
 
+    // Connection workers own registry I/O and compilation. Never queue these
+    // operations on App's event loop; runtime consumers observe generation.
+    let registry = match &request.method {
+        Method::RegistryStatus(_) => Some(Ok(ResponseResult::AgentRegistry {
+            registry: crate::agents::store::status(),
+        })),
+        Method::RegistryCheck(params) => Some(
+            crate::agents::store::check_remote(params.channel)
+                .map(|registry_update| ResponseResult::RegistryUpdateCheck { registry_update }),
+        ),
+        Method::RegistryReload(_) | Method::RegistryUpdate(_) | Method::RegistryReset(_) => {
+            let before = crate::agents::store::generation();
+            let result = match &request.method {
+                Method::RegistryReload(params) => match params.source_path() {
+                    Ok(source) => crate::agents::store::reload(source),
+                    Err(message) => {
+                        return error_response_json(request.id, "invalid_params", message)
+                    }
+                },
+                Method::RegistryUpdate(params) => {
+                    crate::agents::store::update_remote(params.channel)
+                }
+                _ => crate::agents::store::reset(),
+            };
+            if let Ok(status) = &result {
+                crate::api::REGISTRY_PUBLICATION_WAKEUP.notify(before, status.generation, api_tx);
+            }
+            Some(result.map(|registry| ResponseResult::AgentRegistry { registry }))
+        }
+        _ => None,
+    };
+    if let Some(registry) = registry {
+        return match registry {
+            Ok(result) => serde_json::to_string(&SuccessResponse {
+                id: request.id.clone(),
+                result,
+            })
+            .unwrap_or_else(|error| {
+                error_response_json(request.id, "internal_error", error.to_string())
+            }),
+            Err(message) => error_response_json(
+                request.id,
+                if matches!(
+                    request.method,
+                    Method::RegistryCheck(_) | Method::RegistryUpdate(_)
+                ) {
+                    "registry_update_failed"
+                } else {
+                    "registry_reload_failed"
+                },
+                message,
+            ),
+        };
+    }
+
     dispatch_to_app(request, api_tx, None, response_write_complete, None, None)
 }
 
@@ -390,6 +445,12 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::ServerReloadConfig(_) => "server.reload_config",
         Method::ServerAgentManifests(_) => "server.agent_manifests",
         Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
+        Method::RegistryStatus(_) => "registry.status",
+        Method::RegistryReload(_) => "registry.reload",
+        Method::RegistryCheck(_) => "registry.check",
+        Method::RegistryUpdate(_) => "registry.update",
+        Method::RegistryReset(_) => "registry.reset",
+        Method::RegistryPresentationRefresh(_) => "internal.registry.presentation_refresh",
         Method::NotificationShow(_) => "notification.show",
         Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
         Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
@@ -1157,6 +1218,90 @@ mod tests {
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_1");
         assert!(matches!(parsed.result, ResponseResult::Pong { .. }));
+    }
+
+    #[test]
+    fn registry_status_is_read_only_and_bypasses_app_channel() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let before = crate::agents::store::snapshot();
+        for _ in 0..2 {
+            let response = handle_request(
+                Request {
+                    id: "registry_status".into(),
+                    method: Method::RegistryStatus(crate::api::schema::EmptyParams::default()),
+                },
+                &tx,
+                None,
+                None,
+                None,
+            );
+            let response: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert!(
+                matches!(response.result, ResponseResult::AgentRegistry { registry }
+                if registry.generation == before.generation && registry.digest == before.digest)
+            );
+        }
+        assert!(Arc::ptr_eq(&before, &crate::agents::store::snapshot()));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn registry_invalid_reload_is_rejected_without_app_dispatch_or_mutation() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let before = crate::agents::store::snapshot();
+        let response = handle_request(
+            Request {
+                id: "invalid_reload".into(),
+                method: Method::RegistryReload(crate::api::schema::RegistryReloadParams {
+                    source: Some("https://example.com/registry".into()),
+                }),
+            },
+            &tx,
+            None,
+            None,
+            None,
+        );
+        let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(response.id, "invalid_reload");
+        assert_eq!(response.error.code, "invalid_params");
+        assert!(Arc::ptr_eq(&before, &crate::agents::store::snapshot()));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn registry_remote_errors_are_server_local_without_app_dispatch_or_activation() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let previous = std::env::var_os("HERDR_AGENT_REGISTRY_ORIGIN");
+        std::env::set_var("HERDR_AGENT_REGISTRY_ORIGIN", "http://invalid.example");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let before = crate::agents::store::snapshot();
+        let responses = [
+            Method::RegistryCheck(crate::api::schema::RegistryUpdateParams::default()),
+            Method::RegistryUpdate(crate::api::schema::RegistryUpdateParams::default()),
+        ]
+        .map(|method| {
+            handle_request(
+                Request {
+                    id: "remote".into(),
+                    method,
+                },
+                &tx,
+                None,
+                None,
+                None,
+            )
+        });
+        match previous {
+            Some(value) => std::env::set_var("HERDR_AGENT_REGISTRY_ORIGIN", value),
+            None => std::env::remove_var("HERDR_AGENT_REGISTRY_ORIGIN"),
+        }
+        for response in responses {
+            let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(response.error.code, "registry_update_failed");
+            assert!(response.error.message.contains("HTTPS"));
+        }
+        assert!(Arc::ptr_eq(&before, &crate::agents::store::snapshot()));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

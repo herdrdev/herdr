@@ -55,6 +55,17 @@ pub struct WorktreeRemoveResult {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
+    /// Process lifetime evidence must survive a registry reload while queued.
+    AgentResumeProcessBound {
+        pane_id: PaneId,
+        binding: Box<crate::agent_resume::LiveAgentResumeBinding>,
+    },
+    /// A fallback observation evaluated against one immutable registry generation.
+    /// Dispatchers must reject stale observations before applying or forwarding them.
+    AgentDetection {
+        registry_generation: u64,
+        observation: Box<AppEvent>,
+    },
     /// A pane's child process exited.
     PaneDied {
         pane_id: PaneId,
@@ -73,6 +84,7 @@ pub enum AppEvent {
         pane_id: PaneId,
         agent: Option<Agent>,
         state: AgentState,
+        visible_idle: bool,
         visible_blocker: bool,
         visible_working: bool,
         process_exited: bool,
@@ -131,12 +143,6 @@ pub enum AppEvent {
         version: String,
         install_command: String,
     },
-    /// Remote agent detection manifest update check finished.
-    AgentDetectionManifestsUpdated {
-        updated: Vec<crate::detect::manifest_update::ManifestUpdateCommit>,
-        activated: Vec<crate::detect::Agent>,
-        status: crate::detect::manifest_update::ManifestUpdateStatus,
-    },
     /// A pane child emitted one or more executable BEL characters.
     /// The host-facing process forwards them to its outer terminal.
     TerminalBell { pane_id: PaneId, count: u16 },
@@ -173,4 +179,52 @@ pub enum AppEvent {
     WorktreeAddFinished(Box<WorktreeAddResult>),
     /// Background `git worktree remove` completed.
     WorktreeRemoveFinished(Box<WorktreeRemoveResult>),
+}
+
+impl AppEvent {
+    pub(crate) fn into_current_detection(self, generation: u64) -> Option<Self> {
+        match self {
+            Self::AgentDetection {
+                registry_generation,
+                observation,
+            } => (registry_generation == generation).then_some(*observation),
+            event => Some(event),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_detection_observations_are_rejected_but_non_detection_events_are_unchanged() {
+        let observation = || AppEvent::AgentProcessDetected {
+            pane_id: PaneId::from_raw(42),
+            agent: Agent::Pi,
+            observed_at: Instant::now(),
+        };
+        assert!(AppEvent::AgentDetection {
+            registry_generation: 1,
+            observation: Box::new(observation()),
+        }
+        .into_current_detection(2)
+        .is_none());
+        assert!(matches!(
+            AppEvent::AgentDetection {
+                registry_generation: 2,
+                observation: Box::new(observation()),
+            }
+            .into_current_detection(2),
+            Some(AppEvent::AgentProcessDetected { .. })
+        ));
+        assert!(matches!(
+            AppEvent::PaneDied {
+                pane_id: PaneId::from_raw(42),
+                exit_reason: crate::platform::ChildExitReason::Exited,
+            }
+            .into_current_detection(2),
+            Some(AppEvent::PaneDied { .. })
+        ));
+    }
 }

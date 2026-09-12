@@ -2,6 +2,7 @@ use super::ClientEndpointId;
 
 pub(crate) enum EndpointControlMessage {
     HealthPong,
+    Notification(crate::protocol::endpoint::EndpointNotification),
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
     Ignored,
 }
@@ -12,6 +13,11 @@ pub(crate) fn decode_endpoint_control(
 ) -> Result<EndpointControlMessage, String> {
     if kind == crate::protocol::endpoint::HEALTH_PONG_KIND {
         return Ok(EndpointControlMessage::HealthPong);
+    }
+    if kind == crate::protocol::endpoint::ENDPOINT_NOTIFICATION_KIND {
+        let notification = serde_json::from_str(data)
+            .map_err(|error| format!("invalid endpoint notification: {error}"))?;
+        return Ok(EndpointControlMessage::Notification(notification));
     }
     if kind == crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
         let snapshot = serde_json::from_str(data)

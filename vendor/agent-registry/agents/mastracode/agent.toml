@@ -1,0 +1,9 @@
+schema = 1
+id = "mastracode"
+name = "mastracode"
+aliases = ["mastra-code", "mastra code"]
+startable = true
+
+[launch]
+unix = "mastracode"
+windows = "mastracode"
