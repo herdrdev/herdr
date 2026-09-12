@@ -202,10 +202,7 @@ mod windows {
         Release,
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
+    #[allow(dead_code, reason = "used by the stacked Windows handoff integration")]
     enum PtyIoControlCommand {
         Resize(PtyResizeRequest),
         BeginHandoff {
@@ -240,10 +237,7 @@ mod windows {
         handoff_supported: bool,
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "used by the stacked Windows handoff integration")
-    )]
+    #[allow(dead_code, reason = "used by the stacked Windows handoff integration")]
     impl PtyIoActorHandle {
         pub(crate) fn try_write_user_input(
             &self,

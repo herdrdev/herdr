@@ -1300,7 +1300,7 @@ impl PaneRuntimeIo {
 
     #[cfg(windows)]
     #[cfg_attr(
-        not(test),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     fn windows_handoff_supported(&self) -> bool {
@@ -1313,7 +1313,7 @@ impl PaneRuntimeIo {
 
     #[cfg(windows)]
     #[cfg_attr(
-        not(test),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     fn duplicate_windows_handoff(
@@ -1340,7 +1340,7 @@ impl PaneRuntimeIo {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     fn begin_handoff(&self, timeout: std::time::Duration) -> std::io::Result<()> {
@@ -1353,7 +1353,7 @@ impl PaneRuntimeIo {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     fn set_handoff_paused(&self, paused: bool) -> std::io::Result<()> {
@@ -1372,7 +1372,7 @@ impl PaneRuntimeIo {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     fn release_after_commit(&self) -> std::io::Result<()> {
@@ -1881,7 +1881,7 @@ impl PaneRuntime {
 
     #[cfg(windows)]
     #[cfg_attr(
-        not(test),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     pub(crate) fn windows_handoff_supported(&self) -> bool {
@@ -1890,7 +1890,7 @@ impl PaneRuntime {
 
     #[cfg(windows)]
     #[cfg_attr(
-        not(test),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     pub(crate) fn duplicate_windows_handoff(
@@ -1902,7 +1902,7 @@ impl PaneRuntime {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     pub fn preserve_for_handoff(mut self) {
@@ -1927,7 +1927,7 @@ impl PaneRuntime {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     pub fn set_handoff_reader_paused(&self, paused: bool) {
@@ -1943,7 +1943,7 @@ impl PaneRuntime {
 
     #[cfg(any(unix, windows))]
     #[cfg_attr(
-        all(windows, not(test)),
+        windows,
         allow(dead_code, reason = "used by the stacked Windows handoff integration")
     )]
     pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
