@@ -405,6 +405,61 @@ impl HeadlessServer {
             return;
         }
 
+        // Resize from the controlling client's geometry before drawing any observer.
+        // Retained updates fall back here when a pane changes alternate screens.
+        for (client_id, (cols, rows), cell_size, _, _) in &render_targets {
+            let Some(client) = self.clients.get(client_id) else {
+                continue;
+            };
+            if !client.is_active_shell_client() {
+                continue;
+            }
+            let Some(tab_id) = self.shell_tab_id_for_client(*client_id) else {
+                continue;
+            };
+            if self.tab_geometry_controllers.get(&tab_id) != Some(client_id) {
+                continue;
+            }
+            let changed = client
+                .render_state
+                .last_pane_surface()
+                .is_none_or(|surface| {
+                    surface.panes.iter().any(|pane| {
+                        let Some((workspace_index, pane_id)) =
+                            self.app.parse_pane_id(&pane.pane_id)
+                        else {
+                            return false;
+                        };
+                        self.app
+                            .state
+                            .runtime_for_pane_in_workspace(
+                                &self.app.terminal_runtimes,
+                                workspace_index,
+                                pane_id,
+                            )
+                            .is_some_and(|runtime| {
+                                runtime.alternate_screen_active() != pane.alternate_screen_active
+                            })
+                    })
+                });
+            if changed {
+                if let Some(target) = self.shell_target_for_client(*client_id) {
+                    crate::ui::resize_tab_surface(
+                        &self.app.state,
+                        &self.app.terminal_runtimes,
+                        target.workspace_index,
+                        target.tab_index,
+                        Rect::new(0, 0, *cols, *rows),
+                        if cell_size.is_known() {
+                            *cell_size
+                        } else {
+                            crate::kitty_graphics::HostCellSize::default()
+                        },
+                    );
+                }
+            }
+        }
+
         let mut broken_clients: Vec<u64> = Vec::new();
         for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
             let area = Rect::new(0, 0, cols, rows);

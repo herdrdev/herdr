@@ -1057,6 +1057,25 @@ async fn retained_snapshot_survives_a_writer_waiting_for_the_terminal_core() {
 }
 
 #[tokio::test]
+async fn first_shell_surface_resizes_a_pane_that_entered_alternate_screen() {
+    let mut server = test_headless_server();
+    let pane_id = install_shared_view_test_runtime(&mut server);
+    let (_control, render) = connect_test_shell(&mut server, 7, 80, 23);
+    let initial_size = server.app.state.workspaces[0].test_runtimes[&pane_id].current_size();
+
+    write_shared_test_pane(&mut server, pane_id, b"\x1b[?1049hALT");
+    server.render_and_stream();
+
+    let surface = recv_pane_surface(&render, "first alternate-screen surface");
+    assert!(surface.panes[0].alternate_screen_active);
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&pane_id].current_size(),
+        (initial_size.0, initial_size.1 + 1)
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_collection() {
     let mut server = test_headless_server();
     let pane_id = install_shared_view_test_runtime(&mut server);
@@ -1067,6 +1086,7 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
     server.render_and_stream();
     let large_initial = recv_pane_surface(&large_render, "large initial surface");
     let small_initial = recv_pane_surface(&small_render, "small initial surface");
+    let initial_size = server.app.state.workspaces[0].test_runtimes[&pane_id].current_size();
     assert_eq!(
         (large_initial.frame.width, large_initial.frame.height),
         (80, 23)
@@ -1135,6 +1155,10 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
     assert!(large_alt.panes[0].alternate_screen_active);
     assert!(small_alt.panes[0].alternate_screen_active);
     assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&pane_id].current_size(),
+        (initial_size.0, initial_size.1 + 1)
+    );
+    assert_eq!(
         large_alt.panes[0].inner_rect.width,
         large_initial.panes[0].inner_rect.width + 1
     );
@@ -1150,6 +1174,10 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
     let small_main = recv_pane_surface(&small_render, "small restored main-screen surface");
     assert!(!large_main.panes[0].alternate_screen_active);
     assert!(!small_main.panes[0].alternate_screen_active);
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&pane_id].current_size(),
+        initial_size
+    );
     assert_eq!(
         large_main.panes[0].inner_rect,
         large_initial.panes[0].inner_rect
