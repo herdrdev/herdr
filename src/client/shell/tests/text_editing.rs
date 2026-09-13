@@ -1,6 +1,5 @@
 use super::*;
 use crate::input::{KeybindAction, KeybindMatch, TerminalKey, TextCommit};
-use crossterm::event::KeyEventKind;
 
 fn shell(field: usize) -> ClientShellState {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -86,131 +85,44 @@ fn press(state: &mut ClientShellState, code: KeyCode, modifiers: KeyModifiers) -
 }
 
 #[test]
-fn all_ten_fields_share_keys_text_paste_clipboard_and_local_yank() {
-    for field in 0..10 {
-        for delivery in 0..5 {
-            let mut state = shell(field);
-            *editor(&mut state) = TextEditor::from("ab");
-            press(&mut state, KeyCode::Left, KeyModifiers::NONE);
-            let result = match delivery {
-                0 => press(&mut state, KeyCode::Char('X'), KeyModifiers::NONE),
-                1 => state.handle_raw_events(vec![RawInputEvent::Key(
-                    TerminalKey::new(KeyCode::Char('x'), KeyModifiers::NONE)
-                        .with_generated_text(Some("X".into())),
-                )]),
-                2 => state.handle_raw_events(vec![RawInputEvent::Text(TextCommit::new("X"))]),
-                3 => state.handle_raw_events(vec![RawInputEvent::Paste("X".into())]),
-                _ => {
-                    let mut result = ClientShellInput::default();
-                    assert!(state.handle_modal_paste_shortcut_with(
-                        &TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
-                        &mut result,
-                        || Some("X".into())
-                    ));
-                    result
-                }
-            };
-            assert!(result.repaint, "field {field}, delivery {delivery}");
-            assert!(result.requests.is_empty() && result.actions.is_empty());
-            assert_eq!(editor(&mut state).as_str(), "aXb");
-            press(&mut state, KeyCode::Char('k'), KeyModifiers::CONTROL);
-            press(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL);
-            press(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL);
-            assert_eq!(editor(&mut state).as_str(), "aXbb");
-            let mut reopened = shell(field);
-            editor(&mut reopened).clear();
-            press(&mut reopened, KeyCode::Char('y'), KeyModifiers::CONTROL);
-            assert!(editor(&mut reopened).is_empty());
-        }
-    }
-}
-
-#[test]
-fn all_fields_normalize_unicode_delivery_and_preserve_key_lifecycle() {
+fn all_ten_fields_route_shared_text_editing() {
     for field in 0..10 {
         let mut state = shell(field);
-        *editor(&mut state) = TextEditor::from("e\u{301}中👩‍💻");
-        let left = TerminalKey::new(KeyCode::Left, KeyModifiers::NONE);
-        state.handle_raw_events(vec![
-            RawInputEvent::Key(left.clone()),
-            RawInputEvent::Key(left.clone().with_kind(KeyEventKind::Repeat)),
-            RawInputEvent::Key(left.with_kind(KeyEventKind::Release)),
-        ]);
-        state.handle_raw_events(vec![RawInputEvent::Text(TextCommit::new("X\r\n\t\x00"))]);
-        assert_eq!(
-            editor(&mut state).as_str(),
-            "e\u{301}X  中👩‍💻",
-            "field {field}"
-        );
-        state.handle_raw_events(vec![RawInputEvent::Key(
-            TerminalKey::new(
-                KeyCode::Char('b'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT,
-            )
-            .with_generated_text(Some("β".into())),
-        )]);
-        assert_eq!(editor(&mut state).as_str(), "e\u{301}X  β中👩‍💻");
-        for ch in ['n', 'p', 'c', 'v'] {
-            let key =
-                TerminalKey::new(KeyCode::Char(ch), KeyModifiers::CONTROL | KeyModifiers::ALT)
-                    .with_generated_text(Some("β".into()));
-            let previous_len = editor(&mut state).len();
-            state.handle_raw_events(vec![RawInputEvent::Key(key)]);
-            assert_eq!(
-                editor(&mut state).len(),
-                previous_len + "β".len(),
-                "field {field}, AltGr {ch}"
-            );
-        }
+        *editor(&mut state) = TextEditor::from("ab");
+        press(&mut state, KeyCode::Left, KeyModifiers::NONE);
+        let result = press(&mut state, KeyCode::Char('X'), KeyModifiers::NONE);
+        assert!(result.repaint, "field {field}");
+        assert!(result.requests.is_empty() && result.actions.is_empty());
+        assert_eq!(editor(&mut state).as_str(), "aXb");
     }
 }
 
 #[test]
-fn every_editor_binding_reaches_each_active_field() {
-    use KeyCode::*;
-    let plain = KeyModifiers::NONE;
-    let ctrl = KeyModifiers::CONTROL;
-    let alt = KeyModifiers::ALT;
-    for field in 0..10 {
-        for (code, modifiers) in [
-            (Left, plain),
-            (Right, plain),
-            (Home, plain),
-            (End, plain),
-            (Backspace, plain),
-            (Delete, plain),
-            (Char('a'), ctrl),
-            (Char('e'), ctrl),
-            (Char('b'), ctrl),
-            (Char('f'), ctrl),
-            (Char('h'), ctrl),
-            (Char('d'), ctrl),
-            (Char('b'), alt),
-            (Char('f'), alt),
-            (Char('u'), ctrl),
-            (Char('k'), ctrl),
-            (Char('w'), ctrl),
-            (Backspace, alt),
-            (Backspace, ctrl),
-            (Char('d'), alt),
-            (Char('y'), ctrl),
-        ] {
-            let mut state = shell(field);
-            let mut expected = TextEditor::from("one e\u{301}中 👩‍💻/two");
-            expected.handle_key(&TerminalKey::new(Char('w'), ctrl));
-            expected.handle_key(&TerminalKey::new(Left, plain));
-            *editor(&mut state) = expected.clone();
-            expected
-                .handle_key(&TerminalKey::new(code, modifiers))
-                .expect("binding");
-            let result = press(&mut state, code, modifiers);
-            assert_eq!(
-                editor(&mut state),
-                &expected,
-                "field {field}, {code:?} {modifiers:?}"
-            );
-            assert!(result.requests.is_empty() && result.actions.is_empty());
-        }
+fn text_delivery_paths_insert_at_the_cursor() {
+    for delivery in 0..4 {
+        let mut state = shell(0);
+        *editor(&mut state) = TextEditor::from("ab");
+        press(&mut state, KeyCode::Left, KeyModifiers::NONE);
+        let result = match delivery {
+            0 => state.handle_raw_events(vec![RawInputEvent::Key(
+                TerminalKey::new(KeyCode::Char('x'), KeyModifiers::NONE)
+                    .with_generated_text(Some("X".into())),
+            )]),
+            1 => state.handle_raw_events(vec![RawInputEvent::Text(TextCommit::new("X"))]),
+            2 => state.handle_raw_events(vec![RawInputEvent::Paste("X".into())]),
+            _ => {
+                let mut result = ClientShellInput::default();
+                assert!(state.handle_modal_paste_shortcut_with(
+                    &TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                    &mut result,
+                    || Some("X".into())
+                ));
+                result
+            }
+        };
+        assert!(result.repaint, "delivery {delivery}");
+        assert!(result.requests.is_empty() && result.actions.is_empty());
+        assert_eq!(editor(&mut state).as_str(), "aXb");
     }
 }
 

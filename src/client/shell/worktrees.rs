@@ -60,8 +60,8 @@ impl ClientShellState {
                 if !creating {
                     if let Some(ClientShellOverlay::WorktreeCreate(create)) = self.overlay.as_mut()
                     {
-                        if let Some(edit) = create.branch.handle_key(key) {
-                            if edit.content_changed {
+                        if let Some(content_changed) = create.branch.handle_key(key) {
+                            if content_changed {
                                 self.sync_worktree_create_path();
                             }
                             outcome.repaint = true;
@@ -97,8 +97,8 @@ impl ClientShellState {
                 );
                 if !opening && search_focused {
                     if let Some(ClientShellOverlay::WorktreeOpen(open)) = self.overlay.as_mut() {
-                        if let Some(edit) = open.query.handle_key(key) {
-                            if edit.content_changed {
+                        if let Some(content_changed) = open.query.handle_key(key) {
+                            if content_changed {
                                 if let Some(first) = open.filtered_indices().first().copied() {
                                     open.selected = first;
                                 }

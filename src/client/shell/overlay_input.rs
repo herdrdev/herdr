@@ -651,8 +651,8 @@ impl ClientShellState {
             }
             if search_focused {
                 if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
-                    if let Some(edit) = navigator.query.handle_key(key) {
-                        if edit.content_changed {
+                    if let Some(content_changed) = navigator.query.handle_key(key) {
+                        if content_changed {
                             navigator.filter = None;
                             navigator.selected = None;
                         }
@@ -782,8 +782,8 @@ impl ClientShellState {
             );
             if search_focused {
                 if let Some(ClientShellOverlay::Help(help)) = self.overlay.as_mut() {
-                    if let Some(edit) = help.query.handle_key(key) {
-                        if edit.content_changed {
+                    if let Some(content_changed) = help.query.handle_key(key) {
+                        if content_changed {
                             help.scroll = 0;
                         }
                         outcome.repaint = true;

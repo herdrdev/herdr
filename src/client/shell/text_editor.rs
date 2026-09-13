@@ -10,12 +10,6 @@ pub(super) struct TextEditor {
     killed: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct EditOutcome {
-    pub content_changed: bool,
-    pub cursor_changed: bool,
-}
-
 impl std::ops::Deref for TextEditor {
     type Target = str;
     fn deref(&self) -> &str {
@@ -166,7 +160,7 @@ impl TextEditor {
         self.repair_cursor();
     }
 
-    pub fn handle_key(&mut self, key: &crate::input::TerminalKey) -> Option<EditOutcome> {
+    pub fn handle_key(&mut self, key: &crate::input::TerminalKey) -> Option<bool> {
         if key.kind == KeyEventKind::Release {
             return None;
         }
@@ -175,7 +169,6 @@ impl TextEditor {
         }
         let previous_len = self.text.len();
         let mut content_changed = false;
-        let cursor = self.cursor;
         let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         // Explicit text from the host is authoritative, including AltGr/composition.
         if let Some(text) = key
@@ -241,10 +234,7 @@ impl TextEditor {
                 }
             }
         }
-        Some(EditOutcome {
-            content_changed: content_changed || self.text.len() != previous_len,
-            cursor_changed: self.cursor != cursor,
-        })
+        Some(content_changed || self.text.len() != previous_len)
     }
 
     pub fn viewport(&self, width: u16) -> (&str, u16) {
@@ -302,7 +292,7 @@ mod tests {
     use super::*;
     use crate::input::TerminalKey;
 
-    fn key(editor: &mut TextEditor, code: KeyCode, modifiers: KeyModifiers) -> EditOutcome {
+    fn key(editor: &mut TextEditor, code: KeyCode, modifiers: KeyModifiers) -> bool {
         let result = editor
             .handle_key(&TerminalKey::new(code, modifiers))
             .expect("editor binding");
@@ -353,8 +343,7 @@ mod tests {
                 (text, cursor, killed),
                 "{code:?} {modifiers:?}"
             );
-            assert_eq!(result.content_changed, text != "one two");
-            assert_eq!(result.cursor_changed, cursor != 4);
+            assert_eq!(result, text != "one two");
             let mut empty = TextEditor::default();
             key(&mut empty, code, modifiers);
         }
@@ -380,13 +369,7 @@ mod tests {
             let mut editor = TextEditor::new("default", true);
             let event = TerminalKey::new(KeyCode::Char('x'), KeyModifiers::NONE)
                 .with_generated_text(Some(replacement.into()));
-            assert_eq!(
-                editor
-                    .handle_key(&event)
-                    .expect("replacement")
-                    .content_changed,
-                changed
-            );
+            assert_eq!(editor.handle_key(&event).expect("replacement"), changed);
             assert_eq!(editor.as_str(), replacement);
             assert!(!editor.replace_on_type);
         }
@@ -486,7 +469,7 @@ mod tests {
         assert_eq!(editor, before);
         let repeat =
             TerminalKey::new(KeyCode::Left, KeyModifiers::NONE).with_kind(KeyEventKind::Repeat);
-        assert!(editor.handle_key(&repeat).expect("repeat").cursor_changed);
+        assert!(editor.handle_key(&repeat).is_some());
     }
 
     #[test]
