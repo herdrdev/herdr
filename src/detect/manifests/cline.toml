@@ -1,7 +1,7 @@
 id = "cline"
-version = "2026.06.10.1"
+version = "2026.09.11.1"
 min_engine_version = 1
-updated_at = "2026-06-10T00:00:00Z"
+updated_at = "2026-09-11T00:00:00Z"
 
 [[rules]]
 id = "tool_permission"
@@ -16,6 +16,43 @@ any = [
   { contains = ["[plan mode]", "execute command?", "yes"] },
   { contains = ["[plan mode]", "use this tool?", "yes"] },
 ]
+
+[[rules]]
+id = "inline_tool_permission"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(16)"
+visible_blocker = true
+contains = ["Cline needs permission", "Approve tool call?", "[y] Approve", "[n] Deny"]
+
+[[rules]]
+id = "inline_question"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(24)"
+visible_blocker = true
+line_regex = ['^\s*Cline is asking a question\s*$', '^\s*>\s+\S']
+contains = ["(Tab)", "Shift+Tab"]
+
+[[rules]]
+id = "active_turn"
+state = "working"
+priority = 200
+region = "bottom_non_empty_lines(20)"
+visible_working = true
+any = [
+  { line_regex = ['^\s*[\x{2801}-\x{28FF}]\s+\S'] },
+  { contains = ["Thinking... (esc to cancel)"] },
+]
+
+[[rules]]
+id = "composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(12)"
+visible_idle = true
+line_regex = ['^\s*❯(?:\s.*)?$']
+contains = ["─", "(Tab)", "Shift+Tab"]
 
 [[rules]]
 id = "default_cline_working"

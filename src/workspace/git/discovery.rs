@@ -498,10 +498,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn unreadable_loose_ref_dir_is_unavailable_not_absent() {
-        use std::os::unix::fs::PermissionsExt;
+    fn symlink_loop_loose_ref_is_unavailable_not_absent() {
+        use std::os::unix::fs::symlink;
 
-        let root = temp_test_dir("unreadable-loose-ref");
+        let root = temp_test_dir("symlink-loop-loose-ref");
         let refs_dir = root.join("refs/heads");
         std::fs::create_dir_all(&refs_dir).unwrap();
         std::fs::write(
@@ -509,19 +509,17 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n",
         )
         .unwrap();
-        std::fs::write(
-            refs_dir.join("main"),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&refs_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
-
+        // Unlike chmod(000), a symlink loop produces an open error even as root.
+        // It exercises the same unavailable-ref branch as permission errors.
+        let loose_ref = refs_dir.join("main");
+        symlink("main", &loose_ref).unwrap();
+        let open_error = std::fs::File::open(&loose_ref).unwrap_err();
         let oid = read_ref_oid(&root, "refs/heads/main");
-        std::fs::set_permissions(&refs_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(open_error.raw_os_error(), Some(libc::ELOOP));
         assert_eq!(
             oid, None,
-            "a loose ref behind a metadata error must be unavailable, not fall back to the stale packed OID"
+            "a loose ref behind an open error must be unavailable, not fall back to the stale packed OID"
         );
     }
 

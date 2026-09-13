@@ -313,11 +313,18 @@ impl ClientShellState {
     }
 
     pub(super) fn workspace_action_id(&self) -> Option<String> {
-        self.navigate_workspace_id.clone().or_else(|| {
-            self.snapshot
-                .as_deref()
-                .and_then(|snapshot| snapshot.focused_workspace_id.clone())
-        })
+        self.navigate_workspace_id
+            .as_ref()
+            .filter(|target| {
+                target.endpoint_id == self.active_endpoint_id
+                    && self.navigation_target_valid(target)
+            })
+            .map(|target| target.workspace_id.clone())
+            .or_else(|| {
+                self.snapshot
+                    .as_deref()
+                    .and_then(|snapshot| snapshot.focused_workspace_id.clone())
+            })
     }
 
     pub(super) fn open_new_workspace_overlay(&mut self) {
@@ -913,10 +920,8 @@ impl ClientShellState {
             } else if key.code == KeyCode::Esc {
                 self.overlay = None;
                 self.mode = ClientShellMode::Navigate;
-                self.navigate_workspace_id = self
-                    .snapshot
-                    .as_deref()
-                    .and_then(|snapshot| snapshot.focused_workspace_id.clone());
+                self.navigate_workspace_id = self.focused_navigation_target();
+                self.reveal_navigation_workspace = true;
                 outcome.repaint = true;
             }
             return;

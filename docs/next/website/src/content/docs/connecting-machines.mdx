@@ -1,0 +1,106 @@
+---
+title: Connecting machines
+description: Work across Local and saved SSH machines in one Herdr window, with shared agent navigation and independent reconnects.
+---
+
+Keep your local work and remote agents in one Herdr window. Save an SSH machine once, then switch between its workspaces and Local without opening another client. The agent list includes connected machines, so you can see where work is running and which agent needs an answer.
+
+Each machine keeps its own Herdr server, sessions, and running processes. A lost connection to one machine does not disconnect the others.
+
+## Before you connect
+
+You need normal SSH access to the remote machine. Verify it first:
+
+```bash
+ssh workbox
+```
+
+`workbox` can be a host from your SSH config. You can also use a target such as `ssh://you@server:2222`.
+
+Multi-machine connections are supported on Linux and macOS clients, connecting to Linux and macOS servers on x86_64 or aarch64. Multi-machine connections are not yet verified or supported on Windows; standalone `herdr --remote` remains supported on Windows. Native Windows servers are not supported as SSH targets. See [Remote attach over SSH](/docs/persistence-remote/#remote-attach-over-ssh) for SSH configuration, authentication, and custom binaries.
+
+## Add a machine
+
+Run setup in an interactive terminal so Herdr can ask before installing or replacing anything:
+
+```bash
+herdr machine add workbox --label "Build machine"
+```
+
+This uses the remote default session. A machine profile targets one remote session; it does not combine every session on the host.
+
+To use a named session instead, add the optional `--remote-session` flag:
+
+```bash
+herdr machine add workbox --label "Build machine" --remote-session agents
+```
+
+Herdr checks both the installed binary and the running server. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.
+
+Run `herdr` to open the UI. If a local client is already open, added and enabled machines normally appear within a second and connect in the background without changing your selection. An in-progress machine switch finishes before profile changes are applied. The remote server keeps running after setup exits.
+
+## Switch between machines
+
+Choose a machine or one of its workspaces in the sidebar. The selected machine receives your pane input and terminal size, and supplies the visible terminal content and graphics. Other connected machines keep updating their workspace information, agent states, and notifications without streaming their pane screens.
+
+Click the arrow beside any machine to collapse or expand its workspace list without switching away from your current workspace. This also works while that machine is reconnecting.
+
+For keyboard navigation, press `prefix+w`, then use the workspace navigation keys (Up/Down by default) to highlight workspaces across connected machines in sidebar order. Enter activates the highlighted workspace; Esc or the prefix key cancels without switching. Compact and expanded sidebars reveal the highlighted row, including under a collapsed machine. On desktop, navigation wraps at the ends; the mobile switcher stops at the first or last workspace. Disconnected machines are skipped.
+
+When highlighting a workspace on another machine, press Enter before using other keyboard actions. This prevents pane, tab, workspace, or custom-command shortcuts from acting on the current machine by mistake. Clicking cancels a remote desktop keyboard preview. Expanded sidebars respect each machine's collapsed worktree groups.
+
+Local opens immediately on startup without waiting for SSH connections. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
+
+When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.
+
+## Rename, disable, or remove
+
+Read profile IDs from the list rather than deriving them from labels or hostnames:
+
+```bash
+herdr machine list
+herdr machine rename <profile-id> --label "New name"
+herdr machine disable <profile-id>
+herdr machine enable <profile-id>
+herdr machine remove <profile-id>
+```
+
+For scripts, add `--json` to `machine list`.
+
+Renaming changes the displayed label without reconnecting. Disabling keeps the profile for later; removing forgets it. Both disconnect only that machine from the client and leave its remote sessions and agents running, even if the host is unreachable.
+
+Removing or disabling the machine you are viewing returns you to Local. If Local is unavailable, Herdr shows that and retries its connection instead of selecting a different remote machine. With enabled saved machines, the client can remain usable even if Local fails or restarts.
+
+## Connection problems
+
+- **Reconnecting:** Herdr retries with bounded backoff after a network interruption, sleep, or SSH failure. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
+- **Attention:** The target needs an action that cannot be completed in the background, such as host-key approval, authentication, or a compatible server. Other machines remain usable.
+- **Saved-machine file error:** An unreadable or invalid catalog leaves current connections unchanged. Herdr shows a notice and automatically retries reading it.
+
+Background connections never answer prompts or install, update, restart, or hand off a server. For Attention, run the standalone setup command shown by Herdr in an interactive terminal, for example:
+
+```bash
+herdr --remote workbox
+```
+
+Use your profile's target. If you chose a named session when adding it, include the optional `--session <name>` here too. Follow any approval prompts, then restart the client to retry the Attention connection. Do not stop a running server merely because its version differs from the client.
+
+If authentication fails, check ordinary SSH first. For a passphrase-protected key, load it with `ssh-add` before starting Herdr's non-interactive background connections.
+
+## Settings and automation
+
+The UI uses the client's local theme, sidebar settings, and keybindings by default. Custom commands and plugins advertised by the selected server still run there. Herdr does not copy local command plugins, configuration, executables, or secrets onto SSH hosts. Missing remote commands fail visibly. Use the UI's `reload config` action after editing client settings; see [Configuration](/docs/configuration/#reload-config).
+
+Default agent rows show a `machine` token when multiple machines are present. Existing custom rows are preserved; add `machine` explicitly if you want that label in your layout. [Sidebar row layouts](/docs/configuration/#sidebar-row-layouts) also support conditional colors for machine labels.
+
+Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines may both contain `w1:p1` or an agent named `reviewer`. Selecting a machine in the UI does not retarget CLI commands running in an existing pane: they still use that pane's inherited session and socket. For remote automation, use `herdr --machine <label-or-id> agent list`, then pass the same prefix when controlling those remote IDs. The CLI uses the saved profile's SSH target and session directly; it does not need an open TUI. Without `--machine`, existing session/socket routing is unchanged. See [CLI reference](/docs/cli-reference/#saved-ssh-machines) for supported commands, update requirements, and remote path rules.
+
+## Updates and saved data
+
+Saved profiles contain only an opaque ID, label, SSH target, explicit remote session, and enabled state. Herdr does not store passwords, private keys, agent tickets, or SSH control sockets in the catalog. Authentication stays with OpenSSH.
+
+The client and server negotiate compatibility rather than requiring identical versions. Saved-machine connections additionally need the server's `surface_interest` and `health_check` capabilities. Older servers without those capabilities show Attention until explicitly updated, even if a standalone attach works. Other missing server methods disable only their corresponding actions.
+
+Updating a compatible client does not replace the running remote server or stop its agents. When you need new server-side behavior, update that server explicitly. Normal replacement asks before stopping the server and its pane processes.
+
+Live handoff is experimental and opt-in. For a supported server that needs replacement during standalone setup, you can explicitly add `--handoff` to `herdr --remote`; it is not needed for normal connections or authentication fixes. See [Update](/docs/install/#update) for restart and handoff choices, and [Session state and restore](/docs/session-state/) for what survives each operation.

@@ -44,6 +44,7 @@ pub(crate) struct OpenCodeInstallPaths {
     pub plugin_path: PathBuf,
     pub tui_plugin_path: PathBuf,
     pub tui_config_path: PathBuf,
+    pub cli_config_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]

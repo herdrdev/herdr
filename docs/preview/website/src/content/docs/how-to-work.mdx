@@ -77,7 +77,7 @@ herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
-Your local Herdr acts as a thin client. It connects over SSH, starts or attaches to the remote Herdr server, and streams the UI back to your local terminal.
+The remote server keeps the panes running and sends their terminal content and session state over SSH. Your local Herdr draws the UI using your local theme and presentation settings.
 
 Use this path when you want the remote session to feel local. The client runs on your machine, so local desktop features such as image clipboard paste can be bridged to the remote server. If you SSH first and run `herdr` on the server, Herdr runs entirely on that server and cannot read your local desktop clipboard.
 
@@ -98,6 +98,6 @@ herdr --remote workbox
 
 ## Which path to use
 
-Use `herdr` for local work. Use `ssh you@server` then `herdr` when you want Herdr to behave like tmux on that remote shell or when you are using a phone SSH client. Use `herdr --remote <host>` when you want a local thin client for a remote session, including local clipboard image paste bridging.
+Use `herdr` for local work. Use `ssh you@server` then `herdr` when you want Herdr to behave like tmux on that remote shell or when you are using a phone SSH client. Use `herdr --remote <host>` for a local UI attached to one remote session, including local clipboard image paste. To keep Local and several SSH machines in one window, save them with `herdr machine add <host> --label <label>`; see [Connecting machines](/docs/connecting-machines/).
 
 For remote bootstrap details, named remote sessions, custom binaries, and direct terminal attach, see [Persistence and remote access](/docs/persistence-remote/).

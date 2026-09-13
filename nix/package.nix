@@ -4,7 +4,7 @@
   rustPlatform,
   callPackage,
   runCommand,
-  zig_0_15,
+  zig_0_16,
   zstd,
   pkg-config,
   git,
@@ -66,7 +66,7 @@ rustPlatform.buildRustPackage {
     LIBGHOSTTY_VT_OPTIMIZE = "ReleaseFast";
     LIBGHOSTTY_VT_SIMD = "true";
     LIBGHOSTTY_VT_ZIG_SYSTEM_DIR = zigDeps;
-    ZIG = lib.getExe zig_0_15;
+    ZIG = lib.getExe zig_0_16;
   };
 
   preBuild = ''

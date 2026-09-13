@@ -8,6 +8,7 @@ pub struct SidebarTokenRule {
     condition: Condition,
     ignore_case: bool,
     style: SidebarTokenStyle,
+    hide: Option<bool>,
 }
 
 // Deserialization rejects non-finite thresholds, so equality is reflexive.
@@ -43,6 +44,8 @@ struct RawRule {
     bold: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dim: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hide: Option<bool>,
 }
 
 impl TryFrom<RawRule> for SidebarTokenRule {
@@ -91,6 +94,7 @@ impl TryFrom<RawRule> for SidebarTokenRule {
         Ok(Self {
             condition,
             ignore_case: raw.ignore_case.unwrap_or(false),
+            hide: raw.hide,
             style: SidebarTokenStyle {
                 fg: raw.fg,
                 bold: raw.bold,
@@ -107,6 +111,7 @@ impl From<SidebarTokenRule> for RawRule {
             fg: rule.style.fg,
             bold: rule.style.bold,
             dim: rule.style.dim,
+            hide: rule.hide,
             ..Self::default()
         };
         match rule.condition {
@@ -171,18 +176,21 @@ pub(super) fn matching_style(
     rules: &[SidebarTokenRule],
     base: SidebarTokenStyle,
     value: &str,
-) -> SidebarTokenStyle {
+) -> Option<SidebarTokenStyle> {
     let mut numeric = None;
     for rule in rules {
         if rule.matches(value, &mut numeric) {
-            return SidebarTokenStyle {
+            if rule.hide == Some(true) {
+                return None;
+            }
+            return Some(SidebarTokenStyle {
                 fg: rule.style.fg.or(base.fg),
                 bold: rule.style.bold.or(base.bold),
                 dim: rule.style.dim.or(base.dim),
-            };
+            });
         }
     }
-    base
+    Some(base)
 }
 
 #[cfg(test)]

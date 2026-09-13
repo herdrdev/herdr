@@ -1,6 +1,8 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts import agent_detection_manifest_check as check
 
@@ -42,14 +44,21 @@ def staged_grok_dirs(root: Path) -> tuple[Path, Path]:
     return bundled, published
 
 
-def unpublished_muse_dirs(root: Path) -> tuple[Path, Path]:
+UNPUBLISHED_TEST_MANIFEST = manifest("testagent", "2026.06.10.1")
+UNPUBLISHED_TEST_EXCEPTION = {
+    "testagent": (
+        "2026.06.10.1",
+        hashlib.sha256(UNPUBLISHED_TEST_MANIFEST.encode()).hexdigest(),
+    ),
+}
+
+
+def unpublished_manifest_dirs(root: Path) -> tuple[Path, Path]:
     bundled = root / "bundled"
     published = root / "published"
     bundled.mkdir()
     published.mkdir()
-    (bundled / "muse.toml").write_bytes(
-        (check.DEFAULT_BUNDLED_DIR / "muse.toml").read_bytes()
-    )
+    (bundled / "testagent.toml").write_text(UNPUBLISHED_TEST_MANIFEST, encoding="utf-8", newline="\n")
     (published / "index.toml").write_text("schema_version = 1\nagents = []\n")
     return bundled, published
 
@@ -135,9 +144,10 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "same version"):
                 check.validate_catalog(website, bundled_manifests, engine_version=1)
 
+    @patch.dict(check.UNPUBLISHED_BUNDLED_MANIFESTS, UNPUBLISHED_TEST_EXCEPTION, clear=True)
     def test_allows_exact_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundled, published = unpublished_muse_dirs(Path(tmp))
+            bundled, published = unpublished_manifest_dirs(Path(tmp))
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
             check.validate_catalog(
                 published,
@@ -146,17 +156,19 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
                 allow_unpublished=True,
             )
 
+    @patch.dict(check.UNPUBLISHED_BUNDLED_MANIFESTS, UNPUBLISHED_TEST_EXCEPTION, clear=True)
     def test_release_gate_rejects_exact_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundled, published = unpublished_muse_dirs(Path(tmp))
+            bundled, published = unpublished_manifest_dirs(Path(tmp))
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
             with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):
                 check.validate_catalog(published, bundled_manifests, engine_version=3)
 
+    @patch.dict(check.UNPUBLISHED_BUNDLED_MANIFESTS, UNPUBLISHED_TEST_EXCEPTION, clear=True)
     def test_rejects_mutated_unpublished_bundled_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundled, published = unpublished_muse_dirs(Path(tmp))
-            with (bundled / "muse.toml").open("a") as manifest_file:
+            bundled, published = unpublished_manifest_dirs(Path(tmp))
+            with (bundled / "testagent.toml").open("a") as manifest_file:
                 manifest_file.write("\n# unexpected mutation\n")
             bundled_manifests = check.load_manifest_dir(bundled, engine_version=3)
             with self.assertRaisesRegex(check.CheckError, "missing bundled agent"):

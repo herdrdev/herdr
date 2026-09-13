@@ -673,6 +673,24 @@ fn render_rename_overlay(
     })
 }
 
+/// Mark following siblings in preorder without rescanning descendants for each row.
+/// The reverse stack contains at most one entry per depth; every entry is pushed
+/// and popped at most once, so this pass is linear in the number of rows.
+fn navigator_following_siblings(rows: &[ClientNavigatorRow]) -> Vec<bool> {
+    let mut following = vec![false; rows.len()];
+    let mut depths = Vec::new();
+    for (index, row) in rows.iter().enumerate().rev() {
+        while depths.last().is_some_and(|depth| *depth > row.depth) {
+            depths.pop();
+        }
+        following[index] = depths.last() == Some(&row.depth);
+        if !following[index] {
+            depths.push(row.depth);
+        }
+    }
+    following
+}
+
 fn render_navigator_overlay(
     b: &mut Buffer,
     n: &ClientNavigatorOverlay,
@@ -746,15 +764,17 @@ fn render_navigator_overlay(
         .max(selected.saturating_sub(body.height.saturating_sub(1) as usize))
         .min(selected)
         .min(max);
+    let following_siblings = navigator_following_siblings(&rows);
+    let mut ancestor_siblings = Vec::new();
+    let federated = endpoints.len() > 1;
     let mut row_hits = Vec::new();
-    for (vis, (ix, r)) in rows
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .take(body.height as usize)
-        .enumerate()
-    {
-        let rect = Rect::new(body.x, body.y + vis as u16, body.width, 1);
+    for (ix, r) in rows.iter().enumerate().take(scroll + body.height as usize) {
+        ancestor_siblings.truncate(usize::from(r.depth));
+        ancestor_siblings.push(following_siblings[ix]);
+        if ix < scroll {
+            continue;
+        }
+        let rect = Rect::new(body.x, body.y + (ix - scroll) as u16, body.width, 1);
         row_hits.push((rect, r.target.clone()));
         let st = if r.stale {
             Style::default()
@@ -777,7 +797,7 @@ fn render_navigator_overlay(
         };
         b.set_style(rect, st);
         let tree = match &r.target {
-            ClientNavigatorTarget::Machine { .. } => "▾",
+            ClientNavigatorTarget::Machine { .. } => "▾".to_owned(),
             ClientNavigatorTarget::Workspace {
                 endpoint_id,
                 workspace_id,
@@ -785,32 +805,28 @@ fn render_navigator_overlay(
                 .expanded_workspaces
                 .contains(&(endpoint_id.clone(), workspace_id.clone())) =>
             {
-                if r.depth == 0 {
-                    "▾"
-                } else {
-                    "  ▾"
-                }
+                if r.depth == 0 { "▾" } else { "  ▾" }.to_owned()
             }
             ClientNavigatorTarget::Workspace { .. } => {
-                if r.depth == 0 {
-                    "▸"
-                } else {
-                    "  ▸"
-                }
+                if r.depth == 0 { "▸" } else { "  ▸" }.to_owned()
             }
-            ClientNavigatorTarget::Tab { .. } => {
-                if r.depth == 1 {
+            ClientNavigatorTarget::Tab { .. } | ClientNavigatorTarget::Pane { .. } => {
+                // Machines and workspaces keep their existing caret decoration.
+                // Connected branches begin below each workspace.
+                let mut prefix = if federated { "    " } else { "" }.to_owned();
+                for &following in ancestor_siblings
+                    .iter()
+                    .take(usize::from(r.depth))
+                    .skip(if federated { 2 } else { 1 })
+                {
+                    prefix.push_str(if following { "│  " } else { "   " });
+                }
+                prefix.push_str(if following_siblings[ix] {
+                    "├──"
+                } else {
                     "└──"
-                } else {
-                    "    └──"
-                }
-            }
-            ClientNavigatorTarget::Pane { .. } => {
-                if r.depth == 2 {
-                    "   └──"
-                } else {
-                    "        └──"
-                }
+                });
+                prefix
             }
         };
         let current = if r.current { "◆ " } else { "" };

@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 const script = resolve(import.meta.dir, 'versions.mjs');
 const temporaryDirectories: string[] = [];
 
+// The fixture shells out to node and git many times. A healthy Windows runner
+// finishes in seconds, but a degraded one can run an order of magnitude slower,
+// so keep a generous ceiling instead of making the suite a load-sensitive flake.
+const fixtureTimeoutMs = process.platform === 'win32' ? 120_000 : 30_000;
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -103,7 +108,7 @@ describe('documentation release publishing', () => {
     delete archivedManifest.versions[0].commit;
     await write(root, 'docs/versions/manifest.json', `${JSON.stringify(archivedManifest)}\n`);
     expect(() => runScript(root, ['check'])).toThrow();
-  }, 30_000);
+  }, fixtureTimeoutMs);
 });
 
 async function write(root: string, path: string, content: string) {

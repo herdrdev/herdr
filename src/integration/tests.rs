@@ -134,6 +134,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
     std::env::remove_var("XDG_CONFIG_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
     #[cfg(windows)]
     std::env::remove_var("APPDATA");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
@@ -956,7 +957,10 @@ fn install_claude_writes_hook_and_updates_settings() {
     );
     assert_eq!(hook_content, CLAUDE_HOOK_ASSET);
     assert!(settings["permissions"]["allow"].is_array());
-    assert_eq!(settings["hooks"]["SessionStart"][0]["matcher"], "*");
+    assert_eq!(
+        settings["hooks"]["SessionStart"][0]["matcher"],
+        "^(startup|resume|clear|compact|fork)$"
+    );
     assert!(settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         .as_str()
         .unwrap()
@@ -1104,7 +1108,7 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
 }
 
 #[test]
-fn claude_v1_integration_status_is_outdated() {
+fn claude_v9_integration_status_is_outdated_until_reinstalled() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -1113,7 +1117,7 @@ fn claude_v1_integration_status_is_outdated() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=9\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1125,9 +1129,18 @@ fn claude_v1_integration_status_is_outdated() {
         .unwrap();
 
     assert_eq!(claude.path, hook_path);
-    assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(claude.installed_version, Some(9));
+    assert_eq!(claude.expected_version, 10);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
+
+    install_claude().unwrap();
+    let status = integration_status_at(
+        crate::api::schema::IntegrationTarget::Claude,
+        hook_path,
+        CLAUDE_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.installed_version, Some(10));
+    assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1156,7 +1169,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(claude.expected_version, 10);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2301,7 +2314,101 @@ fn install_opencode_writes_server_and_tui_plugins() {
     let tui_config: Value =
         serde_json::from_str(&fs::read_to_string(&installed.tui_config_path).unwrap()).unwrap();
     assert_eq!(tui_config["plugin"], json!([OPENCODE_TUI_PLUGIN_SPEC]));
+    let cli_config_path = installed
+        .cli_config_path
+        .expect("cli.json should be created when OpenCode has nothing to migrate");
+    assert_eq!(cli_config_path, opencode_dir.join("cli.json"));
+    let cli_config: Value =
+        serde_json::from_str(&fs::read_to_string(&cli_config_path).unwrap()).unwrap();
+    assert_eq!(cli_config["plugins"], json!([OPENCODE_V2_TUI_PLUGIN_SPEC]));
 
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_install_defers_v2_registration_while_migration_pending() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let opencode_dir = home.join(".config/opencode");
+    fs::create_dir_all(&opencode_dir).unwrap();
+    fs::write(opencode_dir.join("tui.json"), "{}").unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_opencode().unwrap();
+
+    assert!(installed.cli_config_path.is_none());
+    assert!(!opencode_dir.join("cli.json").exists());
+    assert!(opencode_dir
+        .join(OPENCODE_V2_TUI_PLUGIN_DIR)
+        .join("tui.js")
+        .is_file());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_v2_install_status_and_uninstall_preserve_cli_preferences() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let cli = dir.join("cli.json");
+    fs::write(
+        &cli,
+        r#"{"theme":{"name":"catppuccin"},"plugins":["other"]}"#,
+    )
+    .unwrap();
+    let installed = install_opencode().unwrap();
+    assert_eq!(installed.cli_config_path, Some(cli.clone()));
+    let status = || {
+        integration_status_at(
+            crate::api::schema::IntegrationTarget::Opencode,
+            installed.plugin_path.clone(),
+            OPENCODE_INTEGRATION_VERSION,
+        )
+        .state
+    };
+    assert_eq!(status(), IntegrationStatusKind::Current);
+    let entry = dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).join("tui.js");
+    assert_eq!(
+        fs::read_to_string(&entry).unwrap(),
+        OPENCODE_V2_TUI_PLUGIN_ASSET
+    );
+    fs::remove_file(&entry).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+    install_opencode().unwrap();
+    super::opencode_config::remove_cli_plugin(&dir, OPENCODE_V2_TUI_PLUGIN_SPEC).unwrap();
+    assert_eq!(status(), IntegrationStatusKind::Outdated);
+    install_opencode().unwrap();
+    uninstall_opencode().unwrap();
+    assert!(!entry.exists());
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(cli).unwrap()).unwrap(),
+        json!({"theme":{"name":"catppuccin"},"plugins":["other"]})
+    );
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn opencode_invalid_cli_config_does_not_overwrite_existing_plugins() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let dir = home.join(".config/opencode");
+    fs::create_dir_all(dir.join("plugins")).unwrap();
+    std::env::set_var("HOME", &home);
+    let plugin = dir.join("plugins").join(OPENCODE_PLUGIN_INSTALL_NAME);
+    fs::write(&plugin, "previous integration").unwrap();
+    fs::write(dir.join("cli.json"), r#"{"plugins":{}}"#).unwrap();
+    assert!(install_opencode().is_err());
+    assert_eq!(fs::read_to_string(plugin).unwrap(), "previous integration");
+    assert!(!dir.join("tui.jsonc").exists());
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
@@ -2802,6 +2909,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_HOOK_ASSET,
             MASTRACODE_INTEGRATION_VERSION,
         ),
+        ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -3961,7 +4069,39 @@ fn install_antigravity_cli_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn grok_v1_integration_status_is_current() {
+fn grok_v1_integration_status_is_outdated() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let grok_dir = base.join(".grok");
+    let hooks_dir = grok_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &grok_dir);
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=grok\n# HERDR_INTEGRATION_VERSION=1\n",
+    )
+    .unwrap();
+    fs::write(
+        hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME),
+        serde_json::to_string(&grok_hook_config(&hook_path)).unwrap(),
+    )
+    .unwrap();
+
+    let grok = installed_integration_statuses()
+        .into_iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Grok)
+        .expect("grok integration status");
+    assert_eq!(grok.installed_version, Some(1));
+    assert_eq!(grok.expected_version, GROK_INTEGRATION_VERSION);
+    assert_eq!(grok.state, IntegrationStatusKind::Outdated);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn grok_v2_integration_status_is_current() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let grok_dir = base.join(".grok");

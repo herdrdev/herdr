@@ -62,7 +62,18 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     state.sidebar_collapsed_manual = true;
     state.collapsed_groups.insert("repo-two".into());
     state.collapsed_groups.insert("repo-one".into());
+    let profile =
+        SavedSshEndpoint::new("Build", "dev@build.example", "agents").expect("saved SSH profile");
+    let remote_id = ClientEndpointId::Ssh(profile.id.clone());
+    state
+        .remote_collapsed_groups
+        .insert(remote_id.clone(), HashSet::from(["/repo".to_owned()]));
     state.persist_chrome_preferences(&mut ClientShellInput::default());
+    let stored = std::fs::read_to_string(&path).expect("stored client chrome preferences");
+    assert!(stored.contains(profile.id.as_str()));
+    assert!(stored.contains("repo-one"));
+    assert!(!stored.contains(&profile.label));
+    assert!(!stored.contains(&profile.target));
 
     let reloaded_config =
         ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
@@ -77,6 +88,15 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
         reloaded.collapsed_groups,
         HashSet::from(["repo-one".to_string(), "repo-two".to_string()])
     );
+    assert_eq!(
+        reloaded.remote_collapsed_groups.get(&remote_id),
+        Some(&HashSet::from(["/repo".to_owned()]))
+    );
+    let mut reloaded = reloaded;
+    reloaded.persist_chrome_preferences(&mut ClientShellInput::default());
+    let stored_again = std::fs::read_to_string(&path).expect("restored client chrome preferences");
+    assert!(stored_again.contains(profile.id.as_str()));
+    assert!(stored_again.contains("/repo"));
     std::fs::remove_file(path).expect("remove client chrome preferences");
 }
 

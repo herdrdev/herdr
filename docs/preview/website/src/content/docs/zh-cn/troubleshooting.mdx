@@ -61,7 +61,7 @@ map alt+right send_text all \x1bf
 
 ## Herdr 已更新，但运行中的会话仍是旧版本
 
-更新二进制文件不一定会替换已经运行且兼容的服务器。先检查 `herdr status`。要启动更新后的服务器，请停止会话并重新启动 Herdr:
+更新二进制文件不会替换正在运行的兼容服务器。重新打开 Herdr 即可使用更新后的客户端。只有还需要本次发行的服务器功能时，才先检查 `herdr status`，然后停止会话并重新启动 Herdr:
 
 ```bash
 herdr server stop

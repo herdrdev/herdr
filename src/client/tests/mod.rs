@@ -218,10 +218,12 @@ fn clipboard_image_paste_bridge_triggers_on_configured_key_and_empty_paste() {
     ));
 }
 
+#[cfg(unix)]
 struct TempImageFile {
     path: std::path::PathBuf,
 }
 
+#[cfg(unix)]
 impl TempImageFile {
     fn new(extension: &str, bytes: &[u8]) -> Self {
         Self::with_name_fragment("test", extension, bytes)
@@ -241,6 +243,7 @@ impl TempImageFile {
     }
 }
 
+#[cfg(unix)]
 impl Drop for TempImageFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);

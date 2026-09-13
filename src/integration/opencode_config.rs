@@ -13,25 +13,53 @@ pub(crate) fn tui_config_path(config_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn validate_tui_plugin_config(config_dir: &Path) -> io::Result<()> {
-    let config_path = tui_config_path(config_dir);
+    validate_plugin_config(&tui_config_path(config_dir), "plugin")?;
+    validate_plugin_config(&config_dir.join("cli.json"), "plugins")
+}
+
+fn validate_plugin_config(config_path: &Path, key: &str) -> io::Result<()> {
     if !config_path.is_file() {
         return Ok(());
     }
 
-    let content = fs::read_to_string(&config_path)?;
-    let root = parse_root(&content, &config_path)?;
-    let object = root_object(&root, &config_path)?;
+    let content = fs::read_to_string(config_path)?;
+    let root = parse_root(&content, config_path)?;
+    let object = root_object(&root, config_path)?;
     if object
-        .get("plugin")
+        .get(key)
         .is_some_and(|property| property.array_value().is_none())
     {
-        return Err(invalid_plugin_list(&config_path));
+        return Err(invalid_plugin_list(config_path));
     }
     Ok(())
 }
 
 pub(crate) fn add_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result<PathBuf> {
-    let config_path = tui_config_path(config_dir);
+    add_plugin(tui_config_path(config_dir), "plugin", plugin_spec)
+}
+
+pub(crate) fn add_cli_plugin(
+    config_dir: &Path,
+    state_dir: &Path,
+    plugin_spec: &str,
+) -> io::Result<Option<PathBuf>> {
+    let path = config_dir.join("cli.json");
+    // OpenCode imports V1 TUI preferences (`tui.json`, `kv.json`) into cli.json on
+    // its first V2 start, but only while cli.json is absent. Defer registration
+    // while those sources still exist so we do not skip the migration; otherwise
+    // create cli.json ourselves, since OpenCode will never do it for a fresh V2
+    // install with nothing to migrate.
+    if !path.is_file() && cli_migration_pending(config_dir, state_dir) {
+        return Ok(None);
+    }
+    add_plugin(path, "plugins", plugin_spec).map(Some)
+}
+
+fn cli_migration_pending(config_dir: &Path, state_dir: &Path) -> bool {
+    config_dir.join("tui.json").is_file() || state_dir.join("kv.json").is_file()
+}
+
+fn add_plugin(config_path: PathBuf, key: &str, plugin_spec: &str) -> io::Result<PathBuf> {
     let content = if config_path.is_file() {
         fs::read_to_string(&config_path)?
     } else {
@@ -40,7 +68,7 @@ pub(crate) fn add_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result
     let root = parse_root(&content, &config_path)?;
     let object = root_object(&root, &config_path)?;
 
-    match object.get("plugin") {
+    match object.get(key) {
         Some(property) => {
             let plugins = property
                 .array_value()
@@ -56,7 +84,7 @@ pub(crate) fn add_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result
         }
         None => {
             object.append(
-                "plugin",
+                key,
                 CstInputValue::Array(vec![CstInputValue::String(plugin_spec.to_string())]),
             );
         }
@@ -67,20 +95,27 @@ pub(crate) fn add_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result
 }
 
 pub(crate) fn remove_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result<bool> {
-    let config_path = tui_config_path(config_dir);
+    remove_plugin(&tui_config_path(config_dir), "plugin", plugin_spec)
+}
+
+pub(crate) fn remove_cli_plugin(config_dir: &Path, plugin_spec: &str) -> io::Result<bool> {
+    remove_plugin(&config_dir.join("cli.json"), "plugins", plugin_spec)
+}
+
+fn remove_plugin(config_path: &Path, key: &str, plugin_spec: &str) -> io::Result<bool> {
     if !config_path.is_file() {
         return Ok(false);
     }
 
-    let content = fs::read_to_string(&config_path)?;
-    let root = parse_root(&content, &config_path)?;
-    let object = root_object(&root, &config_path)?;
-    let Some(property) = object.get("plugin") else {
+    let content = fs::read_to_string(config_path)?;
+    let root = parse_root(&content, config_path)?;
+    let object = root_object(&root, config_path)?;
+    let Some(property) = object.get(key) else {
         return Ok(false);
     };
     let plugins = property
         .array_value()
-        .ok_or_else(|| invalid_plugin_list(&config_path))?;
+        .ok_or_else(|| invalid_plugin_list(config_path))?;
     let mut removed = false;
     for entry in plugins.elements() {
         if entry
@@ -98,23 +133,30 @@ pub(crate) fn remove_tui_plugin(config_dir: &Path, plugin_spec: &str) -> io::Res
         property.remove();
     }
 
-    fs::write(&config_path, root.to_string())?;
+    fs::write(config_path, root.to_string())?;
     Ok(true)
 }
 
 pub(crate) fn tui_plugin_is_configured(config_dir: &Path, plugin_spec: &str) -> bool {
-    let config_path = tui_config_path(config_dir);
-    let Ok(content) = fs::read_to_string(&config_path) else {
+    plugin_is_configured(&tui_config_path(config_dir), "plugin", plugin_spec)
+}
+
+pub(crate) fn cli_plugin_is_configured(config_dir: &Path, plugin_spec: &str) -> bool {
+    plugin_is_configured(&config_dir.join("cli.json"), "plugins", plugin_spec)
+}
+
+fn plugin_is_configured(config_path: &Path, key: &str, plugin_spec: &str) -> bool {
+    let Ok(content) = fs::read_to_string(config_path) else {
         return false;
     };
-    let Ok(root) = parse_root(&content, &config_path) else {
+    let Ok(root) = parse_root(&content, config_path) else {
         return false;
     };
-    let Ok(object) = root_object(&root, &config_path) else {
+    let Ok(object) = root_object(&root, config_path) else {
         return false;
     };
     object
-        .get("plugin")
+        .get(key)
         .and_then(|property| property.array_value())
         .is_some_and(|plugins| {
             plugins.elements().iter().any(|entry| {
@@ -154,6 +196,7 @@ fn jsonc_parse_options() -> ParseOptions {
 
 fn plugin_entry_matches(entry: &Value, plugin_spec: &str) -> bool {
     entry.as_str() == Some(plugin_spec)
+        || entry.get("package").and_then(Value::as_str) == Some(plugin_spec)
         || entry
             .as_array()
             .and_then(|parts| parts.first())
@@ -293,6 +336,75 @@ mod tests {
         assert!(tui_plugin_is_configured(&dir, "./herdr-tui-state.js"));
         assert!(remove_tui_plugin(&dir, "./herdr-tui-state.js").unwrap());
 
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cli_registration_preserves_options_and_other_preferences() {
+        let dir = unique_dir();
+        let state = unique_dir();
+        let path = dir.join("cli.json");
+        fs::write(&path, r#"{"theme":{"name":"catppuccin"},"plugins":[{"package":"./herdr-opencode","options":{"custom":true}},"example"]}"#).unwrap();
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
+        assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
+        assert_eq!(parse_config(&path)["plugins"].as_array().unwrap().len(), 2);
+        assert_eq!(parse_config(&path)["plugins"][0]["options"]["custom"], true);
+        assert!(remove_cli_plugin(&dir, "./herdr-opencode").unwrap());
+        assert_eq!(parse_config(&path)["plugins"], json!(["example"]));
+        assert_eq!(parse_config(&path)["theme"]["name"], "catppuccin");
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
+        assert_eq!(
+            parse_config(&path)["plugins"],
+            json!(["example", "./herdr-opencode"])
+        );
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn cli_registration_creates_missing_config_when_no_migration_pending() {
+        let dir = unique_dir();
+        let state = unique_dir();
+        let path = add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .expect("cli.json should be created when OpenCode has nothing to migrate");
+        assert_eq!(path, dir.join("cli.json"));
+        assert_eq!(
+            parse_config(&path),
+            json!({ "plugins": ["./herdr-opencode"] })
+        );
+        assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn cli_registration_defers_while_migration_pending() {
+        let dir = unique_dir();
+        let state = unique_dir();
+        fs::write(dir.join("tui.json"), "{}").unwrap();
+        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .is_none());
+        assert!(!dir.join("cli.json").exists());
+
+        fs::remove_file(dir.join("tui.json")).unwrap();
+        fs::write(state.join("kv.json"), "{}").unwrap();
+        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+            .unwrap()
+            .is_none());
+        assert!(!dir.join("cli.json").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn invalid_cli_plugin_list_fails_preflight() {
+        let dir = unique_dir();
+        fs::write(dir.join("cli.json"), r#"{"plugins":{}}"#).unwrap();
+        assert!(validate_tui_plugin_config(&dir).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 }

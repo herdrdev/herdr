@@ -28,7 +28,7 @@ fn patch_intersects_hyperlinks(
         })
 }
 
-fn apply_patch_row(frame: &mut FrameData, row: &protocol::PaneSurfacePatchRow) -> Option<bool> {
+fn patch_row_changed(frame: &FrameData, row: &protocol::PaneSurfacePatchRow) -> Option<bool> {
     if row.y >= frame.height
         || row.x.saturating_add(u16::try_from(row.cells.len()).ok()?) > frame.width
     {
@@ -39,13 +39,11 @@ fn apply_patch_row(frame: &mut FrameData, row: &protocol::PaneSurfacePatchRow) -
     if end > frame.cells.len() {
         return None;
     }
-    let changed = frame.cells[start..end] != row.cells;
-    frame.cells[start..end].clone_from_slice(&row.cells);
-    Some(changed)
+    Some(frame.cells[start..end] != row.cells)
 }
 
-fn apply_rows(
-    frame: &mut FrameData,
+fn changed_rows(
+    frame: &FrameData,
     area: protocol::SurfaceRect,
     patch: &crate::pane::TerminalDirtyPatch,
 ) -> Option<Vec<protocol::PaneSurfacePatchRow>> {
@@ -89,15 +87,12 @@ fn apply_rows(
             offset = end;
         }
     }
-    for row in &rows {
-        apply_patch_row(frame, row)?;
-    }
     Some(rows)
 }
 
 fn retained_scrollbar_patch(
     app: &app::App,
-    frame: &mut FrameData,
+    frame: &FrameData,
     pane: &mut protocol::PaneSurfacePane,
     alternate_screen_active: bool,
     metrics: Option<crate::pane::ScrollMetrics>,
@@ -146,7 +141,7 @@ fn retained_scrollbar_patch(
             y: rect.y.checked_add(u16::try_from(offset).ok()?)?,
             cells: vec![cell],
         };
-        if apply_patch_row(frame, &row)? {
+        if patch_row_changed(frame, &row)? {
             rows.push(row);
         }
     }
@@ -186,9 +181,9 @@ fn retained_cursor(
         })
 }
 
-struct RetainedRecipient {
+struct RetainedRecipient<'a> {
     client_id: u64,
-    surface: protocol::PaneSurfaceFrame,
+    surface: &'a protocol::PaneSurfaceFrame,
 }
 
 struct CollectedPanePatch {
@@ -204,9 +199,11 @@ struct CollectedPanePatch {
 
 struct RetainedRecipientUpdate {
     client_id: u64,
-    surface: protocol::PaneSurfaceFrame,
     patch: protocol::PaneSurfacePatch,
-    graphics_delivery: Option<crate::kitty_graphics::surface::DeliveryCache>,
+    graphics: Option<(
+        protocol::PaneSurfaceFrame,
+        crate::kitty_graphics::surface::DeliveryCache,
+    )>,
 }
 
 impl HeadlessServer {
@@ -283,7 +280,7 @@ impl HeadlessServer {
             }
             recipients.push(RetainedRecipient {
                 client_id: *client_id,
-                surface: surface.clone(),
+                surface,
             });
         }
         if recipients.is_empty() {
@@ -320,11 +317,10 @@ impl HeadlessServer {
             ) else {
                 fallback!("runtime_missing");
             };
-            let revision_before = runtime.content_seq();
-            if !revision_before.is_multiple_of(2) {
-                fallback!("unstable_content");
-            }
-            let patch = match runtime.collect_dirty_patch(width, height) {
+            let Some(snapshot) = runtime.collect_dirty_patch_snapshot(width, height) else {
+                fallback!("terminal_snapshot");
+            };
+            let patch = match snapshot.patch {
                 crate::pane::TerminalDirtyPatchOutcome::Clean => {
                     crate::render_prof::event("retained_surface.pane_clean");
                     crate::pane::TerminalDirtyPatch { rows: Vec::new() }
@@ -334,28 +330,23 @@ impl HeadlessServer {
                     fallback!("terminal_patch");
                 }
             };
-            let graphics_may_have_placements =
-                crate::kitty_graphics::is_enabled() && runtime.kitty_graphics_may_have_placements();
-            let revision = runtime.content_seq();
-            if revision != revision_before || !revision.is_multiple_of(2) {
-                fallback!("content_changed");
-            }
             collected.push(CollectedPanePatch {
                 pane_id: public_pane_id,
                 patch,
-                content_revision: revision,
-                scroll_metrics: runtime.scroll_metrics(),
-                mouse_reporting: runtime.mouse_reporting_enabled(),
-                sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
-                alternate_screen_active: runtime.alternate_screen_active(),
-                graphics_may_have_placements,
+                content_revision: snapshot.content_revision,
+                scroll_metrics: snapshot.scroll_metrics,
+                mouse_reporting: snapshot.mouse_reporting,
+                sgr_pixel_mouse: snapshot.sgr_pixel_mouse,
+                alternate_screen_active: snapshot.alternate_screen_active,
+                graphics_may_have_placements: snapshot.graphics_may_have_placements,
             });
         }
 
         let mut updates = Vec::with_capacity(recipients.len());
         for recipient in recipients {
             let client_id = recipient.client_id;
-            let mut surface = recipient.surface;
+            let surface = recipient.surface;
+            let mut panes = surface.panes.clone();
             let projection_revision = surface.projection_revision;
             let base_surface_revision = surface.surface_revision;
             let mut changed_panes = Vec::with_capacity(collected.len());
@@ -364,8 +355,7 @@ impl HeadlessServer {
             let mut refresh_graphics = !surface.graphics.placements.is_empty()
                 || !surface.graphics.retained_assets.is_empty();
             for collected_pane in &collected {
-                let Some(pane) = surface
-                    .panes
+                let Some(pane) = panes
                     .iter_mut()
                     .find(|pane| pane.pane_id == collected_pane.pane_id)
                 else {
@@ -387,14 +377,14 @@ impl HeadlessServer {
                 refresh_graphics |= collected_pane.graphics_may_have_placements;
                 let previous_pane = pane.clone();
                 let Some(rows) =
-                    apply_rows(&mut surface.frame, pane.inner_rect, &collected_pane.patch)
+                    changed_rows(&surface.frame, pane.inner_rect, &collected_pane.patch)
                 else {
                     fallback!("invalid_patch");
                 };
                 patch_rows.extend(rows);
                 let Some(scrollbar_rows) = retained_scrollbar_patch(
                     &self.app,
-                    &mut surface.frame,
+                    &surface.frame,
                     pane,
                     collected_pane.alternate_screen_active,
                     collected_pane.scroll_metrics,
@@ -417,36 +407,8 @@ impl HeadlessServer {
                 changed_panes.push(pane.clone());
             }
 
-            let cursor = retained_cursor(&self.app, &surface.panes);
+            let cursor = retained_cursor(&self.app, &panes);
             let cursor_changed = cursor != surface.frame.cursor;
-            surface.frame.cursor = cursor.clone();
-            let mut graphics_changed = false;
-            let graphics_delivery = if refresh_graphics {
-                let Some(target) = self.shell_target_for_client(client_id) else {
-                    fallback!("graphics_target");
-                };
-                let client = &self.clients[&client_id];
-                let Some((graphics, delivery)) =
-                    crate::server::client_shell_graphics::collect_retained(
-                        &self.app,
-                        &surface,
-                        target,
-                        client.cell_size,
-                        &client.shell_graphics_delivery,
-                        client_id,
-                    )
-                else {
-                    fallback!("graphics_geometry");
-                };
-                graphics_changed = graphics != surface.graphics;
-                surface.graphics = graphics;
-                Some(delivery)
-            } else {
-                None
-            };
-            if patch_rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
-                continue;
-            }
             let patch = protocol::PaneSurfacePatch {
                 boot_id: self.client_shell_boot_id.clone(),
                 projection_revision,
@@ -456,11 +418,39 @@ impl HeadlessServer {
                 panes: changed_panes,
                 cursor,
             };
+            let mut graphics_changed = false;
+            let graphics = if refresh_graphics {
+                let Some(target) = self.shell_target_for_client(client_id) else {
+                    fallback!("graphics_target");
+                };
+                let client = &self.clients[&client_id];
+                let mut next_surface = surface.clone();
+                crate::server::render_stream::apply_pane_surface_patch(&mut next_surface, &patch);
+                let Some((graphics, delivery)) =
+                    crate::server::client_shell_graphics::collect_retained(
+                        &self.app,
+                        &next_surface,
+                        target,
+                        client.cell_size,
+                        &client.shell_graphics_delivery,
+                        client_id,
+                    )
+                else {
+                    fallback!("graphics_geometry");
+                };
+                graphics_changed = graphics != surface.graphics;
+                next_surface.graphics = graphics;
+                Some((next_surface, delivery))
+            } else {
+                None
+            };
+            if patch.rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
+                continue;
+            }
             updates.push(RetainedRecipientUpdate {
                 client_id,
-                surface,
                 patch,
-                graphics_delivery,
+                graphics,
             });
         }
         if updates.is_empty() {
@@ -473,9 +463,8 @@ impl HeadlessServer {
         for update in updates {
             let RetainedRecipientUpdate {
                 client_id,
-                surface,
                 patch,
-                graphics_delivery,
+                graphics,
             } = update;
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
@@ -487,12 +476,13 @@ impl HeadlessServer {
             };
             // The published row patch cannot carry images. Reuse the retained text/layout
             // in a graphics-capable surface message rather than invoking the full renderer.
-            let prepared = if graphics_delivery.is_some() {
-                client.render_state.prepare_pane_surface(surface)
+            let (prepared, graphics_delivery) = if let Some((surface, delivery)) = graphics {
+                (
+                    client.render_state.prepare_pane_surface(surface),
+                    Some(delivery),
+                )
             } else {
-                client
-                    .render_state
-                    .prepare_pane_surface_patch(patch, surface)
+                (client.render_state.prepare_pane_surface_patch(patch), None)
             };
             let Some(prepared) = prepared else {
                 client.defer_full_render();
@@ -573,7 +563,7 @@ mod tests {
 
     #[test]
     fn retained_rows_send_only_changed_cell_spans() {
-        let mut frame = FrameData {
+        let frame = FrameData {
             width: 6,
             height: 2,
             cells: vec![cell(" "); 12],
@@ -585,8 +575,8 @@ mod tests {
             rows: vec![(0, vec![cell(" "), cell("x"), cell("y"), cell(" ")])],
         };
 
-        let rows = apply_rows(
-            &mut frame,
+        let rows = changed_rows(
+            &frame,
             protocol::SurfaceRect {
                 x: 1,
                 y: 1,
@@ -605,13 +595,12 @@ mod tests {
                 cells: vec![cell("x"), cell("y"), cell(" ")],
             }]
         );
-        assert_eq!(frame.cells[8], cell("x"));
-        assert_eq!(frame.cells[9], cell("y"));
+        assert_eq!(frame.cells, vec![cell(" "); 12], "planning must not commit");
     }
 
     #[test]
     fn retained_rows_include_the_cell_after_a_width_transition() {
-        let mut frame = FrameData {
+        let frame = FrameData {
             width: 3,
             height: 1,
             cells: vec![cell("界"), cell("z"), cell("q")],
@@ -623,8 +612,8 @@ mod tests {
             rows: vec![(0, vec![cell("x"), cell("z"), cell("q")])],
         };
 
-        let rows = apply_rows(
-            &mut frame,
+        let rows = changed_rows(
+            &frame,
             protocol::SurfaceRect {
                 x: 0,
                 y: 0,
@@ -647,7 +636,7 @@ mod tests {
 
     #[test]
     fn retained_rows_omit_unchanged_full_dirty_rows() {
-        let mut frame = FrameData {
+        let frame = FrameData {
             width: 4,
             height: 2,
             cells: vec![cell(" "); 8],
@@ -659,8 +648,8 @@ mod tests {
             rows: vec![(0, vec![cell(" "); 4]), (1, vec![cell(" "); 4])],
         };
 
-        let rows = apply_rows(
-            &mut frame,
+        let rows = changed_rows(
+            &frame,
             protocol::SurfaceRect {
                 x: 0,
                 y: 0,

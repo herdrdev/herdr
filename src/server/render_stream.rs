@@ -145,9 +145,8 @@ impl ClientRenderState {
     }
 
     pub(crate) fn prepare_pane_surface_patch(
-        &mut self,
+        &self,
         mut patch: PaneSurfacePatch,
-        mut committed_surface: PaneSurfaceFrame,
     ) -> Option<PreparedRender> {
         let Self::Semantic {
             last_surface,
@@ -165,11 +164,8 @@ impl ClientRenderState {
         }
         let next_revision = surface_revision.saturating_add(1);
         patch.surface_revision = next_revision;
-        committed_surface.surface_revision = next_revision;
-        committed_surface.graphics.assets.clear();
-        Some(PreparedRender::Semantic {
+        Some(PreparedRender::SemanticPatch {
             message: ServerMessage::PaneSurfacePatch(patch),
-            committed_surface: Box::new(committed_surface),
         })
     }
 
@@ -186,6 +182,21 @@ impl ClientRenderState {
             ) => {
                 *surface_revision = committed_surface.surface_revision;
                 *last_surface = Some(committed_surface);
+            }
+            (
+                Self::Semantic {
+                    last_surface,
+                    surface_revision,
+                },
+                PreparedRender::SemanticPatch {
+                    message: ServerMessage::PaneSurfacePatch(patch),
+                },
+            ) => {
+                let surface = last_surface
+                    .as_deref_mut()
+                    .expect("prepared patch baseline");
+                apply_pane_surface_patch(surface, &patch);
+                *surface_revision = patch.surface_revision;
             }
             (
                 Self::TerminalAnsi {
@@ -208,6 +219,28 @@ impl ClientRenderState {
     }
 }
 
+// Planning validates all rows and pane IDs before any send. The server does not yield
+// between planning and commit, so applying the accepted patch cannot fail partway through.
+pub(super) fn apply_pane_surface_patch(surface: &mut PaneSurfaceFrame, patch: &PaneSurfacePatch) {
+    debug_assert_eq!(surface.boot_id, patch.boot_id);
+    debug_assert_eq!(surface.projection_revision, patch.projection_revision);
+    debug_assert_eq!(surface.surface_revision, patch.base_surface_revision);
+    for row in &patch.rows {
+        let start = usize::from(row.y) * usize::from(surface.frame.width) + usize::from(row.x);
+        surface.frame.cells[start..start + row.cells.len()].clone_from_slice(&row.cells);
+    }
+    for updated in &patch.panes {
+        let pane = surface
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == updated.pane_id)
+            .expect("planned patch pane");
+        pane.clone_from(updated);
+    }
+    surface.frame.cursor.clone_from(&patch.cursor);
+    surface.surface_revision = patch.surface_revision;
+}
+
 fn insert_graphics_before_sync_end(encoded: &mut Vec<u8>, graphics: &[u8]) {
     if graphics.is_empty() {
         return;
@@ -226,6 +259,9 @@ pub(crate) enum PreparedRender {
         message: ServerMessage,
         committed_surface: Box<PaneSurfaceFrame>,
     },
+    SemanticPatch {
+        message: ServerMessage,
+    },
     TerminalAnsi {
         message: ServerMessage,
         frame: FrameData,
@@ -236,7 +272,9 @@ pub(crate) enum PreparedRender {
 impl PreparedRender {
     pub(crate) fn message(&self) -> &ServerMessage {
         match self {
-            Self::Semantic { message, .. } | Self::TerminalAnsi { message, .. } => message,
+            Self::Semantic { message, .. }
+            | Self::SemanticPatch { message }
+            | Self::TerminalAnsi { message, .. } => message,
         }
     }
 

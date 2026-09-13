@@ -34,8 +34,10 @@ const ClipboardConfirmationDialog = @import("clipboard_confirmation_dialog.zig")
 const TitleDialog = @import("title_dialog.zig").TitleDialog;
 const Window = @import("window.zig").Window;
 const InspectorWindow = @import("inspector_window.zig").InspectorWindow;
+const SplitTree = @import("split_tree.zig").SplitTree;
 const i18n = @import("../../../os/i18n.zig");
-const media = @import("../media.zig");
+const global = @import("../../../global.zig");
+const gtk_version = @import("../gtk_version.zig");
 
 const log = std.log.scoped(.gtk_ghostty_surface);
 
@@ -674,12 +676,6 @@ pub const Surface = extern struct {
         // false by a parent widget.
         bell_ringing: bool = false,
 
-        // The audio bell's MediaFile, reused across bells so we don't leak a
-        // GStreamer pipeline (and its GL threads) on every ring. Built lazily
-        // on the first audio bell and rebuilt when `bell-audio-path` changes;
-        // unref'd on dispose. See ringBell and media.zig.
-        bell_media: ?*gtk.MediaFile = null,
-
         /// True if this surface is in an error state. This is currently
         /// a simple boolean with no additional information on WHAT the
         /// error state is, because we don't yet need it or use it. For now,
@@ -695,6 +691,7 @@ pub const Surface = extern struct {
         // True if the current surface is a split, this is used to apply
         // unfocused-split-* options
         is_split: bool = false,
+        is_split_binding: ?*gobject.Binding = null,
 
         action_group: ?*gio.SimpleActionGroup = null,
 
@@ -713,6 +710,9 @@ pub const Surface = extern struct {
         child_exited_overlay: *ChildExited,
         context_menu: *gtk.PopoverMenu,
         drop_target: *gtk.DropTarget,
+        surface_drop_target: *gtk.DropTarget,
+        drag_handle: *gtk.Widget,
+        drop_overlay: *gtk.Widget,
         progress_bar_overlay: *gtk.ProgressBar,
         error_page: *adw.StatusPage,
         terminal_page: *gtk.Overlay,
@@ -736,6 +736,7 @@ pub const Surface = extern struct {
 
         overrides: struct {
             command: ?configpkg.Command = null,
+            shell_integration: ?configpkg.Config.ShellIntegration = null,
             working_directory: ?[:0]const u8 = null,
 
             pub const none: @This() = .{};
@@ -746,6 +747,7 @@ pub const Surface = extern struct {
 
     pub fn new(overrides: struct {
         command: ?configpkg.Command = null,
+        shell_integration: ?configpkg.Config.ShellIntegration = null,
         working_directory: ?[:0]const u8 = null,
         title: ?[:0]const u8 = null,
 
@@ -758,6 +760,7 @@ pub const Surface = extern struct {
         const priv: *Private = self.private();
         priv.overrides = .{
             .command = if (overrides.command) |c| c.clone(alloc) catch null else null,
+            .shell_integration = overrides.shell_integration,
             .working_directory = if (overrides.working_directory) |wd| alloc.dupeZ(u8, wd) catch null else null,
         };
         return self;
@@ -846,6 +849,28 @@ pub const Surface = extern struct {
         };
 
         return @intFromBool(config.@"bell-features".border);
+    }
+
+    pub fn bindIsSplit(self: *Self, tree: *SplitTree) void {
+        const priv = self.private();
+        if (priv.is_split_binding) |binding| {
+            binding.unbind();
+            binding.unref();
+            priv.is_split_binding = null;
+        }
+
+        const binding = tree.as(gobject.Object).bindProperty(
+            "is-split",
+            self.as(gobject.Object),
+            "is-split",
+            .{ .sync_create = true },
+        );
+        // The ref created by bindProperty is owned by the binding itself.
+        // We need another ref to prevent the binding object from being
+        // freed if the source object (SplitTree) is finalized. Otherwise
+        // our pointer to the binding could become stale.
+        binding.ref();
+        priv.is_split_binding = binding;
     }
 
     /// Callback used to determine whether unfocused-split-fill / unfocused-split-opacity
@@ -1363,19 +1388,11 @@ pub const Surface = extern struct {
                 if (entry.native == keycode) break :w3c entry.key;
             } else .unidentified;
 
-            // Consult the pre-remapped XKB keyval/keysym to get the (possibly)
-            // remapped key. If the W3C key or the remapped key
-            // is eligible for remapping, we use it.
-            //
-            // See the docs for `shouldBeRemappable` for why we even have to
-            // do this in the first place.
-            if (gtk_key.keyFromKeyval(keyval)) |remapped| {
-                if (w3c_key.shouldBeRemappable() or remapped.shouldBeRemappable())
-                    break :keycode remapped;
-            }
-
-            // Return the original physical key
-            break :keycode w3c_key;
+            break :keycode gtk_key.remapKey(
+                w3c_key,
+                keyval,
+                key_event.isModifier() != 0,
+            );
         };
 
         // Get our modifier for the event
@@ -1560,7 +1577,11 @@ pub const Surface = extern struct {
             // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/a7738a4d269bfdf4d8d5429ca73ccdd9b2450421
             // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/9759d3fd81129608dd78116001928f2aed974ead
             if (gtk_xft_dpi <= 0) {
-                log.warn("gtk-xft-dpi has invalid value ({}), using default", .{gtk_xft_dpi});
+                // -1 is a valid value which specifies default scale.
+                // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
+                if (gtk_xft_dpi != -1) {
+                    log.warn("gtk-xft-dpi has invalid value ({}), using default", .{gtk_xft_dpi});
+                }
                 break :xft_scale 1.0;
             }
 
@@ -1589,32 +1610,35 @@ pub const Surface = extern struct {
         return self.private().cursor_pos;
     }
 
-    pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
+    pub fn defaultTermioEnv(self: *Self) !std.process.Environ.Map {
         const app = Application.default();
         const alloc = app.allocator();
-        var env = try internal_os.getEnvMap(alloc);
+        var env = if (internal_os.isFlatpak())
+            std.process.Environ.Map.init(alloc)
+        else
+            try global.environMap();
         errdefer env.deinit();
 
         if (app.savedLanguage()) |language| {
             try env.put("LANG", language);
         } else {
-            env.remove("LANG");
+            _ = env.orderedRemove("LANG");
         }
 
         // Don't leak these GTK environment variables to child processes.
-        env.remove("GDK_DEBUG");
-        env.remove("GDK_DISABLE");
-        env.remove("GSK_RENDERER");
+        _ = env.orderedRemove("GDK_DEBUG");
+        _ = env.orderedRemove("GDK_DISABLE");
+        _ = env.orderedRemove("GSK_RENDERER");
 
         // Remove some environment variables that are set when Ghostty is launched
         // from a `.desktop` file, by D-Bus activation, or systemd.
-        env.remove("GIO_LAUNCHED_DESKTOP_FILE");
-        env.remove("GIO_LAUNCHED_DESKTOP_FILE_PID");
-        env.remove("DBUS_STARTER_ADDRESS");
-        env.remove("DBUS_STARTER_BUS_TYPE");
-        env.remove("INVOCATION_ID");
-        env.remove("JOURNAL_STREAM");
-        env.remove("NOTIFY_SOCKET");
+        _ = env.orderedRemove("GIO_LAUNCHED_DESKTOP_FILE");
+        _ = env.orderedRemove("GIO_LAUNCHED_DESKTOP_FILE_PID");
+        _ = env.orderedRemove("DBUS_STARTER_ADDRESS");
+        _ = env.orderedRemove("DBUS_STARTER_BUS_TYPE");
+        _ = env.orderedRemove("INVOCATION_ID");
+        _ = env.orderedRemove("JOURNAL_STREAM");
+        _ = env.orderedRemove("NOTIFY_SOCKET");
 
         // Unset environment varies set by snaps if we're running in a snap.
         // This allows Ghostty to further launch additional snaps.
@@ -1641,7 +1665,7 @@ pub const Surface = extern struct {
     }
 
     /// Filter out environment variables that start with forbidden prefixes.
-    fn filterSnapPaths(gpa: std.mem.Allocator, env_map: *std.process.EnvMap) !void {
+    fn filterSnapPaths(gpa: std.mem.Allocator, env_map: *std.process.Environ.Map) !void {
         comptime assert(build_config.snap);
 
         const snap_vars = [_][]const u8{
@@ -1708,14 +1732,14 @@ pub const Surface = extern struct {
             item.key,
             item.value,
         );
-        for (env_to_remove.items) |key| _ = env_map.remove(key);
+        for (env_to_remove.items) |key| _ = env_map.orderedRemove(key);
     }
 
     pub fn clipboardRequest(
         self: *Self,
         clipboard_type: apprt.Clipboard,
         state: apprt.ClipboardRequest,
-    ) !bool {
+    ) !apprt.ClipboardReadResult {
         return try Clipboard.request(
             self,
             clipboard_type,
@@ -1825,8 +1849,19 @@ pub const Surface = extern struct {
         };
         priv.drop_target.setGtypes(&drop_target_types, drop_target_types.len);
 
+        // Also have to set up the surface drop target to accept other surfaces
+        // (in particular, their surface IDs)
+        var surface_drop_target_types = [_]gobject.Type{
+            gobject.ext.types.uint64,
+        };
+        priv.surface_drop_target.setGtypes(
+            &surface_drop_target_types,
+            surface_drop_target_types.len,
+        );
+
         // Setup properties we can't set from our Blueprint file.
         self.as(gtk.Widget).setCursorFromName("text");
+        priv.drag_handle.setCursorFromName("grab");
 
         // Initialize our config
         self.propConfig(undefined, null);
@@ -1860,9 +1895,10 @@ pub const Surface = extern struct {
             priv.config = null;
         }
 
-        if (priv.bell_media) |v| {
-            v.unref();
-            priv.bell_media = null;
+        if (priv.is_split_binding) |binding| {
+            binding.unbind();
+            binding.unref();
+            priv.is_split_binding = null;
         }
 
         if (priv.vadj_signal_group) |group| {
@@ -1984,6 +2020,58 @@ pub const Surface = extern struct {
         gobject.Object.virtual_methods.finalize.call(
             Class.parent,
             self.as(Parent),
+        );
+    }
+
+    fn snapshot(self: *Self, snap: *gtk.Snapshot) callconv(.c) void {
+        const priv = self.private();
+
+        const blur = blur: {
+            // Native GTK blur is only available since GTK 4.23.3
+            if (gtk_version.runtimeUntil(4, 23, 3)) break :blur null;
+            const config = priv.config orelse break :blur null;
+
+            break :blur switch (config.get().@"background-blur") {
+                .radius => |v| @as(f32, v),
+                .true, .@"macos-glass-regular", .@"macos-glass-clear" => 20.0,
+                .false => null,
+            };
+        };
+
+        if (blur) |b| blur: {
+            // pushCopy and appendPaste are only supported since 4.22.
+            // These two functions are crucial for the blur function
+            // and it cannot be implemented otherwise, so if you compile
+            // Ghostty on an older GTK version, you won't get blur.
+            // Sorry.
+            if (comptime !gtk_version.atLeast(4, 22, 0)) break :blur;
+
+            const width = self.as(gtk.Widget).getWidth();
+            const height = self.as(gtk.Widget).getHeight();
+
+            // Push the current render state (background)
+            // to be appended below
+            snap.pushCopy();
+            defer snap.pop();
+
+            // Apply blur to the copied background
+            snap.pushBlur(b);
+            defer snap.pop();
+
+            snap.appendPaste(&.{
+                .f_origin = .{ .f_x = 0, .f_y = 0 },
+                .f_size = .{
+                    .f_width = @floatFromInt(width),
+                    .f_height = @floatFromInt(height),
+                },
+            }, 0);
+        }
+
+        // Draw the children normally
+        gtk.Widget.virtual_methods.snapshot.call(
+            Class.parent,
+            self.as(Parent),
+            snap,
         );
     }
 
@@ -2213,7 +2301,12 @@ pub const Surface = extern struct {
 
         // Logic around bell reaction happens on every event even if we're
         // already in the ringing state.
-        if (ringing) self.ringBell();
+        if (ringing) {
+            self.ringBell();
+            // focus clears ringing state, so we should not change state to
+            // ringing if we're already focused
+            if (self.getFocused()) return;
+        }
 
         // Property change only happens on actual state change
         const priv = self.private();
@@ -2467,8 +2560,6 @@ pub const Surface = extern struct {
     /// Handle bell features that need to happen every time a BEL is received
     /// Currently this is audio and system but this could change in the future.
     fn ringBell(self: *Self) void {
-        const priv = self.private();
-
         // Emit the signal
         signals.bell.impl.emit(
             self,
@@ -2480,33 +2571,7 @@ pub const Surface = extern struct {
         // Activate actions if they exist
         _ = self.as(gtk.Widget).activateAction("tab.ring-bell", null);
         _ = self.as(gtk.Widget).activateAction("win.ring-bell", null);
-
-        const config = if (priv.config) |c| c.get() else return;
-
-        // Do our sound
-        if (config.@"bell-features".audio) audio: {
-            const config_path = config.@"bell-audio-path" orelse break :audio;
-            const path, const required = switch (config_path) {
-                .optional => |path| .{ path, false },
-                .required => |path| .{ path, true },
-            };
-
-            const volume = std.math.clamp(
-                config.@"bell-audio-volume",
-                0.0,
-                1.0,
-            );
-
-            // Reuse one MediaFile per surface (rebuilt only when the path
-            // changes) so each bell replays the same pipeline instead of
-            // leaking a fresh one. Assign unconditionally: bellMediaFile frees
-            // any stale MediaFile and returns the current slot value (possibly
-            // null if the path is now inaccessible), so priv.bell_media never
-            // dangles.
-            priv.bell_media = media.bellMediaFile(priv.bell_media, path, required);
-            const media_file = priv.bell_media orelse break :audio;
-            media.playBell(media_file, volume);
-        }
+        _ = self.as(gtk.Widget).activateAction("app.ring-bell", null);
     }
 
     //---------------------------------------------------------------
@@ -2815,7 +2880,10 @@ pub const Surface = extern struct {
             return;
         }
 
-        if (button == .middle and !priv.gtk_enable_primary_paste) {
+        if (button == .middle and
+            !priv.gtk_enable_primary_paste and
+            !core_surface.mouseReportingActive())
+        {
             return;
         }
 
@@ -2875,7 +2943,10 @@ pub const Surface = extern struct {
             return;
         }
 
-        if (button == .middle and !priv.gtk_enable_primary_paste) {
+        if (button == .middle and
+            !priv.gtk_enable_primary_paste and
+            !surface.mouseReportingActive())
+        {
             return;
         }
 
@@ -3320,7 +3391,7 @@ pub const Surface = extern struct {
         self: *Self,
     ) callconv(.c) void {
         self.updateMapped(true);
-        self.updateOcclusion(true);
+        self.updateOcclusion();
     }
 
     fn glareaUnmap(
@@ -3328,7 +3399,7 @@ pub const Surface = extern struct {
         self: *Self,
     ) callconv(.c) void {
         self.updateMapped(false);
-        self.updateOcclusion(false);
+        self.updateOcclusion();
     }
 
     fn updateMapped(self: *Self, mapped: bool) void {
@@ -3337,11 +3408,21 @@ pub const Surface = extern struct {
         self.as(gobject.Object).notifyByPspec(properties.mapped.impl.param_spec);
     }
 
-    fn updateOcclusion(self: *Self, visible: bool) void {
+    /// Update the core surface visibility based on both GTK widget and
+    /// toplevel state. This is public so the window can call it when its
+    /// suspended state changes.
+    pub fn updateOcclusion(self: *Self) void {
         const surface = self.core() orelse return;
+        const visible = self.private().mapped and !self.windowSuspended();
         surface.occlusionCallback(visible) catch |err| {
             log.warn("error in occlusion callback err={}", .{err});
         };
+    }
+
+    fn windowSuspended(self: *Self) bool {
+        const native = self.as(gtk.Widget).getNative() orelse return false;
+        const window = gobject.ext.cast(gtk.Window, native) orelse return false;
+        return window.isSuspended() != 0;
     }
 
     fn glareaRender(
@@ -3461,9 +3542,11 @@ pub const Surface = extern struct {
         );
         defer config.deinit();
 
-        if (priv.overrides.command) |c| {
-            config.command = try c.clone(config._arena.?.allocator());
-        }
+        try applyCommandOverrides(
+            &config,
+            priv.overrides.command,
+            priv.overrides.shell_integration,
+        );
         if (priv.overrides.working_directory) |wd| {
             const config_alloc = config.arenaAlloc();
             var wd_val: configpkg.WorkingDirectory = .{ .path = try config_alloc.dupe(u8, wd) };
@@ -3597,6 +3680,178 @@ pub const Surface = extern struct {
         };
     }
 
+    fn closureShouldDragHandleBeShown(
+        _: *Self,
+        config_: ?*Config,
+        is_split: c_int,
+    ) callconv(.c) c_int {
+        const config = config_ orelse return @intFromBool(false);
+
+        const shown = switch (config.get().@"drag-handle") {
+            .always => true,
+            .auto => is_split != 0,
+            .never => false,
+        };
+        return @intFromBool(shown);
+    }
+
+    fn surfaceDragPrepare(
+        src: *gtk.DragSource,
+        x: f64,
+        y: f64,
+        self: *Self,
+    ) callconv(.c) *gdk.ContentProvider {
+        // TODO: Use a static content provider once we make `self.core()`
+        // available immediately when constructing the surface widget
+        _ = src;
+        _ = x;
+        _ = y;
+        var val = gobject.ext.Value.newFrom(self.core().?.id);
+        return gdk.ContentProvider.newForValue(&val);
+    }
+
+    fn surfaceDragBegin(
+        src: *gtk.DragSource,
+        _: *gdk.Drag,
+        self: *Self,
+    ) callconv(.c) void {
+        // The scale of the preview
+        const preview_scale: f32 = 0.2;
+
+        // Snapshot the entire surface widget as the icon preview
+        const paintable = gtk.WidgetPaintable.new(self.as(gtk.Widget));
+        defer paintable.unref();
+
+        // Center the preview
+        const width = self.as(gtk.Widget).getWidth();
+        const height = self.as(gtk.Widget).getHeight();
+        const mid_x = @as(f32, @floatFromInt(width)) / 2;
+        const mid_y = @as(f32, @floatFromInt(height)) / 2;
+
+        // Create a snapshot to render the scaled paintable
+        const snap = gtk.Snapshot.new();
+        snap.scale(preview_scale, preview_scale);
+        paintable.as(gdk.Paintable).snapshot(
+            snap.as(gdk.Snapshot),
+            @floatFromInt(width),
+            @floatFromInt(height),
+        );
+
+        if (snap.freeToPaintable(null)) |scaled| {
+            defer scaled.unref();
+            src.setIcon(
+                scaled,
+                @intFromFloat(mid_x * preview_scale),
+                @intFromFloat(mid_y * preview_scale),
+            );
+        } else {
+            // The scaling process somehow failed.
+            // Use the original paintable as a fail-safe
+            log.warn("preview scaling failed - falling back to original paintable", .{});
+            src.setIcon(
+                paintable.as(gdk.Paintable),
+                @intFromFloat(mid_x),
+                @intFromFloat(mid_y),
+            );
+        }
+    }
+
+    fn surfaceDrop(
+        _: *gtk.DropTarget,
+        v: *const gobject.Value,
+        x: f64,
+        y: f64,
+        self: *Self,
+    ) callconv(.c) void {
+        const dropped_id = v.getUint64();
+        const dropped = self.core().?.app.findSurfaceByID(dropped_id) orelse return;
+        const from = dropped.rt_surface.gobj();
+
+        const st = ext.getAncestor(
+            SplitTree,
+            self.as(gtk.Widget),
+        ) orelse {
+            log.warn("surface is not placed in a split tree", .{});
+            return;
+        };
+
+        const dir = self.calcDropDirection(x, y);
+
+        // The only error that could happen here is an OOM,
+        // and in that case we're already milliseconds away from crashing, so...
+        st.moveSplit(from, self, dir) catch return;
+
+        // Clean up overlay state
+        self.setDropOverlayDirection(null);
+    }
+
+    fn surfaceDropLeave(
+        _: *gtk.DropTarget,
+        self: *Self,
+    ) callconv(.c) void {
+        // Hide overlay
+        self.setDropOverlayDirection(null);
+    }
+
+    fn surfaceDropMotion(
+        _: *gtk.DropTarget,
+        x: f64,
+        y: f64,
+        self: *Self,
+    ) callconv(.c) gdk.DragAction {
+        // Recalculate the drop region
+        const dir = self.calcDropDirection(x, y);
+        self.setDropOverlayDirection(dir);
+        return .{ .move = true };
+    }
+
+    fn propDropValue(
+        tgt: *gtk.DropTarget,
+        _: *gobject.ParamSpec,
+        self: *Self,
+    ) callconv(.c) void {
+        // Reject the drop if we're dropping a surface onto itself.
+        // Note that we cannot implement this via the `accept` signal,
+        // since the decision of whether to accept or deny a drop is dependent
+        // on the payload (i.e. the surface being dropped). This is
+        // well-documented in GTK docs.
+
+        const core_surface = self.core() orelse return;
+        const value = tgt.getValue() orelse return;
+        const surface_id = value.getUint64();
+        if (core_surface.id == surface_id) tgt.reject();
+    }
+
+    fn setDropOverlayDirection(self: *Self, dir: ?Tree.Split.Direction) void {
+        const priv = self.private();
+        inline for (&.{ "drop-top", "drop-left", "drop-right", "drop-bottom" }) |c| {
+            priv.drop_overlay.removeCssClass(c);
+        }
+
+        if (dir) |d| priv.drop_overlay.addCssClass(switch (d) {
+            .up => "drop-top",
+            .left => "drop-left",
+            .right => "drop-right",
+            .down => "drop-bottom",
+        });
+    }
+
+    fn calcDropDirection(self: *Self, x: f64, y: f64) Tree.Split.Direction {
+        const width: f64 = @floatFromInt(self.as(gtk.Widget).getWidth());
+        const height: f64 = @floatFromInt(self.as(gtk.Widget).getHeight());
+
+        const l_dist = x / width;
+        const t_dist = y / height;
+        const r_dist = 1 - l_dist;
+        const b_dist = 1 - t_dist;
+        const min = @min(l_dist, t_dist, r_dist, b_dist);
+
+        if (min == l_dist) return .left;
+        if (min == r_dist) return .right;
+        if (min == t_dist) return .up;
+        return .down;
+    }
+
     const C = Common(Self, Private);
     pub const as = C.as;
     pub const ref = C.ref;
@@ -3636,6 +3891,9 @@ pub const Surface = extern struct {
             class.bindTemplateChildPrivate("key_state_overlay", .{});
             class.bindTemplateChildPrivate("terminal_page", .{});
             class.bindTemplateChildPrivate("drop_target", .{});
+            class.bindTemplateChildPrivate("surface_drop_target", .{});
+            class.bindTemplateChildPrivate("drag_handle", .{});
+            class.bindTemplateChildPrivate("drop_overlay", .{});
             class.bindTemplateChildPrivate("im_context", .{});
 
             // Template Callbacks
@@ -3678,6 +3936,13 @@ pub const Surface = extern struct {
             class.bindTemplateCallback("search_changed", &searchChanged);
             class.bindTemplateCallback("search_next_match", &searchNextMatch);
             class.bindTemplateCallback("search_previous_match", &searchPreviousMatch);
+            class.bindTemplateCallback("should_drag_handle_be_shown", &closureShouldDragHandleBeShown);
+            class.bindTemplateCallback("surface_drag_prepare", &surfaceDragPrepare);
+            class.bindTemplateCallback("surface_drag_begin", &surfaceDragBegin);
+            class.bindTemplateCallback("surface_drop", &surfaceDrop);
+            class.bindTemplateCallback("surface_drop_leave", &surfaceDropLeave);
+            class.bindTemplateCallback("surface_drop_motion", &surfaceDropMotion);
+            class.bindTemplateCallback("notify_drop_value", &propDropValue);
 
             // Properties
             gobject.ext.registerProperties(class, &.{
@@ -3723,6 +3988,7 @@ pub const Surface = extern struct {
             // Virtual methods
             gobject.Object.virtual_methods.dispose.implement(class, &dispose);
             gobject.Object.virtual_methods.finalize.implement(class, &finalize);
+            gtk.Widget.virtual_methods.snapshot.implement(class, &snapshot);
         }
 
         pub const as = C.Class.as;
@@ -3865,22 +4131,25 @@ const Clipboard = struct {
         );
     }
 
-    /// Request data from the clipboard (read the clipboard). This
-    /// completes asynchronously and will call the `completeClipboardRequest`
-    /// core surface API when done.
-    ///
-    /// Returns true if the request was started, false if the clipboard
-    /// doesn't contain text (allowing performable keybinds to pass through).
+    /// Request data from the clipboard (read the clipboard). A started
+    /// request completes asynchronously and will call the
+    /// `completeClipboardRequest` core surface API when done.
     pub fn request(
         self: *Surface,
         clipboard_type: apprt.Clipboard,
         state: apprt.ClipboardRequest,
-    ) Allocator.Error!bool {
+    ) Allocator.Error!apprt.ClipboardReadResult {
+        // The GTK apprt doesn't support the Kitty clipboard protocol
+        // yet.
+        if (state == .kitty_read or
+            state == .kitty_write or
+            state == .list) return .unsupported;
+
         // Get our requested clipboard
         const clipboard = get(
             self.private().gl_area.as(gtk.Widget),
             clipboard_type,
-        ) orelse return false;
+        ) orelse return .unsupported;
 
         // For paste requests, check if clipboard has text format available.
         // This is a synchronous check that allows performable keybinds to
@@ -3889,7 +4158,7 @@ const Clipboard = struct {
             const formats = clipboard.getFormats();
             if (formats.containGtype(gobject.ext.types.string) == 0) {
                 log.debug("clipboard has no text format, not starting paste request", .{});
-                return false;
+                return .unavailable;
             }
         }
 
@@ -3912,7 +4181,7 @@ const Clipboard = struct {
             ud,
         );
 
-        return true;
+        return .started;
     }
 
     /// Paste explicit text directly into the surface, regardless of the
@@ -3925,16 +4194,15 @@ const Clipboard = struct {
 
         const surface = self.private().core_surface orelse return;
         surface.completeClipboardRequest(
-            .paste,
-            text,
-            false,
+            .{ .paste = .standard },
+            .{ .contents = &.{.{ .mime = "text/plain", .data = text }} },
         ) catch |err| switch (err) {
             error.UnsafePaste,
             error.UnauthorizedPaste,
             => {
                 showClipboardConfirmation(
                     self,
-                    .paste,
+                    .{ .paste = .standard },
                     text,
                 );
                 return;
@@ -3978,7 +4246,7 @@ const Clipboard = struct {
                 .request = &req,
                 .@"can-remember" = switch (req) {
                     .osc_52_read, .osc_52_write => true,
-                    .paste => false,
+                    .paste, .list, .kitty_read, .kitty_write => false,
                 },
                 .@"clipboard-contents" = contents_buf,
             },
@@ -4015,7 +4283,7 @@ const Clipboard = struct {
         if (remember) switch (req.*) {
             .osc_52_read => surface.config.clipboard_read = .allow,
             .osc_52_write => surface.config.clipboard_write = .allow,
-            .paste => {},
+            .paste, .list, .kitty_read, .kitty_write => {},
         };
 
         // Get our text
@@ -4032,11 +4300,10 @@ const Clipboard = struct {
             ?[:0]const u8,
         ) orelse return;
 
-        surface.completeClipboardRequest(
-            req.*,
-            text,
-            true,
-        ) catch |err| {
+        surface.completeClipboardRequest(req.*, .{
+            .contents = &.{.{ .mime = "text/plain", .data = text }},
+            .confirmed = true,
+        }) catch |err| {
             log.warn("failed to complete clipboard request: {}", .{err});
         };
     }
@@ -4054,7 +4321,7 @@ const Clipboard = struct {
         if (remember) switch (req.*) {
             .osc_52_read => surface.config.clipboard_read = .deny,
             .osc_52_write => surface.config.clipboard_write = .deny,
-            .paste => @panic("paste should not be able to be remembered"),
+            .paste, .list, .kitty_read, .kitty_write => @panic("request should not be able to be remembered"),
         };
     }
 
@@ -4092,8 +4359,7 @@ const Clipboard = struct {
         const surface = self.private().core_surface orelse return;
         surface.completeClipboardRequest(
             req.state,
-            str,
-            false,
+            .{ .contents = &.{.{ .mime = "text/plain", .data = str }} },
         ) catch |err| switch (err) {
             error.UnsafePaste,
             error.UnauthorizedPaste,
@@ -4143,4 +4409,58 @@ test "computeFraction" {
     try std.testing.expectEqual(1.0, computeFraction(255));
     try std.testing.expectEqual(0.0, computeFraction(0));
     try std.testing.expectEqual(0.5, computeFraction(50));
+}
+
+/// Apply command and shell integration overrides received from the CLI.
+/// Explicit commands should only receive shell integration when their
+/// executable can be detected as a supported shell. An explicit shell
+/// integration override is also valid without a command.
+fn applyCommandOverrides(
+    config: *configpkg.Config,
+    command: ?configpkg.Command,
+    shell_integration: ?configpkg.Config.ShellIntegration,
+) Allocator.Error!void {
+    if (command) |value| {
+        config.command = try value.clone(config.arenaAlloc());
+
+        if (shell_integration) |integration| {
+            config.@"shell-integration" = integration;
+        } else if (config.@"shell-integration" != .none) {
+            config.@"shell-integration" = .detect;
+        }
+    } else if (shell_integration) |value| {
+        config.@"shell-integration" = value;
+    }
+}
+
+test "command and shell integration overrides" {
+    const testing = std.testing;
+
+    var config = try configpkg.Config.default(testing.allocator);
+    defer config.deinit();
+
+    config.@"shell-integration" = .nushell;
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+    try testing.expectEqual(.detect, config.@"shell-integration");
+
+    config.@"shell-integration" = .none;
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+    try testing.expectEqual(.none, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, .{ .shell = "nu" }, .nushell);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, .none);
+    try testing.expectEqual(.none, config.@"shell-integration");
+
+    config.@"shell-integration" = .nushell;
+    try applyCommandOverrides(&config, null, null);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    config.@"shell-integration" = .none;
+    try applyCommandOverrides(&config, null, .nushell);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, null, .none);
+    try testing.expectEqual(.none, config.@"shell-integration");
 }

@@ -215,6 +215,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) active_endpoint_id: &'a ClientEndpointId,
     pub(super) collapsed_endpoints: &'a HashSet<ClientEndpointId>,
     pub(super) collapsed_groups: &'a HashSet<String>,
+    pub(super) remote_collapsed_groups: &'a HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: &'a mut usize,
     pub(super) agent_scroll: &'a mut usize,
     pub(super) tab_scroll: &'a mut usize,
@@ -223,7 +224,8 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_section_split: f32,
     pub(super) tab_drag_insert_index: Option<usize>,
-    pub(super) selected_workspace_id: Option<&'a str>,
+    pub(super) selected_workspace_id: Option<&'a WorkspaceNavigationTarget>,
+    pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
 }
@@ -271,7 +273,9 @@ pub(super) fn render_shell(
                 layout.sidebar,
                 snapshot,
                 config,
-                state.selected_workspace_id,
+                state
+                    .selected_workspace_id
+                    .map(|target| target.workspace_id.as_str()),
                 &mut hits,
             );
         } else {

@@ -24,10 +24,13 @@
   #, vulkan-loader # unused
   vttest,
   wabt,
+  wasm-tools,
   wasmtime,
+  binaryen,
+  twiggy,
+  wizer,
   wraptest,
   zig,
-  zig_0_15,
   zip,
   llvmPackages_latest,
   bzip2,
@@ -60,6 +63,7 @@
   zlib,
   alejandra,
   jq,
+  kaitai-struct-compiler,
   minisign,
   pandoc,
   pinact,
@@ -86,6 +90,12 @@
   gi_typelib_path = import ./build-support/gi-typelib-path.nix {
     inherit pkgs lib stdenv;
   };
+  python = python3.withPackages (python-pkgs: [
+    python-pkgs.jsonschema
+    python-pkgs.kaitaistruct
+    python-pkgs.ucs-detect
+    python-pkgs.wasmtime
+  ]);
 in
   mkShell {
     name = "ghostty";
@@ -117,13 +127,18 @@ in
 
         # Testing
         parallel
-        python3
+        python
         vttest
         hyperfine
+        kaitai-struct-compiler
 
         # wasm
+        binaryen
+        twiggy
         wabt
+        wasm-tools
         wasmtime
+        wizer
 
         # Localization
         gettext
@@ -139,11 +154,6 @@ in
         blueprint-compiler
         libadwaita
         gtk4
-
-        # Python packages
-        (python3.withPackages (python-pkgs: [
-          python-pkgs.ucs-detect
-        ]))
       ]
       ++ lib.optionals stdenv.hostPlatform.isLinux [
         # My nix shell environment installs the non-interactive version
@@ -222,8 +232,7 @@ in
       '')
       + (lib.optionalString stdenv.hostPlatform.isDarwin ''
         # On macOS, we unset the macOS SDK env vars that Nix sets up because
-        # we rely on a system installation. Nix only provides a macOS SDK
-        # and we need iOS too.
+        # we rely on a system installation. Nix only provides a macOS SDK.
         unset SDKROOT
         unset DEVELOPER_DIR
 
@@ -243,6 +252,6 @@ in
         # We need to remove "xcrun" from the PATH. It is injected by
         # some dependency but we need to rely on system Xcode tools
         export PATH=$(echo "$PATH" | awk -v RS=: -v ORS=: '$0 !~ /xcrun/ || $0 == "/usr/bin" {print}' | sed 's/:$//')
-        export PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/bin:/usr/local/opt/llvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+        export PATH="${python}/bin:/opt/homebrew/opt/llvm/bin:/opt/homebrew/bin:/usr/local/opt/llvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
       '');
   }

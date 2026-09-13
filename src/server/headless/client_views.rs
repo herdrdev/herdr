@@ -248,7 +248,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::AgentFocus(_)
+                | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
                 | Method::PaneCopyMotion(_)
@@ -286,7 +287,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::AgentFocus(_)
+                | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
                 | Method::PaneEditScrollback(_)
@@ -839,6 +841,10 @@ impl HeadlessServer {
                 }),
             _ => None,
         };
+        let agent_focus_target = match &msg.request.method {
+            api::schema::Method::AgentFocus(params) => Some(params.target.clone()),
+            _ => None,
+        };
         let create_focus_requested = match &msg.request.method {
             api::schema::Method::WorkspaceCreate(params) => params.focus,
             api::schema::Method::TabCreate(params) => params.focus,
@@ -848,19 +854,33 @@ impl HeadlessServer {
             &msg.request.method,
             api::schema::Method::WorktreeOpen(params) if params.focus
         );
-        let response_proxy = inspect_worktree_open.then(|| {
+        let response_proxy = (agent_focus_target.is_some() || inspect_worktree_open).then(|| {
             let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
             let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
             (original, proxy_rx)
         });
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false);
-        let worktree_open_succeeded = forward_proxied_api_response(response_proxy);
+        let proxied_request_succeeded = forward_proxied_api_response(response_proxy);
+        let successful_agent_focus_target = proxied_request_succeeded
+            .then(|| {
+                agent_focus_target.as_deref().and_then(|target| {
+                    self.app.resolve_agent_target(target).ok().map(|resolved| {
+                        crate::ui::TabSurfaceTarget {
+                            workspace_index: resolved.ws_idx,
+                            tab_index: resolved.tab_idx,
+                        }
+                    })
+                })
+            })
+            .flatten();
         let target_changed = self.default_shell_target() != target_before;
-        let public_focus_succeeded = explicit_public_focus_target
-            .is_some_and(|target| self.default_shell_target() == Some(target))
+        let explicit_focus_succeeded = successful_agent_focus_target
+            .or(explicit_public_focus_target)
+            .is_some_and(|target| self.default_shell_target() == Some(target));
+        let public_focus_succeeded = explicit_focus_succeeded
             || (create_focus_requested && target_changed)
-            || worktree_open_succeeded;
+            || (inspect_worktree_open && proxied_request_succeeded);
         if public_focus_succeeded {
             self.focus_all_shell_clients_on_default_target();
         }
@@ -895,10 +915,10 @@ impl HeadlessServer {
         if reconcile || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }
+        let focus_after = self.shell_focus_target(client_id);
         if let Some(all_focus_before) = all_focus_before {
             self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
         } else {
-            let focus_after = self.shell_focus_target(client_id);
             let focused_tabs_after = self.focused_shell_tabs();
             self.app.accept_current_focus_without_events();
             self.send_shell_navigation_focus_events(
@@ -907,6 +927,12 @@ impl HeadlessServer {
                 &focused_tabs_before,
                 &focused_tabs_after,
             );
+        }
+        if focus_before != focus_after {
+            if let Some(target) = focus_after {
+                self.app
+                    .emit_focus_api_events(target.workspace_index, target.pane_id);
+            }
         }
         let geometry_changed = method_claims_geometry
             && if reconcile {

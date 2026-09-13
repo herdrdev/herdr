@@ -200,7 +200,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "cursor" | "cursor-agent" => Some(Agent::Cursor),
         "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
         "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
-        "cline" => Some(Agent::Cline),
+        "cline" | ".cline" => Some(Agent::Cline),
         "omp" => Some(Agent::Omp),
         "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
         "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
@@ -378,7 +378,10 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
             if let Some(wrapped_agent) =
                 wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
             {
-                if identify_agent(&wrapped_agent) == Some(Agent::Qwen) {
+                if matches!(
+                    identify_agent(&wrapped_agent),
+                    Some(Agent::Qwen | Agent::Cline)
+                ) {
                     return wrapped_agent;
                 }
             }
@@ -981,6 +984,85 @@ mod tests {
                 Some((Agent::Qwen, "qwen".to_string()))
             );
         }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_cline_native_binaries() {
+        for (name, executable) in [
+            (
+                ".cline",
+                "/home/user/.npm/lib/node_modules/cline/bin/.cline",
+            ),
+            (
+                "cline",
+                "/usr/local/lib/node_modules/@cline/cli-darwin-arm64/bin/cline",
+            ),
+            (
+                "cline.exe",
+                r"C:\Users\user\AppData\Roaming\npm\node_modules\@cline\cli-windows-x64\bin\cline.exe",
+            ),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, name, &[executable, "--tui"])],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Cline, name.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_cline_node_wrapper() {
+        for (name, argv) in [
+            (
+                "MainThread",
+                vec!["node", "/home/user/.fnm/bin/cline", "--tui"],
+            ),
+            (
+                "node",
+                vec!["node", "/usr/local/lib/node_modules/cline/bin/cline"],
+            ),
+            (
+                "node.exe",
+                vec![
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\Users\user\AppData\Roaming\npm\node_modules\cline\bin\cline",
+                ],
+            ),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, name, &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Cline, "cline".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_rejects_unrelated_cline_mentions() {
+        for argv in [
+            vec!["node"],
+            vec!["node", "/path/to/other.js", "cline"],
+            vec!["node", "-e", "cline"],
+            vec!["node", "/path/to/cline-helper"],
+            vec!["/path/to/.cline-helper"],
+            vec!["/path/to/other", "/path/to/cline"],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "MainThread", &argv)],
+            };
+
+            assert_eq!(identify_agent_in_job(&job), None);
+        }
+        assert_eq!(identify_agent("MainThread"), None);
     }
 
     #[test]

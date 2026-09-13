@@ -1,56 +1,53 @@
-diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
-index 26ee0c0b..9bb961d3 100644
 --- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
 +++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
-@@ -1199,2 +1199,9 @@ typedef enum GHOSTTY_ENUM_TYPED {
-   GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
+@@ -1951,6 +1951,14 @@
+    * Output type: size_t *
+    */
+   GHOSTTY_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES = 40,
 +
 +  /**
 +   * Whether xterm modifyOtherKeys mode 2 is enabled.
 +   *
 +   * Output type: bool *
 +   */
-+  GHOSTTY_TERMINAL_DATA_MODIFY_OTHER_KEYS = 33,
++  GHOSTTY_TERMINAL_DATA_MODIFY_OTHER_KEYS = 41,
++
    GHOSTTY_TERMINAL_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
-diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
-index a896c0fd..0f95fcf1 100644
+ } GhosttyTerminalData;
+ 
 --- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
 +++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
-@@ -759,3 +759,4 @@ pub const TerminalData = enum(c_int) {
-     viewport_active = 32,
-+    modify_other_keys = 33,
--
-+
+@@ -1556,6 +1556,7 @@
+     vt_ground = 38,
+     cursor_at_prompt = 39,
+     clipboard_write_max_bytes = 40,
++    modify_other_keys = 41,
+ 
      /// Output type expected for querying the data of the given kind.
-@@ -765,3 +766,8 @@ pub const TerminalData = enum(c_int) {
-             .cols, .rows, .cursor_x, .cursor_y => size.CellCountInt,
--            .cursor_pending_wrap, .cursor_visible, .mouse_tracking, .viewport_active => bool,
-+            .cursor_pending_wrap,
-+            .cursor_visible,
-+            .mouse_tracking,
-+            .viewport_active,
+     pub fn OutType(comptime self: TerminalData) type {
+@@ -1569,6 +1570,7 @@
+             .vt_processing_error,
+             .vt_ground,
+             .cursor_at_prompt,
 +            .modify_other_keys,
-+            => bool,
+             => bool,
              .active_screen => TerminalScreen,
-@@ -901,2 +907,3 @@ fn getTyped(
+             .kitty_keyboard_flags => u8,
+@@ -1719,6 +1721,7 @@
+             t.screens.active.selection orelse return .no_value,
+         ),
          .viewport_active => out.* = t.screens.active.pages.viewport == .active,
 +        .modify_other_keys => out.* = t.flags.modify_other_keys_2,
-     }
-@@ -1655,3 +1662,29 @@ test "get kitty_keyboard_flags" {
+         .vt_processing_error => out.* = wrapper.stream.handler.semantic_failure,
+         .vt_ground => out.* = wrapper.stream.ground(),
+         .scrollback_max_bytes => {
+@@ -3139,6 +3142,24 @@
+     try testing.expectEqual(3, flags);
  }
--
-+
+ 
 +test "get modify_other_keys" {
 +    var t: Terminal = null;
-+    try testing.expectEqual(Result.success, new(
-+        &lib.alloc.test_allocator,
-+        &t,
-+        .{
-+            .cols = 80,
-+            .rows = 24,
-+            .max_scrollback = 0,
-+        },
-+    ));
++    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &t, 80, 24));
 +    defer free(t);
 +
 +    var enabled: bool = undefined;
@@ -67,3 +64,5 @@ index a896c0fd..0f95fcf1 100644
 +}
 +
  test "get mouse_tracking" {
+     var t: Terminal = null;
+     try testing.expectEqual(Result.success, new(

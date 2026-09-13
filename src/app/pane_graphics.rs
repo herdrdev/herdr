@@ -159,12 +159,6 @@ impl Runtime {
             .sum()
     }
 
-    pub(crate) fn active_for_pane(&self, pane_id: PaneId) -> bool {
-        self.slots
-            .iter()
-            .any(|((id, _), slot)| *id == pane_id && slot.layer.is_some())
-    }
-
     pub(crate) fn attach_stream_active(
         &mut self,
         key: &Key,

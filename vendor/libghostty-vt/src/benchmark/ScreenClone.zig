@@ -11,6 +11,7 @@ const terminalpkg = @import("../terminal/main.zig");
 const Benchmark = @import("Benchmark.zig");
 const options = @import("options.zig");
 const Terminal = terminalpkg.Terminal;
+const global = @import("../global.zig");
 
 const log = std.log.scoped(.@"terminal-stream-bench");
 
@@ -79,7 +80,7 @@ pub fn create(
 
     ptr.* = .{
         .opts = opts,
-        .terminal = try .init(alloc, .{
+        .terminal = try .init(global.io(), alloc, .{
             .rows = opts.@"terminal-rows",
             .cols = opts.@"terminal-cols",
         }),
@@ -122,7 +123,7 @@ fn setup(ptr: *anyopaque) Benchmark.Error!void {
     s.nextSlice("hello");
 
     // Setup our terminal state
-    const data_f: std.fs.File = (options.dataFile(
+    const data_f: std.Io.File = (options.dataFile(
         self.opts.data,
     ) catch |err| {
         log.warn("error opening data file err={}", .{err});
@@ -133,7 +134,7 @@ fn setup(ptr: *anyopaque) Benchmark.Error!void {
     defer stream.deinit();
 
     var read_buf: [4096]u8 align(std.atomic.cache_line) = undefined;
-    var f_reader = data_f.reader(&read_buf);
+    var f_reader = data_f.reader(global.io(), &read_buf);
     const r = &f_reader.interface;
 
     var buf: [4096]u8 = undefined;
@@ -171,6 +172,7 @@ fn stepClone(ptr: *anyopaque) Benchmark.Error!void {
     for (0..1000) |_| {
         const s: *terminalpkg.Screen = self.terminal.screens.active;
         const copy = s.clone(
+            s.io,
             s.alloc,
             .{ .viewport = .{} },
             null,

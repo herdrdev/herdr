@@ -37,53 +37,20 @@ herdr session delete side-project --json
 
 ## 已保存的 SSH 机器
 
-保存常用目标后，即可从一个 Herdr 客户端跨多台机器工作：
-
-```bash
-herdr machine add workbox --label "Build machine" --remote-session agents
-herdr machine add ssh://you@server:2222 --label "Production" --remote-session operations
-herdr machine list
-```
-
-`machine add` 会在远程机器上准备 Herdr，并在保存配置前启动指定会话的后台服务器。它会分别检查运行中的服务器和已安装的二进制文件；即使服务器的发行版本与客户端不同，只要兼容就会保留。如果运行中的服务器需要升级，设置过程会在支持时使用实时交接来保留窗格进程，否则会在停止服务器前询问。未安装或不兼容时，使用与 `--remote` 相同的批准流程；需要批准时请在交互式终端中运行。取消设置不会保存配置。设置退出后，远程服务器会继续运行。
-
-已保存机器的更改会自动应用到已打开的本地 Herdr 客户端，通常在一秒内生效。如果正在切换机器，会等待切换完成再应用更改。新增或启用的 SSH 机器会与 Local 一起显示在机器侧边栏中，并在后台连接，不会改变当前选择。选择机器或其工作区即可切换。Herdr 保留已连接机器的元数据、agent 状态和通知，但只为选中的机器传输窗格画面、输入、显示区域和图形。即使两个服务器碰巧使用相同的内部 ID，工作区、标签页、窗格、agent 和图形的身份也始终按机器隔离。
-
-启动时会直接打开 Local，不等待已保存的 SSH 机器，也不显示连接标记。有已启用的保存机器时，即使 Local 连接失败，客户端仍能打开。停止或重启 Local 不会关闭正常的 SSH 连接。Local 服务器恢复后会自动重连，不会从正在使用的机器抢走选择。无响应的机器不会阻塞其他机器的输入或连接处理。
-
-Herdr 会监测已连接 SSH 机器的应用层活动，并在空闲时使用轻量健康探测。Local 依靠本地连接关闭或失败来判断断开，不使用远程健康探测。睡眠、网络中断或 SSH 故障后，不健康的机器会显示 Reconnecting，并以有上限的退避间隔重试。最后的工作区、agent 和选中窗格状态会保留，但变暗并冻结；在新连接和一致的画面到达前，无法输入或导航到这些缓存状态。重连不会回答提示，也不会安装、更新、重启或交接远程服务器。需要批准主机密钥、完成认证或安装兼容 Herdr 的目标会显示 Attention，Local 和其他机器仍可正常使用。请在终端中运行该配置对应的独立连接命令来完成设置，例如：
-
-```bash
-herdr --remote workbox --session agents --handoff
-```
-
-如果机器显示 Attention，请在设置完成后重启客户端以重试连接。使用配置的不透明 ID 来重命名、禁用或移除：
-
-```bash
-herdr machine rename <profile-id> --label "New name"
-herdr machine disable <profile-id>
-herdr machine enable <profile-id>
-herdr machine remove <profile-id>
-```
-
-重命名只更新标签，不会重新连接。移除或禁用只会将该机器从客户端断开；即使机器无法访问也可操作，其远程会话仍会继续运行。如果移除或禁用正在查看的机器，客户端会返回 Local。如果 Local 不可用，会显示该状态并尝试重连，而不是选择另一台远程机器。保存机器的文件无法读取或内容无效时，当前连接保持不变，客户端会显示通知并自动重试读取。
-
-保存的配置仅包含不透明 ID、标签、SSH 目标、明确的远程会话名和启用状态。密码、私钥、agent 票据和 SSH 控制套接字绝不会存入机器目录。
-
-客户端默认使用本地按键绑定。选中机器公布的自定义命令仍在该机器上执行。Herdr 不会将本地命令插件、配置、可执行文件或机密复制到 SSH 主机；远程缺少命令或插件时会明确报错。
+要在一个 Herdr 窗口中使用 Local 和多台 SSH 机器，请参阅[连接机器](/zh-cn/docs/connecting-machines/)。该指南涵盖设置、切换、重连、配置和远程自动化。移除已保存的机器只会断开客户端，不会停止远程会话。
 
 ## 通过 SSH 远程连接
 
-远程模式有两种;[使用 Herdr 的工作方式](/zh-cn/docs/how-to-work/)对它们做了比较。tmux 风格的路径是 SSH 到服务器并在那里运行 `herdr`。另一种是从本地机器通过 SSH 连接:
+[使用 Herdr 的工作方式](/zh-cn/docs/how-to-work/)比较了几种远程连接方式：先 SSH 到服务器再运行 `herdr`，使用已保存的 SSH 机器集中管理多个目标，或从本地直接连接一个远程会话：
 
 ```bash
 herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
-这种模式下,你本地的 Herdr 是瘦客户端。它通过 SSH 连接,启动或连接远程 Herdr 服务器,并把 UI 流式传回本地终端。因为客户端在本地运行,Herdr 可以把图像剪贴板粘贴等本地桌面功能桥接到远程会话: 把图像复制到远程临时文件,再粘贴该路径。
+这种模式下，远程服务器保持窗格运行，并通过 SSH 发送终端内容和会话状态。本地 Herdr 负责绘制 UI，包括侧边栏、菜单和主题。因为客户端在本地运行,Herdr 可以把图像剪贴板粘贴等本地桌面功能桥接到远程会话: 把图像复制到远程临时文件,再粘贴该路径。
 
-默认情况下,`herdr --remote` 在这次连接中使用你本地的 Herdr 按键绑定。即使远程服务器的配置不同,也能保持本地的肌肉记忆。本地按键绑定是连接时的快照;编辑本地按键绑定后请分离再重连。想改用远程服务器配置时,使用 `--remote-keybindings server`。本地的自定义命令按键绑定不会被发送,因为那些命令会在远程主机上执行。
+默认情况下,`herdr --remote` 在这次连接中使用你本地的 Herdr 按键绑定。即使远程服务器的配置不同,也能保持本地的肌肉记忆。编辑本地按键绑定后，可通过 UI 中的 `reload config` 应用更改，无需分离重连。想改用远程服务器配置时,使用 `--remote-keybindings server`。本地的自定义命令按键绑定不会被发送,因为那些命令会在远程主机上执行。
 
 对于经常连接的目标,使用你的 SSH 配置:
 
@@ -100,11 +67,20 @@ Host workbox
 herdr --remote workbox
 ```
 
-远程连接支持 Linux、macOS 和 Windows 本地客户端连接 x86_64 与 aarch64 的 Linux 和 macOS 主机。Herdr 会检查远程平台,优先使用远程 `PATH` 上已有的匹配 `herdr`,然后检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。如果没有匹配的二进制文件,交互式运行会询问是否安装到 `~/.local/bin/herdr`;非交互式运行则直接失败,不会修改主机。如果 `~/.local/bin` 不在远程 `PATH` 上,Herdr 会在安装后发出警告。Windows 不能作为远程主机。
+远程连接支持 Linux、macOS 和 Windows 本地客户端连接 x86_64 与 aarch64 的 Linux 和 macOS 主机。Herdr 会检查远程平台,优先使用远程 `PATH` 上兼容的 `herdr`，然后检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。只要两端都支持稳定端点代数，客户端和服务器的发行版本就不必一致。如果没有兼容的二进制文件，交互式运行会询问是否安装到 `~/.local/bin/herdr`;非交互式运行则直接失败,不会修改主机。如果 `~/.local/bin` 不在远程 `PATH` 上,Herdr 会在安装后发出警告。Windows 不能作为远程主机。
 
 默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行远程设置和桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。Linux 和 macOS 客户端还会添加一个私有的单次连接 control socket 来复用连接;Windows OpenSSH 不使用此方式。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的配置或 control socket,而使用普通 `ssh`。
 
-默认情况下,如果需要替换或重启运行中的远程服务器,远程连接使用常规的重启/停止流程。要对受支持的运行中远程服务器启用实验性实时交接,加上 `--handoff`:
+远程连接使用正常的 OpenSSH 认证。如果在非交互式 shell、脚本、CI 或移动终端中无法输入私钥口令，请先将密钥加载到 ssh-agent：
+
+```bash
+ssh-add
+herdr --remote workbox
+```
+
+认证失败时，先通过 `ssh workbox` 确认普通 SSH 连接正常。
+
+仅有版本差异不会替换或重启运行中的远程服务器。缺少必要兼容性或独立后台运行支持的服务器，会在停止前询问。已保存机器还需要画面传输和健康探测能力，详见[连接机器](/zh-cn/docs/connecting-machines/)。默认回答为 No；停止服务器会结束窗格进程。进行这次一次性升级时，可对受支持的服务器加上 `--handoff`，通过实验性实时交接保留窗格进程：
 
 ```bash
 herdr --remote workbox --handoff
@@ -132,7 +108,7 @@ herdr --remote workbox --session agents
 
 完整的 Herdr 连接会打开整个工作区 UI。直接附加则在你当前的终端中打开一个由服务器拥有的终端。
 
-在 Windows 上,直接终端附加仅限 Unix。
+直接终端附加适用于 Linux 和 macOS，不支持原生 Windows。
 
 按智能体目标附加:
 
@@ -155,3 +131,19 @@ herdr terminal attach term_abc123
 ```bash
 herdr terminal attach term_abc123 --takeover
 ```
+
+对于只需要读取已渲染终端数据的第三方桥接，可以使用只读观察者：
+
+```bash
+herdr terminal session observe w1:p1 --cols 120 --rows 40
+```
+
+它以逐行 JSON 输出包含 base64 ANSI 数据的 `terminal.frame`，服务器关闭流时输出 `terminal.closed`。多个观察者可以同时查看同一终端，不会取得输入、调整尺寸、滚动或接管权限。
+
+交互式桥接可使用可写控制器：
+
+```bash
+herdr terminal session control w1:p1 --takeover --cols 120 --rows 40
+```
+
+控制模式输出相同的帧，并从标准输入读取逐行 JSON 命令。`terminal.input` 发送文本或 base64 数据，`terminal.resize` 更改视口尺寸，`terminal.scroll` 滚动视口，`terminal.release` 关闭控制器。同一时间只有一个控制器能拥有输入和调整尺寸的权限。

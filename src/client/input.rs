@@ -365,31 +365,11 @@ fn windows_crossterm_reader_loop(
             Err(_) => break,
         };
 
-        let raw_sequence_pending = framer.has_pending_input();
-        if let Some(bytes) = windows_key_raw_bytes(&event, raw_sequence_pending) {
-            tracing::debug!(
-                bytes = ?bytes,
-                pending_before = raw_sequence_pending,
-                "windows input routed through raw framer"
-            );
-            if !send_windows_raw_events(framer.push(&bytes), &event_tx) {
-                return;
-            }
-            continue;
+        let (raw_events, event) = frame_windows_crossterm_event(&mut framer, event);
+        if !send_windows_raw_events(raw_events, &event_tx) {
+            return;
         }
-
-        if raw_sequence_pending {
-            tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
-            if !send_windows_raw_events(framer.flush_timeout(), &event_tx) {
-                return;
-            }
-        }
-
-        if windows_event_is_control_key(&event) {
-            tracing::debug!(event = ?event, "windows control key forwarded as semantic input");
-        }
-
-        let Some(event) = windows_crossterm_input_event(event) else {
+        let Some(event) = event else {
             continue;
         };
         if event_tx
@@ -401,8 +381,48 @@ fn windows_crossterm_reader_loop(
     }
 
     if framer.has_pending_input() {
-        let _ = send_windows_raw_events(framer.flush_timeout(), &event_tx);
+        let _ = send_windows_raw_events(framer.flush_interrupted(), &event_tx);
     }
+}
+
+#[cfg(any(windows, test))]
+fn frame_windows_crossterm_event(
+    framer: &mut crate::raw_input::RawInputFramer,
+    event: crossterm::event::Event,
+) -> (
+    Vec<crate::raw_input::RawInputEvent>,
+    Option<crate::protocol::ClientInputEvent>,
+) {
+    let raw_sequence_pending = framer.has_pending_input();
+    if let Some(bytes) = windows_key_raw_bytes(&event, raw_sequence_pending) {
+        tracing::debug!(
+            bytes = ?bytes,
+            pending_before = raw_sequence_pending,
+            "windows input routed through raw framer"
+        );
+        return (framer.push(&bytes), None);
+    }
+
+    if windows_event_is_control_key(&event) {
+        tracing::debug!(event = ?event, "windows control key forwarded as semantic input");
+    }
+    let Some(event) = windows_crossterm_input_event(event) else {
+        // Preserve the existing flush for unrelated pending input, but do not
+        // cancel mouse recovery for an event that will not be forwarded.
+        return (
+            if raw_sequence_pending {
+                framer.flush_timeout()
+            } else {
+                Vec::new()
+            },
+            None,
+        );
+    };
+    if raw_sequence_pending {
+        tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
+    }
+    // Even a dormant mouse prefix must stop claiming bytes after semantic input.
+    (framer.flush_interrupted(), Some(event))
 }
 
 #[cfg(any(windows, test))]
@@ -429,7 +449,7 @@ fn windows_crossterm_input_event(
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_event_is_control_key(event: &crossterm::event::Event) -> bool {
     use crossterm::event::{Event, KeyModifiers};
 
@@ -771,6 +791,60 @@ mod windows_tests {
             windows_key_raw_bytes(&pending_arrow_tail, true).as_deref(),
             Some(b"[".as_slice())
         );
+    }
+
+    #[test]
+    fn windows_crossterm_semantic_input_cancels_dormant_and_buffered_mouse_recovery() {
+        for buffered in [false, true] {
+            let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+            assert!(framer.push(b"\x1b[<3").is_empty());
+            assert!(framer.flush_timeout().is_empty());
+            assert!(framer.flush_timeout().is_empty());
+            if buffered {
+                assert!(framer.push(b"5").is_empty());
+            }
+            // Printable input bypasses the raw route when no bytes are pending;
+            // an arrow bypasses it even when a continuation is buffered.
+            let key = if buffered {
+                KeyCode::Up
+            } else {
+                KeyCode::Char('x')
+            };
+            let event = Event::Key(KeyEvent::new(key, KeyModifiers::empty()));
+            let (raw, semantic) = frame_windows_crossterm_event(&mut framer, event.clone());
+            let raw_bytes: Vec<_> = raw
+                .into_iter()
+                .filter_map(|event| {
+                    let crate::raw_input::RawInputEvent::Key(key) = event else {
+                        return None;
+                    };
+                    key.vt_bytes().map(ToOwned::to_owned)
+                })
+                .collect();
+            assert_eq!(
+                raw_bytes.concat(),
+                if buffered { b"5".as_slice() } else { b"" }
+            );
+            assert_eq!(semantic, windows_crossterm_input_event(event));
+            assert_eq!(framer.push(b"5;28;31M").len(), 8);
+        }
+    }
+
+    #[test]
+    fn windows_crossterm_ignored_event_preserves_mouse_recovery() {
+        let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+        assert!(framer.push(b"\x1b[<3").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert!(framer.push(b"5").is_empty());
+        let (raw, semantic) = frame_windows_crossterm_event(&mut framer, Event::Resize(80, 24));
+        assert!(raw.is_empty());
+        assert!(semantic.is_none());
+        let events = framer.push(b";28;31Mx");
+        assert!(
+            matches!(events.as_slice(), [crate::raw_input::RawInputEvent::Key(key)]
+            if key.code == KeyCode::Char('x'))
+        );
+        assert!(!framer.has_pending_input());
     }
 
     #[test]

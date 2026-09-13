@@ -144,7 +144,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
         }
         crate::api::schema::IntegrationTarget::Opencode => {
             let installed = install_opencode()?;
-            vec![
+            let mut messages = vec![
                 format!(
                     "installed opencode integration plugin to {}",
                     installed.plugin_path.display()
@@ -157,7 +157,14 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                     "ensured opencode tui plugin config at {}",
                     installed.tui_config_path.display()
                 ),
-            ]
+            ];
+            if installed.cli_config_path.is_none() {
+                messages.push(
+                    "to enable OpenCode V2, start opencode2 once, then reinstall this integration"
+                        .to_string(),
+                );
+            }
+            messages
         }
         crate::api::schema::IntegrationTarget::Kilo => {
             let installed = install_kilo()?;

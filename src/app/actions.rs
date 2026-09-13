@@ -1485,7 +1485,21 @@ fn is_word_separator(ch: char) -> bool {
     ch.is_whitespace()
         || matches!(
             ch,
-            '|' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '!'
+            '|' | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | ','
+                | ';'
+                | '!'
+                | '（'
+                | '）'
+                | '：'
+                | '、'
+                | '。'
+                | '，'
         )
 }
 
@@ -2397,6 +2411,11 @@ mod tests {
                 "/Users/me/Library/Application Support/app/config.json",
             ),
             ("echo 你好-world done", "好", "你好-world"),
+            (
+                "註解已補（slice 4 5b5fcc0715）：整合原本",
+                "5b5fcc0715",
+                "5b5fcc0715",
+            ),
             ("先跑 cargo test", "cargo", "cargo"),
             (
                 "export PATH=$HOME/.cargo/bin:$PATH",
@@ -2449,6 +2468,21 @@ mod tests {
             selected_word(row, col_of(row, "好") + 1).as_deref(),
             Some("你好-world")
         );
+    }
+
+    #[test]
+    fn double_click_word_bounds_treat_cjk_punctuation_as_delimiters() {
+        for delimiter in ['（', '）', '：', '、', '。', '，'] {
+            let row = format!("left{delimiter}right");
+            assert_selects(&row, "left", "left");
+            assert_selects(&row, "right", "right");
+            assert_selects_nothing(&row, &delimiter.to_string());
+            assert_eq!(
+                selected_word(&row, col_of(&row, &delimiter.to_string()) + 1),
+                None,
+                "second display cell of {delimiter:?} should not select"
+            );
+        }
     }
 
     #[test]

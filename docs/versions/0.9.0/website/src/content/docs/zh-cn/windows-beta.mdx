@@ -1,0 +1,148 @@
+---
+title: Windows 支持
+description: Windows 原生支持、受支持的工作流和已知限制。
+---
+
+Windows 原生支持已正式发布。
+
+Windows 上的 Herdr 使用 ConPTY 和 Windows 的进程/运行时行为,而不是 Herdr 最初围绕构建的 Unix PTY 模型。大多数核心工作流已受支持,但部分能力与 Linux/macOS 不同或取决于平台。随着这些剩余差距逐步缩小,Windows 可能会收到更多平台专用修复。
+
+使用 PowerShell 在 Windows 上原生安装 Herdr:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"
+```
+
+如果端点安全软件阻止该无文件 PowerShell 命令，请打开命令提示符并运行：
+
+```cmd
+curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
+```
+
+Windows 构建同时通过稳定版和预览版更新通道提供。新安装默认使用稳定版,常规使用也建议选择稳定版。现有预览安装会继续留在预览通道,直到你运行 `herdr channel set stable`。如果旧预览构建拒绝该命令,请先在预览通道运行一次 `herdr update`,再重试。预览版会提供来自 `master` 的更新、测试较少的修复,也可能出现回归;只有在接受这一取舍时,才应通过 `herdr channel set preview` 主动启用。
+
+安装器将发布版本保存在 `%USERPROFILE%\.herdr\packages\standalone\releases` 下,把当前带版本号的发布目录加入 PATH,将 `%LOCALAPPDATA%\Programs\Herdr\bin` 保留为稳定的兼容别名,并保留少量旧版本,以免运行中的进程阻塞更新。
+
+对于内部测试,`HERDR_MANIFEST_URL` 可以让安装器指向自定义清单,而不是 Herdr 的稳定或预览清单。使用自定义预览清单时还应设置 `HERDR_CHANNEL=preview`。
+
+## Windows 支持
+
+| 能力 | 状态 |
+| --- | --- |
+| 本地持久会话 | 已支持 |
+| 通过 ConPTY 的原生窗格 | 已支持 |
+| Windows Terminal / PowerShell 应用连接 | 已支持 |
+| 连接 Linux/macOS 主机的 `herdr --remote` | 已支持 |
+| 远程剪贴板图像和图像文件拖放 | 已支持 |
+| `cmd.exe` 窗格 | 已支持 |
+| 原生键盘和鼠标输入 | 已支持 |
+| 启动 cwd 和工作区标签 | 已支持 |
+| 窗格启动 cwd | 已支持 |
+| 智能体命令发现 | 已支持 |
+| 已支持智能体的自报告集成 | 已支持 |
+| 智能体进程树检测 | 已支持 |
+| 从已知 cwd 检测 Git/worktree | 已支持 |
+| 系统通知和 MP3 声音 | 已支持 |
+| 插件 | 预览 |
+| 窗格屏幕历史 | 已支持 |
+| 嵌套启动覆盖 | 已支持 |
+
+本地持久会话会在客户端分离或终端窗口关闭后继续运行。通过 Windows OpenSSH 启动的服务器和窗格进程也会在注销后继续运行;再次运行 `herdr` 即可重新连接。
+
+Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器,包括 npm/Node 和 Git Bash 进程链。它会跨越模拟的 `exec` 边界跟踪从 Git Bash 启动的智能体,但这和 Unix 前台进程组检测不是一回事。
+
+Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。
+
+插件以预览状态支持在清单中声明 `windows` 平台。GitHub 安装、本地链接、构建命令、动作、事件和插件窗格在 Windows 上尽力而为。命令是 argv 命令,必须兼容 Windows;`npm`、`bun`、`node` 之类的 Node 包 shim 只要在 `PATH` 上就应该能用,而使用 `sh` 或 Bash 的 Unix 专用示例需要 Windows 专用的替代方案。平台过滤器会跳过不支持的构建命令,并对不支持的动作或窗格返回 `platform_unsupported`。
+
+## 部分支持
+
+| 能力 | 状态 |
+| --- | --- |
+| shell `cd` 之后的实时 cwd | 部分支持 |
+| 通过 shell 集成/OSC7 的实时 cwd | 已支持 |
+| 向本地窗格中的智能体粘贴剪贴板图像 | 取决于终端/智能体 |
+| CJK 输入法候选窗口定位 | 部分支持 |
+| 前缀输入源切换 (韩语输入法) | 部分支持 |
+| Kitty graphics 渲染 | 取决于终端 |
+| 主机光标渲染 | 部分支持 |
+
+Herdr 可以在正确的目录中启动窗格,并能从你启动 Herdr 的目录创建初始工作区。启动之后 PowerShell 的目录变化则不同: Herdr 能检查的进程字段无法可靠跟踪后续的逻辑 `cd` 变化。实时 cwd 上报请使用 Herdr 集成或提示符 shell 集成。
+
+使用 `herdr --remote` 时,配置的远程图像粘贴键会读取 Windows 剪贴板图像并传输到远程主机。把一个本地图像文件拖入 Windows Terminal 也会传输该文件并粘贴远程路径。
+
+前缀输入源切换可作为针对韩语输入法的选择性实验功能使用。前缀命令处于活动状态时,它会把韩文输入切换为英文,之后再恢复先前的模式:
+
+```toml
+[experimental]
+switch_ascii_input_source_in_prefix = true
+```
+
+此选项暂不支持其他 Windows 输入法。参见[配置](/zh-cn/docs/configuration/#前缀输入源切换)。
+
+Windows 上的部分智能体可以接收 `ctrl+v` 并直接读取剪贴板图像。Herdr 自己的剪贴板图像读取器尚未接入本地原生 Windows 窗格,因此智能体原生图像粘贴仍取决于终端和智能体。`alt+v` 等智能体图像粘贴快捷键不会增加由 Herdr 管理的本地剪贴板桥。远程剪贴板图像桥通过连接 Linux/macOS 主机的 `herdr --remote` 单独受支持。
+
+Kitty graphics 默认启用，并取决于外层终端。Herdr 会像在其他平台上一样在 Windows 上输出 Kitty graphics protocol。这个路径已在 Windows WezTerm 托管 WSL 中 Herdr 的配置下得到验证，但原生 Windows 的各种终端与 ConPTY 组合尚未全部验证。Windows Terminal 不提供 Herdr 使用的 Kitty graphics 路径。如果外层终端无法正确处理图形输出，请设置 `[terminal].kitty_graphics = false`。
+
+## 已知注意事项
+
+### 光标渲染
+
+Herdr 的原生 Windows 窗格依赖 ConPTY。当前 Windows 终端的光标处理可能会在多路复用器重绘屏幕时显示中间光标位置。因此,在持续输出期间,原生光标可能闪烁、跳动,或短暂留在旧位置。这个现象也能在其他 Windows 原生终端多路复用器以及直接连续更新 VT 光标位置的压力测试中复现,所以 Herdr 无法在保留原生光标行为的同时彻底消除它。
+
+为了优先保证视觉稳定性,默认的 `host_cursor = "auto"` 会在原生 Windows 和 WSL 上把 Herdr 光标绘制为终端单元格内容。其他 Linux 和 macOS 客户端仍使用原生终端光标。Windows 上的绘制光标稳定且不闪烁,但不会使用外层终端的原生闪烁、形状或光标颜色。
+
+绘制光标并不是 Windows 用来定位输入法预编辑文本和候选窗口的真实光标。因此,韩语、日语或中文输入法 UI 可能显示在错误位置。如果遇到这个问题,请改用外层终端光标:
+
+```toml
+[ui]
+host_cursor = "native"
+```
+
+原生模式会恢复输入法定位,但在持续输出期间可能再次出现偶发的光标闪烁、跳动或旧位置残影。这是当前 Windows 支持中的兼容性取舍。
+
+### 键盘和鼠标
+
+Windows 终端并不都以相同形式报告带修饰键的按键。Herdr 在 Windows Terminal 和 Windows 上的 Alacritty 中保留鼠标报告和 `ctrl+j`。原生 Windows 输入路径还会通过默认 ConPTY 窗格保留物理按键的按下、重复、释放、独立 Escape 和 `shift+enter`。带修饰键的输入仍依赖外层终端报告可区分的按键事件;如果它把 `shift+enter` 报告为普通 Enter,Herdr 也只能转发普通 Enter。
+
+旧版 Windows 10 的系统 ConPTY 会丢弃 Kimi 和 Pi 等智能体使用的 Kitty 键盘协议序列，因此 Windows 包包含 Microsoft 当前的应用本地 ConPTY 运行时。仅在诊断捆绑运行时的兼容性问题时，才应在启动 Herdr 前设置 `HERDR_WINDOWS_CONPTY=system`。
+
+## 复制与粘贴
+
+Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即可通过 Herdr 复制。
+
+文本粘贴请在 Windows Terminal 中使用 `ctrl+shift+v`。多行文本粘贴是带括号的 (bracketed),因此 shell 和智能体提示符会把它作为一次粘贴接收,而不是逐行提交。按住 `shift` 再右键,可以使用外层终端的粘贴操作,而不把点击发给 Herdr。
+
+## Windows 不支持
+
+| 能力 | 状态 |
+| --- | --- |
+| 直接终端附加 (`herdr terminal attach`) | 不支持 |
+| Windows 作为 `herdr --remote` 的目标主机 | 不支持 |
+| 实时服务器交接 | 不支持 |
+| Unix 文件描述符交接 | 不支持 |
+| Unix 前台进程组 | 不支持 |
+| 本地原生窗格中的 Herdr 剪贴板图像桥 | 不支持 |
+| 签名二进制 / 规避 SmartScreen | 不支持 |
+
+在 Windows Terminal 中,使用与 Linux 和 macOS 相同的远程命令:
+
+```powershell
+herdr --remote workbox
+```
+
+目标主机必须运行 Linux 或 macOS。Herdr 使用已安装的 Windows OpenSSH 客户端和你的 SSH 配置。Windows OpenSSH 不使用 Herdr 的 Unix control socket 连接复用,因此建议通过 Windows `ssh-agent` 使用密钥认证,避免远程设置期间重复提示。
+
+Windows 更新通过 Windows 安装器进行,并更新当前带版本号的发布路径。新终端和重新连接的 SSH 会话会获得该路径;在其中启动 Herdr 即可使用更新后的客户端。兼容的运行中服务器会让窗格继续运行。只有需要新版本的服务器端改动时,才稍后重启服务器。实时交接仅限 Unix。
+
+## 报告 Windows 问题
+
+请包含:
+
+- Herdr 版本。
+- Windows 版本。
+- 终端应用。
+- Shell,比如 PowerShell 或 cmd。
+- 是否使用了命名的 `HERDR_SESSION`。
+- 相关的 Herdr 日志。
+- 精确的复现步骤。

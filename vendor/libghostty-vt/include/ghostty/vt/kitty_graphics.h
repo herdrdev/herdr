@@ -390,7 +390,8 @@ typedef enum GHOSTTY_ENUM_TYPED {
 
   /**
    * Borrowed pointer to the raw pixel data. Valid as long as the
-   * underlying terminal is not mutated.
+   * underlying terminal is not mutated. Returns GHOSTTY_NO_VALUE when
+   * the image metadata is resident but its pixel payload is pending.
    *
    * The data is always fully decoded, uncompressed pixels in the
    * format reported by GHOSTTY_KITTY_IMAGE_DATA_FORMAT: zlib payloads
@@ -398,13 +399,21 @@ typedef enum GHOSTTY_ENUM_TYPED {
    * time, before the image is stored. Consumers can upload this
    * directly to the GPU without any decode step.
    *
+   * For an animated image (Kitty graphics animation, actions a=f/a=a)
+   * this is the pixel data of the current animation frame. The
+   * image's GHOSTTY_KITTY_IMAGE_DATA_GENERATION changes whenever the
+   * current frame changes, so generation-keyed caches remain
+   * coherent.
+   *
    * Output type: const uint8_t **
    */
   GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR = 7,
 
   /**
    * Length of the raw pixel data in bytes. Always equal to
-   * width * height * bytes-per-pixel for the reported format.
+   * width * height * bytes-per-pixel for the reported format. For a
+   * pending image, this is the expected length reserved against the
+   * storage limit even though DATA_PTR is not available yet.
    *
    * Output type: size_t *
    */
@@ -421,7 +430,10 @@ typedef enum GHOSTTY_ENUM_TYPED {
    * Stamps are unique and monotonically increasing process-wide and
    * are drawn from the same sequence as
    * GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION. Never zero for a stored
-   * image, so zero can be used as an "empty" sentinel by callers.
+   * image, so zero can be used as an "empty" sentinel by callers. Pending
+   * payload completion preserves this value to retain image age; consumers
+   * detect that completion through GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION
+   * and retry DATA_PTR.
    *
    * Output type: uint64_t *
    */

@@ -61,6 +61,10 @@ id = "maki"
 path = "maki.toml"
 
 [[agents]]
+id = "muse"
+path = "muse.toml"
+
+[[agents]]
 id = "opencode"
 path = "opencode.toml"
 

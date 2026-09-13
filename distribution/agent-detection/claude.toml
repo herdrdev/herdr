@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.09.04.1"
+version = "2026.09.11.1"
 min_engine_version = 2
-updated_at = "2026-09-04T00:00:00Z"
+updated_at = "2026-09-11T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -21,7 +21,7 @@ region = "bottom_non_empty_lines(12)"
 visible_working = true
 any = [
   { line_regex = ['^\s*[⏸⏵].*esc to interrupt(?:\s|·|$)'] },
-  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)'] },
+  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)'] },
 ]
 
 [[rules]]

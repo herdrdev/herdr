@@ -12,16 +12,24 @@ use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
-fn agent_prompt_submit_delay(agent: crate::detect::Agent, prompt_bytes: usize) -> Duration {
-    #[cfg(windows)]
-    if agent == crate::detect::Agent::Codex {
-        // Codex consumes Windows paste bursts at about 4 bytes/ms, then suppresses Enter briefly.
-        // ponytail: best-effort ConPTY timing; remove when Codex exposes a paste-complete boundary.
-        return Duration::from_millis(600 + prompt_bytes as u64 / 4);
+// Codex's Windows input reader does not surface bracketed paste. It detects the prompt as a
+// "paste burst" and, while that burst is buffered, rewrites a following Enter into a newline
+// instead of submitting. The burst only flushes after an idle timeout, so any size-based delay is
+// a timing guess that fails when ConPTY delivery lags it. Codex flushes a buffered burst
+// synchronously when it receives a non-character key, so appending one after the paste gives the
+// submission a deterministic paste boundary regardless of prompt size or delivery speed.
+#[cfg(windows)]
+fn append_codex_paste_boundary(runtime: &crate::terminal::TerminalRuntime, text: &mut Vec<u8>) {
+    let keys = match crate::app::api_helpers::encode_api_keys(runtime, &["right".to_string()]) {
+        Ok(keys) => keys,
+        Err(key) => {
+            tracing::warn!(key = %key, "failed to encode Codex paste boundary key");
+            return;
+        }
+    };
+    if let Some(key) = keys.into_iter().find(|bytes| !bytes.is_empty()) {
+        text.extend_from_slice(&key);
     }
-    #[cfg(not(windows))]
-    let _ = (agent, prompt_bytes);
-    AGENT_PROMPT_SUBMIT_DELAY
 }
 
 impl App {
@@ -164,7 +172,6 @@ impl App {
                 ),
             ));
         }
-        let submit_delay = agent_prompt_submit_delay(expected_agent, params.text.len());
         #[cfg(windows)]
         let submit_deadline = params
             .wait
@@ -186,6 +193,14 @@ impl App {
         }
         let (text, enter) =
             crate::app::api_helpers::encode_api_submission_parts(runtime, &params.text);
+        #[cfg(windows)]
+        let text = if expected_agent == crate::detect::Agent::Codex {
+            let mut text = text;
+            append_codex_paste_boundary(runtime, &mut text);
+            text
+        } else {
+            text
+        };
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
@@ -193,7 +208,7 @@ impl App {
             .queue_user_input_submission(
                 Bytes::from(text),
                 Bytes::from(enter),
-                submit_delay,
+                AGENT_PROMPT_SUBMIT_DELAY,
                 submit_deadline,
             )
             .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
@@ -424,17 +439,37 @@ mod tests {
             .expect("agent prompt responds after submission")
     }
 
-    #[test]
-    fn prompt_delay_only_scales_for_windows_codex() {
-        let codex_delay = agent_prompt_submit_delay(Agent::Codex, 4_096);
-        #[cfg(windows)]
-        assert_eq!(codex_delay, Duration::from_millis(1_624));
-        #[cfg(not(windows))]
-        assert_eq!(codex_delay, AGENT_PROMPT_SUBMIT_DELAY);
-        assert_eq!(
-            agent_prompt_submit_delay(Agent::OpenCode, 4_096),
-            AGENT_PROMPT_SUBMIT_DELAY
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_codex_prompt_flushes_paste_burst_before_enter() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.state.insert_test_runtime(pane_id, runtime);
+
+        let response = run_deferred_agent_prompt(
+            &mut app,
+            "req",
+            AgentPromptParams {
+                target: "reviewer".into(),
+                text: "A != B".into(),
+                wait: None,
+            },
         );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::AgentPrompted { .. }
+        ));
+        // The non-character key must precede Enter so Codex commits the paste burst first.
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"A != B\x1b[C"));
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
     }
 
     #[tokio::test]

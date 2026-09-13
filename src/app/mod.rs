@@ -1848,6 +1848,7 @@ mod tests {
         assert_eq!(
             app.state.sidebar_agents.rows[0][0]
                 .style_for_value("90")
+                .unwrap()
                 .bold,
             Some(true)
         );

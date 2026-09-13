@@ -323,6 +323,16 @@ fn print_worktree_help() {
 }
 
 fn normalize_path_arg(value: &str) -> std::io::Result<String> {
+    if super::target::is_remote() {
+        if super::target::remote_path_is_absolute(value) || value == "~" || value.starts_with("~/")
+        {
+            return Ok(value.to_owned());
+        }
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "remote worktree paths must be absolute or start with ~/",
+        ));
+    }
     let path = crate::worktree::expand_tilde_path(value);
     let absolute = if path.is_absolute() {
         path
@@ -330,4 +340,24 @@ fn normalize_path_arg(value: &str) -> std::io::Result<String> {
         std::env::current_dir()?.join(path)
     };
     Ok(absolute.display().to_string())
+}
+
+#[cfg(test)]
+mod machine_tests {
+    #[test]
+    fn remote_worktree_paths_are_not_expanded_on_the_caller_machine() {
+        crate::cli::target::with_test_client(crate::api::client::ApiClient::local(), || {
+            for path in [
+                "~/Projects/herdr",
+                "/Users/can/Projects/herdr",
+                r"C:\work\repo",
+                "C:/work/repo",
+                r"\\host\share\repo",
+            ] {
+                assert_eq!(super::normalize_path_arg(path).unwrap(), path);
+            }
+            assert!(super::normalize_path_arg("../other").is_err());
+            assert!(super::normalize_path_arg("C:relative").is_err());
+        });
+    }
 }

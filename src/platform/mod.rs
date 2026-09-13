@@ -264,7 +264,9 @@ pub(crate) struct RemoteSshConfigPaths {
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
-pub(crate) use unix_common::{begin_cli_output, end_cli_output};
+pub(crate) use unix_common::{
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+};
 
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
@@ -357,6 +359,35 @@ pub(crate) fn quote_powershell_arg(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "''"))
+}
+
+pub(crate) fn quote_windows_command_line_arg(value: &str) -> String {
+    if !value.is_empty()
+        && !value
+            .chars()
+            .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\x0b' | '"'))
+    {
+        return value.to_string();
+    }
+
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+        } else {
+            quoted.push_str(&"\\".repeat(backslashes));
+        }
+        backslashes = 0;
+        quoted.push(ch);
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {

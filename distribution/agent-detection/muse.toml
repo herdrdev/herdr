@@ -1,0 +1,113 @@
+id = "muse"
+version = "2026.08.26.1"
+min_engine_version = 2
+updated_at = "2026-08-26T00:00:00Z"
+aliases = ["muse-code", "muse-cli"]
+
+# Evidence: live bottom-buffer captures from Muse Code 0.2.1 in Herdr, using a local
+# deterministic Responses provider so each UI state could be held and inspected.
+#
+# Idle has a `⟩` prompt and `model · effort · cwd` footer. Active turns show
+# `◆ Working (... · esc to interrupt)` or another activity label with the same interrupt hint.
+#
+# Structured questions show two co-occurring footer controls:
+#   Enter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt
+# Multi-select uses `Enter to toggle` instead. The paired controls distinguish a real picker
+# from ordinary transcript text that happens to mention one action.
+#
+# First launch in an untrusted directory shows `Do you trust this workspace?` together with
+# `Trust and continue`. This is a real blocker. User-opened `/theme` and `/skills` menus are
+# not blockers; their paired footer controls identify overlays whose prior state must be kept.
+#
+# Muse 0.2.1 command approval shows `Allow this stage once` together with
+# `Always allow in this workspace`. Muse 0.1 used `Allow once` with
+# `Allow for this session`. Network approval shows `Yes, proceed` together with
+# `Yes, don't ask again this session`. Each approval rule requires a pair because Muse can
+# emit any one of these phrases as ordinary assistant text after a completed turn.
+
+[[rules]]
+id = "workspace_trust_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["Do you trust this workspace?"]
+any = [
+  { contains = ["Trust and continue"] },
+  { contains = ["Use Up/Down"] },
+]
+
+[[rules]]
+id = "pick_request_blocked"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[rules]]
+id = "menu_overlay"
+state = "unknown"
+priority = 940
+region = "bottom_non_empty_lines(8)"
+skip_state_update = true
+any = [
+  { contains = ["enter confirm", "esc go back"] },
+  { contains = ["enter save", "esc go back"] },
+  { contains = ["space toggle", "esc close", "type filter"] },
+]
+
+[[rules]]
+id = "working_esc_interrupt"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+contains = ["esc to interrupt"]
+not = [
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+]
+
+[[rules]]
+id = "blocked_approval"
+state = "blocked"
+priority = 850
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+any = [
+  { contains = ["Allow this stage once", "Always allow in this workspace"] },
+  { contains = ["Allow once", "Allow for this session"] },
+  { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
+]
+
+[[rules]]
+id = "idle_prompt"
+state = "idle"
+priority = 700
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+any = [
+  { line_regex = ['^\s*⟩\s*$'] },
+  { line_regex = ['^\s*⟩\s+\S'] },
+]
+not = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["Enter to select", "Tab for an optional note"] },
+  { contains = ["Enter to toggle", "Esc to interrupt"] },
+  { contains = ["enter confirm", "esc go back"] },
+  { contains = ["enter save", "esc go back"] },
+  { contains = ["space toggle", "esc close", "type filter"] },
+]
+
+[[rules]]
+id = "idle_status_fallback"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra) · ']
+not = [{ contains = ["esc to interrupt"] }]

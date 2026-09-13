@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 mod actions;
 mod agent_sidebar;
 mod aggregate_navigation;
+mod workspace_navigation;
+use workspace_navigation::WorkspaceNavigationTarget;
 mod composition;
 mod config;
 mod context_menu;
@@ -29,7 +31,9 @@ mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
+mod word_selection;
 mod worktrees;
+use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;

@@ -291,7 +291,7 @@ impl ClientShellState {
                 base: Some("HEAD".to_owned()),
                 path: None,
                 label: None,
-                focus: true,
+                focus: false,
                 trust_repository: false,
             }),
             PendingEndpointKind::WorktreeCreate,
@@ -390,6 +390,7 @@ impl ClientShellState {
         &mut self,
         kind: PendingEndpointKind,
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
+        outcome: &mut ClientShellInput,
     ) -> bool {
         use crate::api::schema::ResponseResult;
 
@@ -481,8 +482,20 @@ impl ClientShellState {
                 }
                 true
             }
-            (PendingEndpointKind::WorktreeCreate, Ok(ResponseResult::WorktreeCreated { .. }))
-            | (PendingEndpointKind::WorktreeOpen, Ok(ResponseResult::WorktreeOpened { .. }))
+            (
+                PendingEndpointKind::WorktreeCreate,
+                Ok(ResponseResult::WorktreeCreated { tab, .. }),
+            ) => {
+                self.overlay = None;
+                self.push_endpoint_method(
+                    crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                        tab_id: tab.tab_id,
+                    }),
+                    outcome,
+                );
+                true
+            }
+            (PendingEndpointKind::WorktreeOpen, Ok(ResponseResult::WorktreeOpened { .. }))
             | (
                 PendingEndpointKind::WorktreeRemove { .. },
                 Ok(ResponseResult::WorktreeRemoved { .. }),
@@ -505,7 +518,9 @@ impl ClientShellState {
                 true
             }
             (PendingEndpointKind::WorktreeRemove { forced: false }, Err(error))
-                if error.code.as_deref() == Some("dirty_worktree_requires_force") =>
+                if error.code.as_deref() == Some("dirty_worktree_requires_force")
+                    || (error.code.as_deref() == Some("worktree_remove_failed")
+                        && crate::worktree::is_not_working_tree_remove_error(&error.message)) =>
             {
                 if let Some(ClientShellOverlay::WorktreeRemove(remove)) = self.overlay.as_mut() {
                     remove.removing = false;

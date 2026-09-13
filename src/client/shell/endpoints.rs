@@ -15,6 +15,7 @@ pub(crate) struct ClientShellEndpoint {
 
 pub(super) struct MachineHit {
     pub(super) rect: Rect,
+    pub(super) collapse_toggle: Rect,
     pub(super) endpoint_id: ClientEndpointId,
 }
 
