@@ -252,6 +252,10 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         "3" => KeyCode::Delete,
         "5" => KeyCode::PageUp,
         "6" => KeyCode::PageDown,
+        "11" => KeyCode::F(1),
+        "12" => KeyCode::F(2),
+        "13" => KeyCode::F(3),
+        "14" => KeyCode::F(4),
         "15" => KeyCode::F(5),
         "17" => KeyCode::F(6),
         "18" => KeyCode::F(7),
@@ -637,9 +641,31 @@ mod tests {
             crossterm::event::KeyEventKind::Press,
             None,
         );
-        assert_eq!(parse_terminal_key_sequence("\x1b[11;2~"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[14;1~"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[14;3~"), None);
+    }
+
+    #[test]
+    fn parse_parameterized_csi_tilde_f1_through_f4() {
+        // foot and some rxvt-style hosts emit F1-F4 as `CSI <code>;<mods>~`
+        // (for example F3 as `\x1b[13;1:1~`), reusing the same code table as the
+        // unmodified `\x1b[11~`..`\x1b[14~` forms.
+        let cases = [
+            ("\x1b[11;2~", KeyCode::F(1), KeyModifiers::SHIFT),
+            ("\x1b[12;1~", KeyCode::F(2), KeyModifiers::empty()),
+            ("\x1b[13;1:1~", KeyCode::F(3), KeyModifiers::empty()),
+            ("\x1b[13;2~", KeyCode::F(3), KeyModifiers::SHIFT),
+            ("\x1b[14;3~", KeyCode::F(4), KeyModifiers::ALT),
+        ];
+
+        for (sequence, code, modifiers) in cases {
+            let parsed = parse_terminal_key_sequence(sequence).unwrap();
+            assert_terminal_key_eq(
+                parsed,
+                code,
+                modifiers,
+                crossterm::event::KeyEventKind::Press,
+                None,
+            );
+        }
     }
 
     #[test]

@@ -1535,6 +1535,9 @@ mod tests {
             (b"\x1b[57423;1u", KeyCode::Home, KeyModifiers::empty()),
             (b"\x1bOq", KeyCode::Char('1'), KeyModifiers::empty()),
             (b"\x1b[14~", KeyCode::F(4), KeyModifiers::empty()),
+            (b"\x1b[11;2~", KeyCode::F(1), KeyModifiers::SHIFT),
+            (b"\x1b[13;1:1~", KeyCode::F(3), KeyModifiers::empty()),
+            (b"\x1b[14;3~", KeyCode::F(4), KeyModifiers::ALT),
             (b"\x1b[57364;1u", KeyCode::F(1), KeyModifiers::empty()),
             (b"\x1b[57366;1u", KeyCode::F(3), KeyModifiers::empty()),
             (b"\x1b[57366;2u", KeyCode::F(3), KeyModifiers::SHIFT),
@@ -1574,11 +1577,11 @@ mod tests {
     }
 
     #[test]
-    fn modified_rxvt_f_key_alias_stays_unsupported() {
+    fn parses_modified_rxvt_f_key_alias() {
         let (event, consumed) = extract_one_event(b"\x1b[14;3~").unwrap();
 
         assert_eq!(consumed, 7);
-        assert!(matches!(event, RawInputEvent::Unsupported));
+        assert_raw_key(event, KeyCode::F(4), KeyModifiers::ALT);
     }
 
     #[test]
