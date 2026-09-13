@@ -1,5 +1,8 @@
 //! Remote thin-client launcher over SSH command stdio.
 
+mod desktop;
+use desktop::*;
+
 use super::{args::*, process::wait_with_output_timeout, restart_policy::*, shell_quote};
 use base64::Engine as _;
 use std::collections::BTreeMap;
@@ -42,13 +45,6 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let program = std::env::args()
         .next()
         .unwrap_or_else(|| "herdr".to_string());
-    let reattach_command = reattach_command(
-        &program,
-        &remote.target,
-        &session_name,
-        remote.keybindings,
-        remote.live_handoff,
-    );
     let manage_ssh_config = crate::config::Config::load()
         .config
         .remote
@@ -61,19 +57,25 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         manage_ssh_config,
         session_name.clone(),
     );
-    let prepared_remote =
-        prepare_remote_herdr(&remote_ssh, remote.live_handoff, require_surface_interest)?;
-    ensure_remote_server_ready(
+    let remote_herdr = prepare_remote_host(
         &remote_ssh,
-        &prepared_remote.remote_herdr,
-        prepared_remote.stop_after_install_approved,
         remote.live_handoff,
         require_surface_interest,
+        remote.windows_desktop,
     )?;
+
+    let reattach_command = reattach_command(
+        &program,
+        &remote.target,
+        &session_name,
+        remote.keybindings,
+        remote.live_handoff,
+        remote_herdr.require_desktop,
+    );
 
     let _bridge = SshStdioBridge::start(
         remote.target,
-        prepared_remote.remote_herdr,
+        remote_herdr,
         local_socket.clone(),
         session_name,
         remote_ssh.options(),
@@ -83,7 +85,11 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
 }
 
-pub(crate) fn prepare_saved_ssh(target: &str, session_name: &str) -> io::Result<()> {
+pub(crate) fn prepare_saved_ssh(
+    target: &str,
+    session_name: &str,
+    windows_desktop: bool,
+) -> io::Result<bool> {
     super::validate_remote_target(target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     crate::session::validate_name(session_name)
@@ -97,26 +103,14 @@ pub(crate) fn prepare_saved_ssh(target: &str, session_name: &str) -> io::Result<
         manage_ssh_config,
         session_name.to_owned(),
     );
-    let prepared = prepare_remote_herdr(&ssh, false, true)?;
-    ensure_remote_server_ready(
-        &ssh,
-        &prepared.remote_herdr,
-        prepared.stop_after_install_approved,
-        false,
-        true,
-    )?;
-
-    // The bridge already owns daemon startup. EOF closes only this temporary attachment,
-    // leaving the named server running even when no local TUI is open yet.
-    let command = prepared
-        .remote_herdr
-        .executable
-        .saved_bridge_command(session_name);
-    let output = ssh.shell_output(&prepared.remote_herdr.platform, &command)?;
+    let remote_herdr = prepare_remote_host(&ssh, false, true, windows_desktop)?;
+    // EOF ends only this temporary attachment; the named server stays running.
+    let command = remote_herdr.saved_bridge_command(session_name);
+    let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
         return Err(command_failed("remote server startup failed", &output));
     }
-    match remote_server_status(&ssh, &prepared.remote_herdr, true)? {
+    match remote_server_status(&ssh, &remote_herdr, true)? {
         RemoteServerStatus::Running {
             endpoint_protocol_generation,
             surface_interest,
@@ -132,7 +126,7 @@ pub(crate) fn prepare_saved_ssh(target: &str, session_name: &str) -> io::Result<
         )
         .is_none() =>
         {
-            Ok(())
+            Ok(remote_herdr.require_desktop)
         }
         _ => Err(io::Error::other(
             "remote server is not ready for saved machines",
@@ -304,6 +298,7 @@ impl RemoteExecutable {
 
 #[derive(Debug, Clone)]
 pub(super) struct RemoteHerdr {
+    require_desktop: bool,
     install_suffix: String,
     executable: RemoteExecutable,
     platform: RemotePlatform,
@@ -322,6 +317,7 @@ impl RemoteHerdr {
             (install_suffix, RemoteExecutable::PosixShellPath(shell_path))
         };
         Self {
+            require_desktop: false,
             install_suffix,
             executable,
             platform,
@@ -886,16 +882,13 @@ impl InstallSource {
     }
 }
 
-pub(super) fn prepare_remote_herdr(
+fn prepare_remote_herdr(
     ssh: &RemoteSsh,
     live_handoff_enabled: bool,
     require_surface_interest: bool,
+    platform: RemotePlatform,
 ) -> io::Result<PreparedRemoteHerdr> {
-    let platform = detect_remote_platform(ssh)?;
     let remote_herdr = RemoteHerdr::for_platform(platform);
-    if remote_herdr.platform.is_windows() {
-        return prepare_windows_remote_herdr(ssh, remote_herdr, require_surface_interest);
-    }
     let override_binary = remote_binary_override_path()?;
     let remote_binary_candidates = remote_binary_candidates(ssh, &remote_herdr)?;
 
@@ -961,13 +954,18 @@ pub(super) fn prepare_remote_herdr(
     })
 }
 
-pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteHerdr> {
+pub(super) fn find_installed_remote_herdr(
+    ssh: &RemoteSsh,
+    require_desktop: bool,
+) -> io::Result<RemoteHerdr> {
     let platform = detect_remote_platform(ssh)?;
-    let remote_herdr = RemoteHerdr::for_platform(platform);
-    if remote_herdr.platform.is_windows() {
-        return prepare_windows_remote_herdr(ssh, remote_herdr, true)
-            .map(|prepared| prepared.remote_herdr);
+    if platform.is_windows() {
+        let mut remote = find_windows_remote_host(ssh, platform, true, require_desktop)?;
+        // Capability discovery does not change a saved profile's placement requirement.
+        remote.require_desktop = require_desktop;
+        return Ok(remote);
     }
+    let remote_herdr = remote_host_for_platform(platform, require_desktop)?;
     let candidates = remote_binary_candidates(ssh, &remote_herdr)?;
     for candidate in candidates {
         if remote_binary_supports_endpoint_requirement(ssh, &candidate, true)? {
@@ -984,41 +982,15 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
     ))
 }
 
-fn prepare_windows_remote_herdr(
-    ssh: &RemoteSsh,
-    remote_herdr: RemoteHerdr,
-    require_surface_interest: bool,
-) -> io::Result<PreparedRemoteHerdr> {
-    if !remote_binary_exists(ssh, &remote_herdr)? {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "herdr.exe is not installed or is not on PATH on Windows host {}; install a compatible Windows package with remote host support and retry",
-                ssh.target()
-            ),
-        ));
-    }
-    if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
-        return Err(io::Error::other(format!(
-            "herdr.exe on Windows host {} does not support saved SSH endpoint federation; install a compatible Windows package with remote host support and retry",
-            ssh.target()
-        )));
-    }
-
-    Ok(PreparedRemoteHerdr {
-        remote_herdr,
-        stop_after_install_approved: false,
-    })
-}
-
 pub(super) fn find_installed_remote_api_herdr(
     ssh: &RemoteSsh,
     session: &str,
+    require_desktop: bool,
 ) -> io::Result<RemoteHerdr> {
     let platform = detect_remote_platform(ssh)?;
-    let remote_herdr = RemoteHerdr::for_platform(platform);
+    let remote_herdr = remote_host_for_platform(platform, require_desktop)?;
     let candidates = if remote_herdr.platform.is_windows() {
-        vec![remote_herdr]
+        desktop_binary_candidates(ssh, &remote_herdr)?
     } else {
         remote_binary_candidates(ssh, &remote_herdr)?
     };
@@ -1643,6 +1615,8 @@ struct RemoteClientStatusJson {
     endpoint_protocol_generation: Option<u32>,
     #[serde(default)]
     endpoint_capabilities: Vec<String>,
+    #[serde(default)]
+    remote_desktop_host: bool,
 }
 
 impl RemoteClientStatusJson {
@@ -2104,6 +2078,9 @@ pub(super) fn remote_api_bridge_command(
     check: bool,
 ) -> String {
     let mut args = vec!["--session", session_name, "remote-api-bridge"];
+    if remote_herdr.require_desktop {
+        args.push("--require-desktop");
+    }
     if check {
         args.push("--check");
     }
@@ -2122,6 +2099,7 @@ fn reattach_command(
     session_name: &str,
     keybindings: RemoteKeybindings,
     live_handoff: bool,
+    windows_desktop: bool,
 ) -> String {
     let program = crate::platform::remote_reattach_program(program);
     let target = crate::platform::remote_reattach_argument(target);
@@ -2132,6 +2110,9 @@ fn reattach_command(
     }
     if live_handoff {
         command.push_str(" --handoff");
+    }
+    if windows_desktop {
+        command.push_str(" --remote-desktop");
     }
     if session_name != crate::session::DEFAULT_SESSION_NAME {
         command.push_str(" --session ");
@@ -2169,7 +2150,7 @@ impl SshStdioBridge {
     ) -> io::Result<Self> {
         Self::start_command(
             target,
-            remote_herdr.executable.bridge_command(&session_name),
+            remote_herdr.bridge_command(&session_name),
             local_socket,
             ssh_options,
             noninteractive,
@@ -3304,6 +3285,7 @@ mod tests {
             endpoint_protocol_generation: Some(
                 crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
             ),
+            remote_desktop_host: false,
             endpoint_capabilities: vec![
                 crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into(),
                 crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
@@ -3468,6 +3450,47 @@ mod tests {
         let remote = remote.unwrap();
         assert_eq!(remote.target, "dev");
         assert!(remote.live_handoff);
+    }
+
+    #[test]
+    fn extract_remote_args_preserves_desktop_intent_for_direct_and_machine_add() {
+        let direct = vec![
+            "herdr".into(),
+            "--remote=dev".into(),
+            "--remote-desktop".into(),
+        ];
+        let (cleaned, remote) = extract_remote_args(&direct).unwrap();
+        assert_eq!(cleaned, vec!["herdr"]);
+        assert!(remote.unwrap().windows_desktop);
+
+        let machine = vec![
+            "herdr".into(),
+            "machine".into(),
+            "add".into(),
+            "dev".into(),
+            "--remote-desktop".into(),
+        ];
+        let (cleaned, remote) = extract_remote_args(&machine).unwrap();
+        assert_eq!(cleaned, machine);
+        assert!(remote.is_none());
+    }
+
+    #[test]
+    fn extract_remote_args_rejects_unowned_or_duplicate_desktop_options() {
+        assert_eq!(
+            extract_remote_args(&["herdr".into(), "--remote-desktop".into()]).unwrap_err(),
+            "--remote-desktop requires --remote"
+        );
+        assert_eq!(
+            extract_remote_args(&[
+                "herdr".into(),
+                "--remote=dev".into(),
+                "--remote-desktop".into(),
+                "--remote-desktop".into(),
+            ])
+            .unwrap_err(),
+            "--remote-desktop can only be specified once"
+        );
     }
 
     #[test]
@@ -3803,6 +3826,7 @@ mod tests {
                 "work",
                 RemoteKeybindings::Local,
                 false,
+                false,
             ),
             "target/release/herdr --remote user@host --session work"
         );
@@ -3812,6 +3836,7 @@ mod tests {
                 "host name",
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Local,
+                false,
                 false,
             ),
             "herdr --remote 'host name'"
@@ -3823,6 +3848,7 @@ mod tests {
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Server,
                 false,
+                false,
             ),
             "herdr --remote host --remote-keybindings server"
         );
@@ -3833,6 +3859,7 @@ mod tests {
                 crate::session::DEFAULT_SESSION_NAME,
                 RemoteKeybindings::Local,
                 true,
+                false,
             ),
             "herdr --remote host --handoff"
         );
@@ -3848,6 +3875,7 @@ mod tests {
                 "host'name",
                 "work'name",
                 RemoteKeybindings::Local,
+                false,
                 false,
             ),
             format!(

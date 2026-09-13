@@ -29,6 +29,7 @@ pub(crate) struct RemoteLaunch {
     pub(crate) target: String,
     pub(crate) keybindings: RemoteKeybindings,
     pub(crate) live_handoff: bool,
+    pub(crate) windows_desktop: bool,
 }
 
 pub(crate) fn extract_remote_args(
@@ -43,6 +44,7 @@ pub(crate) fn extract_remote_args(
     let mut keybindings = RemoteKeybindings::Local;
     let mut keybindings_seen = false;
     let mut live_handoff = false;
+    let mut windows_desktop = false;
     let mut index = 1;
     while index < args.len() {
         let arg = &args[index];
@@ -52,6 +54,14 @@ pub(crate) fn extract_remote_args(
         }
         if arg == "--handoff" {
             live_handoff = true;
+            index += 1;
+            continue;
+        }
+        if arg == "--remote-desktop" {
+            if windows_desktop {
+                return Err("--remote-desktop can only be specified once".to_string());
+            }
+            windows_desktop = true;
             index += 1;
             continue;
         }
@@ -104,12 +114,19 @@ pub(crate) fn extract_remote_args(
         target,
         keybindings,
         live_handoff,
+        windows_desktop,
     });
     if remote.is_none() && keybindings_seen {
         return Err("--remote-keybindings requires --remote".to_string());
     }
     if remote.is_none() && live_handoff {
         cleaned.push("--handoff".to_string());
+    }
+    if remote.is_none() && windows_desktop {
+        if cleaned.get(1).map(String::as_str) != Some("machine") {
+            return Err("--remote-desktop requires --remote".to_string());
+        }
+        cleaned.push("--remote-desktop".to_string());
     }
 
     Ok((cleaned, remote))

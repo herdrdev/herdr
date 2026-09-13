@@ -17,7 +17,7 @@ ssh workbox
 
 `workbox` can be a host from your SSH config. You can also use a target such as `ssh://you@server:2222`.
 
-Multi-machine connections are supported on Linux and macOS clients, connecting to Linux and macOS servers on x86_64 or aarch64. Multi-machine connections are not yet verified or supported on Windows; standalone `herdr --remote` remains supported on Windows. Native Windows servers are not supported as SSH targets. See [Remote attach over SSH](/docs/persistence-remote/#remote-attach-over-ssh) for SSH configuration, authentication, and custom binaries.
+Saved SSH machines support Linux, macOS, and Windows clients connecting to Linux or macOS hosts on x86_64 or aarch64, and Windows hosts on x86_64. Windows hosts need a compatible Herdr package installed first. See [Remote attach over SSH](/docs/persistence-remote/#remote-attach-over-ssh) for SSH configuration, authentication, desktop access, and custom binaries.
 
 ## Add a machine
 
@@ -36,6 +36,8 @@ herdr machine add workbox --label "Build machine" --remote-session agents
 ```
 
 Herdr checks both the installed binary and the running server. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.
+
+On Windows targets with desktop hosting support and an eligible signed-in account, setup offers desktop access before launching: **y** for this start only, **a** to remember approval for this machine/account, or **n** (the default) to continue without desktop access. An existing ordinary server stays running; stop it explicitly or choose another session to switch to desktop access. Background reconnect never starts a desktop server, even when approval is remembered.
 
 Run `herdr` to open the UI. If a local client is already open, added and enabled machines normally appear within a second and connect in the background without changing your selection. An in-progress machine switch finishes before profile changes are applied. The remote server keeps running after setup exits.
 
@@ -97,7 +99,7 @@ Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines
 
 ## Updates and saved data
 
-Saved profiles contain only an opaque ID, label, SSH target, explicit remote session, and enabled state. Herdr does not store passwords, private keys, agent tickets, or SSH control sockets in the catalog. Authentication stays with OpenSSH.
+Saved profiles contain only an opaque ID, label, SSH target, explicit remote session, enabled state, and required desktop placement. Remembered launch approval is stored separately on the client. Herdr does not store passwords, private keys, agent tickets, or SSH control sockets in the catalog. Authentication stays with OpenSSH.
 
 The client and server negotiate compatibility rather than requiring identical versions. Saved-machine connections additionally need the server's `surface_interest` and `health_check` capabilities. Older servers without those capabilities show Attention until explicitly updated, even if a standalone attach works. Other missing server methods disable only their corresponding actions.
 

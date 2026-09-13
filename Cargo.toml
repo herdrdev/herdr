@@ -54,6 +54,12 @@ portable-pty = { path = "vendor/portable-pty" }
 # UTF-16 SDDL input for interprocess security descriptors.
 widestring = "1.2"
 wmi = { version = "0.18.4", default-features = false }
+windows = { version = "0.62.2", features = [
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_TaskScheduler",
+    "Win32_System_Variant",
+] }
 windows-sys = { version = "0.61.2", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
@@ -69,6 +75,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
