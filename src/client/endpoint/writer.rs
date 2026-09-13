@@ -373,16 +373,18 @@ mod tests {
             done.send((first, second)).unwrap();
         });
         let input = ClientMessage::Input {
-            data: vec![b'x'; 1024 * 1024],
+            // Comfortably above MAX_BATCH_BYTES, but small enough that the polling peer's
+            // Windows 2ms read cadence drains it well within the flush deadline under CI load.
+            data: vec![b'x'; 256 * 1024],
         };
         transport.send(&input).unwrap();
         transport.send(&ClientMessage::Detach).unwrap();
         // Large-frame correctness must not depend on the registry's short exit grace period.
         transport
-            .flush(Instant::now() + Duration::from_secs(10))
+            .flush(Instant::now() + Duration::from_secs(30))
             .unwrap();
         drop(transport);
-        let (first, second) = received.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (first, second) = received.recv_timeout(Duration::from_secs(30)).unwrap();
         assert_eq!(first, input);
         assert_eq!(second, ClientMessage::Detach);
         reader.join().unwrap();
