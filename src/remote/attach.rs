@@ -2298,6 +2298,27 @@ fn ssh_config_include_path(path: &Path) -> String {
     }
 }
 
+/// Returns the `Include` value for the user's SSH config, or `None` when there
+/// is nothing useful to include.
+///
+/// Git for Windows' OpenSSH (MSYS) does not resolve Windows drive-letter paths
+/// inside `Include`, so an absolute `C:/.../.ssh/config` path is silently
+/// ignored when herdr runs under Git Bash and host aliases stop resolving.
+/// `~/.ssh/config` is expanded by both Windows OpenSSH (to the user profile)
+/// and MSYS OpenSSH (through `HOME`), so each shell's `ssh` reads the same user
+/// config it would read by default. A missing config is harmless because
+/// OpenSSH ignores an `Include` that matches nothing.
+#[cfg(windows)]
+fn ssh_user_config_include(_path: Option<&Path>) -> Option<String> {
+    Some(ssh_config_quote("~/.ssh/config"))
+}
+
+#[cfg(not(windows))]
+fn ssh_user_config_include(path: Option<&Path>) -> Option<String> {
+    path.filter(|path| path.is_file())
+        .map(ssh_config_include_path)
+}
+
 /// Builds a temporary ssh config that includes the user's settings first, so
 /// OpenSSH's first-value-wins behavior preserves explicit user keepalives.
 fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
@@ -2309,11 +2330,8 @@ fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
         .then(|| dir.join(SSH_CONTROL_SOCKET_NAME));
 
     let mut contents = String::new();
-    if let Some(user_config) = paths.user_config.filter(|path| path.is_file()) {
-        contents.push_str(&format!(
-            "Include {}\n",
-            ssh_config_include_path(&user_config)
-        ));
+    if let Some(include) = ssh_user_config_include(paths.user_config.as_deref()) {
+        contents.push_str(&format!("Include {include}\n"));
     }
     if let Some(system_config) = paths.system_config.filter(|path| path.is_file()) {
         contents.push_str(&format!(
@@ -3214,6 +3232,16 @@ mod tests {
         let contents = std::fs::read_to_string(&config_path).expect("read managed config");
         assert!(contents.contains("ServerAliveInterval 15"));
         assert!(contents.contains("ServerAliveCountMax 4"));
+        // Git Bash's MSYS OpenSSH ignores drive-letter `Include` paths, so the
+        // user config must be referenced through `~` for aliases to resolve.
+        let include_at = contents
+            .find("Include \"~/.ssh/config\"")
+            .expect("user config Included through home");
+        let fallback_at = contents.find("Host *").expect("fallback present");
+        assert!(
+            include_at < fallback_at,
+            "user config must be Included before herdr's fallback: {contents}"
+        );
 
         let ssh = RemoteSsh {
             target: "example".to_string(),
@@ -3243,6 +3271,21 @@ mod tests {
         assert_eq!(
             ssh_config_include_path(Path::new(r"C:\Users\A B\.ssh\config")),
             r#""C:/Users/A B/.ssh/config""#
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ssh_user_config_include_uses_home_shorthand() {
+        // MSYS/Git Bash OpenSSH does not resolve `C:/...` in `Include`, so the
+        // user config is referenced through `~` regardless of the profile path.
+        assert_eq!(
+            ssh_user_config_include(Some(Path::new(r"C:\Users\A B\.ssh\config"))),
+            Some(r#""~/.ssh/config""#.to_string())
+        );
+        assert_eq!(
+            ssh_user_config_include(None),
+            Some(r#""~/.ssh/config""#.to_string())
         );
     }
 
