@@ -391,6 +391,12 @@ fn process_pgrp_comm_and_state_from_stat(stat: &str) -> Option<(i32, String, cha
     Some((pgrp, comm, state))
 }
 
+/// Whether `/proc/<pid>/environ` can be read without risking a stall.
+///
+/// That read enters `access_remote_vm`. A process that is exiting or
+/// uninterruptible sleep can hold it there, and on WSL it has been seen to
+/// block indefinitely while a multithreaded agent exits. The environment is
+/// optional, so it is skipped in both cases rather than blocking the caller.
 fn process_state_allows_remote_memory_read(state: char) -> bool {
     !matches!(state, 'D' | 'Z' | 'X' | 'x')
 }
@@ -433,6 +439,31 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     }
     let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
     super::parse_agent_env_hint(&environ)
+}
+
+/// Read the interpreter environment a process was started in.
+///
+/// A pane whose foreground process cannot be read safely reports `Unknown`; the
+/// pane is still restored, just without a remembered environment.
+pub fn process_virtual_env(pid: u32) -> super::VirtualEnvObservation {
+    use super::VirtualEnvObservation;
+
+    if pid == 0 {
+        return VirtualEnvObservation::Unknown;
+    }
+    let Some((_, comm, state)) = process_pgrp_comm_and_state(pid) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    if !process_allows_remote_memory_read(state, &comm, running_inside_wsl()) {
+        return VirtualEnvObservation::Unknown;
+    }
+    let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    match super::parse_virtual_env_activation(&environ) {
+        Some(activation) => VirtualEnvObservation::Activation(activation),
+        None => VirtualEnvObservation::NoActivation,
+    }
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {

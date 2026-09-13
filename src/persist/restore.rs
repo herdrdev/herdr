@@ -517,15 +517,36 @@ fn restore_tab(
         let public_pane_id = old_pane_id
             .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))
             .map(String::as_str);
+        // The pane comes back from a shell that never activated anything, so
+        // re-enter the interpreter environment it was working in before.
+        //
+        // An environment that has since been removed is dropped rather than
+        // re-entered. Pointing PATH at a missing directory while also telling
+        // conda not to fall back to base would leave the pane with no working
+        // interpreter, which is worse than restoring without one.
+        let restored_virtual_env = saved_pane
+            .and_then(|pane| pane.virtual_env.as_ref())
+            .and_then(|snapshot| snapshot.to_activation())
+            .filter(|activation| {
+                let exists = activation.prefix.is_dir();
+                if !exists {
+                    warn!(
+                        prefix = %activation.prefix.display(),
+                        "saved pane environment is gone; restoring without it"
+                    );
+                }
+                exists
+            });
         let launch_env = public_pane_id
             .map(|pane_id| {
-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(
+                PaneLaunchEnv::default().with_identity(
                     workspace_id.to_string(),
                     crate::workspace::public_tab_id_for_number(workspace_id, number),
                     pane_id.to_string(),
                 )
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .with_virtual_env(restored_virtual_env.clone());
         let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
         let was_imported = imported_runtime.is_some();
         let pending_native_agent_restore = if was_imported {
@@ -537,6 +558,7 @@ fn restore_tab(
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
+            terminal.virtual_env = restored_virtual_env;
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
@@ -629,6 +651,7 @@ fn restore_tab(
             Ok(runtime) => {
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+                terminal.virtual_env = restored_virtual_env;
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
@@ -1198,6 +1221,7 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            virtual_env: None,
                         },
                     )]),
                     zoomed: false,
@@ -1279,6 +1303,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                virtual_env: None,
                             },
                         ),
                         (
@@ -1290,6 +1315,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                virtual_env: None,
                             },
                         ),
                     ]),
@@ -1343,6 +1369,7 @@ mod tests {
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
+                    virtual_env: None,
                 },
             )
         };
@@ -1358,6 +1385,7 @@ mod tests {
                 value: "codex-session".into(),
             }),
             launch_argv: None,
+            virtual_env: None,
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1441,6 +1469,98 @@ mod tests {
             .all(|detail| detail.pane_id != agent_pane));
     }
 
+    fn restore_pane_with_virtual_env(
+        prefix: &std::path::Path,
+    ) -> Option<crate::platform::VirtualEnvActivation> {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("w1".into()),
+                custom_name: None,
+                identity_cwd: cwd.clone(),
+                worktree_space: None,
+                public_pane_numbers: HashMap::from([(10, 1)]),
+                next_public_pane_number: 2,
+                public_tab_numbers: vec![1],
+                next_public_tab_number: 2,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Pane(10),
+                    panes: HashMap::from([(
+                        10,
+                        super::super::snapshot::PaneSnapshot {
+                            cwd: cwd.clone(),
+                            label: None,
+                            agent_name: None,
+                            managed_agent_kind: None,
+                            agent_session: None,
+                            launch_argv: None,
+                            virtual_env: Some(super::super::snapshot::PaneVirtualEnvSnapshot {
+                                kind: "conda".into(),
+                                prefix: prefix.to_path_buf(),
+                                name: Some("web".into()),
+                            }),
+                        },
+                    )]),
+                    zoomed: false,
+                    focused: Some(10),
+                    root_pane: Some(10),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        };
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let workspace = workspaces.first().expect("workspace should restore");
+        let pane = workspace.tabs[0].root_pane;
+        let terminal_id = &workspace.tabs[0].panes[&pane].attached_terminal_id;
+        terminals[terminal_id].virtual_env.clone()
+    }
+
+    #[tokio::test]
+    async fn cold_restore_carries_the_saved_virtual_env_onto_the_terminal() {
+        let prefix = std::env::current_dir().unwrap();
+
+        let activation = restore_pane_with_virtual_env(&prefix)
+            .expect("restored pane should carry its environment");
+
+        assert_eq!(activation.kind, crate::platform::VirtualEnvKind::Conda);
+        assert_eq!(activation.prefix, prefix);
+        assert_eq!(activation.name.as_deref(), Some("web"));
+    }
+
+    #[tokio::test]
+    async fn cold_restore_drops_a_virtual_env_that_no_longer_exists() {
+        // Re-entering a deleted environment would put a missing directory on
+        // PATH and suppress conda's fallback to base, leaving the pane with no
+        // interpreter at all.
+        let prefix = std::env::current_dir()
+            .unwrap()
+            .join("herdr-environment-that-does-not-exist");
+
+        assert!(restore_pane_with_virtual_env(&prefix).is_none());
+    }
+
     #[test]
     fn legacy_restore_precomputes_missing_public_pane_numbers() {
         let cwd = std::env::current_dir().unwrap();
@@ -1509,6 +1629,7 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            virtual_env: None,
                         },
                     )]),
                     zoomed: false,
@@ -1670,6 +1791,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                virtual_env: None,
             },
         );
         let history = SessionHistorySnapshot {

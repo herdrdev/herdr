@@ -804,6 +804,29 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     super::parse_agent_env_hint(procargs2_env(&buf)?)
 }
 
+/// Read the interpreter environment a process was started in.
+///
+/// The kernel withholds the environment block for platform binaries, so this
+/// reports `Unknown` for the pane's own `/bin/zsh`. Agents run from
+/// user-installed binaries, which do report it.
+pub fn process_virtual_env(pid: u32) -> super::VirtualEnvObservation {
+    use super::VirtualEnvObservation;
+
+    if pid == 0 {
+        return VirtualEnvObservation::Unknown;
+    }
+    let Some(buf) = kern_procargs2(pid) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    let Some(environ) = procargs2_env(&buf) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    match super::parse_virtual_env_activation(environ) {
+        Some(activation) => VirtualEnvObservation::Activation(activation),
+        None => VirtualEnvObservation::NoActivation,
+    }
+}
+
 fn procargs2_argv_start(rest: &[u8]) -> Option<usize> {
     let exec_end = rest.iter().position(|&byte| byte == 0)?;
     let mut pos = exec_end;

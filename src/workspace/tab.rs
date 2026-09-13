@@ -556,4 +556,20 @@ impl Tab {
             .get(terminal_id)
             .and_then(|rt| rt.foreground_cwd())
     }
+
+    pub fn virtual_env_for_pane(
+        &self,
+        pane_id: PaneId,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+    ) -> crate::platform::VirtualEnvObservation {
+        use crate::platform::VirtualEnvObservation;
+
+        let Some(terminal_id) = self.terminal_id(pane_id) else {
+            return VirtualEnvObservation::Unknown;
+        };
+        terminal_runtimes
+            .get(terminal_id)
+            .map(|rt| rt.foreground_virtual_env())
+            .unwrap_or(VirtualEnvObservation::Unknown)
+    }
 }
