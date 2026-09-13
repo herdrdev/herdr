@@ -14,6 +14,11 @@ env:
   # Keep file/line backtraces without generating type and variable debug information.
   CARGO_PROFILE_DEV_DEBUG: "1"
   CARGO_PROFILE_TEST_DEBUG: "1"
+  # vercel-labs/setup-zig does not cache the Zig global cache, so redirect it into the
+  # workspace .zig-cache that the Zig build cache steps persist. Remove this (and the
+  # widened condition on "Restore Zig build cache") if we switch to a setup action that
+  # owns Zig caching, e.g. step-security/setup-zig. See PR #4023.
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -113,7 +118,6 @@ jobs:
           "ZIG=$(Join-Path $stable 'zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore Zig build cache
-        if: runner.os == 'macOS' || matrix.kind == 'windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .zig-cache
