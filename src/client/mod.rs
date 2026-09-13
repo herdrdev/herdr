@@ -73,6 +73,12 @@ use terminal_setup::{
     effective_mouse_capture, effective_sgr_pixel_mouse, set_mouse_capture,
     setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor,
 };
+
+fn refresh_host_mouse_capture(enabled: bool, sgr_pixels: bool) {
+    if let Err(err) = set_mouse_capture(enabled, sgr_pixels) {
+        warn!(err = %err, "failed to re-assert host mouse capture");
+    }
+}
 #[cfg(windows)]
 use terminal_setup::{
     enable_windows_virtual_terminal_input, is_ssh_session, windows_vti_input_backend_enabled,
@@ -783,9 +789,16 @@ async fn run_client_loop(
                             continue;
                         }
                     }
+                    let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
+                    if crate::raw_input::events_require_host_mode_refresh(&events) {
+                        refresh_host_mouse_capture(
+                            state.mouse_capture_active,
+                            host_sgr_pixels_active.load(Ordering::Acquire),
+                        );
+                    }
                     let (outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
-                        let outcome = shell.handle_input_bytes(&data);
+                        let outcome = shell.handle_raw_events(events);
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
@@ -1008,6 +1021,14 @@ async fn run_client_loop(
                     write_stream.active_surface_available(),
                 );
                 if state.shell.is_some() {
+                    if events.iter().any(|event| {
+                        matches!(event, crate::protocol::ClientInputEvent::FocusGained)
+                    }) {
+                        refresh_host_mouse_capture(
+                            state.mouse_capture_active,
+                            host_sgr_pixels_active.load(Ordering::Acquire),
+                        );
+                    }
                     let image_target = state
                         .shell
                         .as_ref()
@@ -1084,6 +1105,11 @@ async fn run_client_loop(
                     set_mouse_capture(state.mouse_capture_active, false)
                         .map_err(ClientError::ConnectionFailed)?;
                     host_sgr_pixels_active.store(false, Ordering::Release);
+                } else {
+                    refresh_host_mouse_capture(
+                        state.mouse_capture_active,
+                        host_sgr_pixels_active.load(Ordering::Acquire),
+                    );
                 }
                 state.reported_size = (new_cols, new_rows);
                 state.reported_cell_size = (cell_width_px, cell_height_px);

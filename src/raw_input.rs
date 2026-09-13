@@ -543,6 +543,13 @@ pub(crate) fn events_require_host_surface_redraw(
             .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
 }
 
+#[cfg(any(unix, test))]
+pub(crate) fn events_require_host_mode_refresh(events: &[RawInputEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
+}
+
 #[cfg(any(not(windows), test))]
 pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEvent]) -> bool {
     events
@@ -1353,6 +1360,16 @@ mod tests {
 
         let events = parse_raw_input_bytes_sync(b"\x1b[O");
         assert!(!events_require_host_surface_redraw(&events, true));
+    }
+
+    #[test]
+    fn outer_focus_gained_requests_host_mode_refresh() {
+        assert!(events_require_host_mode_refresh(
+            &parse_raw_input_bytes_sync(b"\x1b[I")
+        ));
+        assert!(!events_require_host_mode_refresh(
+            &parse_raw_input_bytes_sync(b"\x1b[O")
+        ));
     }
 
     #[test]
