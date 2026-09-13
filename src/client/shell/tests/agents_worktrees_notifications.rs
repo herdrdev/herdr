@@ -572,6 +572,67 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
 }
 
 #[test]
+fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "second".into();
+    projected.tabs[0].custom_label = true;
+    projected.agents = vec![ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("reviewer".into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Working,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: true,
+    }];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let row = state.hits.agents.first().expect("agent row hit").0;
+    let buffer = frame.to_ratatui_buffer().expect("agent sidebar buffer");
+
+    for (label, needle) in [("tab", "second"), ("agent", "reviewer"), ("separator", "·")] {
+        let (x, y) = cell_symbol_position(&frame, row, needle);
+        let cell = buffer.cell((x, y)).expect("muted sidebar cell");
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "{label} cell at ({x},{y}) should not stack terminal faint: {cell:?}"
+        );
+    }
+}
+
+#[test]
+fn workspace_state_text_does_not_stack_terminal_faint() {
+    use crate::config::SpaceSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.sidebar.spaces.rows = vec![
+        vec![SpaceSidebarToken::StateIcon, SpaceSidebarToken::Workspace],
+        vec![SpaceSidebarToken::StateText],
+    ];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("workspace sidebar frame");
+    let rect = state.hits.workspaces.first().expect("workspace hit").rect;
+    let buffer = frame.to_ratatui_buffer().expect("workspace sidebar buffer");
+    let (x, y) = cell_symbol_position(&frame, rect, "idle");
+    let cell = buffer.cell((x, y)).expect("workspace state text cell");
+    assert!(
+        !cell.modifier.contains(Modifier::DIM),
+        "workspace state text at ({x},{y}) should not stack terminal faint: {cell:?}"
+    );
+}
+
+#[test]
 fn active_agent_view_controls_sidebar_order_and_focus_indices() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
