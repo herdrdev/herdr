@@ -1101,12 +1101,11 @@ fn worktree_action_errors_expire_without_more_input() {
     let message = "This workspace is not a Herdr-managed worktree checkout.";
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
-    let now = std::time::Instant::now();
-    assert!(!state.tick_endpoint_error(now));
-    assert!(!state.tick_endpoint_error(now + std::time::Duration::from_secs(4)));
+    let deadline = state.endpoint_error_deadline.expect("deadline");
+    assert!(!state.tick_endpoint_error(deadline - std::time::Duration::from_secs(1)));
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
-    assert!(state.tick_endpoint_error(now + std::time::Duration::from_secs(6)));
+    assert!(state.tick_endpoint_error(deadline + std::time::Duration::from_millis(1)));
     assert!(state.endpoint_error.is_none());
 
     // A repeated identical message must start a fresh lifetime instead of
