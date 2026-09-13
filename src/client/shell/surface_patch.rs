@@ -72,6 +72,8 @@ fn fast_path_blocker(
         Some("client_surface_patch.fallback.notification")
     } else if state.copy_feedback.is_some() {
         Some("client_surface_patch.fallback.copy_feedback")
+    } else if state.link_hover_blocks_patch(patch) {
+        Some("client_surface_patch.fallback.link_hover")
     } else if state.selection.is_some() {
         Some("client_surface_patch.fallback.selection")
     } else if state.copy_mode.is_some() {
@@ -240,6 +242,7 @@ impl ClientShellState {
                     }
                 }
             }
+            self.invalidate_link_hover();
             self.reconcile_input_source();
         } else {
             let mut next = current.clone();

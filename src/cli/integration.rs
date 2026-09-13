@@ -38,30 +38,51 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
 
     for status in crate::integration::installed_integration_statuses() {
         let target = crate::integration::integration_target_label(status.target);
-        let version = match status.installed_version {
-            Some(version) => format!("v{version}"),
-            None => "legacy".to_string(),
-        };
-        let state = match status.state {
-            crate::integration::IntegrationStatusKind::NotInstalled => "not installed".to_string(),
-            crate::integration::IntegrationStatusKind::Current => {
-                format!("current ({version})")
-            }
-            crate::integration::IntegrationStatusKind::Outdated
-                if status
-                    .installed_version
-                    .is_some_and(|installed| installed >= status.expected_version) =>
-            {
-                format!("needs repair ({version})")
-            }
-            crate::integration::IntegrationStatusKind::Outdated => {
-                format!("outdated ({version} < v{})", status.expected_version)
-            }
-        };
+        let state = describe_integration_state(
+            status.state,
+            status.installed_version,
+            status.expected_version,
+        );
         println!("{target}: {state} ({})", status.path.display());
     }
 
+    if let Some(status) = crate::integration::experimental_letta_integration_status() {
+        let state = describe_integration_state(
+            status.state,
+            status.installed_version,
+            status.expected_version,
+        );
+        println!(
+            "{} (experimental): {state} ({})",
+            status.label,
+            status.path.display()
+        );
+    }
+
     Ok(0)
+}
+
+fn describe_integration_state(
+    state: crate::integration::IntegrationStatusKind,
+    installed_version: Option<u32>,
+    expected_version: u32,
+) -> String {
+    let version = match installed_version {
+        Some(version) => format!("v{version}"),
+        None => "legacy".to_string(),
+    };
+    match state {
+        crate::integration::IntegrationStatusKind::NotInstalled => "not installed".to_string(),
+        crate::integration::IntegrationStatusKind::Current => format!("current ({version})"),
+        crate::integration::IntegrationStatusKind::Outdated
+            if installed_version.is_some_and(|installed| installed >= expected_version) =>
+        {
+            format!("needs repair ({version})")
+        }
+        crate::integration::IntegrationStatusKind::Outdated => {
+            format!("outdated ({version} < v{expected_version})")
+        }
+    }
 }
 
 fn integration_install(args: &[String]) -> std::io::Result<i32> {
@@ -69,7 +90,11 @@ fn integration_install(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     };
 
-    match crate::integration::install_target(target) {
+    let installed = match target {
+        IntegrationCommandTarget::Builtin(target) => crate::integration::install_target(target),
+        IntegrationCommandTarget::Letta => crate::integration::install_experimental_letta(),
+    };
+    match installed {
         Ok(messages) => {
             print_integration_messages(messages);
             Ok(0)
@@ -86,7 +111,11 @@ fn integration_uninstall(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     };
 
-    match crate::integration::uninstall_target(target) {
+    let removed = match target {
+        IntegrationCommandTarget::Builtin(target) => crate::integration::uninstall_target(target),
+        IntegrationCommandTarget::Letta => crate::integration::uninstall_experimental_letta(),
+    };
+    match removed {
         Ok(messages) => {
             print_integration_messages(messages);
             Ok(0)
@@ -104,45 +133,56 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
+/// Integration target accepted by the CLI. Letta is deliberately kept out of
+/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
+/// experimental CLI-only target until the agent registry replaces it.
+enum IntegrationCommandTarget {
+    Builtin(IntegrationTarget),
+    Letta,
+}
+
 fn parse_integration_target(
     args: &[String],
     action: &str,
-) -> std::io::Result<Option<IntegrationTarget>> {
+) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
         );
         return Ok(None);
     }
 
     let parsed = match target {
-        "pi" => IntegrationTarget::Pi,
-        "omp" => IntegrationTarget::Omp,
-        "claude" => IntegrationTarget::Claude,
-        "codex" => IntegrationTarget::Codex,
-        "copilot" => IntegrationTarget::Copilot,
-        "devin" => IntegrationTarget::Devin,
-        "droid" => IntegrationTarget::Droid,
-        "kimi" => IntegrationTarget::Kimi,
-        "opencode" => IntegrationTarget::Opencode,
-        "kilo" => IntegrationTarget::Kilo,
-        "hermes" => IntegrationTarget::Hermes,
-        "qodercli" => IntegrationTarget::Qodercli,
-        "qwen" => IntegrationTarget::Qwen,
-        "cursor" => IntegrationTarget::Cursor,
-        "mastracode" => IntegrationTarget::Mastracode,
-        "antigravity-cli" | "antigravity_cli" => IntegrationTarget::AntigravityCli,
-        "grok" => IntegrationTarget::Grok,
+        "pi" => IntegrationCommandTarget::Builtin(IntegrationTarget::Pi),
+        "omp" => IntegrationCommandTarget::Builtin(IntegrationTarget::Omp),
+        "claude" => IntegrationCommandTarget::Builtin(IntegrationTarget::Claude),
+        "codex" => IntegrationCommandTarget::Builtin(IntegrationTarget::Codex),
+        "copilot" => IntegrationCommandTarget::Builtin(IntegrationTarget::Copilot),
+        "devin" => IntegrationCommandTarget::Builtin(IntegrationTarget::Devin),
+        "droid" => IntegrationCommandTarget::Builtin(IntegrationTarget::Droid),
+        "kimi" => IntegrationCommandTarget::Builtin(IntegrationTarget::Kimi),
+        "opencode" => IntegrationCommandTarget::Builtin(IntegrationTarget::Opencode),
+        "kilo" => IntegrationCommandTarget::Builtin(IntegrationTarget::Kilo),
+        "hermes" => IntegrationCommandTarget::Builtin(IntegrationTarget::Hermes),
+        "qodercli" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qodercli),
+        "qwen" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qwen),
+        "letta" => IntegrationCommandTarget::Letta,
+        "cursor" => IntegrationCommandTarget::Builtin(IntegrationTarget::Cursor),
+        "mastracode" => IntegrationCommandTarget::Builtin(IntegrationTarget::Mastracode),
+        "antigravity-cli" | "antigravity_cli" => {
+            IntegrationCommandTarget::Builtin(IntegrationTarget::AntigravityCli)
+        }
+        "grok" => IntegrationCommandTarget::Builtin(IntegrationTarget::Grok),
         _ => {
             eprintln!("unknown integration target: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, cursor, mastracode, antigravity-cli, grok"
+                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
             );
             return Ok(None);
         }
@@ -166,6 +206,7 @@ fn print_integration_help() {
     eprintln!("  herdr integration install hermes");
     eprintln!("  herdr integration install qodercli");
     eprintln!("  herdr integration install qwen");
+    eprintln!("  herdr integration install letta");
     eprintln!("  herdr integration install cursor");
     eprintln!("  herdr integration install mastracode");
     eprintln!("  herdr integration install antigravity-cli");
@@ -183,6 +224,7 @@ fn print_integration_help() {
     eprintln!("  herdr integration uninstall hermes");
     eprintln!("  herdr integration uninstall qodercli");
     eprintln!("  herdr integration uninstall qwen");
+    eprintln!("  herdr integration uninstall letta");
     eprintln!("  herdr integration uninstall cursor");
     eprintln!("  herdr integration uninstall mastracode");
     eprintln!("  herdr integration uninstall antigravity-cli");

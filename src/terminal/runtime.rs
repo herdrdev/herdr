@@ -423,6 +423,19 @@ impl TerminalRuntime {
         self.0.visible_hyperlinks(area)
     }
 
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.0.link_regions_at(col, row, resolve)
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.0.link_target_at(col, row)
+    }
+
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         needs_data: F,

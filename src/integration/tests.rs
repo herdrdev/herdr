@@ -957,7 +957,10 @@ fn install_claude_writes_hook_and_updates_settings() {
     );
     assert_eq!(hook_content, CLAUDE_HOOK_ASSET);
     assert!(settings["permissions"]["allow"].is_array());
-    assert_eq!(settings["hooks"]["SessionStart"][0]["matcher"], "*");
+    assert_eq!(
+        settings["hooks"]["SessionStart"][0]["matcher"],
+        "^(startup|resume|clear|compact|fork)$"
+    );
     assert!(settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         .as_str()
         .unwrap()
@@ -1105,7 +1108,7 @@ fn install_claude_removes_deprecated_completion_hooks_and_preserves_user_hooks()
 }
 
 #[test]
-fn claude_v1_integration_status_is_outdated() {
+fn claude_v9_integration_status_is_outdated_until_reinstalled() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
@@ -1114,7 +1117,7 @@ fn claude_v1_integration_status_is_outdated() {
     let hook_path = claude_hooks_dir.join(CLAUDE_HOOK_INSTALL_NAME);
     fs::write(
         &hook_path,
-        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=1\n",
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=claude\n# HERDR_INTEGRATION_VERSION=9\n",
     )
     .unwrap();
     std::env::set_var("HOME", &home);
@@ -1126,9 +1129,18 @@ fn claude_v1_integration_status_is_outdated() {
         .unwrap();
 
     assert_eq!(claude.path, hook_path);
-    assert_eq!(claude.installed_version, Some(1));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(claude.installed_version, Some(9));
+    assert_eq!(claude.expected_version, 10);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
+
+    install_claude().unwrap();
+    let status = integration_status_at(
+        crate::api::schema::IntegrationTarget::Claude,
+        hook_path,
+        CLAUDE_INTEGRATION_VERSION,
+    );
+    assert_eq!(status.installed_version, Some(10));
+    assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
@@ -1157,7 +1169,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 9);
+    assert_eq!(claude.expected_version, 10);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -2692,6 +2704,59 @@ fn install_hermes_converts_flow_plugin_list_to_block_list() {
 }
 
 #[test]
+fn install_hermes_converts_inline_enabled_list_to_block_list() {
+    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [example-plugin]\n", true);
+    assert_eq!(
+        config,
+        "plugins:\n  enabled:\n    - herdr-agent-state\n    - example-plugin\n"
+    );
+}
+
+#[test]
+fn install_hermes_preserves_quoted_inline_enabled_items() {
+    let config =
+        update_hermes_enabled_plugin("plugins:\n  enabled: [\"null\", 'foo: bar']\n", true);
+    assert_eq!(
+        config,
+        "plugins:\n  enabled:\n    - herdr-agent-state\n    - \"null\"\n    - 'foo: bar'\n"
+    );
+}
+
+#[test]
+fn install_hermes_preserves_inline_enabled_comment() {
+    let config = update_hermes_enabled_plugin(
+        "plugins:\n  enabled: [example-plugin] # managed locally\n",
+        true,
+    );
+    assert_eq!(
+        config,
+        "plugins:\n  enabled: # managed locally\n    - herdr-agent-state\n    - example-plugin\n"
+    );
+}
+
+#[test]
+fn install_hermes_preserves_inline_plugins_comment() {
+    let config =
+        update_hermes_enabled_plugin("plugins: [platforms/discord] # managed locally\n", true);
+    assert_eq!(
+        config,
+        "plugins: # managed locally\n  - herdr-agent-state\n  - platforms/discord\n"
+    );
+}
+
+#[test]
+fn install_hermes_is_idempotent_for_inline_enabled_list_entry() {
+    let config = update_hermes_enabled_plugin(
+        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n",
+        true,
+    );
+    assert_eq!(
+        config,
+        "plugins:\n  enabled: [herdr-agent-state, example-plugin]\n"
+    );
+}
+
+#[test]
 fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -2813,6 +2878,30 @@ fn uninstall_hermes_removes_flow_plugin_list_entry() {
 }
 
 #[test]
+fn uninstall_hermes_removes_inline_enabled_list_entry() {
+    let config = update_hermes_enabled_plugin(
+        "plugins:\n  enabled: [example-plugin, herdr-agent-state]\n",
+        false,
+    );
+    assert_eq!(config, "plugins:\n  enabled:\n    - example-plugin\n");
+}
+
+#[test]
+fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
+    let config = update_hermes_enabled_plugin(
+        "plugins:\n  enabled: ['foo: bar', herdr-agent-state]\n",
+        false,
+    );
+    assert_eq!(config, "plugins:\n  enabled:\n    - 'foo: bar'\n");
+}
+
+#[test]
+fn uninstall_hermes_converts_single_inline_enabled_entry_to_empty_list() {
+    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [herdr-agent-state]\n", false);
+    assert_eq!(config, "plugins:\n  enabled: []\n");
+}
+
+#[test]
 fn uninstall_hermes_removes_commented_flat_plugin_entry() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -2897,6 +2986,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_HOOK_ASSET,
             MASTRACODE_INTEGRATION_VERSION,
         ),
+        ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -3326,6 +3416,194 @@ fn install_qwen_errors_when_config_dir_missing() {
     assert!(err.contains("qwen code config directory not found"));
 
     std::env::remove_var(QWEN_HOME_ENV_VAR);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_and_uninstall_letta_preserve_unrelated_settings_and_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let letta_dir = home.join(".letta");
+    fs::create_dir_all(&letta_dir).unwrap();
+    let settings_path = letta_dir.join("settings.json");
+    fs::write(
+        &settings_path,
+        r#"{"theme":"dark","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+    )
+    .unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let installed = install_letta().unwrap();
+    assert_eq!(
+        installed.hook_path,
+        letta_dir.join("hooks").join(LETTA_HOOK_INSTALL_NAME)
+    );
+    let first_install = fs::read_to_string(&settings_path).unwrap();
+    let settings: Value = serde_json::from_str(&first_install).unwrap();
+    let entries = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["hooks"][0]["command"], "echo user");
+    assert!(entries[1].get("matcher").is_none());
+    assert_eq!(entries[1]["hooks"][0]["timeout"], LETTA_HOOK_TIMEOUT_MS);
+    assert_eq!(entries[1]["hooks"][0]["quiet"], true);
+    assert!(entries[1]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("session"));
+    assert_eq!(settings["theme"], "dark");
+
+    install_letta().unwrap();
+    assert_eq!(fs::read_to_string(&settings_path).unwrap(), first_install);
+
+    let result = uninstall_letta().unwrap();
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+    assert!(!installed.hook_path.exists());
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(settings["theme"], "dark");
+    let remaining = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["hooks"][0]["command"], "echo user");
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn letta_session_hook_is_silent_and_encodes_default_conversation() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".letta")).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+    let installed = install_letta().unwrap();
+
+    let capture = base.join("args.txt");
+    let fake_herdr = base.join("herdr");
+    fs::write(
+        &fake_herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\n",
+            capture.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&fake_herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_herdr, permissions).unwrap();
+
+    let mut child = Command::new("sh")
+        .arg(&installed.hook_path)
+        .arg("session")
+        .env("HERDR_ENV", "1")
+        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HERDR_SOCKET_PATH", "/tmp/herdr.sock")
+        .env("HERDR_BIN_PATH", &fake_herdr)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            br#"{"event_type":"SessionStart","conversation_id":"default","agent_id":"agent-123","is_new_session":false}"#,
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let args = fs::read_to_string(capture).unwrap();
+    assert!(args.contains("report-agent-session w1:p2"));
+    assert!(args.contains("--source herdr:letta --agent letta"));
+    assert!(args.contains("--agent-session-id default:agent-123"));
+    assert!(args.contains("--session-start-source resume"));
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_letta_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let err = install_letta().unwrap_err().to_string();
+    assert!(err.contains("letta code config directory not found"));
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_letta_does_not_publish_hook_when_settings_are_invalid() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let letta_dir = home.join(".letta");
+    fs::create_dir_all(&letta_dir).unwrap();
+    fs::write(letta_dir.join("settings.json"), "not json").unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    assert!(install_letta().is_err());
+    assert!(!letta_dir
+        .join("hooks")
+        .join(LETTA_HOOK_INSTALL_NAME)
+        .exists());
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn letta_staged_install_can_restore_the_prior_file() {
+    let base = unique_base();
+    fs::create_dir_all(&base).unwrap();
+    let target = base.join("settings.json");
+    fs::write(&target, "old").unwrap();
+
+    let (staged, backup) = prepare_letta_install_file(&target, b"new", false, true).unwrap();
+    let had_original = publish_letta_install_file(&target, &staged, &backup).unwrap();
+    assert!(had_original);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+
+    rollback_letta_install_file(&target, &backup, had_original).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+    assert!(!backup.exists());
+
     let _ = fs::remove_dir_all(base);
 }
 
@@ -4056,7 +4334,39 @@ fn install_antigravity_cli_errors_when_config_dir_missing() {
 }
 
 #[test]
-fn grok_v1_integration_status_is_current() {
+fn grok_v1_integration_status_is_outdated() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let grok_dir = base.join(".grok");
+    let hooks_dir = grok_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var(GROK_CONFIG_DIR_ENV_VAR, &grok_dir);
+    let hook_path = hooks_dir.join(GROK_HOOK_INSTALL_NAME);
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=grok\n# HERDR_INTEGRATION_VERSION=1\n",
+    )
+    .unwrap();
+    fs::write(
+        hooks_dir.join(GROK_HOOK_CONFIG_INSTALL_NAME),
+        serde_json::to_string(&grok_hook_config(&hook_path)).unwrap(),
+    )
+    .unwrap();
+
+    let grok = installed_integration_statuses()
+        .into_iter()
+        .find(|status| status.target == crate::api::schema::IntegrationTarget::Grok)
+        .expect("grok integration status");
+    assert_eq!(grok.installed_version, Some(1));
+    assert_eq!(grok.expected_version, GROK_INTEGRATION_VERSION);
+    assert_eq!(grok.state, IntegrationStatusKind::Outdated);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn grok_v2_integration_status_is_current() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let grok_dir = base.join(".grok");

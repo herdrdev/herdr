@@ -23,6 +23,18 @@ pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<
         return Vec::new();
     }
 
+    // Super has no legacy character encoding. Preserve the chord with CSI-u
+    // instead of leaking the unmodified character into the pane.
+    if matches!(protocol, KeyboardProtocol::Legacy)
+        && key.kind != crossterm::event::KeyEventKind::Release
+        && matches!(key.code, KeyCode::Char(_))
+        && key.modifiers.contains(KeyModifiers::SUPER)
+    {
+        if let Some(bytes) = try_encode_csi_u(&key, 0) {
+            return bytes;
+        }
+    }
+
     // REPORT_ALL_KEYS must retain physical press/repeat/release semantics instead of
     // reducing a native key to its layout-generated text.
     let preserve_physical_key = key.has_physical_identity() && protocol.reports_all_keys();
@@ -1193,6 +1205,19 @@ mod tests {
                 parse_terminal_key_sequence(std::str::from_utf8(&encoded).unwrap()).unwrap();
             assert_terminal_key_eq(parsed, key.code, key.modifiers, key.kind, None);
         }
+    }
+
+    #[test]
+    fn legacy_super_character_preserves_csi_u_chord() {
+        let sequence = "\x1b[99;9u";
+        let key = parse_terminal_key_sequence(sequence).expect("Super+C CSI-u key");
+
+        assert_eq!(key.code, KeyCode::Char('c'));
+        assert_eq!(key.modifiers, KeyModifiers::SUPER);
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Legacy),
+            sequence.as_bytes()
+        );
     }
 
     #[test]

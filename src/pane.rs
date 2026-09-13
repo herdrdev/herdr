@@ -147,6 +147,9 @@ impl PaneLaunchEnv {
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     cmd.env_remove("CODEX_THREAD_ID");
+    // OMP sets OMPCODE for shells it spawns. A pane launched from inside OMP
+    // must not inherit it or its root agent would look like a nested session.
+    cmd.env_remove("OMPCODE");
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
@@ -1714,26 +1717,59 @@ fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
 /// prompt would show success after a failed command (verified on 5.1).
 pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
 
+/// Login flags appended when launching POSIX-style shells on Windows.
+///
+/// `portable-pty`'s default-program path resolves to `%ComSpec%` (cmd.exe) on
+/// Windows and ignores the `SHELL` env override, and the Unix argv0-prefix
+/// login convention does not exist there. A login shell therefore has to be
+/// launched directly with the shell's own login flag. Only POSIX-style shells
+/// that define one (the sh family, fish, and csh/tcsh) get it; Windows-native
+/// shells such as cmd.exe and PowerShell have no login concept and launch
+/// plain.
+fn windows_login_shell_args(shell: &str) -> &'static [&'static str] {
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    match name {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "mksh" | "fish" | "csh" | "tcsh" => {
+            &["-l"]
+        }
+        _ => &[],
+    }
+}
+
 fn pane_shell_command_builder_for_target(
     shell_config: PaneShellConfig<'_>,
     target: ShellLaunchTarget,
 ) -> io::Result<CommandBuilder> {
     let shell = pane_shell(shell_config.default_shell);
-    if shell_mode_uses_login_shell(shell_config.mode, target) {
+    // Unix login shells go through portable-pty's default-program builder so
+    // they receive the login argv0 convention. Windows has no such convention
+    // and the default-program builder would launch cmd.exe, so Windows login
+    // shells are built directly below like every other direct-shell target.
+    if shell_mode_uses_login_shell(shell_config.mode, target)
+        && target != ShellLaunchTarget::Windows
+    {
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
-        Ok(cmd)
-    } else {
-        let mut cmd = CommandBuilder::new(&shell);
-        if uses_windows_powershell_pane_shell_for_target(shell_config, target) {
-            cmd.args([
-                "-NoExit",
-                "-Command",
-                WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
-            ]);
-        }
-        Ok(cmd)
+        return Ok(cmd);
     }
+
+    let mut cmd = CommandBuilder::new(&shell);
+    if shell_mode_uses_login_shell(shell_config.mode, target) {
+        cmd.args(windows_login_shell_args(&shell));
+    }
+    if uses_windows_powershell_pane_shell_for_target(shell_config, target) {
+        cmd.args([
+            "-NoExit",
+            "-Command",
+            WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
+        ]);
+    }
+    Ok(cmd)
 }
 
 fn pane_shell_command_builder(shell_config: PaneShellConfig<'_>) -> io::Result<CommandBuilder> {
@@ -1751,8 +1787,10 @@ fn uses_windows_powershell_pane_shell_for_target(
     shell_config: PaneShellConfig<'_>,
     target: ShellLaunchTarget,
 ) -> bool {
+    // Login mode no longer routes Windows through the default-program builder,
+    // so login PowerShell panes are launched directly and can carry the same
+    // prompt-based cwd reporting as non-login panes.
     target == ShellLaunchTarget::Windows
-        && !shell_mode_uses_login_shell(shell_config.mode, target)
         && is_powershell_shell(&pane_shell(shell_config.default_shell))
 }
 
@@ -3135,6 +3173,19 @@ impl PaneRuntime {
         self.terminal.visible_hyperlinks(area)
     }
 
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.terminal.link_regions_at(col, row, resolve)
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.terminal.link_target_at(col, row)
+    }
+
     pub(crate) fn kitty_graphics_may_have_placements(&self) -> bool {
         self.terminal.kitty_graphics_may_have_placements()
     }
@@ -3558,6 +3609,16 @@ mod tests {
     }
 
     #[test]
+    fn pane_launch_env_removes_outer_ompcode_marker() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("OMPCODE", "1");
+
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+
+        assert!(cmd.get_env("OMPCODE").is_none());
+    }
+
+    #[test]
     fn pane_terminal_identity_removes_outer_windows_terminal_session() {
         let mut cmd = CommandBuilder::new("shell");
         cmd.env("WT_SESSION", "outer-session");
@@ -3796,6 +3857,122 @@ mod tests {
     }
 
     #[test]
+    fn windows_login_shell_builder_launches_configured_shell_with_login_flag() {
+        let cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new("bash.exe", crate::config::ShellModeConfig::Login),
+            ShellLaunchTarget::Windows,
+        )
+        .unwrap();
+
+        assert!(
+            !cmd.is_default_prog(),
+            "Windows login mode must not fall back to the default program (cmd.exe)"
+        );
+        assert_eq!(
+            cmd.get_argv(),
+            &[
+                std::ffi::OsString::from("bash.exe"),
+                std::ffi::OsString::from("-l"),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_login_shell_builder_launches_native_shells_without_flag() {
+        for shell in ["cmd.exe", "C:\\Windows\\System32\\cmd.exe"] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert!(!cmd.is_default_prog(), "shell {shell:?}");
+            assert_eq!(
+                cmd.get_argv(),
+                &[std::ffi::OsString::from(shell)],
+                "shell {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_powershell_builder_injects_prompt_cwd_shell_integration() {
+        for shell in [
+            "powershell.exe",
+            "pwsh.exe",
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        ] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert_eq!(
+                cmd.get_argv(),
+                &[
+                    std::ffi::OsString::from(shell),
+                    std::ffi::OsString::from("-NoExit"),
+                    std::ffi::OsString::from("-Command"),
+                    std::ffi::OsString::from(WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND),
+                ],
+                "shell {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_shell_args_maps_posix_shells_to_login_flag() {
+        for shell in [
+            "sh",
+            "sh.exe",
+            "bash",
+            "bash.exe",
+            "BASH.EXE",
+            "zsh",
+            "zsh.exe",
+            "ksh",
+            "dash",
+            "ash",
+            "mksh",
+            "fish",
+            "fish.exe",
+            "csh",
+            "csh.exe",
+            "tcsh",
+            "tcsh.exe",
+            "C:\\Program Files\\Git\\bin\\bash.exe",
+        ] {
+            assert_eq!(
+                windows_login_shell_args(shell),
+                &["-l"],
+                "shell {shell:?} should get the login flag"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_shell_args_omits_flag_for_shells_without_login_concept() {
+        for shell in [
+            "cmd",
+            "cmd.exe",
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "pwsh.exe",
+            "nu",
+            "nu.exe",
+            "C:\\Windows\\System32\\cmd.exe",
+        ] {
+            assert_eq!(
+                windows_login_shell_args(shell),
+                &[] as &[&str],
+                "shell {shell:?} must not get a login flag"
+            );
+        }
+    }
+
+    #[test]
     fn auto_shell_builder_keeps_direct_shell_on_non_macos_target() {
         let cmd = pane_shell_command_builder_for_target(
             PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Auto),
@@ -3887,26 +4064,31 @@ mod tests {
     }
 
     #[test]
-    fn windows_powershell_pane_shell_predicate_requires_windows_and_non_login() {
-        let pwsh = PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::NonLogin);
-        assert!(uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::Windows
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::OtherUnix
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::Macos
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::Login),
-            ShellLaunchTarget::Windows
-        ));
+    fn windows_powershell_pane_shell_predicate_requires_windows_and_powershell() {
+        for mode in [
+            crate::config::ShellModeConfig::NonLogin,
+            crate::config::ShellModeConfig::Login,
+        ] {
+            let pwsh = PaneShellConfig::new("pwsh.exe", mode);
+            assert!(
+                uses_windows_powershell_pane_shell_for_target(pwsh, ShellLaunchTarget::Windows),
+                "mode {mode:?}"
+            );
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::OtherUnix
+            ));
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::Macos
+            ));
+        }
         assert!(!uses_windows_powershell_pane_shell_for_target(
             PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            ShellLaunchTarget::Windows
+        ));
+        assert!(!uses_windows_powershell_pane_shell_for_target(
+            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::Login),
             ShellLaunchTarget::Windows
         ));
     }

@@ -252,6 +252,10 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         "3" => KeyCode::Delete,
         "5" => KeyCode::PageUp,
         "6" => KeyCode::PageDown,
+        "11" => KeyCode::F(1),
+        "12" => KeyCode::F(2),
+        "13" => KeyCode::F(3),
+        "14" => KeyCode::F(4),
         "15" => KeyCode::F(5),
         "17" => KeyCode::F(6),
         "18" => KeyCode::F(7),
@@ -311,6 +315,7 @@ fn kitty_codepoint_to_keycode(codepoint: u32) -> Option<KeyCode> {
         57361 => Some(KeyCode::PrintScreen),
         57362 => Some(KeyCode::Pause),
         57363 => Some(KeyCode::Menu),
+        57364..=57375 => Some(KeyCode::F((codepoint - 57364 + 1) as u8)),
         57376..=57398 => Some(KeyCode::F((codepoint - 57376 + 13) as u8)),
         57399 => Some(KeyCode::Char('0')),
         57400 => Some(KeyCode::Char('1')),
@@ -367,13 +372,8 @@ fn kitty_codepoint_to_keycode(codepoint: u32) -> Option<KeyCode> {
         57452 => Some(KeyCode::Modifier(ModifierKeyCode::RightMeta)),
         57453 => Some(KeyCode::Modifier(ModifierKeyCode::IsoLevel3Shift)),
         57454 => Some(KeyCode::Modifier(ModifierKeyCode::IsoLevel5Shift)),
-        value if is_kitty_functional_codepoint(value) => None,
         value => char::from_u32(value).map(KeyCode::Char),
     }
-}
-
-fn is_kitty_functional_codepoint(codepoint: u32) -> bool {
-    (57358..=57454).contains(&codepoint)
 }
 
 #[allow(dead_code)] // Reserved for the upcoming raw stdin parser.
@@ -641,9 +641,31 @@ mod tests {
             crossterm::event::KeyEventKind::Press,
             None,
         );
-        assert_eq!(parse_terminal_key_sequence("\x1b[11;2~"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[14;1~"), None);
-        assert_eq!(parse_terminal_key_sequence("\x1b[14;3~"), None);
+    }
+
+    #[test]
+    fn parse_parameterized_csi_tilde_f1_through_f4() {
+        // foot and some rxvt-style hosts emit F1-F4 as `CSI <code>;<mods>~`
+        // (for example F3 as `\x1b[13;1:1~`), reusing the same code table as the
+        // unmodified `\x1b[11~`..`\x1b[14~` forms.
+        let cases = [
+            ("\x1b[11;2~", KeyCode::F(1), KeyModifiers::SHIFT),
+            ("\x1b[12;1~", KeyCode::F(2), KeyModifiers::empty()),
+            ("\x1b[13;1:1~", KeyCode::F(3), KeyModifiers::empty()),
+            ("\x1b[13;2~", KeyCode::F(3), KeyModifiers::SHIFT),
+            ("\x1b[14;3~", KeyCode::F(4), KeyModifiers::ALT),
+        ];
+
+        for (sequence, code, modifiers) in cases {
+            let parsed = parse_terminal_key_sequence(sequence).unwrap();
+            assert_terminal_key_eq(
+                parsed,
+                code,
+                modifiers,
+                crossterm::event::KeyEventKind::Press,
+                None,
+            );
+        }
     }
 
     #[test]
@@ -1016,8 +1038,27 @@ mod tests {
     }
 
     #[test]
-    fn unknown_kitty_functional_key_remains_unsupported() {
-        assert!(parse_terminal_key_sequence("\x1b[57364;1u").is_none());
+    fn kitty_f1_through_f12_codepoints_are_recognized() {
+        let cases = [
+            ("\x1b[57364;1u", KeyCode::F(1)),
+            ("\x1b[57365;1u", KeyCode::F(2)),
+            ("\x1b[57366;1u", KeyCode::F(3)),
+            ("\x1b[57367;1u", KeyCode::F(4)),
+            ("\x1b[57368;1u", KeyCode::F(5)),
+            ("\x1b[57375;1u", KeyCode::F(12)),
+            ("\x1b[57376;1u", KeyCode::F(13)),
+        ];
+
+        for (sequence, code) in cases {
+            let parsed = parse_terminal_key_sequence(sequence).unwrap();
+            assert_terminal_key_eq(
+                parsed,
+                code,
+                KeyModifiers::empty(),
+                crossterm::event::KeyEventKind::Press,
+                None,
+            );
+        }
     }
 
     fn assert_fixture_corpus_parses(corpus: &str) {

@@ -364,7 +364,7 @@ impl WindowsInputPump {
         }
         if let Some(escape) = item.physical_escape_press() {
             if !self.framer.has_pending_bracketed_paste() {
-                let raw_events = self.framer.flush_timeout();
+                let raw_events = self.framer.flush_interrupted();
                 events.extend(self.process_raw_events(raw_events));
                 self.pending_physical_escape = Some((escape, false));
                 return events;
@@ -377,7 +377,7 @@ impl WindowsInputPump {
                 self.process_raw_events(raw_events)
             }
             PlatformInputItem::Semantic(event) => {
-                let raw_events = self.framer.flush_timeout();
+                let raw_events = self.framer.flush_interrupted();
                 let mut events = self.process_raw_events(raw_events);
                 events.push(event);
                 events
@@ -436,7 +436,11 @@ impl WindowsInputPump {
                     let raw_events = self.framer.push(&win32_paste_bytes);
                     self.process_raw_events(raw_events)
                 } else {
-                    let raw_events = self.framer.flush_timeout();
+                    let raw_events = if events.is_empty() {
+                        self.framer.flush_timeout()
+                    } else {
+                        self.framer.flush_interrupted()
+                    };
                     let mut output = self.process_raw_events(raw_events);
                     output.extend(events);
                     output
@@ -3447,6 +3451,91 @@ mod tests {
                 source: crate::protocol::ClientKeySource::Synthesized,
             }]
         );
+    }
+
+    #[test]
+    fn vti_mouse_recovery_survives_idle_and_split_continuations() {
+        let mut translator = WindowsInputTranslator::default();
+        for record in "\x1b[<3".chars().map(key_char) {
+            assert!(translator.translate(record).is_empty());
+        }
+        assert!(translator.idle().is_empty());
+        assert!(translator.idle().is_empty());
+        for record in "5;28;31M".chars().map(key_char) {
+            assert!(translator.translate(record).is_empty());
+            assert!(translator.idle().is_empty());
+        }
+        assert_eq!(
+            translator.translate(key_char('x')),
+            translate_with_provenance([key_char('x')])
+        );
+    }
+
+    #[test]
+    fn vti_ignored_modifier_record_preserves_mouse_recovery() {
+        for buffered in [false, true] {
+            let mut translator = WindowsInputTranslator::default();
+            for record in "\x1b[<3".chars().map(key_char) {
+                assert!(translator.translate(record).is_empty());
+            }
+            assert!(translator.idle().is_empty());
+            if buffered {
+                assert!(translator.translate(key_char('5')).is_empty());
+            }
+            // A modifier-only Win32 input record emits no semantic input.
+            for record in "\x1b[17;0;0;1;8;3_".chars().map(key_char) {
+                assert!(translator.translate(record).is_empty());
+            }
+            let tail = if buffered { ";28;31M" } else { "5;28;31M" };
+            for record in tail.chars().map(key_char) {
+                assert!(translator.translate(record).is_empty());
+            }
+            assert_eq!(
+                translator.translate(key_char('x')),
+                translate_with_provenance([key_char('x')])
+            );
+        }
+    }
+
+    #[test]
+    fn vti_semantic_input_cancels_mouse_recovery_and_preserves_order() {
+        // These hit Semantic, PasteAwareKey, and physical-Escape forwarding.
+        for interruption in [
+            WindowsInputRecord::Focus(true),
+            key_vk_with_unicode(0x41, 'a', 0),
+            key_vk_with_scan_unicode(0x1b, 1, '\x1b', 0),
+        ] {
+            for buffered in [false, true] {
+                let mut translator = WindowsInputTranslator::default();
+                for record in "\x1b[<3".chars().map(key_char) {
+                    assert!(translator.translate(record).is_empty());
+                }
+                assert!(translator.idle().is_empty());
+                if buffered {
+                    assert!(translator.translate(key_char('5')).is_empty());
+                }
+                let mut events = translator.translate(interruption);
+                events.extend(translator.idle());
+                let mut expected = if buffered {
+                    translate_with_provenance([key_char('5')])
+                } else {
+                    Vec::new()
+                };
+                let mut baseline = WindowsInputTranslator::default();
+                expected.extend(baseline.translate(interruption));
+                expected.extend(baseline.idle());
+                assert_eq!(events, expected);
+
+                let mut later = Vec::new();
+                for record in "5;28;31M".chars().map(key_char) {
+                    later.extend(translator.translate(record));
+                }
+                assert_eq!(
+                    later,
+                    translate_with_provenance("5;28;31M".chars().map(key_char))
+                );
+            }
+        }
     }
 
     #[test]

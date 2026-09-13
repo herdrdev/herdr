@@ -770,6 +770,21 @@ GHOSTTY_API GhosttyResult ghostty_terminal_select_word(
                                     GhosttySelection* out_selection);
 
 /**
+ * Derive a word selection with a shared forward/backward cell inspection limit.
+ *
+ * Like ghostty_terminal_select_word(), but returns GHOSTTY_NO_VALUE if
+ * max_cells is zero or the search exhausts that budget. No partial selection
+ * is returned. The existing options structure and unbounded API are unchanged.
+ *
+ * @ingroup selection
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_select_word_bounded(
+                                    GhosttyTerminal terminal,
+                                    const GhosttyTerminalSelectWordOptions* options,
+                                    size_t max_cells,
+                                    GhosttySelection* out_selection);
+
+/**
  * Derive the nearest word selection snapshot between two terminal grid refs.
  *
  * Starting at options->start, this searches toward options->end (inclusive)

@@ -542,6 +542,19 @@ impl PaneTerminal {
         self.ghostty.visible_hyperlinks(area)
     }
 
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.ghostty.link_regions_at(col, row, resolve)
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.ghostty.link_target_at(col, row)
+    }
+
     pub(crate) fn kitty_graphics_may_have_placements(&self) -> bool {
         self.ghostty.kitty_graphics_may_have_placements()
     }
@@ -2204,6 +2217,33 @@ impl GhosttyPaneTerminal {
             .ok()
             .and_then(|mut core| ghostty_recent_ansi_snapshot(&mut core, lines, true).ok())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn link_regions_at(
+        &self,
+        col: u16,
+        row: u16,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Vec<crate::api::schema::PaneLinkRegion> {
+        self.core
+            .lock()
+            .ok()
+            .and_then(|core| {
+                core.terminal
+                    .viewport_link_regions(col, u32::from(row), resolve)
+                    .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn link_target_at(&self, col: u16, row: u16) -> Option<crate::ghostty::LinkTarget> {
+        self.core
+            .lock()
+            .ok()?
+            .terminal
+            .viewport_link_target(col, u32::from(row))
+            .ok()
+            .flatten()
     }
 
     pub fn extract_selection(&self, selection: &crate::selection::Selection) -> Option<String> {
@@ -5604,6 +5644,23 @@ mod tests {
             let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[14t\x1b[16t\x1b[18t", &tx);
             assert!(result.terminal_responses.is_empty());
         }
+    }
+
+    #[test]
+    fn enabling_in_band_size_reports_after_alt_screen_resize_reports_current_size() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(91, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[?1049h", &tx);
+        assert!(pane.resize(24, 92, 9, 18).is_empty());
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?2048h", &tx);
+
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b[48;24;92;432;828t")]
+        );
     }
 
     #[test]

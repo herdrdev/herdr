@@ -441,29 +441,32 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
             .is_some_and(|version| version >= expected_version)))
 }
 
+fn integration_state_for_path(
+    path: &Path,
+    expected_version: u32,
+) -> (super::IntegrationStatusKind, Option<u32>) {
+    if !path.is_file() {
+        return (super::IntegrationStatusKind::NotInstalled, None);
+    }
+
+    let installed_version = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| parse_integration_version(&content));
+    let state = if installed_version.is_some_and(|version| version >= expected_version) {
+        super::IntegrationStatusKind::Current
+    } else {
+        super::IntegrationStatusKind::Outdated
+    };
+
+    (state, installed_version)
+}
+
 pub(crate) fn integration_status_at(
     target: crate::api::schema::IntegrationTarget,
     path: PathBuf,
     expected_version: u32,
 ) -> super::IntegrationStatus {
-    if !path.is_file() {
-        return super::IntegrationStatus {
-            target,
-            path,
-            state: super::IntegrationStatusKind::NotInstalled,
-            installed_version: None,
-            expected_version,
-        };
-    }
-
-    let installed_version = fs::read_to_string(&path)
-        .ok()
-        .and_then(|content| parse_integration_version(&content));
-    let mut state = if installed_version.is_some_and(|version| version >= expected_version) {
-        super::IntegrationStatusKind::Current
-    } else {
-        super::IntegrationStatusKind::Outdated
-    };
+    let (mut state, installed_version) = integration_state_for_path(&path, expected_version);
 
     // Grok only invokes the hook when the herdr-owned `hooks/herdr.json`
     // registers it, so a current hook script with a missing or broken config
@@ -489,6 +492,27 @@ pub(crate) fn integration_status_at(
         installed_version,
         expected_version,
     }
+}
+
+/// Letta is intentionally kept out of the frozen client endpoint
+/// `IntegrationTarget` enum so published generation-1 clients never receive an
+/// unknown variant. It is installable and reportable as an experimental
+/// CLI-only target until the agent registry replaces the enum-keyed registry.
+pub(crate) fn experimental_letta_integration_status() -> Option<super::ExperimentalIntegrationStatus>
+{
+    let path = letta_dir()
+        .ok()?
+        .join("hooks")
+        .join(super::LETTA_HOOK_INSTALL_NAME);
+    let (state, installed_version) =
+        integration_state_for_path(&path, super::LETTA_INTEGRATION_VERSION);
+    Some(super::ExperimentalIntegrationStatus {
+        label: "letta",
+        path,
+        state,
+        installed_version,
+        expected_version: super::LETTA_INTEGRATION_VERSION,
+    })
 }
 
 pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {

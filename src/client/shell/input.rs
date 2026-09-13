@@ -159,6 +159,7 @@ impl ClientShellState {
     pub(super) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
         if !events.is_empty() && self.endpoint_error.take().is_some() {
+            self.endpoint_error_deadline = None;
             outcome.repaint = true;
         }
         for event in events {
@@ -247,6 +248,7 @@ impl ClientShellState {
                         .push(ClientMessage::ClientShellFocus { focused: true });
                 }
                 RawInputEvent::OuterFocusLost => {
+                    outcome.repaint |= self.clear_link_hover();
                     self.outer_focused = Some(false);
                     self.release_input_leases(&mut outcome);
                     outcome
@@ -301,6 +303,7 @@ impl ClientShellState {
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
+        outcome.repaint |= self.clear_link_hover();
         if self.copy_operation_in_flight {
             self.copy_input_queue.push_back(key);
             return;

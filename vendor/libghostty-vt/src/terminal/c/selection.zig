@@ -110,6 +110,33 @@ pub fn word(
     return .success;
 }
 
+pub fn word_bounded(
+    terminal: terminal_c.Terminal,
+    options: ?*const SelectWordOptions,
+    max_cells: usize,
+    out_selection: ?*CSelection,
+) callconv(lib.calling_conv) Result {
+    const t = terminal_c.zigTerminal(terminal) orelse return .invalid_value;
+    const opts = options orelse return .invalid_value;
+    if (opts.size < @sizeOf(SelectWordOptions)) return .invalid_value;
+    const out = out_selection orelse return .invalid_value;
+
+    const boundary_codepoints = codepointSlice(
+        opts.boundary_codepoints,
+        opts.boundary_codepoints_len,
+    ) catch return .invalid_value;
+
+    const screen = t.screens.active;
+    const pin = opts.ref.toPin() orelse return .invalid_value;
+    out.* = .fromZig(screen.selectWordBounded(
+        pin,
+        boundary_codepoints orelse &selection_codepoints.default_word_boundaries,
+        max_cells,
+    ) orelse
+        return .no_value);
+    return .success;
+}
+
 pub fn word_between(
     terminal: terminal_c.Terminal,
     options: ?*const SelectWordBetweenOptions,

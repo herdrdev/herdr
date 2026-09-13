@@ -1776,6 +1776,15 @@ unsafe extern "C" {
     ) -> GhosttyResult;
 }
 unsafe extern "C" {
+    #[doc = " Derive a word selection with a shared forward/backward cell inspection limit.\n\n Like ghostty_terminal_select_word(), but returns GHOSTTY_NO_VALUE if\n max_cells is zero or the search exhausts that budget. No partial selection\n is returned. The existing options structure and unbounded API are unchanged.\n\n @ingroup selection"]
+    pub fn ghostty_terminal_select_word_bounded(
+        terminal: GhosttyTerminal,
+        options: *const GhosttyTerminalSelectWordOptions,
+        max_cells: usize,
+        out_selection: *mut GhosttySelection,
+    ) -> GhosttyResult;
+}
+unsafe extern "C" {
     #[doc = " Derive the nearest word selection snapshot between two terminal grid refs.\n\n Starting at options->start, this searches toward options->end (inclusive)\n and returns the first selectable word found using Ghostty's word-selection\n rules.\n\n This is useful for implementing double-click-and-drag selection in a UI. If\n a user double-clicks one word and drags across spaces or punctuation toward\n another word, selecting only the word directly under the current pointer can\n flicker or collapse when the pointer is between words. Instead, ask for the\n nearest word between the original click and the drag point, ask again in the\n reverse direction, and combine the two word bounds into the drag selection.\n\n @snippet c-vt-selection/src/main.c selection-word-between\n\n The returned selection is not installed as the terminal's current\n selection. It is a snapshot with the same lifetime rules as GhosttySelection.\n\n @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)\n @param options Word-between-selection options\n @param[out] out_selection On success, receives the derived selection\n @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if there is no\n         selectable word content between the valid refs, or\n         GHOSTTY_INVALID_VALUE if the terminal, options, refs, codepoint\n         pointer, or output pointer are invalid.\n\n @ingroup selection"]
     pub fn ghostty_terminal_select_word_between(
         terminal: GhosttyTerminal,

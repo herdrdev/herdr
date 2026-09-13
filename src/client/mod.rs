@@ -142,6 +142,10 @@ fn run_client_with_mode(
     init_logging();
 
     let loaded_config = crate::config::Config::load();
+    // Windows may not have virtual terminal processing enabled until the rendered
+    // client initializes the terminal, so defer the host mouse reset to
+    // `setup_terminal_with_capabilities` instead of emitting raw escapes early.
+    #[cfg(not(windows))]
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let client_rendered_shell = attach_request.is_none();
     let socket_path = client_socket_path();
@@ -2022,7 +2026,9 @@ async fn run_client_loop(
                             outcome.actions.extend(actions);
                         }
                         let (effects, notification_repaint) = shell.tick_notifications(now);
-                        outcome.repaint |= notification_repaint | shell.tick_copy_feedback(now);
+                        outcome.repaint |= notification_repaint
+                            | shell.tick_copy_feedback(now)
+                            | shell.tick_endpoint_error(now);
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))

@@ -762,3 +762,11 @@ pub struct PaneReadResult {
     pub revision: u64,
     pub truncated: bool,
 }
+
+/// Inclusive display-cell columns on a pane's current viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneLinkRegion {
+    pub row: u16,
+    pub start_col: u16,
+    pub end_col: u16,
+}

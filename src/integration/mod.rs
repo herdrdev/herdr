@@ -10,24 +10,34 @@ mod targets;
 mod types;
 mod version;
 
-pub(crate) use actions::{install_target, uninstall_target};
+pub(crate) use actions::{
+    install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
+};
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
-    installed_integration_statuses, integration_recommendations, integration_target_label,
-    print_outdated_update_notice,
+    experimental_letta_integration_status, installed_integration_statuses,
+    integration_recommendations, integration_target_label, print_outdated_update_notice,
 };
-pub(crate) use types::{IntegrationRecommendation, IntegrationStatus, IntegrationStatusKind};
+pub(crate) use types::{
+    ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
+    IntegrationStatusKind,
+};
+
+/// CLI labels for experimental integrations that are intentionally not part of
+/// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
+/// agent registry provides first-class target registration.
+pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
 const PI_INTEGRATION_VERSION: u32 = 9;
 const OMP_EXTENSION_INSTALL_NAME: &str = "herdr-omp-agent-state.ts";
 const OMP_EXTENSION_ASSET: &str = include_str!("assets/omp/herdr-agent-state.ts");
-const OMP_INTEGRATION_VERSION: u32 = 9;
+const OMP_INTEGRATION_VERSION: u32 = 10;
 const CLAUDE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -38,7 +48,7 @@ const CLAUDE_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/claude/herdr-agent-state.sh")
 };
-const CLAUDE_INTEGRATION_VERSION: u32 = 9;
+const CLAUDE_INTEGRATION_VERSION: u32 = 10;
 const CODEX_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
     "herdr-agent-state.ps1"
 } else {
@@ -207,6 +217,18 @@ const QWEN_HOOK_ASSET: &str = if cfg!(windows) {
 };
 const QWEN_INTEGRATION_VERSION: u32 = 1;
 const QWEN_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
+const LETTA_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "herdr-agent-session.ps1"
+} else {
+    "herdr-agent-session.sh"
+};
+const LETTA_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/letta/herdr-agent-session.ps1")
+} else {
+    include_str!("assets/letta/herdr-agent-session.sh")
+};
+const LETTA_INTEGRATION_VERSION: u32 = 1;
+const LETTA_HOOK_TIMEOUT_MS: u64 = 10_000;
 const QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("SessionStart", "idle"),
     ("UserPromptSubmit", "working"),
@@ -296,7 +318,7 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 } else {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
-const GROK_INTEGRATION_VERSION: u32 = 1;
+const GROK_INTEGRATION_VERSION: u32 = 2;
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

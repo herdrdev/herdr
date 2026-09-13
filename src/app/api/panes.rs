@@ -2696,6 +2696,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_pane_send_keys_preserves_super_chord_in_legacy_pane() {
+        let (mut app, pane_id, mut rx) = app_with_send_key_runtime(1);
+        let internal_pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        assert_eq!(
+            app.lookup_runtime_sender(0, internal_pane_id)
+                .unwrap()
+                .keyboard_protocol(),
+            crate::input::KeyboardProtocol::Legacy
+        );
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: vec!["cmd+c".into()],
+            }),
+        });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.id, "req");
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            bytes::Bytes::from_static(b"\x1b[99;9u")
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn api_pane_send_keys_accepts_literal_plus() {
         let (mut app, pane_id, mut rx) = app_with_send_key_runtime(1);
 

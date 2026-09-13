@@ -5870,6 +5870,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.link.resolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneLinkActivateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.rename",
               "type": "string"
             },
@@ -8162,6 +8178,35 @@
           ],
           "type": "object"
         },
+        "PaneLinkRegion": {
+          "description": "Inclusive display-cell columns on a pane's current viewport.",
+          "properties": {
+            "end_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "row": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "start_col": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "row",
+            "start_col",
+            "end_col"
+          ],
+          "type": "object"
+        },
         "PaneMoveReason": {
           "enum": [
             "same_tab",
@@ -10371,6 +10416,25 @@
                 "action",
                 "context",
                 "log"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "regions": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneLinkRegion"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "pane_link_resolved",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "regions"
               ],
               "type": "object"
             },

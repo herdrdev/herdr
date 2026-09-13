@@ -189,8 +189,9 @@ impl ClientShellState {
             other => {
                 if matches!(other, Ok(value) if !matches!(value, crate::api::schema::ResponseResult::PaneSelection { .. }))
                 {
-                    self.endpoint_error =
-                        Some("endpoint returned an unexpected word-selection result".to_owned());
+                    self.set_endpoint_error(
+                        "endpoint returned an unexpected word-selection result",
+                    );
                 }
                 self.cancel_word_selection();
                 return (true, Vec::new());

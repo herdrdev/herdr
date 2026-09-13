@@ -274,6 +274,9 @@ pub enum ResponseResult {
         context: PluginInvocationContext,
         log: PluginCommandLogInfo,
     },
+    PaneLinkResolved {
+        regions: Vec<super::panes::PaneLinkRegion>,
+    },
     PaneLinkActivated {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,

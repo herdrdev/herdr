@@ -134,6 +134,41 @@ fn surface() -> PaneSurfaceFrame {
     }
 }
 
+fn frame_rows(frame: &FrameData) -> Vec<String> {
+    frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| row.iter().map(|cell| cell.symbol.as_str()).collect())
+        .collect()
+}
+
+/// Absolute cell position of `needle` inside `area`, for style assertions.
+fn cell_symbol_position(frame: &FrameData, area: Rect, needle: &str) -> (u16, u16) {
+    let rows = frame_rows(frame);
+    for y in area.y..area.bottom().min(frame.height) {
+        let row = &rows[y as usize];
+        let slice = row
+            .chars()
+            .skip(area.x as usize)
+            .take(area.width as usize)
+            .collect::<String>();
+        if let Some(byte) = slice.find(needle) {
+            let column = slice[..byte].chars().count() as u16 + area.x;
+            return (column, y);
+        }
+    }
+    let visible = (area.y..area.bottom().min(frame.height))
+        .map(|y| {
+            rows[y as usize]
+                .chars()
+                .skip(area.x as usize)
+                .take(area.width as usize)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    panic!("symbol {needle:?} not found in {area:?}: {visible:?}");
+}
+
 fn pane_scroll_result(
     offset_from_bottom: u64,
     max_offset_from_bottom: u64,
@@ -217,6 +252,7 @@ mod endpoints;
 #[path = "input.rs"]
 mod input_domain;
 mod keybindings_settings;
+mod link_hover;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;

@@ -332,16 +332,8 @@ pub(super) fn render_agent_row(
             .fg(palette.subtext0)
             .add_modifier(Modifier::BOLD)
     };
-    let status_style = Style::default()
-        .fg(status_color(row.status, palette))
-        .add_modifier(if row.focused {
-            Modifier::empty()
-        } else {
-            Modifier::DIM
-        });
-    let secondary = Style::default()
-        .fg(palette.overlay0)
-        .add_modifier(Modifier::DIM);
+    let status_style = Style::default().fg(status_color(row.status, palette));
+    let secondary = Style::default().fg(palette.overlay0);
     let icon = (
         status_icon(row.status, config.status_indicators),
         Style::default().fg(status_color(row.status, palette)),

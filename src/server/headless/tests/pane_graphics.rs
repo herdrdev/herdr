@@ -594,28 +594,22 @@ fn direct_stream_message(
 }
 
 #[tokio::test]
-async fn pixel_mouse_activation_requires_graphics_demand_not_direct_transport() {
-    let (mut server, _client_rx, pane_id) =
+async fn pixel_mouse_activation_follows_child_1016_without_graphics_demand() {
+    let (mut server, _client_rx, _pane_id) =
         retained_test_server(b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
     let (writer, control_rx, _render_rx) = test_client_writer();
     let client = server.clients.get_mut(&1).unwrap();
     client.writer = Some(writer);
     client.direct_graphics = false;
     client.pixel_mouse = true;
+    client.cell_size = crate::kitty_graphics::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };
     client.host_mouse_capture_active = None;
     client.host_sgr_pixels_active = None;
     server.app.direct_graphics_available = false;
 
-    server.stream_host_mouse_capture_mode();
-    assert!(matches!(
-        read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
-        ServerMessage::MouseCapture {
-            enabled: true,
-            sgr_pixels: false
-        }
-    ));
-
-    set_graphics_layer(&mut server, pane_id, vec![1, 2, 3]);
     server.stream_host_mouse_capture_mode();
     assert!(matches!(
         read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),

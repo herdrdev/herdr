@@ -219,9 +219,7 @@ pub(crate) fn resolved_token_spans(
             let previous = &resolved[visible_indices[position - 1]];
             spans.push(Span::styled(
                 tokens::separator(previous, token),
-                Style::default()
-                    .fg(palette.overlay0)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(palette.overlay0),
             ));
         }
         match &token.kind {

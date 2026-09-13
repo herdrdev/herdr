@@ -314,7 +314,20 @@ pub(super) fn render_expanded(
             }
         })
         .collect::<Vec<_>>();
-    let gaps = vec![0; rows.len()];
+    let gaps = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| match (row, rows.get(index + 1)) {
+            (
+                Row::Workspace { endpoint, .. },
+                Some(Row::Workspace {
+                    endpoint: next_endpoint,
+                    entry,
+                }),
+            ) if endpoint == next_endpoint => u16::from(!entry.indented) * config.spaces.row_gap,
+            _ => 0,
+        })
+        .collect::<Vec<_>>();
     if std::mem::take(state.reveal_navigation_workspace) {
         let selected_row = rows.iter().position(|row| match row {
             Row::Workspace { endpoint, entry } => {
@@ -355,7 +368,7 @@ pub(super) fn render_expanded(
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
     let mut y = body.y;
-    for row in rows.iter().skip(*state.workspace_scroll) {
+    for (row_index, row) in rows.iter().enumerate().skip(*state.workspace_scroll) {
         match row {
             Row::Endpoint(index) => {
                 if y >= body.bottom() {
@@ -383,7 +396,9 @@ pub(super) fn render_expanded(
                     ),
                     endpoint_id: endpoint.endpoint_id.clone(),
                 });
-                y = y.saturating_add(1);
+                y = y
+                    .saturating_add(1)
+                    .saturating_add(gaps.get(row_index).copied().unwrap_or(0));
             }
             Row::Workspace { endpoint, entry } => {
                 let endpoint = &state.endpoints[*endpoint];
@@ -460,7 +475,9 @@ pub(super) fn render_expanded(
                     indented: entry.indented,
                     group_toggle,
                 });
-                y = y.saturating_add(height);
+                y = y
+                    .saturating_add(height)
+                    .saturating_add(gaps.get(row_index).copied().unwrap_or(0));
             }
         }
     }

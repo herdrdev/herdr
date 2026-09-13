@@ -333,6 +333,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # distinct static glyphs for blocked, working, done, idle, and unknown states.
 # status_indicators = "dots"
 
+# Accent color for highlights, borders, and navigation UI.
+# Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
+# accent = "cyan"
+
 # Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,
 # pane, agent, terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
@@ -353,10 +357,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Blank rows between space entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
 # rows = [["state_icon", "workspace"], ["branch", "git_status"]]
-
-# Accent color for highlights, borders, and navigation UI.
-# Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
-# accent = "cyan"
 
 # Background notification popup delivery
 [ui.toast]
@@ -425,7 +425,7 @@ pane_history = false
 # If the list contains no valid names, the reveal does not apply.
 # Accepted: pi, claude, codex, gemini, cursor, devin, cline, opencode,
 # copilot, kimi, kiro, droid, amp, grok, hermes, kilo, qodercli, qoder, qwen,
-# qwen-code, maki.
+# qwen-code, letta, letta-code, maki.
 # cjk_ime_agents = []
 # Cursor shape rendered when reveal_hidden_cursor_for_cjk_ime is true.
 # Values: block, steady_block (default), underline, steady_underline, bar, steady_bar.
@@ -796,6 +796,17 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_config_lists_ui_accent_before_nested_tables() {
+        let accent_marker = "# accent = \"cyan\"";
+        assert_eq!(DEFAULT_CONFIG.matches(accent_marker).count(), 1);
+
+        let accent = DEFAULT_CONFIG.find(accent_marker).unwrap();
+        let sidebar = DEFAULT_CONFIG.find("# [ui.sidebar.agents]").unwrap();
+
+        assert!(accent < sidebar);
+    }
 
     #[test]
     fn nested_herdr_blocks_when_env_is_set() {

@@ -572,6 +572,67 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
 }
 
 #[test]
+fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "second".into();
+    projected.tabs[0].custom_label = true;
+    projected.agents = vec![ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("reviewer".into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Working,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: true,
+    }];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let row = state.hits.agents.first().expect("agent row hit").0;
+    let buffer = frame.to_ratatui_buffer().expect("agent sidebar buffer");
+
+    for (label, needle) in [("tab", "second"), ("agent", "reviewer"), ("separator", "·")] {
+        let (x, y) = cell_symbol_position(&frame, row, needle);
+        let cell = buffer.cell((x, y)).expect("muted sidebar cell");
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "{label} cell at ({x},{y}) should not stack terminal faint: {cell:?}"
+        );
+    }
+}
+
+#[test]
+fn workspace_state_text_does_not_stack_terminal_faint() {
+    use crate::config::SpaceSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.sidebar.spaces.rows = vec![
+        vec![SpaceSidebarToken::StateIcon, SpaceSidebarToken::Workspace],
+        vec![SpaceSidebarToken::StateText],
+    ];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("workspace sidebar frame");
+    let rect = state.hits.workspaces.first().expect("workspace hit").rect;
+    let buffer = frame.to_ratatui_buffer().expect("workspace sidebar buffer");
+    let (x, y) = cell_symbol_position(&frame, rect, "idle");
+    let cell = buffer.cell((x, y)).expect("workspace state text cell");
+    assert!(
+        !cell.modifier.contains(Modifier::DIM),
+        "workspace state text at ({x},{y}) should not stack terminal faint: {cell:?}"
+    );
+}
+
+#[test]
 fn active_agent_view_controls_sidebar_order_and_focus_indices() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
@@ -1027,6 +1088,71 @@ fn unavailable_worktree_create_does_not_wedge_the_overlay() {
 }
 
 #[test]
+fn worktree_action_errors_expire_without_more_input() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    let mut guard = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
+        &mut guard,
+    );
+    let message = "This workspace is not a Herdr-managed worktree checkout.";
+    assert_eq!(state.endpoint_error.as_deref(), Some(message));
+
+    let deadline = state.endpoint_error_deadline.expect("deadline");
+    assert!(!state.tick_endpoint_error(deadline - std::time::Duration::from_secs(1)));
+    assert_eq!(state.endpoint_error.as_deref(), Some(message));
+
+    assert!(state.tick_endpoint_error(deadline + std::time::Duration::from_millis(1)));
+    assert!(state.endpoint_error.is_none());
+
+    // A repeated identical message must start a fresh lifetime instead of
+    // inheriting the earlier deadline.
+    let before_repeat = std::time::Instant::now();
+    state.set_endpoint_error(message);
+    assert!(
+        state.endpoint_error_deadline.expect("deadline")
+            >= before_repeat + std::time::Duration::from_secs(5)
+    );
+}
+
+#[test]
+fn worktree_prepare_rejection_notice_expires() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut prepare = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
+        &mut prepare,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
+        panic!("new worktree should prepare through worktree.list");
+    };
+    let request_id = request.id.clone();
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(ClientShellEndpointError {
+            code: Some("not_git_worktree".into()),
+            message: "Herdr worktree actions require a workspace inside a Git work tree".into(),
+        }),
+    );
+    let notice = state
+        .visible_endpoint_notice
+        .as_ref()
+        .expect("rejection notice");
+    assert!(notice.key.code.contains("not_git_worktree"));
+    let deadline = notice.deadline;
+
+    let (_, repaint) = state.tick_notifications(deadline + std::time::Duration::from_millis(1));
+    assert!(repaint);
+    assert!(state.visible_endpoint_notice.is_none());
+}
+
+#[test]
 fn worktree_open_filters_and_clicks_a_stable_public_entry() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -1073,70 +1199,112 @@ fn worktree_open_filters_and_clicks_a_stable_public_entry() {
 }
 
 #[test]
-fn worktree_remove_escalates_dirty_failure_to_force_confirmation() {
-    let mut snapshot = snapshot();
-    snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
-        key: "repo-key".into(),
-        label: "repo".into(),
-        is_linked_worktree: true,
-    });
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot));
-    state.set_pane_surface(surface());
-    let mut prepare = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
-        &mut prepare,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
-        panic!("remove worktree should prepare through worktree.list");
-    };
-    let request_id = request.id.clone();
-    state.handle_endpoint_result(
-        "boot-1",
-        &request_id,
-        Ok(worktree_list_result(Some("ws_1"))),
-    );
-    let remove = state.handle_input_bytes(b"\r");
-    let [ClientShellAction::Endpoint { request, .. }] = &remove.actions[..] else {
-        panic!("worktree remove should use endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorktreeRemove(params)
-            if params.workspace_id == "ws_1" && !params.force
-    ));
-    let request_id = request.id.clone();
-    state.handle_endpoint_result(
-        "boot-1",
-        &request_id,
-        Err(ClientShellEndpointError {
-            code: Some("dirty_worktree_requires_force".into()),
-            message: "dirty worktree".into(),
-        }),
-    );
-    let frame = state.compose(106, 30).expect("force remove modal");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("delete anyway"));
-    assert!(text.contains("permanently deleted"));
-    let force = state.handle_input_bytes(b"\r");
-    let [ClientShellAction::Endpoint { request, .. }] = &force.actions[..] else {
-        panic!("forced worktree remove should use endpoint API");
-    };
-    assert!(matches!(
-        &request.method,
-        crate::api::schema::Method::WorktreeRemove(params)
-            if params.workspace_id == "ws_1" && params.force
-    ));
+fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
+    for (code, message, expect_force) in [
+        ("dirty_worktree_requires_force", "dirty worktree", true),
+        (
+            "worktree_remove_failed",
+            "fatal: '/repo-feature' is not a working tree",
+            true,
+        ),
+        ("worktree_remove_failed", "Permission denied", false),
+        ("server_unavailable", "is not a working tree", false),
+    ] {
+        let mut snapshot = snapshot();
+        snapshot.workspaces[0].worktree = Some(ClientShellWorktree {
+            key: "repo-key".into(),
+            label: "repo".into(),
+            is_linked_worktree: true,
+        });
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot));
+        state.set_pane_surface(surface());
+        let mut prepare = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
+            &mut prepare,
+        );
+        let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
+            panic!("remove worktree should prepare through worktree.list");
+        };
+        let request_id = request.id.clone();
+        state.handle_endpoint_result(
+            "boot-1",
+            &request_id,
+            Ok(worktree_list_result(Some("ws_1"))),
+        );
+        let remove = state.handle_input_bytes(b"\r");
+        let [ClientShellAction::Endpoint { request, .. }] = &remove.actions[..] else {
+            panic!("worktree remove should use endpoint API");
+        };
+        assert!(matches!(
+            &request.method,
+            crate::api::schema::Method::WorktreeRemove(params)
+                if params.workspace_id == "ws_1" && !params.force
+        ));
+        let request_id = request.id.clone();
+        let (_, actions) = state.handle_endpoint_result(
+            "boot-1",
+            &request_id,
+            Err(ClientShellEndpointError {
+                code: Some(code.into()),
+                message: message.into(),
+            }),
+        );
+        assert!(actions.is_empty(), "failure must not retry automatically");
+        let Some(ClientShellOverlay::WorktreeRemove(remove)) = &state.overlay else {
+            panic!("failed remove should keep its confirmation");
+        };
+        assert!(!remove.removing);
+        assert_eq!(remove.force_confirmation, expect_force);
+        if !expect_force {
+            assert_eq!(remove.error.as_deref(), Some(message));
+            continue;
+        }
+        assert!(remove.error.is_none());
+        let frame = state.compose(106, 30).expect("force remove modal");
+        let text = frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("delete anyway"));
+        assert!(text.contains("permanently deleted"));
+        let force = state.handle_input_bytes(b"\r");
+        let [ClientShellAction::Endpoint { request, .. }] = &force.actions[..] else {
+            panic!("forced worktree remove should use endpoint API");
+        };
+        assert!(matches!(
+            &request.method,
+            crate::api::schema::Method::WorktreeRemove(params)
+                if params.workspace_id == "ws_1" && params.force
+        ));
+        let request_id = request.id.clone();
+        let (_, actions) = state.handle_endpoint_result(
+            "boot-1",
+            &request_id,
+            Err(ClientShellEndpointError {
+                code: Some("worktree_remove_failed".into()),
+                message: "fatal: '/repo-feature' is not a working tree".into(),
+            }),
+        );
+        assert!(actions.is_empty());
+        let Some(ClientShellOverlay::WorktreeRemove(remove)) = &state.overlay else {
+            panic!("forced failure should keep its confirmation");
+        };
+        assert!(!remove.removing);
+        assert_eq!(
+            remove.error.as_deref(),
+            Some("fatal: '/repo-feature' is not a working tree")
+        );
+        state.handle_input_bytes(b"\x1b");
+        assert!(state.overlay.is_none());
+    }
 }
 
 #[test]

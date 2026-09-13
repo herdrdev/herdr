@@ -44,6 +44,7 @@ pub struct AgentSoundOverrides {
     pub kilo: AgentSoundSetting,
     pub qodercli: AgentSoundSetting,
     pub qwen: AgentSoundSetting,
+    pub letta: AgentSoundSetting,
     pub maki: AgentSoundSetting,
     pub muse: AgentSoundSetting,
 }
@@ -142,6 +143,7 @@ impl AgentSoundOverrides {
             Some(Agent::Kilo) => self.kilo,
             Some(Agent::Qodercli) => self.qodercli,
             Some(Agent::Qwen) => self.qwen,
+            Some(Agent::Letta) => self.letta,
             Some(Agent::Maki) => self.maki,
             Some(Agent::Muse) => self.muse,
             None => AgentSoundSetting::Default,
@@ -183,6 +185,7 @@ impl Default for AgentSoundOverrides {
             kilo: AgentSoundSetting::Default,
             qodercli: AgentSoundSetting::Default,
             qwen: AgentSoundSetting::Default,
+            letta: AgentSoundSetting::Default,
             maki: AgentSoundSetting::Default,
             muse: AgentSoundSetting::Default,
         }
@@ -223,6 +226,17 @@ claude = "on"
         assert_eq!(config.ui.sound.agents.droid, AgentSoundSetting::Off);
         assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::On);
         assert_eq!(config.ui.sound.agents.pi, AgentSoundSetting::Default);
+        assert_eq!(config.ui.sound.agents.letta, AgentSoundSetting::Default);
+    }
+
+    #[test]
+    fn letta_sound_override_is_used() {
+        let overrides: AgentSoundOverrides = toml::from_str("letta = \"on\"").unwrap();
+        assert_eq!(overrides.letta, AgentSoundSetting::On);
+        assert_eq!(
+            overrides.for_agent(Some(Agent::Letta)),
+            AgentSoundSetting::On
+        );
     }
 
     #[test]

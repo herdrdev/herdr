@@ -806,6 +806,12 @@ pub fn encode_focus(event: FocusEvent) -> Result<Vec<u8>, Error> {
     Ok(buffer)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LinkTarget {
+    Uri(String),
+    Text { text: String, clicked_byte: usize },
+}
+
 pub struct Terminal {
     raw: ffi::GhosttyTerminal,
     max_scrollback: usize,
@@ -1271,6 +1277,187 @@ impl Terminal {
         grid_ref_hyperlink_uri(&grid_ref)
     }
 
+    pub(crate) fn viewport_link_target(&self, x: u16, y: u32) -> Result<Option<LinkTarget>, Error> {
+        Ok(self
+            .viewport_link_selection(x, y)?
+            .map(|(target, _)| target))
+    }
+
+    fn viewport_link_selection(
+        &self,
+        x: u16,
+        y: u32,
+    ) -> Result<Option<(LinkTarget, Option<ffi::GhosttySelection>)>, Error> {
+        let mut clicked = self.grid_ref(ghostty_viewport_point(x, y))?;
+        if grid_ref_wide(&clicked)? == CellWide::SpacerTail {
+            clicked.x = clicked.x.saturating_sub(1);
+        }
+        if let Some(uri) = grid_ref_hyperlink_uri(&clicked)? {
+            return Ok(Some((LinkTarget::Uri(uri), None)));
+        }
+        let graphemes = grid_ref_graphemes(&clicked)?;
+        if graphemes
+            .first()
+            .copied()
+            .and_then(char::from_u32)
+            .is_none_or(char::is_whitespace)
+        {
+            return Ok(None);
+        }
+        // Unicode White_Space, matching Rust's char::is_whitespace URL boundaries.
+        const BOUNDARIES: &[u32] = &[
+            9, 10, 11, 12, 13, 32, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+            0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+        ];
+        let options = ffi::GhosttyTerminalSelectWordOptions {
+            size: mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
+            ref_: clicked,
+            boundary_codepoints: BOUNDARIES.as_ptr(),
+            boundary_codepoints_len: BOUNDARIES.len(),
+        };
+        let mut selection = ffi::GhosttySelection::default();
+        // Bound work before formatting, even for an unbroken scrollback-sized token.
+        let result = unsafe {
+            ffi::ghostty_terminal_select_word_bounded(self.raw, &options, 8192, &mut selection)
+        };
+        if result == ffi::GhosttyResult_GHOSTTY_NO_VALUE {
+            return Ok(None);
+        }
+        result.into_result()?;
+        let text = self.format_selection(&selection, FormatterFormat::Plain, true, false)?;
+        let prefix = self.format_selection(
+            &ffi::GhosttySelection {
+                end: clicked,
+                ..selection
+            },
+            FormatterFormat::Plain,
+            true,
+            false,
+        )?;
+        let clicked_len: usize = graphemes
+            .into_iter()
+            .filter_map(char::from_u32)
+            .map(char::len_utf8)
+            .sum();
+        Ok(Some((
+            LinkTarget::Text {
+                text,
+                clicked_byte: prefix.len().saturating_sub(clicked_len),
+            },
+            Some(selection),
+        )))
+    }
+
+    /// Resolve only the bounded plain-text token. OSC 8 regions are resolved by
+    /// clients from frame hyperlink IDs; their full URI activation path is unchanged.
+    pub(crate) fn viewport_link_regions(
+        &self,
+        x: u16,
+        y: u32,
+        resolve: fn(&str, usize) -> Option<std::ops::Range<usize>>,
+    ) -> Result<Vec<crate::api::schema::PaneLinkRegion>, Error> {
+        let cols = self.cols()?;
+        let rows = self.rows()?;
+        if x >= cols || y >= u32::from(rows) {
+            return Ok(Vec::new());
+        }
+        let Some((LinkTarget::Text { text, clicked_byte }, Some(selection))) =
+            self.viewport_link_selection(x, y)?
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(range) = resolve(&text, clicked_byte) else {
+            return Ok(Vec::new());
+        };
+        let point =
+            |grid_ref: &ffi::GhosttyGridRef, clipped: (u16, u32)| -> Result<(u16, u32), Error> {
+                let mut out = ffi::GhosttyPointCoordinate::default();
+                let result = unsafe {
+                    ffi::ghostty_terminal_point_from_grid_ref(
+                        self.raw,
+                        grid_ref,
+                        ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_VIEWPORT,
+                        &mut out,
+                    )
+                };
+                if result == ffi::GhosttyResult_GHOSTTY_NO_VALUE {
+                    return Ok(clipped);
+                }
+                result.into_result()?;
+                // C viewport coordinates can extend below the visible viewport
+                // when scrolled up. Clip those as well as NO_VALUE endpoints.
+                if out.y >= u32::from(rows) {
+                    return Ok(clipped);
+                }
+                Ok((out.x, out.y))
+            };
+        // The selected token contains the visible hovered cell, so an invisible
+        // start/end necessarily lies above/below the viewport respectively.
+        let (start_col, start_row) = point(&selection.start, (0, 0))?;
+        let (end_col, end_row) = point(&selection.end, (cols - 1, u32::from(rows - 1)))?;
+        let first = self.grid_ref(ghostty_viewport_point(start_col, start_row))?;
+        let cell_len = |cell: &ffi::GhosttyGridRef| -> Result<usize, Error> {
+            if matches!(
+                grid_ref_wide(cell)?,
+                CellWide::SpacerHead | CellWide::SpacerTail
+            ) {
+                return Ok(0);
+            }
+            Ok(grid_ref_graphemes(cell)?
+                .into_iter()
+                .filter_map(char::from_u32)
+                .map(char::len_utf8)
+                .sum())
+        };
+        // Format a prefix once, not once per cell. Then walk only the selected
+        // visible cells, retaining one page/grid lookup per row.
+        let prefix = self.format_selection(
+            &ffi::GhosttySelection {
+                end: first,
+                ..selection
+            },
+            FormatterFormat::Plain,
+            true,
+            false,
+        )?;
+        let mut byte = prefix.len().saturating_sub(cell_len(&first)?);
+        let mut regions: Vec<crate::api::schema::PaneLinkRegion> = Vec::new();
+        for row in start_row..=end_row {
+            let mut cell = self.grid_ref(ghostty_viewport_point(0, row))?;
+            let left = if row == start_row { start_col } else { 0 };
+            let right = if row == end_row { end_col } else { cols - 1 };
+            for col in left..=right {
+                cell.x = col;
+                let wide = grid_ref_wide(&cell)?;
+                if matches!(wide, CellWide::SpacerHead | CellWide::SpacerTail) {
+                    continue;
+                }
+                let len = cell_len(&cell)?;
+                if byte < range.end && byte + len > range.start {
+                    let end = if wide == CellWide::Wide {
+                        (col + 1).min(cols - 1)
+                    } else {
+                        col
+                    };
+                    if let Some(last) = regions
+                        .last_mut()
+                        .filter(|last| u32::from(last.row) == row && last.end_col + 1 == col)
+                    {
+                        last.end_col = end;
+                    } else {
+                        regions.push(crate::api::schema::PaneLinkRegion {
+                            row: row as u16,
+                            start_col: col,
+                            end_col: end,
+                        });
+                    }
+                }
+                byte += len;
+            }
+        }
+        Ok(regions)
+    }
+
     fn grid_ref(&self, point: ffi::GhosttyPoint) -> Result<ffi::GhosttyGridRef, Error> {
         let mut grid_ref = ffi::GhosttyGridRef {
             size: mem::size_of::<ffi::GhosttyGridRef>(),
@@ -1375,6 +1562,16 @@ impl Terminal {
             end: end_ref,
             rectangle,
         };
+        self.format_selection(&selection, format, unwrap, trim)
+    }
+
+    fn format_selection(
+        &self,
+        selection: &ffi::GhosttySelection,
+        format: FormatterFormat,
+        unwrap: bool,
+        trim: bool,
+    ) -> Result<String, Error> {
         let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
         let options = ffi::GhosttyFormatterTerminalOptions {
             size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
@@ -1389,7 +1586,7 @@ impl Terminal {
                 },
                 ..Default::default()
             },
-            selection: &selection,
+            selection,
         };
         unsafe {
             ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
@@ -3762,6 +3959,118 @@ mod tests {
         assert!(terminal.modify_other_keys_enabled().unwrap());
         terminal.write(b"\x1b[>4;0m");
         assert!(!terminal.modify_other_keys_enabled().unwrap());
+    }
+
+    #[test]
+    fn link_target_includes_offscreen_wrapped_rows() {
+        let url = "https://example.com/abcdefghijklmnopqrstuv";
+        let mut terminal = Terminal::new(20, 2, 1024 * 1024).unwrap();
+        terminal.write(url.as_bytes());
+        let expected = LinkTarget::Text {
+            text: url.to_owned(),
+            clicked_byte: 20,
+        };
+        assert_eq!(terminal.viewport_link_target(0, 0).unwrap(), Some(expected));
+        terminal.scroll_viewport_row(0);
+        assert_eq!(
+            terminal.viewport_link_target(0, 0).unwrap(),
+            Some(LinkTarget::Text {
+                text: url.to_owned(),
+                clicked_byte: 0
+            })
+        );
+    }
+
+    #[test]
+    fn link_target_prefers_explicit_uri_and_does_not_join_hard_lines() {
+        let mut terminal = Terminal::new(20, 4, 1024).unwrap();
+        terminal.write(b"\x1b]8;;https://example.com/real\x1b\\label\x1b]8;;\x1b\\\r\nhttps://example.com/\r\ntail");
+        assert_eq!(
+            terminal.viewport_link_target(2, 0).unwrap(),
+            Some(LinkTarget::Uri("https://example.com/real".into()))
+        );
+        assert_eq!(
+            terminal.viewport_link_target(1, 2).unwrap(),
+            Some(LinkTarget::Text {
+                text: "tail".into(),
+                clicked_byte: 1
+            })
+        );
+    }
+
+    #[test]
+    fn link_target_stops_at_hard_line_when_clicking_last_column() {
+        let mut terminal = Terminal::new(20, 3, 1024).unwrap();
+        terminal.write(b"https://example.com/x\r\nnot-part-of-url");
+        assert_eq!(
+            terminal.viewport_link_target(19, 0).unwrap(),
+            Some(LinkTarget::Text {
+                text: "https://example.com/x".into(),
+                clicked_byte: 19
+            })
+        );
+    }
+
+    #[test]
+    fn link_target_wide_explicit_label_works_on_both_cell_halves() {
+        let mut terminal = Terminal::new(20, 2, 1024).unwrap();
+        terminal.write("\x1b]8;;https://example.com/\x1b\\路径\x1b]8;;\x1b\\".as_bytes());
+        for col in 0..4 {
+            assert_eq!(
+                terminal.viewport_link_target(col, 0).unwrap(),
+                Some(LinkTarget::Uri("https://example.com/".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn link_target_selection_budget_is_shared_across_both_directions() {
+        let mut terminal = Terminal::new(20, 2, 1024).unwrap();
+        terminal.write(b" abc ");
+        let boundaries = [u32::from(b' ')];
+        let options = ffi::GhosttyTerminalSelectWordOptions {
+            size: mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
+            ref_: terminal.grid_ref(ghostty_viewport_point(2, 0)).unwrap(),
+            boundary_codepoints: boundaries.as_ptr(),
+            boundary_codepoints_len: boundaries.len(),
+        };
+        for budget in 0..=5 {
+            let mut selection = ffi::GhosttySelection::default();
+            let result = unsafe {
+                ffi::ghostty_terminal_select_word_bounded(
+                    terminal.raw,
+                    &options,
+                    budget,
+                    &mut selection,
+                )
+            };
+            if budget < 5 {
+                assert_eq!(
+                    result,
+                    ffi::GhosttyResult_GHOSTTY_NO_VALUE,
+                    "budget={budget}"
+                );
+            } else {
+                result.into_result().unwrap();
+                assert_eq!(
+                    terminal
+                        .format_selection(&selection, FormatterFormat::Plain, true, false)
+                        .unwrap(),
+                    "abc"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn link_target_rejects_oversized_token_without_returning_a_prefix() {
+        let mut terminal = Terminal::new(100, 4, 16 * 1024 * 1024).unwrap();
+        let text = format!("https://example.com/{}", "a".repeat(1_000_000));
+        terminal.write(text.as_bytes());
+        let started = std::time::Instant::now();
+        let target = terminal.viewport_link_target(0, 0).unwrap();
+        eprintln!("million-byte token lookup: {:?}", started.elapsed());
+        assert!(target.is_none());
     }
 
     #[test]

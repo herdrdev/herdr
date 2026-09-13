@@ -11,6 +11,7 @@ const originalEnvironment = {
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  OMPCODE: process.env.OMPCODE,
 };
 
 let server: Server | undefined;
@@ -228,6 +229,33 @@ for (const integration of integrations) {
     expect(reportedState()).toBe("working");
   });
 }
+
+test("OMP ignores nested sessions launched inside another OMP shell", async () => {
+  const requests = await startRecordingServer("omp-nested");
+  process.env.OMPCODE = "1";
+  const { handlers, pi } = createExtensionHarness();
+
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  // OMP sets OMPCODE on every shell it spawns. A nested `omp` inherits it and
+  // must not claim the pane's session for its short-lived conversation.
+  expect(handlers.size).toBe(0);
+  await handlers.get("session_start")?.(
+    { reason: "startup" },
+    {
+      hasUI: true,
+      isIdle: () => true,
+      sessionManager: {
+        getSessionFile: () => "/tmp/omp-nested.jsonl",
+        getSessionId: () => "omp-nested",
+      },
+    },
+  );
+  await Bun.sleep(25);
+
+  expect(requests).toEqual([]);
+});
 
 test("OMP accepts POSIX and Windows session paths", async () => {
   const { isAbsoluteSessionPath } = await importFresh("./omp/herdr-agent-state.ts");

@@ -196,6 +196,7 @@ pub const terminal_continuation_write = terminal.continuation_write;
 pub const terminal_continuation_buf = terminal.continuation_buf;
 pub const terminal_continuation_alloc = terminal.continuation_alloc;
 pub const terminal_select_word = selection.word;
+pub const terminal_select_word_bounded = selection.word_bounded;
 pub const terminal_select_word_between = selection.word_between;
 pub const terminal_select_line = selection.line;
 pub const terminal_select_all = selection.all;
