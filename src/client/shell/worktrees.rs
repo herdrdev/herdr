@@ -213,9 +213,8 @@ impl ClientShellState {
             .is_some_and(|worktree| worktree.is_linked_worktree);
         let kind = match action {
             KeybindAction::NewWorktree | KeybindAction::OpenWorktree if linked => {
-                self.endpoint_error = Some(
-                    "New and open worktree actions start from the repo parent workspace."
-                        .to_owned(),
+                self.set_endpoint_error(
+                    "New and open worktree actions start from the repo parent workspace.",
                 );
                 outcome.repaint = true;
                 return;
@@ -227,8 +226,7 @@ impl ClientShellState {
                 workspace_id: workspace_id.clone(),
             },
             KeybindAction::RemoveWorktree if !linked => {
-                self.endpoint_error =
-                    Some("This workspace is not a Herdr-managed worktree checkout.".to_owned());
+                self.set_endpoint_error("This workspace is not a Herdr-managed worktree checkout.");
                 outcome.repaint = true;
                 return;
             }
@@ -442,7 +440,7 @@ impl ClientShellState {
                     })
                     .collect::<Vec<_>>();
                 if entries.is_empty() {
-                    self.endpoint_error = Some("No Git worktrees found for this repo.".to_owned());
+                    self.set_endpoint_error("No Git worktrees found for this repo.");
                 } else {
                     self.overlay = Some(ClientShellOverlay::WorktreeOpen(
                         ClientWorktreeOpenOverlay {
@@ -477,8 +475,9 @@ impl ClientShellState {
                         },
                     ));
                 } else {
-                    self.endpoint_error =
-                        Some("This workspace is not a Herdr-managed worktree checkout.".to_owned());
+                    self.set_endpoint_error(
+                        "This workspace is not a Herdr-managed worktree checkout.",
+                    );
                 }
                 true
             }
@@ -543,8 +542,7 @@ impl ClientShellState {
                 Err(_),
             ) => true,
             (_, Ok(_)) => {
-                self.endpoint_error =
-                    Some("endpoint returned an unexpected worktree result".to_owned());
+                self.set_endpoint_error("endpoint returned an unexpected worktree result");
                 true
             }
             (

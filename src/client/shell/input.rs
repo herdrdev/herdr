@@ -159,7 +159,6 @@ impl ClientShellState {
         let mut outcome = ClientShellInput::default();
         if !events.is_empty() && self.endpoint_error.take().is_some() {
             self.endpoint_error_deadline = None;
-            self.endpoint_error_tracked = None;
             outcome.repaint = true;
         }
         for event in events {

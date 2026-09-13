@@ -63,7 +63,7 @@ impl ClientShellState {
             remote_collapsed_groups,
         };
         if let Err(error) = preferences::store(path, preferences) {
-            self.endpoint_error = Some(error);
+            self.set_endpoint_error(error);
             outcome.repaint = true;
         }
     }
@@ -97,7 +97,7 @@ impl ClientShellState {
                         .config
                         .apply_snapshot_keybindings(profile.as_deref(), &commands)
                     {
-                        self.endpoint_error = Some(err);
+                        self.set_endpoint_error(err);
                     }
                 }
             }
