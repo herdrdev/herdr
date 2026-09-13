@@ -974,6 +974,8 @@ pub(crate) struct ClientShellState {
     pub(super) local_config_diagnostic: Option<String>,
     pub(super) config_diagnostic: Option<String>,
     pub(super) endpoint_error: Option<String>,
+    pub(super) endpoint_error_deadline: Option<std::time::Instant>,
+    pub(super) endpoint_error_tracked: Option<String>,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
 }
 
@@ -1132,6 +1134,8 @@ impl ClientShellState {
             config_diagnostic: local_config_diagnostic.clone(),
             local_config_diagnostic,
             endpoint_error: None,
+            endpoint_error_deadline: None,
+            endpoint_error_tracked: None,
             dismissed_product_announcement: None,
         }
     }
@@ -1273,6 +1277,8 @@ impl ClientShellState {
         self.endpoint_notice_seen.clear();
         self.visible_endpoint_notice = None;
         self.endpoint_error = None;
+        self.endpoint_error_deadline = None;
+        self.endpoint_error_tracked = None;
         self.navigate_workspace_id = None;
         self.overlay = self
             .config
@@ -1693,6 +1699,8 @@ impl ClientShellState {
             }
             self.hits.popup = None;
             self.endpoint_error = None;
+            self.endpoint_error_deadline = None;
+            self.endpoint_error_tracked = None;
         }
         if next_popup.is_some() {
             self.popup_pending = false;
@@ -1850,6 +1858,32 @@ impl ClientShellState {
             repaint = true;
         }
         repaint
+    }
+
+    pub(crate) fn tick_endpoint_error(&mut self, now: std::time::Instant) -> bool {
+        if self.endpoint_error.is_none() {
+            self.endpoint_error_deadline = None;
+            self.endpoint_error_tracked = None;
+            return false;
+        }
+        // The deadline starts on the first tick after the message appears, so
+        // every assignment site gets a consistent lifetime without having to
+        // thread a timestamp through each error path.
+        if self.endpoint_error_tracked.as_deref() != self.endpoint_error.as_deref() {
+            self.endpoint_error_tracked = self.endpoint_error.clone();
+            self.endpoint_error_deadline = Some(now + std::time::Duration::from_secs(5));
+            return false;
+        }
+        if self
+            .endpoint_error_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.endpoint_error = None;
+            self.endpoint_error_deadline = None;
+            self.endpoint_error_tracked = None;
+            return true;
+        }
+        false
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {

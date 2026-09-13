@@ -1027,6 +1027,63 @@ fn unavailable_worktree_create_does_not_wedge_the_overlay() {
 }
 
 #[test]
+fn worktree_action_errors_expire_without_more_input() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    let mut guard = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
+        &mut guard,
+    );
+    let message = "This workspace is not a Herdr-managed worktree checkout.";
+    assert_eq!(state.endpoint_error.as_deref(), Some(message));
+
+    let now = std::time::Instant::now();
+    assert!(!state.tick_endpoint_error(now));
+    assert!(!state.tick_endpoint_error(now + std::time::Duration::from_secs(4)));
+    assert_eq!(state.endpoint_error.as_deref(), Some(message));
+
+    assert!(state.tick_endpoint_error(now + std::time::Duration::from_secs(6)));
+    assert!(state.endpoint_error.is_none());
+}
+
+#[test]
+fn worktree_prepare_rejection_notice_expires() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut prepare = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
+        &mut prepare,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
+        panic!("new worktree should prepare through worktree.list");
+    };
+    let request_id = request.id.clone();
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(ClientShellEndpointError {
+            code: Some("not_git_worktree".into()),
+            message: "Herdr worktree actions require a workspace inside a Git work tree".into(),
+        }),
+    );
+    let notice = state
+        .visible_endpoint_notice
+        .as_ref()
+        .expect("rejection notice");
+    assert!(notice.key.code.contains("not_git_worktree"));
+    let deadline = notice.deadline;
+
+    let (_, repaint) = state.tick_notifications(deadline + std::time::Duration::from_millis(1));
+    assert!(repaint);
+    assert!(state.visible_endpoint_notice.is_none());
+}
+
+#[test]
 fn worktree_open_filters_and_clicks_a_stable_public_entry() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
