@@ -1722,9 +1722,10 @@ pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($nul
 /// `portable-pty`'s default-program path resolves to `%ComSpec%` (cmd.exe) on
 /// Windows and ignores the `SHELL` env override, and the Unix argv0-prefix
 /// login convention does not exist there. A login shell therefore has to be
-/// launched directly with the shell's own login flag. Only POSIX sh-family
-/// shells and fish accept one; Windows-native shells such as cmd.exe and
-/// PowerShell have no login concept and launch plain.
+/// launched directly with the shell's own login flag. Only POSIX-style shells
+/// that define one (the sh family, fish, and csh/tcsh) get it; Windows-native
+/// shells such as cmd.exe and PowerShell have no login concept and launch
+/// plain.
 fn windows_login_shell_args(shell: &str) -> &'static [&'static str] {
     let name = shell
         .rsplit(['/', '\\'])
@@ -1733,7 +1734,9 @@ fn windows_login_shell_args(shell: &str) -> &'static [&'static str] {
         .to_ascii_lowercase();
     let name = name.strip_suffix(".exe").unwrap_or(&name);
     match name {
-        "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "mksh" | "fish" => &["-l"],
+        "sh" | "bash" | "zsh" | "ksh" | "dash" | "ash" | "mksh" | "fish" | "csh" | "tcsh" => {
+            &["-l"]
+        }
         _ => &[],
     }
 }
@@ -3893,6 +3896,10 @@ mod tests {
             "mksh",
             "fish",
             "fish.exe",
+            "csh",
+            "csh.exe",
+            "tcsh",
+            "tcsh.exe",
             "C:\\Program Files\\Git\\bin\\bash.exe",
         ] {
             assert_eq!(
