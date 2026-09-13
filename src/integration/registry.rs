@@ -22,6 +22,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Qodercli => "qodercli",
         crate::api::schema::IntegrationTarget::Cursor => "cursor",
         crate::api::schema::IntegrationTarget::Mastracode => "mastracode",
+        crate::api::schema::IntegrationTarget::Codewhale => "codewhale",
     }
 }
 
@@ -49,7 +50,12 @@ pub(crate) fn integration_target_command_names(
         crate::api::schema::IntegrationTarget::Qodercli => qodercli_command_names(),
         crate::api::schema::IntegrationTarget::Cursor => cursor_command_names(),
         crate::api::schema::IntegrationTarget::Mastracode => &["mastracode"],
+        crate::api::schema::IntegrationTarget::Codewhale => codewhale_command_names(),
     }
+}
+
+pub(crate) fn codewhale_command_names() -> &'static [&'static str] {
+    &["codewhale", "codew"]
 }
 
 pub(crate) fn cursor_command_names() -> &'static [&'static str] {
@@ -253,7 +259,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 14] {
+); 15] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -327,6 +333,11 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Mastracode,
             mastracode_dir().map(|dir| dir.join("hooks").join(super::MASTRACODE_HOOK_INSTALL_NAME)),
             super::MASTRACODE_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Codewhale,
+            codewhale_dir().map(|dir| dir.join("hooks").join(super::CODEWHALE_HOOK_INSTALL_NAME)),
+            super::CODEWHALE_INTEGRATION_VERSION,
         ),
     ]
 }

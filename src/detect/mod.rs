@@ -61,6 +61,7 @@ pub enum Agent {
     Hermes,
     Kilo,
     Qodercli,
+    Codewhale,
 }
 
 impl Agent {
@@ -108,6 +109,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Hermes => "hermes",
         Agent::Kilo => "kilo",
         Agent::Qodercli => "qodercli",
+        Agent::Codewhale => "codewhale",
     }
 }
 
@@ -134,6 +136,7 @@ pub fn parse_agent_label(agent: &str) -> Option<Agent> {
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
+        "codewhale" | "codewhale-cli" | "codew" => Some(Agent::Codewhale),
         _ => None,
     }
 }
@@ -164,6 +167,7 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
         "hermes" | "hermes-agent" => Some(Agent::Hermes),
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
+        "codewhale" | "codewhale-cli" | "codew" => Some(Agent::Codewhale),
         _ => None,
     }
 }
@@ -251,6 +255,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
             | ("herdr:kimi", "kimi")
+            | ("herdr:codewhale", "codewhale")
     )
 }
 
@@ -642,6 +647,8 @@ mod tests {
         assert_eq!(identify_agent("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(identify_agent("codewhale"), Some(Agent::Codewhale));
+        assert_eq!(identify_agent("codew"), Some(Agent::Codewhale));
     }
 
     #[test]
@@ -667,6 +674,8 @@ mod tests {
         assert_eq!(parse_agent_label("grok-build"), Some(Agent::Grok));
         assert_eq!(parse_agent_label("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(parse_agent_label("kilo-code"), Some(Agent::Kilo));
+        assert_eq!(parse_agent_label("codewhale"), Some(Agent::Codewhale));
+        assert_eq!(parse_agent_label("codew"), Some(Agent::Codewhale));
     }
 
     #[test]
@@ -682,6 +691,7 @@ mod tests {
         assert_eq!(agent_label(Agent::Grok), "grok");
         assert_eq!(agent_label(Agent::Hermes), "hermes");
         assert_eq!(agent_label(Agent::Kilo), "kilo");
+        assert_eq!(agent_label(Agent::Codewhale), "codewhale");
     }
 
     #[test]
@@ -691,6 +701,15 @@ mod tests {
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+    }
+
+    #[test]
+    fn codewhale_is_hook_authority_without_screen_manifest() {
+        assert!(full_lifecycle_hook_authority(
+            "herdr:codewhale",
+            "codewhale"
+        ));
+        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Codewhale));
     }
 
     #[test]

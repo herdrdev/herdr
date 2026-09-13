@@ -101,6 +101,17 @@ fn clear_integration_path_env() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(QODERCLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(CURSOR_CONFIG_DIR_ENV_VAR);
+    std::env::remove_var(CODEWHALE_CONFIG_DIR_ENV_VAR);
+}
+
+fn codewhale_config_hooks(config: &str) -> Vec<toml::Value> {
+    let parsed: toml::Value = toml::from_str(config).unwrap();
+    parsed
+        .get("hooks")
+        .and_then(|h| h.get("hooks"))
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -2597,6 +2608,13 @@ fn bundled_integration_assets_report_session_refs() {
     assert!(MASTRACODE_HOOK_ASSET.contains("agent_session_id"));
     assert!(MASTRACODE_HOOK_ASSET.contains("pane.report_agent"));
     assert!(MASTRACODE_HOOK_ASSET.contains("pane.release_agent"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=codewhale"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("HERDR_INTEGRATION_VERSION=1"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("session_id"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("agent_session_id"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("pane.report_agent"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("pane.release_agent"));
+    assert!(CODEWHALE_HOOK_ASSET.contains("pane.report_agent_session"));
 }
 
 #[test]
@@ -3305,5 +3323,122 @@ fn uninstall_mastracode_errors_when_event_value_not_array() {
     } else {
         std::env::remove_var("HOME");
     }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_writes_hook_and_updates_config() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let codewhale_dir = home.join(".codewhale");
+    fs::create_dir_all(&codewhale_dir).unwrap();
+    fs::write(
+        codewhale_dir.join("config.toml"),
+        "default_text_model = \"deepseek-v4-flash\"\nprovider = \"deepseek\"\n",
+    )
+    .unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_codewhale().unwrap();
+    let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+    let config = fs::read_to_string(&installed.config_path).unwrap();
+    let hooks = codewhale_config_hooks(&config);
+
+    assert_eq!(
+        installed.hook_path,
+        codewhale_dir
+            .join("hooks")
+            .join(CODEWHALE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.config_path, codewhale_dir.join("config.toml"));
+    assert_eq!(hook_content, CODEWHALE_HOOK_ASSET);
+    assert_eq!(hooks.len(), CODEWHALE_HOOK_EVENTS.len());
+    assert!(config.contains("default_text_model = \"deepseek-v4-flash\""));
+    assert!(config.contains("provider = \"deepseek\""));
+    assert!(config.contains(CODEWHALE_CONFIG_BLOCK_BEGIN));
+    assert!(config.contains(CODEWHALE_CONFIG_BLOCK_END));
+    assert!(config.contains("[hooks]"));
+    assert!(config.contains("enabled = true"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_uses_codewhale_config_dir_env() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let codewhale_dir = base.join("custom-codewhale");
+    fs::create_dir_all(&codewhale_dir).unwrap();
+    std::env::set_var(CODEWHALE_CONFIG_DIR_ENV_VAR, &codewhale_dir);
+
+    let installed = install_codewhale().unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        codewhale_dir
+            .join("hooks")
+            .join(CODEWHALE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.config_path, codewhale_dir.join("config.toml"));
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_codewhale_is_idempotent_for_config_block() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let codewhale_dir = home.join(".codewhale");
+    fs::create_dir_all(&codewhale_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    install_codewhale().unwrap();
+    install_codewhale().unwrap();
+
+    let config = fs::read_to_string(codewhale_dir.join("config.toml")).unwrap();
+    let hooks = codewhale_config_hooks(&config);
+
+    assert_eq!(config.matches(CODEWHALE_CONFIG_BLOCK_BEGIN).count(), 1);
+    assert_eq!(config.matches(CODEWHALE_CONFIG_BLOCK_END).count(), 1);
+    assert_eq!(hooks.len(), CODEWHALE_HOOK_EVENTS.len());
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_codewhale_removes_hook_and_config_block_preserves_other_content() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let codewhale_dir = home.join(".codewhale");
+    fs::create_dir_all(&codewhale_dir).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let installed = install_codewhale().unwrap();
+    fs::write(
+        &installed.config_path,
+        format!(
+            "telemetry = false\n\n{}",
+            fs::read_to_string(&installed.config_path).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let result = uninstall_codewhale().unwrap();
+    let config = fs::read_to_string(codewhale_dir.join("config.toml")).unwrap();
+
+    assert!(result.removed_hook_file);
+    assert!(result.updated_config);
+    assert!(!result.hook_path.exists());
+    assert!(config.contains("telemetry = false"));
+    assert!(!config.contains(CODEWHALE_CONFIG_BLOCK_BEGIN));
+    assert!(!config.contains(CODEWHALE_CONFIG_BLOCK_END));
+
+    std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
