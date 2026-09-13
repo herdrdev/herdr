@@ -883,7 +883,10 @@ impl TerminalState {
         session_ref: &crate::agent_resume::AgentSessionRef,
     ) -> bool {
         self.hook_authority.is_none()
-            && (source, agent_label) == ("herdr:mastracode", "mastracode")
+            && matches!(
+                (source, agent_label),
+                ("herdr:mastracode", "mastracode") | ("herdr:codewhale", "codewhale")
+            )
             && self
                 .persisted_agent_session
                 .as_ref()
@@ -916,6 +919,11 @@ impl TerminalState {
                     "herdr:omp",
                     "omp",
                     Some("startup" | "new" | "resume" | "fork")
+                )
+                | (
+                    "herdr:codewhale",
+                    "codewhale",
+                    Some("startup" | "clear" | "resume")
                 )
         )
     }
@@ -2426,6 +2434,47 @@ mod tests {
                 "mastracode".into(),
                 crate::agent_resume::AgentSessionRefKind::Id,
                 "mastracode-new".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn codewhale_reacquires_full_lifecycle_hook_after_release_with_fresh_session_ref() {
+        assert_full_lifecycle_hook_reacquires_after_release_with_fresh_session_ref(
+            "herdr:codewhale",
+            "codewhale",
+        );
+    }
+
+    #[test]
+    fn codewhale_lifecycle_report_replaces_restored_session_ref() {
+        let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codewhale".into(),
+            agent: "codewhale".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("codewhale-old").unwrap(),
+        });
+
+        let mutation = terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:codewhale".into(),
+                "codewhale".into(),
+                AgentState::Working,
+                None,
+                None,
+                crate::agent_resume::AgentSessionRef::id("codewhale-new"),
+                Some(20),
+            )
+            .expect("fresh Codewhale session should replace restored session id");
+
+        assert!(mutation.session_ref_changed);
+        assert_eq!(
+            terminal.current_session_identity_for_persistence(),
+            Some((
+                "herdr:codewhale".into(),
+                "codewhale".into(),
+                crate::agent_resume::AgentSessionRefKind::Id,
+                "codewhale-new".into()
             ))
         );
     }

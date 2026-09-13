@@ -197,6 +197,20 @@ const MASTRACODE_HOOK_EVENTS: [(&str, &str); 12] = [
     ("Stop", "idle"),
     ("SessionEnd", "release"),
 ];
+const CODEWHALE_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const CODEWHALE_HOOK_ASSET: &str = include_str!("assets/codewhale/herdr-agent-state.sh");
+const CODEWHALE_INTEGRATION_VERSION: u32 = 1;
+const CODEWHALE_CONFIG_BLOCK_BEGIN: &str = "# >>> herdr codewhale integration";
+const CODEWHALE_CONFIG_BLOCK_END: &str = "# <<< herdr codewhale integration";
+const CODEWHALE_HOOK_EVENTS: [(&str, &str); 7] = [
+    ("herdr-session-start", "session_start"),
+    ("herdr-message-submit", "message_submit"),
+    ("herdr-tool-call-before", "tool_call_before"),
+    ("herdr-tool-call-after", "tool_call_after"),
+    ("herdr-turn-end", "turn_end"),
+    ("herdr-on-error", "on_error"),
+    ("herdr-session-end", "session_end"),
+];
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";

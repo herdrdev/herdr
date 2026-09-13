@@ -7,6 +7,7 @@ use super::command::{hook_command, legacy_bash_hook_command};
 #[cfg(windows)]
 use super::file_ops::legacy_bash_hook_path;
 use super::{
+    CODEWHALE_CONFIG_BLOCK_BEGIN, CODEWHALE_CONFIG_BLOCK_END, CODEWHALE_HOOK_EVENTS,
     HERMES_PLUGIN_INSTALL_NAME, KIMI_CONFIG_BLOCK_BEGIN, KIMI_CONFIG_BLOCK_END, KIMI_HOOK_EVENTS,
 };
 
@@ -780,6 +781,72 @@ pub(crate) fn remove_kimi_config_block(content: &str) -> String {
         }
         if in_block {
             if line.trim() == KIMI_CONFIG_BLOCK_END {
+                in_block = false;
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+
+    if !removed_block {
+        return content.to_string();
+    }
+
+    let mut result = join_toml_lines(lines, trailing_newline);
+    while result.ends_with("\n\n") {
+        result.pop();
+    }
+    if result == "\n" {
+        String::new()
+    } else {
+        result
+    }
+}
+
+pub(crate) fn build_codewhale_config_with_hooks(content: &str, hook_path: &Path) -> String {
+    let mut result = remove_codewhale_config_block(content)
+        .trim_end_matches('\n')
+        .to_string();
+    if !result.is_empty() {
+        result.push('\n');
+        result.push('\n');
+    }
+
+    result.push_str(CODEWHALE_CONFIG_BLOCK_BEGIN);
+    result.push('\n');
+    result.push_str("[hooks]\nenabled = true\n\n");
+    for (name, event) in CODEWHALE_HOOK_EVENTS {
+        result.push_str(&codewhale_hook_table(name, event, hook_path));
+    }
+    result.push_str(CODEWHALE_CONFIG_BLOCK_END);
+    result.push('\n');
+    result
+}
+
+pub(crate) fn codewhale_hook_table(name: &str, event: &str, hook_path: &Path) -> String {
+    let command = hook_command(hook_path, Some(event));
+    format!(
+        "[[hooks.hooks]]\nname = {}\nevent = {}\ncommand = {}\n\n",
+        toml_basic_string(name),
+        toml_basic_string(event),
+        toml_basic_string(&command)
+    )
+}
+
+pub(crate) fn remove_codewhale_config_block(content: &str) -> String {
+    let trailing_newline = content.ends_with('\n');
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    let mut removed_block = false;
+
+    for line in content.lines() {
+        if line.trim() == CODEWHALE_CONFIG_BLOCK_BEGIN {
+            in_block = true;
+            removed_block = true;
+            continue;
+        }
+        if in_block {
+            if line.trim() == CODEWHALE_CONFIG_BLOCK_END {
                 in_block = false;
             }
             continue;

@@ -96,6 +96,12 @@ pub(crate) struct MastracodeUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct CodewhaleInstallPaths {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+}
+
+#[derive(Debug)]
 pub(crate) struct QodercliUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,
@@ -225,5 +231,13 @@ pub(crate) struct HermesUninstallResult {
     pub plugin_dir: PathBuf,
     pub config_path: PathBuf,
     pub removed_plugin_dir: bool,
+    pub updated_config: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodewhaleUninstallResult {
+    pub hook_path: PathBuf,
+    pub config_path: PathBuf,
+    pub removed_hook_file: bool,
     pub updated_config: bool,
 }

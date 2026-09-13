@@ -28,7 +28,6 @@ mod android_shims {
     }
 }
 
-
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture,

@@ -147,6 +147,13 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
+        ("herdr:codewhale", "codewhale", AgentSessionRefKind::Id) => {
+            vec![
+                "codewhale".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
+        }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pi".into(), "--session".into(), session_ref.value.clone()]
         }
@@ -220,6 +227,7 @@ fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:qodercli", "qodercli")
             | ("herdr:kilo", "kilo")
             | ("herdr:cursor", "cursor")
+            | ("herdr:codewhale", "codewhale")
     )
 }
 
@@ -331,6 +339,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["mastracode", "--thread", "mastracode-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:codewhale",
+                "codewhale",
+                &AgentSessionRef::id("codewhale-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["codewhale", "--resume", "codewhale-session"]
         );
         assert_eq!(
             plan(
@@ -528,6 +546,16 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qoder-id");
+
+        let session_ref = session_ref_from_report(
+            "herdr:codewhale",
+            "codewhale",
+            Some("codewhale-id".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "codewhale-id");
     }
 
     #[test]
@@ -624,6 +652,13 @@ mod tests {
             "mastracode",
             AgentSessionRefKind::Id,
             "mastracode-session"
+        )
+        .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:codewhale",
+            "codewhale",
+            AgentSessionRefKind::Id,
+            "codewhale-session"
         )
         .is_some());
         assert!(session_ref_from_snapshot(
