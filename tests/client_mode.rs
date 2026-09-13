@@ -1020,6 +1020,187 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
 }
 
 #[test]
+fn primary_remote_client_recovers_transport_without_replaying_offline_input() {
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // Emulate the persistent --remote bridge listener, including an outage between two SSH
+    // connections. The actual server and shell stay alive throughout the disconnection.
+    struct Bridge {
+        stopped: Arc<AtomicBool>,
+        blocked: Arc<AtomicBool>,
+        streams: Arc<Mutex<Vec<UnixStream>>>,
+        worker: Option<thread::JoinHandle<Vec<thread::JoinHandle<()>>>>,
+    }
+
+    impl Drop for Bridge {
+        fn drop(&mut self) {
+            self.stopped.store(true, Ordering::Release);
+            let workers = self.worker.take().unwrap().join().unwrap();
+            for stream in self.streams.lock().unwrap().iter() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            for worker in workers {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let created = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "remote-recovery", "method": "workspace.create",
+            "params": {"cwd": base, "focus": true, "label": "remote-recovery"},
+        })
+        .to_string(),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    send_pane_shell_command(
+        &api_socket,
+        pane_id,
+        "HERDR_RECOVERY_STATE=retained; printf 'REMOTE_READY\\n'",
+    );
+
+    let bridge_api_socket = runtime_dir.join("remote-bridge.sock");
+    let bridge_socket = runtime_dir.join("remote-bridge-client.sock");
+    let listener = UnixListener::bind(&bridge_socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
+    let worker_stopped = stopped.clone();
+    let worker_blocked = blocked.clone();
+    let worker_streams = streams.clone();
+    let worker = thread::spawn(move || {
+        let mut workers = Vec::new();
+        while !worker_stopped.load(Ordering::Acquire) {
+            if worker_blocked.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            let mut client = match listener.accept() {
+                Ok((client, _)) => client,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("bridge accept: {error}"),
+            };
+            client.set_nonblocking(false).unwrap();
+            let mut remote = UnixStream::connect(&client_socket).unwrap();
+            let mut client_upload = client.try_clone().unwrap();
+            let mut remote_upload = remote.try_clone().unwrap();
+            worker_streams
+                .lock()
+                .unwrap()
+                .extend([client.try_clone().unwrap(), remote.try_clone().unwrap()]);
+            workers.push(thread::spawn(move || {
+                let _ = std::io::copy(&mut client_upload, &mut remote_upload);
+                let _ = client_upload.shutdown(Shutdown::Both);
+                let _ = remote_upload.shutdown(Shutdown::Both);
+            }));
+            workers.push(thread::spawn(move || {
+                let _ = std::io::copy(&mut remote, &mut client);
+                let _ = client.shutdown(Shutdown::Both);
+                let _ = remote.shutdown(Shutdown::Both);
+            }));
+        }
+        workers
+    });
+    let bridge = Bridge {
+        stopped,
+        blocked,
+        streams,
+        worker: Some(worker),
+    };
+    let mut client = spawn_client_process_with_args_and_env(
+        &config_home,
+        &runtime_dir,
+        &bridge_api_socket,
+        &["client"],
+        &[("HERDR_REMOTE_KEYBINDINGS", "local")],
+    );
+    let output = spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
+    let mut input = client._master.as_ref().unwrap().take_writer().unwrap();
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            read_output(&output).contains("REMOTE_READY")
+        }),
+        "primary remote should initially attach through the bridge: {}",
+        read_output(&output)
+    );
+
+    let watermark = output_len(&output);
+    bridge.blocked.store(true, Ordering::Release);
+    for stream in bridge.streams.lock().unwrap().iter() {
+        let _ = stream.shutdown(Shutdown::Both);
+    }
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            read_output(&output)[watermark..].contains("reconnecting")
+        }),
+        "primary remote should survive transport loss: {}",
+        read_output(&output)
+    );
+    assert!(client.child.try_wait().unwrap().is_none());
+    let disconnected = read_output(&output);
+    assert!(disconnected.contains("Remote connection was lost; reconnecting"));
+    assert!(!disconnected.contains("Local connection was lost"));
+    input.write_all(b"touch offline-input-replayed\r").unwrap();
+    thread::sleep(Duration::from_millis(100));
+    bridge.blocked.store(false, Ordering::Release);
+
+    // A retained shell variable proves the original pane survived. A subsequent command also
+    // proves coherent activation released the input fence on the new connection generation.
+    let watermark = output_len(&output);
+    assert!(
+        wait_until(Duration::from_secs(12), Duration::from_millis(100), || {
+            if read_output(&output)[watermark..].contains("RECOVERED_retained") {
+                return true;
+            }
+            input
+                .write_all(b"printf 'RECOVERED_%s\\n' \"$HERDR_RECOVERY_STATE\"\r")
+                .unwrap();
+            false
+        }),
+        "remote should recover its original shell and accept new input: {}",
+        read_output(&output)
+    );
+    assert!(!base.join("offline-input-replayed").exists());
+    assert!(server.child.try_wait().unwrap().is_none());
+    assert!(!runtime_dir
+        .join("state")
+        .join(app_dir_name())
+        .join("client/endpoints.json")
+        .exists());
+
+    // A deliberate server stop still exits the primary client instead of recovering it.
+    let watermark = output_len(&output);
+    let _ = send_json_request(
+        &api_socket,
+        r#"{"id":"stop","method":"server.stop","params":{}}"#,
+    );
+    let stopped_output = drain_until_client_exits(&mut client, &output, watermark);
+    assert!(stopped_output.contains("server"), "{stopped_output}");
+    drop(input);
+    drop(client);
+    drop(bridge);
+    drop(server);
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let _lock = test_lock();
     let base = unique_test_dir();

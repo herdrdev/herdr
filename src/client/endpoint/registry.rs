@@ -201,6 +201,17 @@ impl EndpointRegistry {
         }
     }
 
+    /// The primary --remote endpoint has a Local identity but crosses a network bridge.
+    /// Probe it only when the server advertises support; actual Local sockets keep their
+    /// existing transport-only liveness behavior.
+    pub(crate) fn enable_remote_health(&mut self, endpoint_id: &ClientEndpointId, now: Instant) {
+        if let Some(connection) = self.connections.get_mut(endpoint_id) {
+            if connection.negotiation.supports_health_check() {
+                connection.health = Some(EndpointHealth::new(now));
+            }
+        }
+    }
+
     pub(crate) fn tick_health(&mut self, now: Instant) {
         let actions = self
             .connections
@@ -487,6 +498,74 @@ mod tests {
             false,
         );
         registry.tick_health(Instant::now() + std::time::Duration::from_secs(300));
+        assert!(registry.connection(&ClientEndpointId::Local).is_some());
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(registry.take_failures().is_empty());
+    }
+
+    #[test]
+    fn primary_remote_health_detects_a_silent_bridge_without_replaying_input() {
+        let now = Instant::now();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = EndpointRegistry::new(
+            FakeTransport {
+                sent: sent.clone(),
+                error: None,
+            },
+            1,
+            negotiation(),
+        );
+        registry.enable_remote_health(&ClientEndpointId::Local, now);
+        registry.mark_ready(&ClientEndpointId::Local, 1);
+        registry.tick_health(now + super::super::health::HEARTBEAT_INTERVAL);
+        assert!(matches!(
+            sent.lock().unwrap().as_slice(),
+            [ClientMessage::EndpointControl { kind, .. }]
+                if kind == crate::protocol::endpoint::HEALTH_PING_KIND
+        ));
+        registry.tick_health(
+            now + super::super::health::HEARTBEAT_INTERVAL
+                + super::super::health::HEARTBEAT_TIMEOUT,
+        );
+        assert!(registry.connection(&ClientEndpointId::Local).is_none());
+        assert!(!registry.active_surface_available());
+        assert_eq!(registry.take_failures()[0].kind, io::ErrorKind::TimedOut);
+        let input = ClientMessage::Input {
+            data: b"offline input".to_vec(),
+        };
+        assert_eq!(registry.send(&input), EndpointSendOutcome::NotSent);
+        registry.insert(
+            ClientEndpointId::Local,
+            FakeTransport {
+                sent: sent.clone(),
+                error: None,
+            },
+            2,
+            negotiation(),
+            false,
+        );
+        assert_eq!(
+            sent.lock().unwrap().len(),
+            1,
+            "offline input is never queued"
+        );
+        assert!(!registry.accepts(&ClientEndpointId::Local, 1));
+    }
+
+    #[test]
+    fn primary_remote_health_is_optional_for_older_servers() {
+        let now = Instant::now();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = EndpointRegistry::new(
+            FakeTransport {
+                sent: sent.clone(),
+                error: None,
+            },
+            1,
+            EndpointNegotiation::default(),
+        );
+        registry.enable_remote_health(&ClientEndpointId::Local, now);
+        registry.tick_health(now + std::time::Duration::from_secs(300));
         assert!(registry.connection(&ClientEndpointId::Local).is_some());
         assert!(sent.lock().unwrap().is_empty());
         assert!(registry.take_failures().is_empty());

@@ -58,7 +58,10 @@ fn fast_path_blocker(
     state: &ClientShellState,
     patch: &crate::protocol::PaneSurfacePatch,
 ) -> Option<&'static str> {
-    if state.mode != ClientShellMode::Terminal {
+    if state.input_prediction.has_pending() {
+        // A partial blit cannot erase every speculative cell on confirmation or rollback.
+        Some("client_surface_patch.fallback.prediction")
+    } else if state.mode != ClientShellMode::Terminal {
         Some("client_surface_patch.fallback.mode")
     } else if state.overlay.is_some() {
         Some("client_surface_patch.fallback.overlay")
@@ -240,6 +243,7 @@ impl ClientShellState {
                     }
                 }
             }
+            self.reconcile_prediction();
             self.reconcile_input_source();
         } else {
             let mut next = current.clone();

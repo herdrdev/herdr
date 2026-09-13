@@ -131,6 +131,15 @@ impl ClientShellState {
     }
 
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
+        // Waiting for the matching snapshot is not a prompt change. The exact-pair
+        // guard below prevents display until the new authoritative context is known.
+        if !self.prediction_context_allowed()
+            || self
+                .last_composed_size
+                .is_some_and(|size| size != (cols, rows))
+        {
+            self.input_prediction.clear();
+        }
         self.last_composed_at = Some(std::time::Instant::now());
         self.selection_repaint_deadline = None;
         if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
@@ -313,6 +322,8 @@ impl ClientShellState {
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        self.input_prediction
+            .apply(&mut frame, (layout.pane_surface.x, layout.pane_surface.y));
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let has_selection = self
             .selection

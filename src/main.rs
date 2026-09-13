@@ -402,6 +402,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Set false to run plain ssh against your ssh config unchanged — this does not
 # force keepalive or multiplexing off, it only stops herdr from adding its own.
 # manage_ssh_config = true
+# Predict simple remote typing after observing matching echo. Unconfirmed text
+# is underlined. Disabled by default because terminal echo behavior can change.
+# predict_input = false
 
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.

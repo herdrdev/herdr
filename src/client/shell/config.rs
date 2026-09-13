@@ -106,6 +106,9 @@ impl ClientShellState {
             }
         }
         self.reconcile_input_source();
+        if !self.config.remote_predict_input {
+            self.input_prediction.clear();
+        }
     }
 }
 
@@ -113,6 +116,7 @@ impl ClientShellConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
         Self {
+            remote_predict_input: config.remote.predict_input,
             sidebar_width: config.ui.sidebar_width,
             sidebar_min_width: config.ui.sidebar_min_width,
             sidebar_max_width: config.ui.sidebar_max_width,
@@ -289,6 +293,10 @@ impl ClientShellConfig {
         let mut diagnostics = load_diagnostics.to_vec();
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+
+        if !invalid_section("remote") {
+            self.remote_predict_input = config.remote.predict_input;
+        }
 
         if !invalid_section("keys")
             && self.keybinding_source != ClientShellKeybindingSource::Endpoint

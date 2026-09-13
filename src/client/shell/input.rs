@@ -161,6 +161,7 @@ impl ClientShellState {
             outcome.repaint = true;
         }
         for event in events {
+            self.prepare_prediction_input(&event, &mut outcome);
             if let Some(update) = host_theme_update(&event) {
                 push_host_theme_update(&mut outcome.requests, update);
             }
@@ -290,6 +291,9 @@ impl ClientShellState {
                 | RawInputEvent::Unsupported => {}
             }
             self.reconcile_input_source();
+            if !self.prediction_allowed() {
+                outcome.repaint |= self.input_prediction.clear();
+            }
         }
         outcome.repaint |= self.resume_mobile_switcher_if_ready();
         outcome
@@ -997,19 +1001,26 @@ impl ClientShellState {
     }
 
     fn push_pane_key(
-        &self,
+        &mut self,
         target: ClientInputTarget,
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
         if let Some(event) = ClientPaneInputEvent::from_terminal_key(key) {
+            self.predict_pane_event(&target, &event, outcome);
             super::push_target_event(target, event, outcome);
         }
     }
 
-    fn push_focused_pane_event(&self, event: ClientPaneInputEvent, outcome: &mut ClientShellInput) {
+    fn push_focused_pane_event(
+        &mut self,
+        event: ClientPaneInputEvent,
+        outcome: &mut ClientShellInput,
+    ) {
         if let Some(pane_id) = self.focused_pane_id() {
-            super::push_target_event(ClientInputTarget::Pane(pane_id), event, outcome);
+            let target = ClientInputTarget::Pane(pane_id);
+            self.predict_pane_event(&target, &event, outcome);
+            super::push_target_event(target, event, outcome);
         }
     }
 }

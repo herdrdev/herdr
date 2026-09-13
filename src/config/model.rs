@@ -1023,12 +1023,16 @@ pub struct RemoteConfig {
     /// Add keepalive fallbacks and private connection reuse for `herdr --remote`.
     /// Set false to run plain ssh unchanged. Default: true.
     pub manage_ssh_config: bool,
+    /// Predict simple remote pane typing after observing matching echo. Default: false.
+    /// Unconfirmed text is underlined; applications can change their echo behavior.
+    pub predict_input: bool,
 }
 
 impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             manage_ssh_config: true,
+            predict_input: false,
         }
     }
 }

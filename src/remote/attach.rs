@@ -829,7 +829,7 @@ impl Drop for RemoteSsh {
     }
 }
 
-fn apply_noninteractive_ssh_options(command: &mut Command) {
+fn apply_noninteractive_ssh_auth_options(command: &mut Command) {
     command
         .arg("-o")
         .arg("BatchMode=yes")
@@ -840,7 +840,12 @@ fn apply_noninteractive_ssh_options(command: &mut Command) {
         .arg("-o")
         .arg("ConnectTimeout=10")
         .arg("-o")
-        .arg("ConnectionAttempts=1")
+        .arg("ConnectionAttempts=1");
+}
+
+fn apply_noninteractive_ssh_options(command: &mut Command) {
+    apply_noninteractive_ssh_auth_options(command);
+    command
         .arg("-o")
         .arg("ServerAliveInterval=15")
         .arg("-o")
@@ -2158,6 +2163,39 @@ pub(super) struct SshStdioBridge {
     thread: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgeSshPolicy {
+    Interactive,
+    SavedEndpoint,
+    PrimaryReconnect,
+}
+
+impl BridgeSshPolicy {
+    fn for_connection(noninteractive: bool, first_connection: bool) -> Self {
+        if noninteractive {
+            Self::SavedEndpoint
+        } else if first_connection {
+            Self::Interactive
+        } else {
+            Self::PrimaryReconnect
+        }
+    }
+
+    fn is_noninteractive(self) -> bool {
+        self != Self::Interactive
+    }
+
+    fn apply_options(self, command: &mut Command) {
+        match self {
+            Self::Interactive => {}
+            Self::SavedEndpoint => apply_noninteractive_ssh_options(command),
+            // Preserve the primary attach's user-configured keepalives, including
+            // managed fallback precedence, while disallowing raw-terminal prompts.
+            Self::PrimaryReconnect => apply_noninteractive_ssh_auth_options(command),
+        }
+    }
+}
+
 impl SshStdioBridge {
     pub(super) fn start(
         target: String,
@@ -2204,6 +2242,7 @@ impl SshStdioBridge {
         let thread_ssh_options = ssh_options.cloned();
         let (failure_tx, failure_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
+            let mut first_connection = true;
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok(stream) => {
@@ -2217,18 +2256,24 @@ impl SshStdioBridge {
                                 continue;
                             }
                         };
+                        // Only the initial attach may prompt for SSH authentication. A
+                        // reconnect happens while the client owns a raw terminal; prompting
+                        // there could consume pane input or leave the reconnect worker stuck.
+                        let policy =
+                            BridgeSshPolicy::for_connection(noninteractive, first_connection);
+                        first_connection = false;
                         if let Err(err) = bridge_connection(
                             stream,
                             &target,
                             &remote_command,
                             thread_ssh_options.as_ref(),
-                            noninteractive,
+                            policy,
                             &thread_stop,
                         ) {
                             let _ =
                                 failure_tx.try_send(io::Error::new(err.kind(), err.to_string()));
-                            if noninteractive {
-                                tracing::warn!(error = %err, "saved SSH endpoint bridge failed");
+                            if policy.is_noninteractive() {
+                                tracing::warn!(error = %err, "SSH endpoint bridge failed");
                             } else {
                                 eprintln!("herdr: remote bridge failed: {err}");
                             }
@@ -2403,15 +2448,14 @@ fn bridge_connection(
     target: &str,
     remote_command: &str,
     ssh_options: Option<&ManagedSshOptions>,
-    noninteractive: bool,
+    policy: BridgeSshPolicy,
     bridge_stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     let upload_stop = Arc::new(BridgeUploadStop::new()?);
     let mut command = Command::new("ssh");
     apply_managed_ssh_options(&mut command, ssh_options);
-    if noninteractive {
-        apply_noninteractive_ssh_options(&mut command);
-    }
+    policy.apply_options(&mut command);
+    let noninteractive = policy.is_noninteractive();
     command
         .arg("-T")
         .arg(target)
@@ -3274,6 +3318,61 @@ mod tests {
         }
         assert!(!args.iter().any(|arg| arg == "-F"));
         assert!(ssh.options().is_none());
+    }
+
+    #[test]
+    fn primary_reconnect_preserves_keepalive_configuration_without_auth_prompts() {
+        let policy = BridgeSshPolicy::for_connection(false, false);
+        assert_eq!(policy, BridgeSshPolicy::PrimaryReconnect);
+        assert!(policy.is_noninteractive());
+        let mut command = Command::new("ssh");
+        policy.apply_options(&mut command);
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        for required in [
+            "BatchMode=yes",
+            "NumberOfPasswordPrompts=0",
+            "StrictHostKeyChecking=yes",
+            "ConnectTimeout=10",
+            "ConnectionAttempts=1",
+        ] {
+            assert!(args.iter().any(|arg| arg == required), "missing {required}");
+        }
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("ServerAlive")),
+            "reconnect must not override keepalives from SSH config: {args:?}"
+        );
+    }
+
+    #[test]
+    fn primary_initial_attach_and_saved_bridges_keep_their_ssh_policies() {
+        let initial = BridgeSshPolicy::for_connection(false, true);
+        assert!(!initial.is_noninteractive());
+        let mut command = Command::new("ssh");
+        initial.apply_options(&mut command);
+        assert_eq!(command.get_args().count(), 0);
+
+        for first_connection in [true, false] {
+            let policy = BridgeSshPolicy::for_connection(true, first_connection);
+            assert_eq!(policy, BridgeSshPolicy::SavedEndpoint);
+            assert!(policy.is_noninteractive());
+            let mut command = Command::new("ssh");
+            policy.apply_options(&mut command);
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            for required in [
+                "BatchMode=yes",
+                "StrictHostKeyChecking=yes",
+                "ServerAliveInterval=15",
+                "ServerAliveCountMax=4",
+            ] {
+                assert!(args.iter().any(|arg| arg == required), "missing {required}");
+            }
+        }
     }
 
     #[test]

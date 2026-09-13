@@ -117,9 +117,14 @@ Remote attach manages its SSH connection with temporary keepalives and, where su
 ```toml
 [remote]
 manage_ssh_config = true
+predict_input = false
 ```
 
 When enabled, `herdr --remote` writes a private temporary SSH config that includes your user and system SSH configs first, then adds fallback `ServerAliveInterval` and `ServerAliveCountMax` values. Your own keepalive settings win. Linux and macOS clients also use a private per-attach OpenSSH control socket to reuse the first authenticated connection; Windows OpenSSH does not. Set `manage_ssh_config = false` to run remote attach through plain `ssh` without Herdr's generated config or control socket.
+
+Set `predict_input = true` to opt in to local echo for remote pane typing, including saved SSH machines. After observing matching server echo, Herdr displays simple ASCII characters immediately in blank cells on the current line. This also works with full-screen applications, mouse reporting, and hidden terminal cursors when the application keeps an accurate input anchor and its echoed text matches. For editors such as Pi that draw a styled blank caret, Herdr learns its exact movement with echoed text and moves that caret with the predicted suffix. Unrelated changes to the input row still cancel prediction. Learned confidence survives pauses and unrelated sidebar metadata updates while the prompt stays unchanged. Unconfirmed characters are underlined and never become part of the authoritative pane content or clipboard reads. Prediction stops on Enter, editing/control keys, paste, uncertain output, selection, resize, focus or terminal-mode changes, disconnection, or a 750 ms confirmation timeout. It does not predict Unicode input, line wrapping, or editors whose input position cannot be confirmed.
+
+Prediction is disabled by default because the current endpoint protocol does not report whether the remote application permits echo. Waiting for observed echo and resetting on Enter protects ordinary password prompts, but an application that changes echo behavior within a line can still briefly show unexpected input. Disable prediction for workflows that require strictly authoritative display. Command execution, completion, and new output still wait for the remote host.
 
 ## Keybindings
 

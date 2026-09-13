@@ -1436,6 +1436,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Add keepalive fallbacks and private connection reuse for `herdr --remote`. Set false to run plain ssh unchanged."
+        },
+        {
+          "key": "remote.predict_input",
+          "type": "boolean",
+          "default": "false",
+          "description": "Opt in to conservative local echo for remote panes after matching server echo. Unconfirmed ASCII typing is underlined; prediction resets on controls, uncertain output, and context changes. Echo permission is not available in the current protocol, so applications that change echo behavior can briefly display unexpected input."
         }
       ]
     },

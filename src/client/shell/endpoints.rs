@@ -264,6 +264,17 @@ impl ClientShellState {
             .map_or("Unknown endpoint", |endpoint| endpoint.label.as_str())
     }
 
+    pub(crate) fn set_primary_endpoint_label(&mut self, label: &str) {
+        self.primary_remote = true;
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id.is_local())
+        {
+            endpoint.label = label.to_owned();
+        }
+    }
+
     pub(crate) fn active_endpoint_label(&self) -> &str {
         self.endpoint_label(&self.active_endpoint_id)
     }
