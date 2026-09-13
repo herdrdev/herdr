@@ -3509,6 +3509,53 @@ fn terminal_attach_disconnect_restores_client_shell_pane_size() {
     rt.shutdown_timeout(Duration::from_millis(100));
 }
 
+#[cfg(unix)]
+#[test]
+fn backpressured_observer_skips_runtime_access_and_recovers_without_new_output() {
+    with_terminal_session_test_server(|server, terminal_id, target, _| {
+        let (writer, control, frames) = test_client_writer();
+        server.handle_server_event(ServerEvent::ClientConnected {
+            client_id: 7,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            writer,
+        });
+        server.handle_server_event(ServerEvent::ClientObserveTerminal {
+            client_id: 7,
+            target,
+        });
+        server.render_and_stream();
+        server.app.terminal_runtimes.insert(
+            terminal_id.clone(),
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"LATEST"),
+        );
+        server.render_and_stream();
+        assert_eq!(server.clients[&7].deferred_render(), DeferredRender::Full);
+
+        // An absent runtime makes any attempted rendering observable without timing a lock.
+        let runtime = server.app.terminal_runtimes.remove(&terminal_id).unwrap();
+        server.render_and_stream();
+        server.app.terminal_runtimes.insert(terminal_id, runtime);
+        assert!(
+            server.clients.contains_key(&7),
+            "backpressure must skip runtime access"
+        );
+        assert!(control.try_recv().is_err());
+
+        let _ = frames.recv().expect("previously accepted frame");
+        assert!(server.handle_server_event(ServerEvent::ClientWriterDrained { client_id: 7 }));
+        server.render_and_stream();
+        let ServerMessage::Terminal(frame) = read_server_message(frames.recv().unwrap()) else {
+            panic!("terminal update");
+        };
+        assert!(String::from_utf8_lossy(&frame.bytes).contains("LATEST"));
+        assert_eq!(server.clients[&7].deferred_render(), DeferredRender::None);
+    });
+}
+
 #[test]
 fn terminal_observe_allows_multiple_clients_without_attach_ownership() {
     with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {

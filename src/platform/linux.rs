@@ -17,7 +17,7 @@ pub(crate) use super::unix_common::{
     create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
     remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, status_commands_supported,
-    wait_client_stream_readable, StatusCommandGuard,
+    wait_client_stream_readable, write_client_stream, ClientStreamReader, StatusCommandGuard,
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];

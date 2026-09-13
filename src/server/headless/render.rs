@@ -462,6 +462,16 @@ impl HeadlessServer {
 
         let mut broken_clients: Vec<u64> = Vec::new();
         for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
+            #[cfg(unix)]
+            if matches!(mode, ClientConnectionMode::TerminalObserve { .. })
+                && self
+                    .clients
+                    .get(&client_id)
+                    .is_some_and(|client| client.deferred_render() != DeferredRender::None)
+            {
+                // The writer-drained event schedules recovery, even if pane output stops.
+                continue;
+            }
             let area = Rect::new(0, 0, cols, rows);
             let shell_target = self.shell_target_for_client(client_id);
             let shell_tab_id = self.shell_tab_id_for_client(client_id);
