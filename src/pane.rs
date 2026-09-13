@@ -1746,26 +1746,30 @@ fn pane_shell_command_builder_for_target(
     target: ShellLaunchTarget,
 ) -> io::Result<CommandBuilder> {
     let shell = pane_shell(shell_config.default_shell);
-    if shell_mode_uses_login_shell(shell_config.mode, target) {
-        if target == ShellLaunchTarget::Windows {
-            let mut cmd = CommandBuilder::new(&shell);
-            cmd.args(windows_login_shell_args(&shell));
-            return Ok(cmd);
-        }
+    // Unix login shells go through portable-pty's default-program builder so
+    // they receive the login argv0 convention. Windows has no such convention
+    // and the default-program builder would launch cmd.exe, so Windows login
+    // shells are built directly below like every other direct-shell target.
+    if shell_mode_uses_login_shell(shell_config.mode, target)
+        && target != ShellLaunchTarget::Windows
+    {
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.env("SHELL", resolve_shell_for_login_mode(&shell)?);
-        Ok(cmd)
-    } else {
-        let mut cmd = CommandBuilder::new(&shell);
-        if uses_windows_powershell_pane_shell_for_target(shell_config, target) {
-            cmd.args([
-                "-NoExit",
-                "-Command",
-                WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
-            ]);
-        }
-        Ok(cmd)
+        return Ok(cmd);
     }
+
+    let mut cmd = CommandBuilder::new(&shell);
+    if shell_mode_uses_login_shell(shell_config.mode, target) {
+        cmd.args(windows_login_shell_args(&shell));
+    }
+    if uses_windows_powershell_pane_shell_for_target(shell_config, target) {
+        cmd.args([
+            "-NoExit",
+            "-Command",
+            WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
+        ]);
+    }
+    Ok(cmd)
 }
 
 fn pane_shell_command_builder(shell_config: PaneShellConfig<'_>) -> io::Result<CommandBuilder> {
@@ -1783,8 +1787,10 @@ fn uses_windows_powershell_pane_shell_for_target(
     shell_config: PaneShellConfig<'_>,
     target: ShellLaunchTarget,
 ) -> bool {
+    // Login mode no longer routes Windows through the default-program builder,
+    // so login PowerShell panes are launched directly and can carry the same
+    // prompt-based cwd reporting as non-login panes.
     target == ShellLaunchTarget::Windows
-        && !shell_mode_uses_login_shell(shell_config.mode, target)
         && is_powershell_shell(&pane_shell(shell_config.default_shell))
 }
 
@@ -3860,11 +3866,7 @@ mod tests {
 
     #[test]
     fn windows_login_shell_builder_launches_native_shells_without_flag() {
-        for shell in [
-            "cmd.exe",
-            "powershell.exe",
-            "C:\\Windows\\System32\\cmd.exe",
-        ] {
+        for shell in ["cmd.exe", "C:\\Windows\\System32\\cmd.exe"] {
             let cmd = pane_shell_command_builder_for_target(
                 PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
                 ShellLaunchTarget::Windows,
@@ -3875,6 +3877,32 @@ mod tests {
             assert_eq!(
                 cmd.get_argv(),
                 &[std::ffi::OsString::from(shell)],
+                "shell {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_login_powershell_builder_injects_prompt_cwd_shell_integration() {
+        for shell in [
+            "powershell.exe",
+            "pwsh.exe",
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        ] {
+            let cmd = pane_shell_command_builder_for_target(
+                PaneShellConfig::new(shell, crate::config::ShellModeConfig::Login),
+                ShellLaunchTarget::Windows,
+            )
+            .unwrap();
+
+            assert_eq!(
+                cmd.get_argv(),
+                &[
+                    std::ffi::OsString::from(shell),
+                    std::ffi::OsString::from("-NoExit"),
+                    std::ffi::OsString::from("-Command"),
+                    std::ffi::OsString::from(WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND),
+                ],
                 "shell {shell:?}"
             );
         }
@@ -4023,26 +4051,31 @@ mod tests {
     }
 
     #[test]
-    fn windows_powershell_pane_shell_predicate_requires_windows_and_non_login() {
-        let pwsh = PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::NonLogin);
-        assert!(uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::Windows
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::OtherUnix
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            pwsh,
-            ShellLaunchTarget::Macos
-        ));
-        assert!(!uses_windows_powershell_pane_shell_for_target(
-            PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::Login),
-            ShellLaunchTarget::Windows
-        ));
+    fn windows_powershell_pane_shell_predicate_requires_windows_and_powershell() {
+        for mode in [
+            crate::config::ShellModeConfig::NonLogin,
+            crate::config::ShellModeConfig::Login,
+        ] {
+            let pwsh = PaneShellConfig::new("pwsh.exe", mode);
+            assert!(
+                uses_windows_powershell_pane_shell_for_target(pwsh, ShellLaunchTarget::Windows),
+                "mode {mode:?}"
+            );
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::OtherUnix
+            ));
+            assert!(!uses_windows_powershell_pane_shell_for_target(
+                pwsh,
+                ShellLaunchTarget::Macos
+            ));
+        }
         assert!(!uses_windows_powershell_pane_shell_for_target(
             PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            ShellLaunchTarget::Windows
+        ));
+        assert!(!uses_windows_powershell_pane_shell_for_target(
+            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::Login),
             ShellLaunchTarget::Windows
         ));
     }
