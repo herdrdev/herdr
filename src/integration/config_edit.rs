@@ -428,12 +428,24 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         .map(|offset| plugins_index + 1 + offset);
 
     if let Some(enabled_index) = enabled_index {
-        let line = lines[enabled_index].trim();
-        if line == "enabled: []" || line == "enabled: [] # herdr" {
-            if enabled {
-                lines[enabled_index] = "  enabled:".to_string();
-                lines.insert(enabled_index + 1, "    - herdr-agent-state".to_string());
+        if let Some(mut items) = yaml_key_value_at_indent(&lines[enabled_index], 2, "enabled")
+            .and_then(yaml_flow_sequence_items)
+        {
+            let existing_item_index = items
+                .iter()
+                .position(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
+
+            match (enabled, existing_item_index) {
+                (true, Some(_)) | (false, None) => return content.to_string(),
+                (true, None) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
+                (false, Some(index)) => {
+                    items.remove(index);
+                }
             }
+
+            let comment = yaml_inline_comment(&lines[enabled_index]);
+            let replacement = hermes_enabled_plugin_lines(&items, comment);
+            lines.splice(enabled_index..enabled_index + 1, replacement);
             return join_yaml_lines(lines, trailing_newline);
         }
 
@@ -463,7 +475,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
     if let Some(mut items) = plugins_inline_items {
         let existing_item_index = items
             .iter()
-            .position(|item| item == HERMES_PLUGIN_INSTALL_NAME);
+            .position(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
 
         match (enabled, existing_item_index) {
             (true, Some(_)) | (false, None) => return content.to_string(),
@@ -473,7 +485,8 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
             }
         }
 
-        let replacement = hermes_flat_plugin_lines(&items);
+        let comment = yaml_inline_comment(&lines[plugins_index]);
+        let replacement = hermes_flat_plugin_lines(&items, comment);
         lines.splice(plugins_index..plugins_end, replacement);
         return join_yaml_lines(lines, trailing_newline);
     }
@@ -503,14 +516,35 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
     content.to_string()
 }
 
-pub(crate) fn hermes_flat_plugin_lines(items: &[String]) -> Vec<String> {
+pub(crate) fn hermes_flat_plugin_lines(items: &[String], comment: Option<&str>) -> Vec<String> {
     if items.is_empty() {
-        return vec!["plugins: []".to_string()];
+        return vec![with_yaml_inline_comment("plugins: []".to_string(), comment)];
     }
 
-    let mut lines = vec!["plugins:".to_string()];
+    let mut lines = vec![with_yaml_inline_comment("plugins:".to_string(), comment)];
     lines.extend(items.iter().map(|item| format!("  - {item}")));
     lines
+}
+
+pub(crate) fn hermes_enabled_plugin_lines(items: &[String], comment: Option<&str>) -> Vec<String> {
+    if items.is_empty() {
+        return vec![with_yaml_inline_comment(
+            "  enabled: []".to_string(),
+            comment,
+        )];
+    }
+
+    let mut lines = vec![with_yaml_inline_comment("  enabled:".to_string(), comment)];
+    lines.extend(items.iter().map(|item| format!("    - {item}")));
+    lines
+}
+
+fn with_yaml_inline_comment(mut line: String, comment: Option<&str>) -> String {
+    if let Some(comment) = comment {
+        line.push(' ');
+        line.push_str(comment.trim_end());
+    }
+    line
 }
 
 pub(crate) fn top_level_yaml_key_index(lines: &[String], key: &str) -> Option<usize> {
@@ -619,7 +653,7 @@ pub(crate) fn yaml_flow_sequence_items(value: &str) -> Option<Vec<String>> {
                 current.push(ch);
             }
             ',' => {
-                items.push(yaml_scalar_value(&current));
+                items.push(current.trim().to_string());
                 current.clear();
             }
             _ => current.push(ch),
@@ -630,7 +664,7 @@ pub(crate) fn yaml_flow_sequence_items(value: &str) -> Option<Vec<String>> {
         return None;
     }
 
-    items.push(yaml_scalar_value(&current));
+    items.push(current.trim().to_string());
     Some(items)
 }
 
@@ -648,6 +682,13 @@ pub(crate) fn yaml_scalar_value(value: &str) -> String {
 }
 
 pub(crate) fn strip_yaml_inline_comment(value: &str) -> &str {
+    match yaml_inline_comment(value) {
+        Some(comment) => value[..value.len() - comment.len()].trim_end(),
+        None => value,
+    }
+}
+
+pub(crate) fn yaml_inline_comment(value: &str) -> Option<&str> {
     let mut quote = None;
     let mut escaped = false;
 
@@ -667,13 +708,13 @@ pub(crate) fn strip_yaml_inline_comment(value: &str) -> &str {
         match ch {
             '"' | '\'' => quote = Some(ch),
             '#' if index == 0 || value[..index].ends_with(char::is_whitespace) => {
-                return value[..index].trim_end();
+                return Some(&value[index..]);
             }
             _ => {}
         }
     }
 
-    value
+    None
 }
 
 pub(crate) fn join_yaml_lines(lines: Vec<String>, trailing_newline: bool) -> String {
