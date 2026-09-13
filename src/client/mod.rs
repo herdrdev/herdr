@@ -2026,7 +2026,9 @@ async fn run_client_loop(
                             outcome.actions.extend(actions);
                         }
                         let (effects, notification_repaint) = shell.tick_notifications(now);
-                        outcome.repaint |= notification_repaint | shell.tick_copy_feedback(now);
+                        outcome.repaint |= notification_repaint
+                            | shell.tick_copy_feedback(now)
+                            | shell.tick_endpoint_error(now);
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))

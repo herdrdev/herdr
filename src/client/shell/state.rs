@@ -3,6 +3,7 @@ use super::*;
 pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
+const ENDPOINT_ERROR_TIMEOUT_SECS: u64 = 5;
 
 fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,
@@ -974,6 +975,7 @@ pub(crate) struct ClientShellState {
     pub(super) local_config_diagnostic: Option<String>,
     pub(super) config_diagnostic: Option<String>,
     pub(super) endpoint_error: Option<String>,
+    pub(super) endpoint_error_deadline: Option<std::time::Instant>,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
 }
 
@@ -1132,6 +1134,7 @@ impl ClientShellState {
             config_diagnostic: local_config_diagnostic.clone(),
             local_config_diagnostic,
             endpoint_error: None,
+            endpoint_error_deadline: None,
             dismissed_product_announcement: None,
         }
     }
@@ -1273,6 +1276,7 @@ impl ClientShellState {
         self.endpoint_notice_seen.clear();
         self.visible_endpoint_notice = None;
         self.endpoint_error = None;
+        self.endpoint_error_deadline = None;
         self.navigate_workspace_id = None;
         self.overlay = self
             .config
@@ -1389,7 +1393,7 @@ impl ClientShellState {
                 snapshot.server_keybindings_toml.as_deref(),
                 &snapshot.commands,
             ) {
-                self.endpoint_error = Some(err);
+                self.set_endpoint_error(err);
             } else if active_keymap_changed
                 && matches!(
                     self.mode,
@@ -1693,6 +1697,7 @@ impl ClientShellState {
             }
             self.hits.popup = None;
             self.endpoint_error = None;
+            self.endpoint_error_deadline = None;
         }
         if next_popup.is_some() {
             self.popup_pending = false;
@@ -1850,6 +1855,33 @@ impl ClientShellState {
             repaint = true;
         }
         repaint
+    }
+
+    /// Show a transient client-side action error, restarting its lifetime.
+    ///
+    /// Every assignment must go through this setter so a repeated identical
+    /// message gets a fresh deadline instead of inheriting the previous one.
+    pub(super) fn set_endpoint_error(&mut self, message: impl Into<String>) {
+        self.endpoint_error = Some(message.into());
+        self.endpoint_error_deadline = Some(
+            std::time::Instant::now() + std::time::Duration::from_secs(ENDPOINT_ERROR_TIMEOUT_SECS),
+        );
+    }
+
+    pub(crate) fn tick_endpoint_error(&mut self, now: std::time::Instant) -> bool {
+        if self.endpoint_error.is_none() {
+            self.endpoint_error_deadline = None;
+            return false;
+        }
+        if self
+            .endpoint_error_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.endpoint_error = None;
+            self.endpoint_error_deadline = None;
+            return true;
+        }
+        false
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {

@@ -192,9 +192,8 @@ impl ClientShellState {
                         .then(|| candidate.command_id.clone())
                 });
                 let Some(command_id) = command_id else {
-                    self.endpoint_error = Some(
-                        "custom command is not available on this endpoint; reload configuration"
-                            .to_owned(),
+                    self.set_endpoint_error(
+                        "custom command is not available on this endpoint; reload configuration",
                     );
                     outcome.repaint = true;
                     return;
@@ -608,8 +607,7 @@ impl ClientShellState {
                         (false, Vec::new())
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected selection result".to_owned());
+                        self.set_endpoint_error("endpoint returned an unexpected selection result");
                         (true, Vec::new())
                     }
                     Err(_) => (true, Vec::new()),
@@ -667,8 +665,7 @@ impl ClientShellState {
                         (false, replay_action(replay))
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected link result".to_owned());
+                        self.set_endpoint_error("endpoint returned an unexpected link result");
                         (true, replay_action(replay))
                     }
                     Err(error)
@@ -706,8 +703,9 @@ impl ClientShellState {
                     ),
                     Ok(crate::api::schema::ResponseResult::PaneCopyMotion { .. }) => (false, false),
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected copy-motion result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected copy-motion result",
+                        );
                         (true, false)
                     }
                     Err(_) => (true, false),
@@ -761,8 +759,9 @@ impl ClientShellState {
                     }
                     Ok(_) => {
                         self.cancel_deferred_copy_after_search(generation);
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected copy-search result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected copy-search result",
+                        );
                         (true, false)
                     }
                     Err(_) => {
@@ -777,8 +776,9 @@ impl ClientShellState {
                 let repaint = match result {
                     Ok(crate::api::schema::ResponseResult::ConfigReload { .. }) => false,
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected config reload result".to_owned());
+                        self.set_endpoint_error(
+                            "endpoint returned an unexpected config reload result",
+                        );
                         true
                     }
                     Err(_) => true,
