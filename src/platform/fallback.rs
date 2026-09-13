@@ -207,8 +207,8 @@ pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
 }
 
 /// Unsupported platform stub.
-pub fn process_virtual_env(_pid: u32) -> Option<super::VirtualEnvActivation> {
-    None
+pub fn process_virtual_env(_pid: u32) -> super::VirtualEnvObservation {
+    super::VirtualEnvObservation::Unknown
 }
 
 /// Unsupported platform stub.

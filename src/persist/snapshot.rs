@@ -369,20 +369,27 @@ fn capture_tab(
             })
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
-        // A live pane only reports an activation while it is running
-        // something, so an idle pane falls back to the one it was restored
-        // into. Without that, saving a restored session at an idle prompt
-        // would lose the environment on the next restore.
+        // A pane that has not observed its foreground environment reports
+        // `Unknown`, so it falls back to the one it was restored into. Without
+        // that, saving a restored session at an idle prompt would lose the
+        // environment on the next restore. Once a foreground command has been
+        // read successfully and had no activation, the restored value is
+        // dropped instead of resurrecting a deactivated environment.
         //
-        // That fallback is sticky: deactivating and then saving at an idle
-        // prompt brings the environment back on the next restore. A shell
-        // deactivates in its own process, and that is not observable from
-        // outside it, so there is nothing here to notice the change.
-        let virtual_env = tab
-            .virtual_env_for_pane(*id, terminal_runtimes)
-            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))
-            .as_ref()
-            .map(PaneVirtualEnvSnapshot::from_activation);
+        // The restored fallback is still sticky for an idle shell: a user who
+        // deactivates and then saves without running a command gets the
+        // environment back on the next restore. Deactivation happens inside the
+        // shell's own process, and that is not observable from outside it, so
+        // there is nothing here to notice the change.
+        let virtual_env = match tab.virtual_env_for_pane(*id, terminal_runtimes) {
+            crate::platform::VirtualEnvObservation::Activation(activation) => Some(activation),
+            crate::platform::VirtualEnvObservation::NoActivation => None,
+            crate::platform::VirtualEnvObservation::Unknown => {
+                terminal.and_then(|terminal| terminal.virtual_env.clone())
+            }
+        }
+        .as_ref()
+        .map(PaneVirtualEnvSnapshot::from_activation);
         let agent_session = terminal.and_then(|terminal| {
             if let Some(authority) = terminal.hook_authority.as_ref() {
                 if let Some(session_ref) = authority.session_ref.as_ref() {

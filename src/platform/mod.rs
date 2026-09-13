@@ -553,6 +553,20 @@ impl VirtualEnvActivation {
     }
 }
 
+/// What a process-environment read could tell us about an activation.
+///
+/// A failed read stays distinct from a successful read that found nothing, so
+/// callers can tell "no environment" apart from "could not check".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VirtualEnvObservation {
+    /// The process environment could not be read; nothing is known.
+    Unknown,
+    /// The process environment was read and carried no activation.
+    NoActivation,
+    /// The process environment was read and carried this activation.
+    Activation(VirtualEnvActivation),
+}
+
 /// Read an activation out of a NUL-separated environment block.
 ///
 /// A venv nested inside a conda environment leaves both prefixes exported, and
@@ -569,6 +583,10 @@ pub(crate) fn parse_virtual_env_activation(environ: &[u8]) -> Option<VirtualEnvA
             continue;
         };
         let (key, value) = record.split_at(index);
+        // A non-UTF-8 record is skipped rather than kept. Session snapshots are
+        // JSON, and `serde_json` refuses a `Path` that is not valid UTF-8, which
+        // would abort the whole save instead of just this pane's environment.
+        // `cwd`, stored in the same snapshot, has the same restriction.
         let Ok(value) = std::str::from_utf8(&value[1..]) else {
             continue;
         };
@@ -664,6 +682,68 @@ fn child_exit_classification_only_checkpoints_interruptions() {
     #[cfg(unix)]
     assert!(ChildExitReason::Handoff.requires_session_checkpoint());
     assert!(!ChildExitReason::WaitFailed.requires_session_checkpoint());
+}
+
+/// Layout tests for `path_entries_on`.
+///
+/// Both layouts are exercised on every host so the Windows directory list stays
+/// covered even when the host is not Windows. Expectations are built with
+/// `join` because the separator follows the host, while the directories under
+/// test do not. This module is not gated to a target because
+/// `path_entries_on` is not.
+#[cfg(test)]
+mod virtual_env_layout_tests {
+    use super::*;
+
+    #[test]
+    fn windows_conda_activation_covers_every_directory_the_activate_script_adds() {
+        let prefix = std::path::PathBuf::from(r"C:\conda\envs\web");
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Conda,
+            prefix: prefix.clone(),
+            name: Some("web".to_string()),
+        };
+
+        assert_eq!(
+            activation.path_entries_on(true),
+            [
+                prefix.clone(),
+                prefix.join("Library").join("mingw-w64").join("bin"),
+                prefix.join("Library").join("usr").join("bin"),
+                prefix.join("Library").join("bin"),
+                prefix.join("Scripts"),
+                prefix.join("bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_venv_activation_uses_the_scripts_directory() {
+        let prefix = std::path::PathBuf::from(r"C:\work\api\.venv");
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Venv,
+            prefix: prefix.clone(),
+            name: None,
+        };
+
+        assert_eq!(activation.path_entries_on(true), [prefix.join("Scripts")]);
+    }
+
+    #[test]
+    fn unix_activation_uses_the_bin_directory_for_both_kinds() {
+        for kind in [VirtualEnvKind::Conda, VirtualEnvKind::Venv] {
+            let activation = VirtualEnvActivation {
+                kind,
+                prefix: "/opt/conda/envs/web".into(),
+                name: None,
+            };
+
+            assert_eq!(
+                activation.path_entries_on(false),
+                [std::path::PathBuf::from("/opt/conda/envs/web/bin")]
+            );
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -816,60 +896,6 @@ mod tests {
 
         assert!(env.contains(&("CONDA_SHLVL", "1".into())));
         assert!(env.contains(&("CONDA_DEFAULT_ENV", "web".into())));
-    }
-
-    // `path_entries_on` is exercised for both layouts here rather than only for
-    // the host's, so the Windows directory list stays covered off Windows.
-    // Expectations are built with `join` because the separator follows the
-    // host, while the directories under test do not.
-    #[test]
-    fn windows_conda_activation_covers_every_directory_the_activate_script_adds() {
-        let prefix = std::path::PathBuf::from(r"C:\conda\envs\web");
-        let activation = VirtualEnvActivation {
-            kind: VirtualEnvKind::Conda,
-            prefix: prefix.clone(),
-            name: Some("web".to_string()),
-        };
-
-        assert_eq!(
-            activation.path_entries_on(true),
-            [
-                prefix.clone(),
-                prefix.join("Library").join("mingw-w64").join("bin"),
-                prefix.join("Library").join("usr").join("bin"),
-                prefix.join("Library").join("bin"),
-                prefix.join("Scripts"),
-                prefix.join("bin"),
-            ]
-        );
-    }
-
-    #[test]
-    fn windows_venv_activation_uses_the_scripts_directory() {
-        let prefix = std::path::PathBuf::from(r"C:\work\api\.venv");
-        let activation = VirtualEnvActivation {
-            kind: VirtualEnvKind::Venv,
-            prefix: prefix.clone(),
-            name: None,
-        };
-
-        assert_eq!(activation.path_entries_on(true), [prefix.join("Scripts")]);
-    }
-
-    #[test]
-    fn unix_activation_uses_the_bin_directory_for_both_kinds() {
-        for kind in [VirtualEnvKind::Conda, VirtualEnvKind::Venv] {
-            let activation = VirtualEnvActivation {
-                kind,
-                prefix: "/opt/conda/envs/web".into(),
-                name: None,
-            };
-
-            assert_eq!(
-                activation.path_entries_on(false),
-                [std::path::PathBuf::from("/opt/conda/envs/web/bin")]
-            );
-        }
     }
 
     #[test]

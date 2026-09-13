@@ -1880,14 +1880,26 @@ fn read_process_environment(process: HANDLE, address: *const c_void) -> Option<V
 }
 
 /// Read the interpreter environment a process was started in.
-pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+pub fn process_virtual_env(pid: u32) -> super::VirtualEnvObservation {
+    use super::VirtualEnvObservation;
+
     if pid == 0 {
-        return None;
+        return VirtualEnvObservation::Unknown;
     }
-    let process = ProcessHandle::open(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)?;
-    let parameters = read_process_parameters(process.0)?;
-    let environment = read_process_environment(process.0, parameters.environment)?;
-    virtual_env_from_utf16(&environment)
+    let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)
+    else {
+        return VirtualEnvObservation::Unknown;
+    };
+    let Some(parameters) = read_process_parameters(process.0) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    let Some(environment) = read_process_environment(process.0, parameters.environment) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    match virtual_env_from_utf16(&environment) {
+        Some(activation) => VirtualEnvObservation::Activation(activation),
+        None => VirtualEnvObservation::NoActivation,
+    }
 }
 
 /// A venv nested inside a conda environment leaves both prefixes exported, and

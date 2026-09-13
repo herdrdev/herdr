@@ -169,6 +169,20 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         cmd.env(key, value);
     }
     if let Some(activation) = &launch_env.virtual_env {
+        // The builder inherits the server's environment, which may already
+        // carry an activation because herdr itself can be started from inside
+        // one. Clear both families first so the restored environment is the
+        // only one in effect; otherwise a stale variable from the other family
+        // outlives the restore and can be read back later.
+        for key in [
+            "CONDA_PREFIX",
+            "CONDA_DEFAULT_ENV",
+            "CONDA_SHLVL",
+            "VIRTUAL_ENV",
+            "VIRTUAL_ENV_PROMPT",
+        ] {
+            cmd.env_remove(key);
+        }
         // The builder starts from the server's environment, so this reads the
         // PATH the pane would otherwise launch with, including anything set
         // above. The activation goes in front of that value rather than
@@ -1279,6 +1293,9 @@ pub struct PaneRuntime {
     current_size: Cell<(u16, u16, u32, u32)>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
+    /// Last activation seen on a foreground command, kept for saves taken while
+    /// the shell is idle. See `foreground_virtual_env`.
+    remembered_virtual_env: Mutex<Option<crate::platform::VirtualEnvActivation>>,
     child_wait_completed: Option<Arc<AtomicBool>>,
     kitty_keyboard_flags: Arc<AtomicU16>,
     content_seq: Arc<AtomicU64>,
@@ -2267,6 +2284,7 @@ impl PaneRuntime {
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,
+            remembered_virtual_env: Mutex::new(None),
             child_wait_completed: None,
             kitty_keyboard_flags,
             content_seq,
@@ -2843,6 +2861,7 @@ impl PaneRuntime {
             current_size: Cell::new((rows, cols, 0, 0)),
             child_pid,
             reported_cwd,
+            remembered_virtual_env: Mutex::new(None),
             child_wait_completed: Some(child_wait_completed),
             kitty_keyboard_flags,
             content_seq,
@@ -3373,7 +3392,7 @@ impl PaneRuntime {
         }
     }
 
-    /// Interpreter environment the pane is currently working in, if any.
+    /// Interpreter environment the pane is currently working in.
     ///
     /// A shell mutates its own environment in place when it activates one, and
     /// that mutation is not visible from outside the process. What is visible
@@ -3381,22 +3400,95 @@ impl PaneRuntime {
     /// foreground process group leader — the command the shell started, which
     /// carries any activation that was in effect when it began.
     ///
+    /// An idle prompt leaves the shell itself in the foreground, where its
+    /// activation cannot be read. The last activation observed on a foreground
+    /// command is remembered for that case, so a save taken at the prompt keeps
+    /// the environment instead of dropping it. A successful read that finds no
+    /// activation clears the remembered one, so a deactivation is noticed while
+    /// a command runs; a failed read keeps it, so a transient failure cannot
+    /// forget a valid environment. An environment activated and left idle
+    /// without running a command is still unobservable.
+    ///
+    /// `Unknown` means nothing is known and the caller may fall back to the
+    /// value the pane was restored into.
+    ///
     /// Session saves call this for every pane, so it stays at one process
     /// lookup plus one environment read. In particular it does not ask the PTY
     /// actor for the foreground group: that is a round trip which blocks while
     /// the reader is paused for a handoff.
-    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {
+    pub fn foreground_virtual_env(&self) -> crate::platform::VirtualEnvObservation {
+        use crate::platform::VirtualEnvObservation;
+
         let pid = self.child_pid.load(Ordering::Acquire);
         if pid == 0 {
-            return None;
+            return VirtualEnvObservation::Unknown;
         }
-        let foreground = crate::platform::foreground_process_group_id(pid)?;
-        // An idle prompt leaves the shell itself in the foreground, and the
-        // shell's own activation is the part that cannot be read.
-        if foreground == pid {
-            return None;
+        let foreground = crate::platform::foreground_process_group_id(pid);
+        let remembered = self
+            .remembered_virtual_env
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (observation, remembered) = resolve_foreground_virtual_env(
+            pid,
+            foreground,
+            remembered,
+            crate::platform::process_virtual_env,
+        );
+        *self
+            .remembered_virtual_env
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = remembered;
+        observation
+    }
+}
+
+fn remembered_virtual_env_observation(
+    remembered: &Option<crate::platform::VirtualEnvActivation>,
+) -> crate::platform::VirtualEnvObservation {
+    use crate::platform::VirtualEnvObservation;
+
+    match remembered {
+        Some(activation) => VirtualEnvObservation::Activation(activation.clone()),
+        None => VirtualEnvObservation::Unknown,
+    }
+}
+
+/// Pick what a pane reports about its environment and the value to remember for
+/// the next save taken while the shell is idle.
+///
+/// The shell's own process environment is deliberately not read: it only shows
+/// what the shell was launched with, not what it built by activating in place,
+/// and reading it would add a process lookup to every idle pane. The remembered
+/// value stands in for the shell.
+fn resolve_foreground_virtual_env(
+    child_pid: u32,
+    foreground: Option<u32>,
+    remembered: Option<crate::platform::VirtualEnvActivation>,
+    observe: impl FnOnce(u32) -> crate::platform::VirtualEnvObservation,
+) -> (
+    crate::platform::VirtualEnvObservation,
+    Option<crate::platform::VirtualEnvActivation>,
+) {
+    use crate::platform::VirtualEnvObservation;
+
+    let Some(foreground) = foreground else {
+        return (remembered_virtual_env_observation(&remembered), remembered);
+    };
+    if foreground == child_pid {
+        return (remembered_virtual_env_observation(&remembered), remembered);
+    }
+    match observe(foreground) {
+        VirtualEnvObservation::Activation(activation) => (
+            VirtualEnvObservation::Activation(activation.clone()),
+            Some(activation),
+        ),
+        VirtualEnvObservation::NoActivation => (VirtualEnvObservation::NoActivation, None),
+        // The process could not be read, so keep what was already known rather
+        // than dropping a valid activation on a transient failure.
+        VirtualEnvObservation::Unknown => {
+            (remembered_virtual_env_observation(&remembered), remembered)
         }
-        crate::platform::process_virtual_env(foreground)
     }
 }
 
@@ -3522,6 +3614,7 @@ impl PaneRuntime {
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
+                remembered_virtual_env: Mutex::new(None),
                 child_wait_completed: None,
                 kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
                 content_seq: Arc::new(AtomicU64::new(0)),
@@ -3633,6 +3726,121 @@ mod tests {
             cmd.get_env("CONDA_PREFIX"),
             Some(std::ffi::OsStr::new("/opt/conda/envs/web"))
         );
+    }
+
+    #[test]
+    fn pane_launch_env_clears_an_inherited_activation_family() {
+        // The server can itself have been started from inside an environment,
+        // so an activation the restore does not emit has to be cleared or it
+        // outlives the restore and is read back later.
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("VIRTUAL_ENV", "/server/.venv");
+        cmd.env("VIRTUAL_ENV_PROMPT", "server");
+        let launch_env = PaneLaunchEnv::default().with_virtual_env(Some(
+            crate::platform::VirtualEnvActivation {
+                kind: crate::platform::VirtualEnvKind::Conda,
+                prefix: "/opt/conda/envs/web".into(),
+                name: Some("web".to_string()),
+            },
+        ));
+
+        apply_pane_launch_env(&mut cmd, &launch_env);
+
+        assert_eq!(cmd.get_env("VIRTUAL_ENV"), None);
+        assert_eq!(cmd.get_env("VIRTUAL_ENV_PROMPT"), None);
+        assert_eq!(
+            cmd.get_env("CONDA_PREFIX"),
+            Some(std::ffi::OsStr::new("/opt/conda/envs/web"))
+        );
+
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("CONDA_PREFIX", "/server/conda");
+        cmd.env("CONDA_DEFAULT_ENV", "base");
+        cmd.env("CONDA_SHLVL", "2");
+        let launch_env = PaneLaunchEnv::default().with_virtual_env(Some(
+            crate::platform::VirtualEnvActivation {
+                kind: crate::platform::VirtualEnvKind::Venv,
+                prefix: "/work/api/.venv".into(),
+                name: None,
+            },
+        ));
+
+        apply_pane_launch_env(&mut cmd, &launch_env);
+
+        assert_eq!(cmd.get_env("CONDA_PREFIX"), None);
+        assert_eq!(cmd.get_env("CONDA_DEFAULT_ENV"), None);
+        assert_eq!(cmd.get_env("CONDA_SHLVL"), None);
+        assert_eq!(
+            cmd.get_env("VIRTUAL_ENV"),
+            Some(std::ffi::OsStr::new("/work/api/.venv"))
+        );
+    }
+
+    #[test]
+    fn resolve_foreground_virtual_env_keeps_the_last_activation_for_an_idle_shell() {
+        use crate::platform::{VirtualEnvActivation, VirtualEnvKind, VirtualEnvObservation};
+
+        let activation = VirtualEnvActivation {
+            kind: VirtualEnvKind::Conda,
+            prefix: "/opt/conda/envs/web".into(),
+            name: Some("web".to_string()),
+        };
+
+        // An idle shell is in the foreground. Its own environment cannot carry
+        // an activation, so the remembered value is reported and kept.
+        let (reported, remembered) =
+            resolve_foreground_virtual_env(10, Some(10), Some(activation.clone()), |_| {
+                panic!("the shell itself must not be read")
+            });
+        assert_eq!(
+            reported,
+            VirtualEnvObservation::Activation(activation.clone())
+        );
+        assert_eq!(remembered, Some(activation.clone()));
+
+        // A foreground command that carries an activation replaces the
+        // remembered one.
+        let (reported, remembered) = resolve_foreground_virtual_env(10, Some(20), None, |pid| {
+            assert_eq!(pid, 20);
+            VirtualEnvObservation::Activation(activation.clone())
+        });
+        assert_eq!(
+            reported,
+            VirtualEnvObservation::Activation(activation.clone())
+        );
+        assert_eq!(remembered, Some(activation.clone()));
+
+        // A successful read with no activation clears the remembered one, so a
+        // deactivation is noticed while a command runs.
+        let (reported, remembered) =
+            resolve_foreground_virtual_env(10, Some(20), Some(activation.clone()), |_| {
+                VirtualEnvObservation::NoActivation
+            });
+        assert_eq!(reported, VirtualEnvObservation::NoActivation);
+        assert!(remembered.is_none());
+
+        // A failed read keeps the remembered value; a transient failure must not
+        // forget a valid activation.
+        let (reported, remembered) =
+            resolve_foreground_virtual_env(10, Some(20), Some(activation.clone()), |_| {
+                VirtualEnvObservation::Unknown
+            });
+        assert_eq!(
+            reported,
+            VirtualEnvObservation::Activation(activation.clone())
+        );
+        assert_eq!(remembered, Some(activation.clone()));
+
+        // Without a readable foreground group the remembered value stands.
+        let (reported, remembered) =
+            resolve_foreground_virtual_env(10, None, Some(activation.clone()), |_| {
+                panic!("there is no foreground group to read")
+            });
+        assert_eq!(
+            reported,
+            VirtualEnvObservation::Activation(activation.clone())
+        );
+        assert_eq!(remembered, Some(activation));
     }
 
     #[test]
@@ -4288,6 +4496,7 @@ mod tests {
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
+            remembered_virtual_env: Mutex::new(None),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
@@ -4325,6 +4534,7 @@ mod tests {
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
+            remembered_virtual_env: Mutex::new(None),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),

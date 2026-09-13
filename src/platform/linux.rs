@@ -443,18 +443,27 @@ pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
 
 /// Read the interpreter environment a process was started in.
 ///
-/// A pane whose foreground process cannot be read safely reports no
-/// environment; the pane is still restored, just without one.
-pub fn process_virtual_env(pid: u32) -> Option<super::VirtualEnvActivation> {
+/// A pane whose foreground process cannot be read safely reports `Unknown`; the
+/// pane is still restored, just without a remembered environment.
+pub fn process_virtual_env(pid: u32) -> super::VirtualEnvObservation {
+    use super::VirtualEnvObservation;
+
     if pid == 0 {
-        return None;
+        return VirtualEnvObservation::Unknown;
     }
-    let (_, comm, state) = process_pgrp_comm_and_state(pid)?;
+    let Some((_, comm, state)) = process_pgrp_comm_and_state(pid) else {
+        return VirtualEnvObservation::Unknown;
+    };
     if !process_allows_remote_memory_read(state, &comm, running_inside_wsl()) {
-        return None;
+        return VirtualEnvObservation::Unknown;
     }
-    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    super::parse_virtual_env_activation(&environ)
+    let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
+        return VirtualEnvObservation::Unknown;
+    };
+    match super::parse_virtual_env_activation(&environ) {
+        Some(activation) => VirtualEnvObservation::Activation(activation),
+        None => VirtualEnvObservation::NoActivation,
+    }
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {

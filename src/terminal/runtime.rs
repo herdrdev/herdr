@@ -553,7 +553,7 @@ impl TerminalRuntime {
         self.0.foreground_cwd()
     }
 
-    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {
+    pub fn foreground_virtual_env(&self) -> crate::platform::VirtualEnvObservation {
         self.0.foreground_virtual_env()
     }
 
