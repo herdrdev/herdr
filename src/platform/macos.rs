@@ -28,6 +28,12 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {
 }
 
 pub(crate) fn should_query_host_terminal_palette() -> bool {
+    // tmux 3.6 on macOS forwards OSC 4 queries to the outer terminal asynchronously.
+    // A burst of 256 queries can cause reply fragments to leak into the focused pane
+    // if the replies arrive across multiple read boundaries or exceed buffer sizes.
+    if std::env::var("TERM_PROGRAM").as_deref() == Ok("tmux") {
+        return false;
+    }
     true
 }
 
