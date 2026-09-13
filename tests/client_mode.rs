@@ -808,11 +808,18 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
                 || { read_output(&output).contains("Local") }
             ));
             let mut input = client._master.as_ref().unwrap().take_writer().unwrap();
-            input
-                .write_all(b"printf 'LOCAL_%s\\n' DIRECT_READY\r")
-                .unwrap();
+            // Input is gated until Local's active surface is ready, and that readiness can lag
+            // the first rendered frame (the unavailable remote must not extend the wait). Retry
+            // the write instead of assuming a single write lands, matching the recovered-Local
+            // path below.
             assert!(wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-                read_output(&output).contains("LOCAL_DIRECT_READY")
+                if read_output(&output).contains("LOCAL_DIRECT_READY") {
+                    return true;
+                }
+                input
+                    .write_all(b"printf 'LOCAL_%s\\n' DIRECT_READY\r")
+                    .unwrap();
+                false
             }), "Local must accept input without waiting for SSH (remote selected: {select_remote}): {}", read_output(&output));
             let text = read_output(&output);
             assert!(!text.contains("Local: connecting"), "{text}");
