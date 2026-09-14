@@ -14,8 +14,11 @@ const fixtureTimeoutMs = process.platform === 'win32' ? 120_000 : 30_000;
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+    temporaryDirectories.map((path) =>
+      rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
+    ),
   );
+  temporaryDirectories.length = 0;
 });
 
 describe('preview documentation snapshots', () => {

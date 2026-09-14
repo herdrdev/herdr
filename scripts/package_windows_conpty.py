@@ -7,6 +7,8 @@ import json
 import shutil
 import struct
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -74,10 +76,18 @@ def validate_nuspec(archive: zipfile.ZipFile, package: dict[str, Any]) -> None:
 def acquire_package(package: dict[str, Any], package_path: Path) -> None:
     package_path.parent.mkdir(parents=True, exist_ok=True)
     if not package_path.exists():
-        with urllib.request.urlopen(
-            package["url"], timeout=DOWNLOAD_TIMEOUT_SECONDS
-        ) as response, package_path.open("wb") as output:
-            shutil.copyfileobj(response, output)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(
+                    package["url"], timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response, package_path.open("wb") as output:
+                    shutil.copyfileobj(response, output)
+                break
+            except urllib.error.HTTPError as error:
+                if error.code < 500 or attempt == 2:
+                    raise
+                error.close()
+                time.sleep(2**attempt)
     actual = sha256_file(package_path)
     if actual != package["sha256"]:
         raise ValueError(

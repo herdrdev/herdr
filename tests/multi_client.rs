@@ -75,17 +75,6 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-fn wait_for_file(path: &Path, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    panic!("socket did not appear at {}", path.display());
-}
-
 fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
     fs::create_dir_all(config.join("herdr")).unwrap();
     fs::create_dir_all(runtime).unwrap();
@@ -285,7 +274,7 @@ fn same_tab_geometry_follows_meaningful_client_activity() {
     let clients = runtime.join("herdr-client.sock");
     let server = spawn_server(&config, &runtime, &api);
     wait_for_socket(&api, Duration::from_secs(10));
-    wait_for_file(&clients, Duration::from_secs(10));
+    wait_for_socket(&clients, Duration::from_secs(10));
     let pane = create_pane(&api, "effective-size");
     let _large = shell(&clients, 120, 40);
     let mut small = shell(&clients, 80, 24);
@@ -318,7 +307,7 @@ fn api_pane_output_is_fanned_out_as_pane_surface_updates() {
     let clients = runtime.join("herdr-client.sock");
     let server = spawn_server(&config, &runtime, &api);
     wait_for_socket(&api, Duration::from_secs(10));
-    wait_for_file(&clients, Duration::from_secs(10));
+    wait_for_socket(&clients, Duration::from_secs(10));
     let pane = create_pane(&api, "fanout");
     let mut a = shell(&clients, 100, 30);
     let mut b = shell(&clients, 100, 30);
@@ -352,7 +341,7 @@ fn crashed_client_shell_does_not_affect_survivor() {
     let clients = runtime.join("herdr-client.sock");
     let server = spawn_server(&config, &runtime, &api);
     wait_for_socket(&api, Duration::from_secs(10));
-    wait_for_file(&clients, Duration::from_secs(10));
+    wait_for_socket(&clients, Duration::from_secs(10));
     let mut survivor = shell(&clients, 100, 30);
     let crashed = spawn_client(&config, &runtime, &api);
     // Give the supported client process time to complete its ClientShell hello;
@@ -385,7 +374,7 @@ fn rapid_client_shell_connect_disconnect_remains_healthy() {
     let clients = runtime.join("herdr-client.sock");
     let server = spawn_server(&config, &runtime, &api);
     wait_for_socket(&api, Duration::from_secs(10));
-    wait_for_file(&clients, Duration::from_secs(10));
+    wait_for_socket(&clients, Duration::from_secs(10));
     for i in 0..10 {
         let mut client = shell(&clients, 80 + i, 24);
         send_detach(&mut client).unwrap();

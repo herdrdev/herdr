@@ -1012,12 +1012,15 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     local.child.kill().unwrap();
     local.close_master();
     drop(local);
-    input
-        .write_all(b"printf 'REMOTE_%s\\n' SURVIVED\r")
-        .unwrap();
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            screen_text().contains("REMOTE_SURVIVED")
+            if screen_text().contains("REMOTE_SURVIVED") {
+                return true;
+            }
+            input
+                .write_all(b"printf 'REMOTE_%s\\n' SURVIVED\r")
+                .unwrap();
+            false
         }),
         "Local loss must not interrupt remote input or output: {}",
         screen_text()

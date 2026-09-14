@@ -6,6 +6,7 @@ import json
 import struct
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -52,7 +53,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
         self.assertIn('conpty\\conpty.dll', wrapper)
         self.assertIn('"*Microsoft Corporation*"', wrapper)
 
-    def test_package_download_has_a_finite_timeout(self) -> None:
+    def test_package_download_retries_server_errors_with_a_finite_timeout(self) -> None:
         payload = b"package"
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "conpty.nupkg"
@@ -60,14 +61,31 @@ class WindowsConptyPackageTests(unittest.TestCase):
                 "url": "https://example.invalid/conpty.nupkg",
                 "sha256": hashlib.sha256(payload).hexdigest(),
             }
-            with mock.patch.object(
-                package.urllib.request, "urlopen", return_value=io.BytesIO(payload)
-            ) as urlopen:
+            server_error = urllib.error.HTTPError(
+                metadata["url"], 504, "Gateway Time-out", {}, None
+            )
+            with (
+                mock.patch.object(
+                    package.urllib.request,
+                    "urlopen",
+                    side_effect=[server_error, io.BytesIO(payload)],
+                ) as urlopen,
+                mock.patch.object(package.time, "sleep") as sleep,
+            ):
                 package.acquire_package(metadata, destination)
 
-            urlopen.assert_called_once_with(
-                metadata["url"], timeout=package.DOWNLOAD_TIMEOUT_SECONDS
+            self.assertEqual(
+                urlopen.call_args_list,
+                [
+                    mock.call(
+                        metadata["url"], timeout=package.DOWNLOAD_TIMEOUT_SECONDS
+                    ),
+                    mock.call(
+                        metadata["url"], timeout=package.DOWNLOAD_TIMEOUT_SECONDS
+                    ),
+                ],
             )
+            sleep.assert_called_once_with(1)
 
     def test_stage_and_archive_validate_exact_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
