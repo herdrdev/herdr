@@ -1527,6 +1527,53 @@ fn new_connection_generation_accepts_a_lower_same_boot_projection_revision() {
 }
 
 #[test]
+fn reconnect_same_endpoint_accepts_new_generation_surface_revision() {
+    for previous_revision in [9, 1] {
+        let (mut state, endpoint_id) = state_with_remote();
+        let mut previous = snapshot();
+        previous.boot_id = "shared-server-boot".into();
+        previous.revision = previous_revision;
+        state.cache_endpoint_snapshot_inactive_for_generation(&endpoint_id, 4, Box::new(previous));
+        assert!(state.activate_endpoint_projection(&endpoint_id));
+        let mut previous_surface = surface();
+        previous_surface.boot_id = "shared-server-boot".into();
+        previous_surface.projection_revision = previous_revision;
+        previous_surface.surface_revision = 9;
+        state.set_pane_surface(previous_surface.clone());
+        previous_surface.projection_revision += 1;
+        state.set_pane_surface(previous_surface);
+        assert!(state.pending_pane_surface.is_some());
+        state.agent_scroll = 7;
+
+        state.mark_endpoint_disconnected(&endpoint_id);
+        let mut reconnected = snapshot();
+        reconnected.boot_id = "shared-server-boot".into();
+        reconnected.revision = 1;
+        state.cache_endpoint_snapshot_inactive_for_generation(
+            &endpoint_id,
+            5,
+            Box::new(reconnected),
+        );
+        assert_eq!(state.snapshot.as_ref().unwrap().revision, previous_revision);
+        assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 9);
+
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+        assert!(state.activate_endpoint_projection(&endpoint_id));
+        let mut reconnected_surface = surface();
+        reconnected_surface.boot_id = "shared-server-boot".into();
+        reconnected_surface.projection_revision = 1;
+        reconnected_surface.surface_revision = 1;
+        state.set_pane_surface(reconnected_surface);
+
+        assert_eq!(state.snapshot.as_ref().unwrap().revision, 1);
+        assert_eq!(state.pane_surface.as_ref().unwrap().projection_revision, 1);
+        assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 1);
+        assert!(state.pending_pane_surface.is_none());
+        assert_eq!(state.agent_scroll, 7);
+    }
+}
+
+#[test]
 fn reconnect_snapshot_waits_for_coherent_activation_before_replacing_projection() {
     let (mut state, endpoint_id) = state_with_remote();
     assert!(state.activate_endpoint_projection(&endpoint_id));

@@ -113,7 +113,8 @@ impl ClientShellState {
         let Some(current) = self.pane_surface.as_ref() else {
             return ClientPaneSurfacePatchOutcome::Rejected;
         };
-        if patch.boot_id != current.boot_id
+        if self.pane_surface_generation != self.active_snapshot_generation
+            || patch.boot_id != current.boot_id
             || patch.projection_revision != current.projection_revision
             || patch.base_surface_revision != current.surface_revision
             || patch.surface_revision != current.surface_revision.saturating_add(1)

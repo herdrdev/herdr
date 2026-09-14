@@ -895,6 +895,8 @@ pub(super) struct ClientCopyModeState {
 pub(crate) struct ClientShellState {
     pub(super) config: ClientShellConfig,
     pub(super) snapshot: Option<Box<ClientShellSnapshot>>,
+    pub(super) active_snapshot_generation: Option<u64>,
+    pub(super) pane_surface_generation: Option<u64>,
     pub(super) pane_surface: Option<PaneSurfaceFrame>,
     /// A future projection surface waits here until its matching snapshot arrives. The visible
     /// pane surface always remains an exact snapshot pair.
@@ -1054,6 +1056,8 @@ impl ClientShellState {
         Self {
             config,
             snapshot: None,
+            active_snapshot_generation: None,
+            pane_surface_generation: None,
             pane_surface: None,
             pending_pane_surface: None,
             graphics: crate::kitty_graphics::surface::ClientState::default(),
@@ -1309,7 +1313,11 @@ impl ClientShellState {
         self.dismissed_product_announcement = None;
     }
 
-    pub(super) fn apply_active_snapshot(&mut self, mut snapshot: Box<ClientShellSnapshot>) {
+    pub(super) fn apply_active_snapshot(
+        &mut self,
+        mut snapshot: Box<ClientShellSnapshot>,
+        generation: Option<u64>,
+    ) {
         snapshot
             .commands
             .retain(|command| command.action != crate::protocol::ClientShellCommandAction::Unknown);
@@ -1320,13 +1328,21 @@ impl ClientShellState {
         };
         let endpoint_boot_changed =
             self.snapshot.is_some() && self.graphics.scope() != graphics_scope;
+        let generation_changed = self.active_snapshot_generation != generation;
         if !endpoint_boot_changed
+            && !generation_changed
             && self.snapshot.as_ref().is_some_and(|current| {
                 current.boot_id == snapshot.boot_id && snapshot.revision < current.revision
             })
         {
             return;
         }
+        // Screen revisions restart per connection. Keep the displayed surface for selection
+        // content comparisons, but retire speculative frames from the old connection.
+        if generation_changed {
+            self.pending_pane_surface = None;
+        }
+        self.active_snapshot_generation = generation;
         self.graphics.set_scope(&graphics_scope);
         let command_bindings_changed = self.snapshot.as_ref().is_none_or(|current| {
             current.commands.len() != snapshot.commands.len()
@@ -1618,7 +1634,8 @@ impl ClientShellState {
             return;
         }
         if self.pane_surface.as_ref().is_some_and(|current| {
-            current.boot_id == surface.boot_id
+            self.pane_surface_generation == self.active_snapshot_generation
+                && current.boot_id == surface.boot_id
                 && (surface.projection_revision < current.projection_revision
                     || (surface.projection_revision == current.projection_revision
                         && surface.surface_revision < current.surface_revision))
@@ -1646,7 +1663,8 @@ impl ClientShellState {
             || surface.projection_revision < snapshot.revision
             || (!retain_future && surface.projection_revision != snapshot.revision)
             || self.pane_surface.as_ref().is_some_and(|current| {
-                current.boot_id == surface.boot_id
+                self.pane_surface_generation == self.active_snapshot_generation
+                    && current.boot_id == surface.boot_id
                     && (surface.projection_revision < current.projection_revision
                         || (surface.projection_revision == current.projection_revision
                             && surface.surface_revision < current.surface_revision))
@@ -1817,6 +1835,7 @@ impl ClientShellState {
         self.graphics
             .set_scene(std::mem::take(&mut surface.graphics));
         self.pane_surface = Some(surface);
+        self.pane_surface_generation = self.active_snapshot_generation;
         self.invalidate_link_hover();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
