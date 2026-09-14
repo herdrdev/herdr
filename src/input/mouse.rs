@@ -41,20 +41,17 @@ impl HostGeometry {
     }
 
     pub(crate) fn cell(self, x: u32, y: u32) -> Option<(u16, u16)> {
+        let x = x.checked_sub(1)?;
+        let y = y.checked_sub(1)?;
+        if x >= self.width_px || y >= self.height_px {
+            return None;
+        }
+        let width_px = grid_extent(self.cols, self.width_px)?;
+        let height_px = grid_extent(self.rows, self.height_px)?;
         Some((
-            grid_cell(x.checked_sub(1)?, self.cols, self.width_px)?,
-            grid_cell(y.checked_sub(1)?, self.rows, self.height_px)?,
+            grid_cell(x.min(width_px - 1), self.cols, width_px)?,
+            grid_cell(y.min(height_px - 1), self.rows, height_px)?,
         ))
-    }
-
-    #[cfg(test)]
-    fn column_boundary(self, column: u16) -> Option<u32> {
-        boundary(column, self.cols, self.width_px)
-    }
-
-    #[cfg(test)]
-    fn row_boundary(self, row: u16) -> Option<u32> {
-        boundary(row, self.rows, self.height_px)
     }
 }
 
@@ -111,8 +108,9 @@ fn map_axis_within_cell(
     if local_cell >= pane_cells {
         return None;
     }
-    let source_start = boundary(host_cell, host_cells, host_extent)?;
-    let source_end = boundary(host_cell.checked_add(1)?, host_cells, host_extent)?;
+    let host_grid_extent = grid_extent(host_cells, host_extent)?;
+    let source_start = boundary(host_cell, host_cells, host_grid_extent)?;
+    let source_end = boundary(host_cell.checked_add(1)?, host_cells, host_grid_extent)?;
     let target_start = boundary(local_cell, pane_cells, child_extent)?;
     let target_end = boundary(local_cell.checked_add(1)?, pane_cells, child_extent)?;
     let source_width = source_end.checked_sub(source_start)?;
@@ -169,6 +167,11 @@ fn boundary(index: u16, count: u16, extent: u32) -> Option<u32> {
         .then(|| (u64::from(index) * u64::from(extent) / u64::from(count)) as u32)
 }
 
+fn grid_extent(count: u16, extent: u32) -> Option<u32> {
+    let count = u32::from(count);
+    (count > 0 && extent > 0).then(|| (extent / count).max(1) * count)
+}
+
 fn grid_cell(pixel: u32, count: u16, extent: u32) -> Option<u16> {
     if count == 0 || extent == 0 || pixel >= extent {
         return None;
@@ -200,46 +203,48 @@ mod tests {
     }
 
     #[test]
-    fn fractional_geometry_maps_exactly_to_pane_pixels() {
-        let geometry = HostGeometry::new(211, 57, 2_537, 1_429).unwrap();
-        let inner = ratatui::layout::Rect::new(157, 7, 53, 49);
-        let start_x = geometry.column_boundary(inner.x).unwrap();
-        let end_x = geometry.column_boundary(inner.x + inner.width).unwrap();
-        let start_y = geometry.row_boundary(inner.y).unwrap();
-        let end_y = geometry.row_boundary(inner.y + inner.height).unwrap();
+    fn integer_cell_pitch_ignores_trailing_pixel_remainder() {
+        let geometry = HostGeometry::new(127, 31, 1_276, 626).unwrap();
+        assert_eq!(geometry.cell(220, 1), Some((21, 0)));
+        assert_eq!(geometry.cell(221, 61), Some((22, 3)));
+        let right_pane = ratatui::layout::Rect::new(22, 3, 105, 20);
         assert_eq!(
             HostPixels {
-                x: start_x + 1,
-                y: start_y + 1,
+                x: 221,
+                y: 61,
                 geometry,
             }
-            .pane_position(inner, 636, 1_225),
+            .pane_position(right_pane, 1_050, 400),
             Some(Position::Pixels { x: 1, y: 1 })
         );
+        assert_eq!(geometry.cell(1_270, 620), Some((126, 30)));
         assert_eq!(
             HostPixels {
-                x: end_x,
-                y: end_y,
+                x: 1_270,
+                y: 460,
                 geometry,
             }
-            .pane_position(inner, 636, 1_225),
-            Some(Position::Pixels { x: 636, y: 1_225 })
+            .pane_position(right_pane, 1_050, 400),
+            Some(Position::Pixels { x: 1_050, y: 400 })
         );
-    }
 
-    #[test]
-    fn fractional_scaling_preserves_the_canonical_child_cell() {
-        let geometry = HostGeometry::new(80, 1, 805, 20).unwrap();
-        assert_eq!(geometry.cell(11, 1), Some((1, 0)));
-        assert_eq!(
-            HostPixels {
-                x: 11,
-                y: 1,
-                geometry,
-            }
-            .pane_position(ratatui::layout::Rect::new(0, 0, 80, 1), 800, 20),
-            Some(Position::Pixels { x: 11, y: 1 })
-        );
+        let full_grid = ratatui::layout::Rect::new(0, 0, 127, 31);
+        for x in 1_271..=1_276 {
+            assert_eq!(geometry.cell(x, 1), Some((126, 0)));
+            assert_eq!(
+                HostPixels { x, y: 1, geometry }.pane_position(full_grid, 1_270, 620),
+                None
+            );
+        }
+        for y in 621..=626 {
+            assert_eq!(geometry.cell(1, y), Some((0, 30)));
+            assert_eq!(
+                HostPixels { x: 1, y, geometry }.pane_position(full_grid, 1_270, 620),
+                None
+            );
+        }
+        assert_eq!(geometry.cell(1_277, 1), None);
+        assert_eq!(geometry.cell(1, 627), None);
     }
 
     #[test]

@@ -6,6 +6,8 @@ use jsonc_parser::cst::{CstInputValue, CstRootNode};
 use jsonc_parser::ParseOptions;
 use serde_json::Value;
 
+use super::config_file::{check_config_target, write_config};
+
 const TUI_CONFIG_NAME: &str = "tui.jsonc";
 
 pub(crate) fn tui_config_path(config_dir: &Path) -> PathBuf {
@@ -44,6 +46,7 @@ pub(crate) fn add_cli_plugin(
     plugin_spec: &str,
 ) -> io::Result<Option<PathBuf>> {
     let path = config_dir.join("cli.json");
+    check_config_target(&path)?;
     // OpenCode imports V1 TUI preferences (`tui.json`, `kv.json`) into cli.json on
     // its first V2 start, but only while cli.json is absent. Defer registration
     // while those sources still exist so we do not skip the migration; otherwise
@@ -60,6 +63,7 @@ fn cli_migration_pending(config_dir: &Path, state_dir: &Path) -> bool {
 }
 
 fn add_plugin(config_path: PathBuf, key: &str, plugin_spec: &str) -> io::Result<PathBuf> {
+    check_config_target(&config_path)?;
     let content = if config_path.is_file() {
         fs::read_to_string(&config_path)?
     } else {
@@ -90,7 +94,7 @@ fn add_plugin(config_path: PathBuf, key: &str, plugin_spec: &str) -> io::Result<
         }
     }
 
-    fs::write(&config_path, root.to_string())?;
+    write_config(&config_path, root.to_string())?;
     Ok(config_path)
 }
 
@@ -103,6 +107,7 @@ pub(crate) fn remove_cli_plugin(config_dir: &Path, plugin_spec: &str) -> io::Res
 }
 
 fn remove_plugin(config_path: &Path, key: &str, plugin_spec: &str) -> io::Result<bool> {
+    check_config_target(config_path)?;
     if !config_path.is_file() {
         return Ok(false);
     }
@@ -133,7 +138,7 @@ fn remove_plugin(config_path: &Path, key: &str, plugin_spec: &str) -> io::Result
         property.remove();
     }
 
-    fs::write(config_path, root.to_string())?;
+    write_config(config_path, root.to_string())?;
     Ok(true)
 }
 
@@ -243,6 +248,48 @@ mod tests {
             .value()
             .and_then(|value| value.to_serde_value())
             .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_cli_registration_preserves_existing_config() {
+        const CHILD_CONFIG: &str = "HERDR_TEST_3970_CONFIG_DIR";
+        if let Some(dir) = std::env::var_os(CHILD_CONFIG) {
+            let dir = PathBuf::from(dir);
+            let result = add_cli_plugin(&dir, &dir.join("state"), "./herdr-opencode");
+            assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EFBIG));
+            println!("registration reached the file-size limit");
+            return;
+        }
+
+        let dir = unique_dir();
+        let path = dir.join("cli.json");
+        let original = r#"{"theme":{"name":"catppuccin"},"plugins":["example"]}"#;
+        fs::write(&path, original).unwrap();
+        // Apply the limit only to a child, after seeding the existing preferences.
+        // Ignoring SIGXFSZ makes the kernel return EFBIG instead of killing it.
+        let output = std::process::Command::new("bash")
+            .args(["-c", "trap '' XFSZ; ulimit -f 0; exec \"$@\"", "herdr-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "integration::opencode_config::tests::failed_cli_registration_preserves_existing_config",
+                "--nocapture",
+            ])
+            .env(CHILD_CONFIG, &dir)
+            .output()
+            .unwrap();
+        let actual = fs::read_to_string(&path).unwrap();
+        let remaining_files = fs::read_dir(&dir).unwrap().count();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(output.status.success(), "child failed: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .contains("registration reached the file-size limit"));
+        assert_eq!(
+            actual, original,
+            "failed registration must preserve preferences"
+        );
+        assert_eq!(remaining_files, 1, "temporary files must be cleaned up");
     }
 
     #[test]

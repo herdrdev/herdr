@@ -55,6 +55,8 @@ herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
 ```
 
+Herdr は Linux/macOS の統合設定と全プラットフォームの新規ファイルをアトミックに保存し、Windows の既存ファイルは権限を維持するため、バックアップ後に同じファイルを更新します。Windows でバックアップが通知された場合は、再試行前にエージェントを終了して設定を確認し、未完了の `.herdr-backup.pending` は復旧元に使わず設定が正しいことを確認してから削除するか、必要なら完成済みの `.herdr-backup` の内容を既存ファイルに書き戻し（ファイルがない場合は先に意図した権限を設定）、設定が正しいことを確認してからバックアップを削除してください。
+
 ## Herdr がインテグレーションをどう使うか
 
 Herdr はインテグレーションを 2 つの異なる方法で使います:

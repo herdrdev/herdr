@@ -55,6 +55,8 @@ herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
 ```
 
+Herdr 对 Linux/macOS 上的集成配置和所有平台的新文件使用原子保存；Windows 上的现有文件先备份再原地更新，以保留权限。如果 Windows 提示存在备份，请在重试前关闭智能体并检查配置：未完成的 `.herdr-backup.pending` 只能在确认配置正确后删除，不能用于恢复；完整 `.herdr-backup` 的内容可在需要时写回现有文件（若文件已丢失，先设置其预期权限），确认配置正确后再删除备份。
+
 ## Herdr 如何使用集成
 
 Herdr 以两种不同方式使用集成:
