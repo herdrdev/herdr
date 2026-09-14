@@ -88,7 +88,7 @@ visible_working = true
 contains = ["esc to interrupt"]
 # Animations can hide the bullet, and queued inputs can sit below a dynamic activity label.
 # Require the live timer/control suffix with no later response or interruption marker.
-regex = ['(?m)^(?:[•◦][ \t]+)?[^\s›•◦■✗✓─][^\r\n]* \((?:[0-9]+[hm] )*[0-9]+s • esc to interrupt\)(?: · [^\r\n]*)?(?:\r?\n(?:[^•◦›■✗✓─\r\n][^\r\n]*|• Queued follow-up inputs|›[⠁⠂⠄⠈⠐⠠⡀⢀][^\r\n]*)?)*\s*\z']
+regex = ['(?m)^(?:[•◦][ \t]+)?[^\s›•◦■✗✓─][^\r\n]* \((?:[0-9]+[hm] )*[0-9]+s • esc to interrupt\)(?: · [^\r\n]*)?(?:\r?\n(?:[^•◦›■✗✓─\r\n][^\r\n]*|• (?:Queued follow-up inputs|Messages to be submitted after next tool call|Messages to be submitted at end of turn)|›[⠁⠂⠄⠈⠐⠠⡀⢀][^\r\n]*)?)*\s*\z']
 
 [[rules]]
 id = "osc_title_idle"

@@ -1179,6 +1179,9 @@ fn codex_screen_working_fallback_handles_activity_labels_and_queued_inputs() {
             for queue in [
                 "",
                 "\n• Queued follow-up inputs\n  ↳ Follow up after this turn\n    alt + ↑ edit last queued message\n",
+                "\n• Messages to be submitted after next tool call\n  (press esc to interrupt and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n",
+                "\n• Messages to be submitted at end of turn\n  ↳ Follow up after this turn\n",
+                "\n• Messages to be submitted after next tool call\n  (press esc to interrupt and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n\n• Queued follow-up inputs\n  ↳ After this turn reply ok.\n    alt + ↑ edit last queued message\n",
             ] {
                 let screen = format!(
                     "{prefix}{label} (1m 16s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n\
