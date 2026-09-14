@@ -1180,6 +1180,9 @@ fn codex_screen_working_fallback_handles_activity_labels_and_queued_inputs() {
                 "",
                 "\n• Queued follow-up inputs\n  ↳ Follow up after this turn\n    alt + ↑ edit last queued message\n",
                 "\n• Messages to be submitted after next tool call\n  (press esc to interrupt and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n",
+                "\n• Messages to be submitted after next tool call (press esc to interrupt and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n",
+                "\n• Messages to be submitted after next tool call (press esc to interrupt\n  and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n",
+                "\n• Messages to be submitted after next\n  tool call (press esc to interrupt and\n  send immediately)\n  ↳ Keep waiting until the sleep finishes.\n",
                 "\n• Messages to be submitted at end of turn\n  ↳ Follow up after this turn\n",
                 "\n• Messages to be submitted after next tool call\n  (press esc to interrupt and send immediately)\n  ↳ Keep waiting until the sleep finishes.\n\n• Queued follow-up inputs\n  ↳ After this turn reply ok.\n    alt + ↑ edit last queued message\n",
             ] {
@@ -1380,6 +1383,7 @@ fn codex_screen_working_fallback_ignores_stale_and_prompt_text() {
         "Working (1m 16s • esc to interrupt)\n\
          ─ Worked for 1m 16s ─\n\
          › Ask Codex to do anything\n",
+        "Working (1m 16s • esc to interrupt)\n•\nMessages to be submitted after next tool call\n› Ask Codex to do anything\n",
         "› Explain this status:\n  Working (1m 16s • esc to interrupt)\n",
         "• Example (press esc to interrupt)\n\
          › Ask Codex to do anything\n",
