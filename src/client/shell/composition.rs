@@ -147,9 +147,11 @@ impl ClientShellState {
             return Some(self.compose_unavailable(cols, rows));
         }
         let snapshot = self.snapshot.as_deref()?;
-        // A one-step successor is retained separately until its exact snapshot arrives; do not
-        // keep composing the now-superseded current pair while it is pending.
-        if self.pending_pane_surface.is_some() {
+        // Do not compose a retained surface while waiting for its matching snapshot or
+        // connection generation.
+        if self.pending_pane_surface.is_some()
+            || self.pane_surface_generation != self.active_snapshot_generation
+        {
             return None;
         }
         let surface = self.pane_surface.as_ref()?;

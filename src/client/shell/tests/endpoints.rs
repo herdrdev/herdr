@@ -1559,6 +1559,7 @@ fn reconnect_same_endpoint_accepts_new_generation_surface_revision() {
 
         state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
         assert!(state.activate_endpoint_projection(&endpoint_id));
+        assert!(state.compose(106, 20).is_none());
         let mut reconnected_surface = surface();
         reconnected_surface.boot_id = "shared-server-boot".into();
         reconnected_surface.projection_revision = 1;
@@ -1570,6 +1571,7 @@ fn reconnect_same_endpoint_accepts_new_generation_surface_revision() {
         assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 1);
         assert!(state.pending_pane_surface.is_none());
         assert_eq!(state.agent_scroll, 7);
+        assert!(state.compose(106, 20).is_some());
     }
 }
 

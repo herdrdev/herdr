@@ -431,6 +431,7 @@ fn active_preview_is_not_retargeted_by_deletion_or_reboot() {
             7,
             Box::new(local.clone()),
         );
+        state.set_pane_surface(surface());
         state.compose(100, 28).unwrap();
         enter_navigation(&mut state);
         preview_key(&mut state, b"\x1b[B");
