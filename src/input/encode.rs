@@ -212,8 +212,9 @@ fn try_encode_csi_u(key: &TerminalKey, flags: u16) -> Option<Vec<u8>> {
         return None;
     }
 
-    // Unmodified keys use legacy encoding (more compatible)
-    if mods.is_empty() && event_suffix.is_none() && !report_all_keys {
+    // Unmodified keys use legacy encoding (more compatible), but always use CSI-u
+    // for Caps Lock to preserve the modifier bit (bit 6 = 64)
+    if mods.is_empty() && !key.caps_lock && event_suffix.is_none() && !report_all_keys {
         return None;
     }
 
@@ -263,7 +264,7 @@ fn try_encode_csi_u(key: &TerminalKey, flags: u16) -> Option<Vec<u8>> {
         _ => return None, // fall back to legacy for unhandled keys
     };
 
-    let modifier = kitty_modifier(mods);
+    let modifier = kitty_modifier(key);
 
     let mut sequence = String::with_capacity(32);
     sequence.push_str("\x1b[");
@@ -375,18 +376,21 @@ fn xterm_modifier(mods: KeyModifiers) -> u32 {
     m
 }
 
-/// Kitty protocol modifier encoding: 1 + shift(1) + alt(2) + ctrl(4) + super(8) + hyper(16) + meta(32)
-/// Superset of xterm — adds Super/Hyper/Meta bits.
-fn kitty_modifier(mods: KeyModifiers) -> u32 {
-    let mut m = xterm_modifier(mods);
-    if mods.contains(KeyModifiers::SUPER) {
+/// Kitty protocol modifier encoding: 1 + shift(1) + alt(2) + ctrl(4) + super(8) + hyper(16) + meta(32) + caps_lock(64)
+/// Superset of xterm — adds Super/Hyper/Meta/Caps Lock bits.
+fn kitty_modifier(key: &TerminalKey) -> u32 {
+    let mut m = xterm_modifier(key.modifiers);
+    if key.modifiers.contains(KeyModifiers::SUPER) {
         m += 8;
     }
-    if mods.contains(KeyModifiers::HYPER) {
+    if key.modifiers.contains(KeyModifiers::HYPER) {
         m += 16;
     }
-    if mods.contains(KeyModifiers::META) {
+    if key.modifiers.contains(KeyModifiers::META) {
         m += 32;
+    }
+    if key.caps_lock {
+        m += 64;
     }
     m
 }
@@ -399,6 +403,11 @@ fn encode_text_input(key: &TerminalKey) -> Option<Vec<u8>> {
 
 fn text_char_for_key(key: &TerminalKey) -> Option<char> {
     if key.kind == crossterm::event::KeyEventKind::Release {
+        return None;
+    }
+
+    // Caps Lock without generated_text must use CSI-u to preserve the modifier bit
+    if key.caps_lock {
         return None;
     }
 

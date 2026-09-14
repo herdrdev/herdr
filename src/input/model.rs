@@ -77,6 +77,7 @@ pub struct TerminalKey {
     pub repeat_count: u16,
     pub shifted_codepoint: Option<u32>,
     pub generated_text: Option<String>,
+    pub caps_lock: bool,
     physical_identity_hint: bool,
     windows_dead_key: bool,
     source: KeySource,
@@ -91,6 +92,7 @@ impl TerminalKey {
             repeat_count: 1,
             shifted_codepoint: None,
             generated_text: None,
+            caps_lock: false,
             physical_identity_hint: false,
             windows_dead_key: false,
             source: KeySource::Synthesized,
@@ -103,6 +105,11 @@ impl TerminalKey {
             self.generated_text = None;
         }
         self.kind = kind;
+        self
+    }
+
+    pub fn with_caps_lock(mut self, caps_lock: bool) -> Self {
+        self.caps_lock = caps_lock;
         self
     }
 

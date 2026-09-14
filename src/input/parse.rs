@@ -26,6 +26,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
 
     let (modifier_text, event_type) = split_modifier_and_event(modifier_part);
     let modifier = modifier_text.parse::<u8>().ok()?.checked_sub(1)?;
+    let caps_lock = modifier & 0b0100_0000 != 0;
 
     let mut key_fields = key_part.split(':');
     let codepoint = key_fields.next()?.parse::<u32>().ok()?;
@@ -54,7 +55,9 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         modifiers |= KeyModifiers::SHIFT;
     }
 
-    let mut key = TerminalKey::new(code, modifiers).with_kind(kind);
+    let mut key = TerminalKey::new(code, modifiers)
+        .with_kind(kind)
+        .with_caps_lock(caps_lock);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
     }
@@ -1157,5 +1160,49 @@ mod tests {
     fn linux_terminal_variants_fixture_parses() {
         let corpus = include_str!("../../tests/fixtures/linux_terminal_variants.tsv");
         assert_fixture_corpus_parses(corpus);
+    }
+
+    #[test]
+    fn parse_kitty_sequence_captures_caps_lock_bit() {
+        // modifier 65 = 1 (base) + 64 (caps_lock bit 6)
+        let key = parse_terminal_key_sequence("\x1b[97;65u").unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.caps_lock, "caps_lock bit should be set for modifier 65");
+        assert!(key.modifiers.is_empty(), "standard modifier flags should be empty");
+    }
+
+    #[test]
+    fn parse_kitty_sequence_caps_lock_with_shift() {
+        // modifier 66 = 1 (shift) + 64 (caps_lock)
+        let key = parse_terminal_key_sequence("\x1b[97;66u").unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.caps_lock);
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn parse_kitty_sequence_no_caps_lock() {
+        // modifier 1 = base only (no caps_lock)
+        let key = parse_terminal_key_sequence("\x1b[97;1u").unwrap();
+        assert!(!key.caps_lock);
+    }
+
+    #[test]
+    fn caps_lock_roundtrips_through_parse_encode() {
+        use crate::input::model::TerminalKey;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let key = TerminalKey::new(KeyCode::Char('a'), KeyModifiers::empty())
+            .with_caps_lock(true);
+        let encoded = encode_terminal_key(
+            key,
+            KeyboardProtocol::Kitty { flags: 1 },
+        );
+        let encoded_str = std::str::from_utf8(&encoded).unwrap();
+        // Should contain modifier 65 (1 + 64 caps_lock)
+        assert!(
+            encoded_str.contains(";65u"),
+            "encoded CSI-u should contain modifier 65 (caps_lock), got: {encoded_str}"
+        );
     }
 }
