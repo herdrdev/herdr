@@ -404,11 +404,11 @@ fn pop_keyboard_enhancement_flags() -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
-fn windows_win32_input_mode_enabled() -> bool {
+#[cfg(any(windows, test))]
+pub(super) fn windows_win32_input_mode_enabled() -> bool {
     std::env::var("HERDR_WINDOWS_INPUT_PROBE")
         .map(|probe| probe.eq_ignore_ascii_case("win32"))
-        .unwrap_or(true)
+        .unwrap_or_else(|_| is_ssh_session())
 }
 
 #[cfg(windows)]

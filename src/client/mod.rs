@@ -86,7 +86,8 @@ use terminal_setup::{
 #[cfg(test)]
 use terminal_setup::{
     should_enable_host_color_scheme_reports, windows_virtual_terminal_input_mode,
-    write_host_color_scheme_report_mode, write_terminal_restore_postlude,
+    windows_win32_input_mode_enabled, write_host_color_scheme_report_mode,
+    write_terminal_restore_postlude,
 };
 
 #[cfg(unix)]

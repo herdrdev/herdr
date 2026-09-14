@@ -102,6 +102,23 @@ fn windows_virtual_terminal_input_mode_sets_only_vti_bit() {
     assert_eq!(windows_virtual_terminal_input_mode(0x03f0), 0x03f0);
 }
 
+#[test]
+fn windows_win32_input_mode_defaults_to_ssh_and_honors_probe() {
+    let _guard = env_lock().lock().unwrap();
+    let _removed =
+        EnvVarsRemovedGuard::new(&["HERDR_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
+
+    assert!(!windows_win32_input_mode_enabled());
+    {
+        let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
+        assert!(windows_win32_input_mode_enabled());
+        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "vt");
+        assert!(!windows_win32_input_mode_enabled());
+    }
+    let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "win32");
+    assert!(windows_win32_input_mode_enabled());
+}
+
 struct EnvVarsRemovedGuard {
     previous: Vec<(&'static str, Option<OsString>)>,
 }
@@ -870,12 +887,8 @@ fn terminal_control_scroll_command_maps_to_attach_scroll() {
 
 #[test]
 fn forward_clipboard_uses_local_clipboard_path() {
-    unsafe {
-        std::env::set_var("SSH_CONNECTION", "1 2 3 4");
-    }
+    let _guard = env_lock().lock().unwrap();
+    let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
     assert!(forward_clipboard("dGVzdA=="));
     assert!(!forward_clipboard("not base64"));
-    unsafe {
-        std::env::remove_var("SSH_CONNECTION");
-    }
 }
