@@ -24,17 +24,33 @@ pub(super) fn raw_console_reader_loop(
     let mut handoff = WindowsInputHandoff::default();
 
     while !should_quit.load(Ordering::Acquire) {
-        match windows_console_input_items(handle, &mut mapper) {
+        let mut trace = windows_input_trace_enabled().then(WindowsInputTraceBatch::default);
+        match windows_console_input_items(handle, &mut mapper, trace.as_mut()) {
             WindowsInputItems::Items(items) => {
-                process_platform_input_items(items, &mut pump, &mut handoff);
+                process_platform_input_items(items, &mut pump, &mut handoff, trace.as_mut());
             }
             WindowsInputItems::Idle => {
-                process_platform_input_items(mapper.idle(), &mut pump, &mut handoff);
-                handoff.push(pump.idle());
+                process_platform_input_items(
+                    mapper.idle(),
+                    &mut pump,
+                    &mut handoff,
+                    trace.as_mut(),
+                );
+                push_platform_input_events(pump.idle(), &mut handoff, trace.as_mut());
             }
             WindowsInputItems::Closed => return,
         }
-        if !handoff.try_flush(&event_tx) {
+        let handoff_open = handoff.try_flush(&event_tx);
+        if let Some(trace) = trace
+            .filter(|trace| !trace.raw_keys.is_empty() || !trace.mapped_event_groups.is_empty())
+        {
+            tracing::info!(
+                raw_keys = ?trace.raw_keys,
+                mapped_event_groups = ?trace.mapped_event_groups,
+                "windows input trace: input batch"
+            );
+        }
+        if !handoff_open {
             return;
         }
     }
@@ -45,10 +61,26 @@ fn process_platform_input_items(
     items: Vec<PlatformInputItem>,
     pump: &mut WindowsInputPump,
     handoff: &mut WindowsInputHandoff,
+    mut trace: Option<&mut WindowsInputTraceBatch>,
 ) {
     for item in items {
-        handoff.push(pump.process(item));
+        push_platform_input_events(pump.process(item), handoff, trace.as_deref_mut());
     }
+}
+
+#[cfg(windows)]
+fn push_platform_input_events(
+    events: Vec<crate::protocol::ClientInputEvent>,
+    handoff: &mut WindowsInputHandoff,
+    trace: Option<&mut WindowsInputTraceBatch>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    if let Some(trace) = trace {
+        trace.mapped_event_groups.push(events.clone());
+    }
+    handoff.push(events);
 }
 
 #[cfg(windows)]
@@ -83,6 +115,13 @@ enum WindowsInputItems {
 
 #[cfg(windows)]
 #[derive(Default)]
+struct WindowsInputTraceBatch {
+    raw_keys: Vec<WindowsKeyRecord>,
+    mapped_event_groups: Vec<Vec<crate::protocol::ClientInputEvent>>,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
 struct WindowsInputHandoff {
     pending: VecDeque<Vec<crate::protocol::ClientInputEvent>>,
     backpressured: bool,
@@ -93,9 +132,6 @@ impl WindowsInputHandoff {
     fn push(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
         if events.is_empty() {
             return;
-        }
-        if windows_input_trace_enabled() {
-            tracing::info!(?events, "windows input trace: client input events");
         }
         if self.backpressured {
             self.push_backpressured(events);
@@ -185,6 +221,7 @@ fn windows_mouse_motion_can_replace(
 fn windows_console_input_items(
     handle: windows_sys::Win32::Foundation::HANDLE,
     mapper: &mut WindowsInputMapper,
+    mut trace: Option<&mut WindowsInputTraceBatch>,
 ) -> WindowsInputItems {
     const WAIT_OBJECT_0: u32 = 0;
     const WAIT_TIMEOUT: u32 = 258;
@@ -212,6 +249,9 @@ fn windows_console_input_items(
     let mut items = Vec::new();
     for record in records.iter().take(read as usize) {
         if let Some(record) = windows_console_input_record_from_os(*record) {
+            if let (Some(trace), WindowsInputRecord::Key(key)) = (trace.as_deref_mut(), record) {
+                trace.raw_keys.push(key);
+            }
             items.extend(mapper.translate(record));
         }
     }
@@ -662,18 +702,6 @@ impl WindowsInputMapper {
     }
 
     fn translate_key(&mut self, key: WindowsKeyRecord) -> Vec<PlatformInputItem> {
-        if windows_input_trace_enabled() {
-            tracing::info!(
-                key_down = key.key_down,
-                repeat_count = key.repeat_count,
-                virtual_key_code = key.virtual_key_code,
-                virtual_scan_code = key.virtual_scan_code,
-                unicode = key.unicode,
-                control_key_state = key.control_key_state,
-                "windows input trace: console key record"
-            );
-        }
-
         if !self.key_record_can_emit_event(key) {
             return Vec::new();
         }
@@ -1341,7 +1369,7 @@ fn resolve_ctrl_oem_char(key: WindowsKeyRecord) -> Option<char> {
     None
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn windows_input_trace_enabled() -> bool {
     std::env::var_os("HERDR_WINDOWS_INPUT_TRACE").is_some()
 }
@@ -1556,6 +1584,28 @@ mod tests {
         .chars()
         .map(key_char)
         .collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_input_trace_preserves_mapped_event_groups() {
+        let groups = vec![
+            vec![crate::protocol::ClientInputEvent::FocusGained],
+            vec![
+                crate::protocol::ClientInputEvent::FocusLost,
+                crate::protocol::ClientInputEvent::FocusGained,
+            ],
+        ];
+        let mut trace = WindowsInputTraceBatch::default();
+        let mut handoff = WindowsInputHandoff::default();
+
+        for events in &groups {
+            push_platform_input_events(events.clone(), &mut handoff, Some(&mut trace));
+        }
+        push_platform_input_events(Vec::new(), &mut handoff, Some(&mut trace));
+
+        assert_eq!(trace.mapped_event_groups, groups);
+        assert_eq!(handoff.pending, VecDeque::from(groups));
     }
 
     #[cfg(windows)]
