@@ -5063,6 +5063,33 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_ghostty_default_pane_sends_legacy_modified_enter() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+        for (modifiers, expected) in [
+            // Shift+Enter keeps using the native ConPTY fallback so the child
+            // receives a real key record rather than a CSI 27 sequence.
+            (
+                crossterm::event::KeyModifiers::SHIFT,
+                b"\x1b[13;28;13;1;16;1_".as_slice(),
+            ),
+            (crossterm::event::KeyModifiers::CONTROL, b"\r".as_slice()),
+            (crossterm::event::KeyModifiers::SUPER, b"\r".as_slice()),
+            (crossterm::event::KeyModifiers::ALT, b"\x1b\r".as_slice()),
+        ] {
+            let key = crate::input::TerminalKey::new(crossterm::event::KeyCode::Enter, modifiers);
+            assert_eq!(
+                pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+                expected,
+                "{modifiers:?}"
+            );
+        }
+    }
+
     #[test]
     fn ghostty_modify_other_keys_mode_one_preserves_shift_enter() {
         let (tx, _rx) = mpsc::channel(4);
