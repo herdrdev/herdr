@@ -86,7 +86,8 @@ use terminal_setup::{
 #[cfg(test)]
 use terminal_setup::{
     should_enable_host_color_scheme_reports, windows_virtual_terminal_input_mode,
-    write_host_color_scheme_report_mode, write_terminal_restore_postlude,
+    windows_win32_input_mode_enabled, write_host_color_scheme_report_mode,
+    write_terminal_restore_postlude,
 };
 
 #[cfg(unix)]
@@ -534,6 +535,10 @@ async fn run_client_loop(
         } else {
             crate::protocol::MAX_FRAME_SIZE
         };
+        let negotiation = endpoint::EndpointNegotiation::new(
+            handshake.endpoint_methods.unwrap_or_default(),
+            handshake.endpoint_capabilities.unwrap_or_default(),
+        );
         let transport = start_endpoint_transport(
             stream,
             (),
@@ -541,11 +546,8 @@ async fn run_client_loop(
             endpoint::ClientEndpointId::Local,
             1,
             max_frame_size,
+            negotiation.supports_capability(protocol::surface_reuse::CAPABILITY),
         )?;
-        let negotiation = endpoint::EndpointNegotiation::new(
-            handshake.endpoint_methods.unwrap_or_default(),
-            handshake.endpoint_capabilities.unwrap_or_default(),
-        );
         let mut registry = endpoint::EndpointRegistry::new(transport, 1, negotiation);
         if state.shell.is_some() {
             registry.send(&ClientMessage::ClientShellFocus { focused: true });
@@ -1194,6 +1196,8 @@ async fn run_client_loop(
                     ) {
                         continue;
                     }
+                    let surface_reuse =
+                        negotiation.supports_capability(protocol::surface_reuse::CAPABILITY);
                     let agent_view_projection_supported = negotiation.supports_capability(
                         crate::protocol::endpoint::AGENT_VIEW_PROJECTION_CAPABILITY,
                     );
@@ -1225,6 +1229,7 @@ async fn run_client_loop(
                             MAX_GRAPHICS_FRAME_SIZE,
                             endpoint_id,
                             generation,
+                            surface_reuse,
                         );
                     });
                 }

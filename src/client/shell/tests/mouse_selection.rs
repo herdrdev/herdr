@@ -579,6 +579,33 @@ fn double_click_drag_invalidates_cached_boundaries_outside_selected_cells() {
 }
 
 #[test]
+fn reconnect_word_selection_tracks_content_changes() {
+    for content_changed in [false, true] {
+        let mut state = word_drag_state(true);
+        let initial = start_word_drag(&mut state);
+        word_row_reply(&mut state, &initial, "alpha bravo charlie");
+        let mut next_surface = state.pane_surface.as_ref().unwrap().clone();
+        if content_changed {
+            next_surface.panes[0].content_revision += 2;
+            next_surface.frame.cells[14].symbol = " ".into();
+        }
+        let endpoint_id = state.active_endpoint_id.clone();
+        let snapshot = state.snapshot.as_ref().unwrap().clone();
+        state.mark_endpoint_disconnected(&endpoint_id);
+        state.cache_endpoint_snapshot_inactive_for_generation(&endpoint_id, 1, snapshot);
+        state.set_endpoint_status(
+            &endpoint_id,
+            crate::client::endpoint::ClientEndpointStatus::Online,
+        );
+        assert!(state.activate_endpoint_projection(&endpoint_id));
+        state.set_pane_surface(next_surface);
+
+        assert_eq!(state.selection.is_some(), !content_changed);
+        assert_eq!(state.word_selection_gesture.is_some(), !content_changed);
+    }
+}
+
+#[test]
 fn double_click_release_ignores_reply_after_focus_or_content_changes() {
     for focus_changed in [false, true] {
         let mut state = word_drag_state(true);

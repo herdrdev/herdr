@@ -633,7 +633,7 @@ fn parse_pane_split_args(
 ) -> Result<PaneSplitParams, String> {
     let args = super::expand_equals_args(args, &["--right-click"]);
     let mut env = std::collections::HashMap::new();
-    let mut pane_id = None;
+    let mut pane_id = env_pane_id.map(super::normalize_pane_id);
     let mut direction = None;
     let mut ratio = None;
     let mut cwd = None;
@@ -1783,22 +1783,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_pane_split_args_omitted_target_keeps_focused_fallback() {
-        let params =
-            parse_pane_split_args(&args(&["--direction", "down"]), Some("issue-1")).unwrap();
+    fn parse_pane_split_args_omitted_target_uses_caller() {
+        let params = parse_pane_split_args(
+            &args(&["--no-focus", "--direction", "right", "--cwd", "/var/tmp"]),
+            Some("w1:p2"),
+        )
+        .unwrap();
 
-        assert_eq!(params.target_pane_id, None);
-        assert_eq!(params.direction, crate::api::schema::SplitDirection::Down);
+        assert_eq!(params.target_pane_id, Some("w1:p2".into()));
+        assert!(!params.focus);
     }
 
     #[test]
-    fn parse_pane_split_args_accepts_pane_option() {
-        let params =
-            parse_pane_split_args(&args(&["--pane", "issue-2", "--direction", "right"]), None)
-                .unwrap();
+    fn parse_pane_split_args_without_caller_keeps_focused_fallback() {
+        let params = parse_pane_split_args(&args(&["--direction", "down"]), None).unwrap();
 
-        assert_eq!(params.target_pane_id, Some("issue-2".into()));
-        assert_eq!(params.direction, crate::api::schema::SplitDirection::Right);
+        assert_eq!(params.target_pane_id, None);
+    }
+
+    #[test]
+    fn parse_pane_split_args_explicit_target_overrides_caller() {
+        for target in [args(&["w2:p3"]), args(&["--pane", "w2:p3"])] {
+            let mut input = target;
+            input.extend(args(&["--direction", "right"]));
+            let params = parse_pane_split_args(&input, Some("w1:p2")).unwrap();
+
+            assert_eq!(params.target_pane_id, Some("w2:p3".into()));
+        }
     }
 
     #[test]

@@ -208,12 +208,19 @@ impl ClientShellState {
         let Some(snapshot) = endpoint.snapshot.clone() else {
             return false;
         };
-        if endpoint_id != &self.active_endpoint_id {
+        let generation = endpoint.snapshot_generation;
+        let switching_endpoint = endpoint_id != &self.active_endpoint_id;
+        let agent_scroll = self.agent_scroll;
+        if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
             self.pending_pane_surface = None;
         }
-        self.apply_active_snapshot(snapshot);
+        self.apply_active_snapshot(snapshot, generation);
+        if switching_endpoint {
+            // The aggregate agent list belongs to the client, not one endpoint.
+            self.agent_scroll = agent_scroll;
+        }
         true
     }
 
@@ -647,16 +654,21 @@ impl ClientShellState {
     }
 
     fn apply_cached_endpoint_snapshot(&mut self, endpoint_id: &ClientEndpointId) {
-        let Some(snapshot) = self
+        let Some((snapshot, generation)) = self
             .endpoints
             .iter()
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
-            .and_then(|endpoint| endpoint.snapshot.clone())
+            .and_then(|endpoint| {
+                endpoint
+                    .snapshot
+                    .clone()
+                    .map(|snapshot| (snapshot, endpoint.snapshot_generation))
+            })
         else {
             return;
         };
         if endpoint_id == &self.active_endpoint_id {
-            self.apply_active_snapshot(snapshot);
+            self.apply_active_snapshot(snapshot, generation);
         }
     }
 }

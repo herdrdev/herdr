@@ -14,11 +14,9 @@ env:
   # Keep file/line backtraces without generating type and variable debug information.
   CARGO_PROFILE_DEV_DEBUG: "1"
   CARGO_PROFILE_TEST_DEBUG: "1"
-  # vercel-labs/setup-zig does not cache the Zig global cache, so redirect it into the
-  # workspace .zig-cache that the Zig build cache steps persist. Remove this (and the
-  # widened condition on "Restore Zig build cache") if we switch to a setup action that
-  # owns Zig caching, e.g. step-security/setup-zig. See PR #4023.
+  # Persist both Zig caches; local build outputs otherwise stay in the uncached vendor tree.
   ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
+  ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

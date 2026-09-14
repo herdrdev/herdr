@@ -699,7 +699,7 @@ pub enum AttachScrollSource {
 
 /// A single cell in a rendered frame, serialized independently from ratatui's
 /// `Cell` type to keep the wire protocol stable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellData {
     /// Grapheme cluster displayed in this cell (usually 1–2 chars).
     pub symbol: String,
@@ -713,6 +713,21 @@ pub struct CellData {
     pub skip: bool,
     /// Index into `FrameData::hyperlinks` for this cell's OSC 8 target, if any.
     pub hyperlink: Option<u32>,
+}
+
+impl Clone for CellData {
+    fn clone(&self) -> Self {
+        Self {
+            symbol: self.symbol.clone(),
+            ..*self
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        let mut symbol = std::mem::take(&mut self.symbol);
+        symbol.clone_from(&source.symbol);
+        *self = Self { symbol, ..*source };
+    }
 }
 
 impl CellData {

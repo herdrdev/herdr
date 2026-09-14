@@ -7,6 +7,7 @@ pub(super) fn start_endpoint_transport(
     endpoint_id: endpoint::ClientEndpointId,
     generation: u64,
     max_frame_size: usize,
+    surface_reuse: bool,
 ) -> Result<endpoint::NativeEndpointTransport, ClientError> {
     let reader = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
     let transport = endpoint::NativeEndpointTransport::with_lifetime(stream, lifetime)
@@ -23,6 +24,7 @@ pub(super) fn start_endpoint_transport(
                 max_frame_size,
                 endpoint_id,
                 generation,
+                surface_reuse,
             );
         })
         .map_err(ClientError::ConnectionFailed)?;
@@ -37,6 +39,7 @@ pub(super) fn server_reader_thread(
     max_frame_size: usize,
     endpoint_id: endpoint::ClientEndpointId,
     generation: u64,
+    surface_reuse: bool,
 ) {
     if stream.set_nonblocking(true).is_err() {
         let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected {
@@ -50,12 +53,21 @@ pub(super) fn server_reader_thread(
         stream: &mut stream,
         stopped: should_quit,
     };
+    let mut surface_decoder = surface_reuse.then(protocol::surface_reuse::Decoder::default);
     loop {
         if should_quit.load(Ordering::Acquire) {
             break;
         }
 
-        match protocol::read_message(&mut stream, max_frame_size) {
+        let message = protocol::read_message(&mut stream, max_frame_size).and_then(|message| {
+            match &mut surface_decoder {
+                Some(decoder) => decoder.decode(message).map_err(|error| {
+                    protocol::FramingError::Io(io::Error::new(io::ErrorKind::InvalidData, error))
+                }),
+                None => Ok(message),
+            }
+        });
+        match message {
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage {

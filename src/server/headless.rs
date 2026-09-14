@@ -1483,11 +1483,17 @@ impl HeadlessServer {
         sources: &HashSet<crate::layout::PaneId>,
     ) -> (bool, bool) {
         let focused_source = self
-            .app
-            .state
-            .active
-            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-            .and_then(|workspace| workspace.focused_pane_id())
+            .foreground_window_title_target()
+            .or_else(|| self.default_shell_target())
+            .and_then(|target| {
+                self.app
+                    .state
+                    .workspaces
+                    .get(target.workspace_index)?
+                    .tabs
+                    .get(target.tab_index)
+            })
+            .map(|tab| tab.layout.focused())
             .is_some_and(|pane_id| sources.contains(&pane_id));
         let changes = self.app.sync_terminal_titles(sources);
         let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
@@ -1500,12 +1506,28 @@ impl HeadlessServer {
         )
     }
 
-    /// Renders `ui.window_title` against current session state. `None` means
+    fn foreground_window_title_target(&self) -> Option<crate::ui::TabSurfaceTarget> {
+        self.foreground_client_id
+            .filter(|client_id| {
+                self.clients
+                    .get(client_id)
+                    .is_some_and(|client| client.is_active_shell_client())
+            })
+            .and_then(|client_id| self.shell_target_for_client(client_id))
+    }
+
+    /// Renders `ui.window_title` against the foreground client view. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
     /// the client on Herdr's default title.
     fn configured_window_title(&self) -> Option<String> {
-        self.app
-            .window_title()
+        self.foreground_window_title_target()
+            .map_or_else(
+                || self.app.window_title(),
+                |target| {
+                    self.app
+                        .window_title_for(target.workspace_index, target.tab_index)
+                },
+            )
             .and_then(|title| crate::config::sanitize_window_title_text(&title))
     }
 
@@ -1946,6 +1968,7 @@ impl HeadlessServer {
                 endpoint_keybindings,
                 mouse_capture,
                 surface_active,
+                surface_reuse,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1991,6 +2014,7 @@ impl HeadlessServer {
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
+                connection.render_state.enable_surface_reuse(surface_reuse);
                 connection.shell_projection_revision = 1;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()

@@ -17,6 +17,7 @@ pub(crate) enum ClientRenderState {
     Semantic {
         last_surface: Option<Box<PaneSurfaceFrame>>,
         surface_revision: u64,
+        surface_reuse: bool,
     },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
     TerminalAnsi {
@@ -32,12 +33,19 @@ impl ClientRenderState {
             RenderEncoding::SemanticFrame => Self::Semantic {
                 last_surface: None,
                 surface_revision: 0,
+                surface_reuse: false,
             },
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
                 blit_encoder: BlitEncoder::new(),
                 seq: 0,
                 repaint_pending: false,
             },
+        }
+    }
+
+    pub(crate) fn enable_surface_reuse(&mut self, enabled: bool) {
+        if let Self::Semantic { surface_reuse, .. } = self {
+            *surface_reuse = enabled;
         }
     }
 
@@ -118,6 +126,7 @@ impl ClientRenderState {
         let Self::Semantic {
             last_surface,
             surface_revision,
+            surface_reuse,
         } = self
         else {
             return None;
@@ -138,8 +147,24 @@ impl ClientRenderState {
         surface.surface_revision = surface_revision.saturating_add(1);
         let mut committed_surface = surface.clone();
         committed_surface.graphics.assets.clear();
+        let reused = (*surface_reuse)
+            .then_some(last_surface.as_deref())
+            .flatten()
+            .filter(|last| {
+                last.boot_id == surface.boot_id
+                    && last.frame == surface.frame
+                    // Popup cells are not part of the reusable grid; keep their compact codec.
+                    && surface.popup.is_none()
+                    && surface.graphics.assets.is_empty()
+            })
+            .and_then(|last| {
+                crate::protocol::surface_reuse::message(last.surface_revision, &mut surface)
+                    .map_err(|error| tracing::warn!(%error, "failed to encode surface reuse"))
+                    .ok()
+                    .flatten()
+            });
         Some(PreparedRender::Semantic {
-            message: ServerMessage::PaneSurface(surface),
+            message: reused.unwrap_or(ServerMessage::PaneSurface(surface)),
             committed_surface: Box::new(committed_surface),
         })
     }
@@ -151,6 +176,7 @@ impl ClientRenderState {
         let Self::Semantic {
             last_surface,
             surface_revision,
+            ..
         } = self
         else {
             return None;
@@ -175,6 +201,7 @@ impl ClientRenderState {
                 Self::Semantic {
                     last_surface,
                     surface_revision,
+                    ..
                 },
                 PreparedRender::Semantic {
                     committed_surface, ..
@@ -187,6 +214,7 @@ impl ClientRenderState {
                 Self::Semantic {
                     last_surface,
                     surface_revision,
+                    ..
                 },
                 PreparedRender::SemanticPatch {
                     message: ServerMessage::PaneSurfacePatch(patch),
@@ -487,6 +515,133 @@ mod tests {
             })),
             graphics: crate::protocol::SurfaceGraphicsScene::default(),
         }
+    }
+
+    #[test]
+    fn surface_reuse_preserves_projection_and_patch_baselines_without_resending_cells() {
+        for enabled in [false, true] {
+            let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+            state.enable_surface_reuse(enabled);
+            let mut decoder = crate::protocol::surface_reuse::Decoder::default();
+            let mut surface = popup_surface("popup");
+            surface.popup = None;
+            let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 240, 100));
+            surface.frame = FrameData::from_ratatui_buffer(&buffer, None);
+            let initial = state.prepare_pane_surface(surface.clone()).unwrap();
+            decoder.decode(initial.message().clone()).unwrap();
+            state.commit_sent_frame(initial);
+
+            surface.projection_revision += 1;
+            let update = state.prepare_pane_surface(surface.clone()).unwrap();
+            let mut bytes = Vec::new();
+            crate::protocol::write_message(&mut bytes, update.message()).unwrap();
+            if enabled {
+                assert!(
+                    matches!(update.message(), ServerMessage::EndpointControl { kind, .. }
+                    if kind == crate::protocol::surface_reuse::MESSAGE_KIND)
+                );
+                assert!(
+                    bytes.len() < 2000,
+                    "metadata update was {} bytes",
+                    bytes.len()
+                );
+            } else {
+                assert!(matches!(update.message(), ServerMessage::PaneSurface(_)));
+                assert!(bytes.len() > 100_000);
+            }
+            let ServerMessage::PaneSurface(decoded) =
+                decoder.decode(update.message().clone()).unwrap()
+            else {
+                panic!("decoded full surface");
+            };
+            assert_eq!(decoded.frame, surface.frame);
+            assert_eq!(decoded.projection_revision, surface.projection_revision);
+            assert_eq!(decoded.surface_revision, 2);
+            state.commit_sent_frame(update);
+
+            let mut changed_cell = surface.frame.cells[0].clone();
+            changed_cell.symbol = "x".into();
+            let patch = state
+                .prepare_pane_surface_patch(PaneSurfacePatch {
+                    boot_id: surface.boot_id.clone(),
+                    projection_revision: surface.projection_revision,
+                    base_surface_revision: 2,
+                    surface_revision: 0,
+                    rows: vec![crate::protocol::PaneSurfacePatchRow {
+                        x: 0,
+                        y: 0,
+                        cells: vec![changed_cell.clone()],
+                    }],
+                    panes: Vec::new(),
+                    cursor: None,
+                })
+                .unwrap();
+            decoder.decode(patch.message().clone()).unwrap();
+            state.commit_sent_frame(patch);
+            surface.frame.cells[0] = changed_cell;
+            surface.projection_revision += 1;
+            let update = state.prepare_pane_surface(surface.clone()).unwrap();
+            let ServerMessage::PaneSurface(decoded) =
+                decoder.decode(update.message().clone()).unwrap()
+            else {
+                panic!("decoded surface after patch");
+            };
+            assert_eq!(decoded.frame, surface.frame);
+            assert_eq!(decoded.surface_revision, 4);
+            state.commit_sent_frame(update);
+
+            // A changed border or terminal cell must still reach the client.
+            surface.frame.cells[0].symbol = "y".into();
+            let changed = state.prepare_pane_surface(surface.clone()).unwrap();
+            assert!(matches!(changed.message(), ServerMessage::PaneSurface(_)));
+            let ServerMessage::PaneSurface(decoded) =
+                decoder.decode(changed.message().clone()).unwrap()
+            else {
+                panic!("changed full surface");
+            };
+            assert_eq!(decoded.frame, surface.frame);
+            state.commit_sent_frame(changed);
+
+            state.request_repaint();
+            assert!(matches!(
+                state.prepare_pane_surface(surface).unwrap().message(),
+                ServerMessage::PaneSurface(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn surface_reuse_keeps_popup_cells_on_the_binary_codec() {
+        let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+        state.enable_surface_reuse(true);
+        let mut surface = popup_surface("popup");
+        let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 400, 100));
+        surface.popup.as_mut().unwrap().frame = FrameData::from_ratatui_buffer(&buffer, None);
+        let initial = state.prepare_pane_surface(surface.clone()).unwrap();
+        state.commit_sent_frame(initial);
+        surface.projection_revision += 1;
+        let update = state.prepare_pane_surface(surface).unwrap();
+        assert!(matches!(update.message(), ServerMessage::PaneSurface(_)));
+        let mut bytes = Vec::new();
+        crate::protocol::write_message(&mut bytes, update.message()).unwrap();
+        assert!(bytes.len() < crate::protocol::MAX_FRAME_SIZE);
+    }
+
+    #[test]
+    fn surface_reuse_falls_back_when_json_metadata_exceeds_the_frame_limit() {
+        let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+        state.enable_surface_reuse(true);
+        let mut surface = popup_surface("popup");
+        surface.popup = None;
+        surface.frame.hyperlinks = vec!["\"".repeat(crate::protocol::MAX_FRAME_SIZE / 2)];
+        let initial = state.prepare_pane_surface(surface.clone()).unwrap();
+        state.commit_sent_frame(initial);
+        surface.projection_revision += 1;
+        let update = state.prepare_pane_surface(surface).unwrap();
+        assert!(matches!(update.message(), ServerMessage::PaneSurface(_)));
+        let mut bytes = Vec::new();
+        crate::protocol::write_message(&mut bytes, update.message()).unwrap();
+        assert!(bytes.len() < crate::protocol::MAX_FRAME_SIZE);
     }
 
     #[test]
