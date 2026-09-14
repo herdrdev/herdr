@@ -53,7 +53,6 @@ impl KittyKeyboardTracker {
             match bytes[end] {
                 b'u' => self.observe_csi_u(&bytes[index + 2..end]),
                 b'm' => self.observe_modify_other_keys(&bytes[index + 2..end]),
-                #[cfg(windows)]
                 b'n' if bytes[index + 2..end]
                     .strip_prefix(b">")
                     .is_some_and(|params| {
@@ -209,5 +208,33 @@ mod tests {
         assert_eq!(tracker.modify_other_keys_level(), 2);
         tracker.observe(b"\x1b[>4;0m");
         assert_eq!(tracker.modify_other_keys_level(), 0);
+    }
+
+    #[test]
+    fn modify_other_keys_disable_clears_state_across_chunks() {
+        for level in [1, 2] {
+            for sequence in [b"\x1b[>4n".as_slice(), b"\x1b[>04n".as_slice()] {
+                for split in 0..=sequence.len() {
+                    let mut tracker = KittyKeyboardTracker::default();
+                    tracker.observe(b"\x1b[>5u");
+                    tracker.observe(format!("\x1b[>4;{level}m").as_bytes());
+                    tracker.observe(b"\x1b[4n\x1b[>1n\x1b[>4;2n");
+                    assert_eq!(tracker.modify_other_keys_level(), level);
+
+                    tracker.observe(&sequence[..split]);
+                    tracker.observe(&sequence[split..]);
+
+                    assert_eq!(
+                        tracker.modify_other_keys_level(),
+                        0,
+                        "mode {level}, sequence {sequence:?}, split {split}"
+                    );
+                    assert_eq!(tracker.flags, 5);
+                    assert_eq!(tracker.stack, vec![0]);
+                    #[cfg(unix)]
+                    assert_eq!(tracker.replay_ansi().as_deref(), Some("\x1b[>5u"));
+                }
+            }
+        }
     }
 }

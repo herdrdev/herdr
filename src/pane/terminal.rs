@@ -1987,6 +1987,10 @@ impl GhosttyPaneTerminal {
                 .kitty_keyboard_flags()
                 .is_ok_and(|flags| flags == 0)
                 && !core.kitty_keyboard.modify_other_keys_enabled()
+                && core
+                    .terminal
+                    .modify_other_keys_enabled()
+                    .is_ok_and(|enabled| !enabled)
         }) {
             if let Some(bytes) = crate::platform::encode_windows_conpty_fallback(&key) {
                 return bytes;
@@ -4659,12 +4663,19 @@ mod tests {
             ("", legacy),
             ("\x1b[>4;1m", mode_one),
             ("\x1b[>4;2m", mode_two),
+            ("\x1b[>4n", legacy),
+            ("\x1b[>4;2m", mode_two),
             ("\x1b[>4;0m", legacy),
             ("\x1b[>5u", kitty),
             ("\x1b[<u", legacy),
             ("\x1b[>4;2m\x1b[>1u", kitty),
             ("\x1b[<u", mode_two),
             ("\x1b[>4;0m", legacy),
+            ("\x1b[>4;1m", mode_one),
+            ("\x1b[>04n", legacy),
+            ("\x1b[>4;2m", mode_two),
+            ("\x1b[>4", mode_two),
+            ("n", legacy),
         ] {
             pane.process_pty_bytes(pane_id, 0, sequence.as_bytes(), &tx);
             for (modifiers, expected) in [
