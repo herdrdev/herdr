@@ -73,6 +73,115 @@ fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
+fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
+    let (mut state, remote) = state_with_remote();
+    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
+        let mut projection = state
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap()
+            .snapshot
+            .clone()
+            .unwrap();
+        projection.agents = (0..8)
+            .map(|index| ClientShellAgent {
+                pane_id: format!("pane_{}", index + 1),
+                focused: index == 0,
+                ..agent(&format!("agent {index}"), AgentStatus::Idle, 1)
+            })
+            .collect();
+        projection.panes = projection
+            .agents
+            .iter()
+            .map(|agent| ClientShellPane {
+                pane_id: agent.pane_id.clone(),
+                focused: agent.focused,
+                ..projection.panes[0].clone()
+            })
+            .collect();
+        state.set_endpoint_snapshot(&endpoint_id, projection);
+    }
+    state.compose(100, 28).unwrap();
+    state.agent_scroll = 6;
+    state.compose(100, 28).unwrap();
+    assert_eq!(state.agent_scroll, 6);
+    (state, remote)
+}
+
+#[test]
+fn switching_machines_preserves_aggregate_agent_scroll_and_visible_rows() {
+    let (mut state, remote) = state_with_scrollable_agents();
+    for endpoint_id in [remote.clone(), ClientEndpointId::Local, remote] {
+        let visible = state.hits.endpoint_agents.clone();
+        let (rect, _, pane_id) = visible
+            .iter()
+            .find(|(_, endpoint, _)| endpoint == &endpoint_id)
+            .expect("destination agent remains visible");
+        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        })]);
+        assert!(matches!(
+            click.actions.as_slice(),
+            [ClientShellAction::ActivateEndpoint {
+                endpoint_id: target,
+                target: Some(ClientEndpointFocusTarget::Pane(target_pane)),
+            }] if target == &endpoint_id && target_pane == pane_id
+        ));
+
+        state.workspace_scroll = 3;
+        state.tab_scroll = 2;
+        assert!(state.activate_endpoint_projection(&endpoint_id));
+        assert_eq!(state.agent_scroll, 6);
+        assert_eq!(state.workspace_scroll, 0);
+        assert_eq!(state.tab_scroll, 0);
+        assert!(state.pane_surface.is_none());
+
+        let mut next_surface = surface();
+        next_surface.boot_id = state.endpoint_boot_id(&endpoint_id).unwrap().into();
+        state.set_pane_surface(next_surface);
+        state.compose(100, 28).unwrap();
+        assert_eq!(state.agent_scroll, 6);
+        assert_eq!(state.hits.endpoint_agents, visible);
+    }
+}
+
+#[test]
+fn aggregate_agent_scroll_still_clamps_when_rows_shrink_on_activation() {
+    let (mut state, remote) = state_with_scrollable_agents();
+    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
+        let mut projection = state
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap()
+            .snapshot
+            .clone()
+            .unwrap();
+        projection.revision += 1;
+        projection.agents.truncate(1);
+        state.set_endpoint_snapshot(&endpoint_id, projection);
+    }
+    assert!(state.activate_endpoint_projection(&remote));
+    state.compose(100, 28).unwrap();
+    assert_eq!(state.agent_scroll, 0);
+    assert_eq!(state.hits.agent_max_scroll, 0);
+    assert_eq!(state.hits.endpoint_agents.len(), 2);
+}
+
+#[test]
+fn same_machine_reboot_still_resets_agent_scroll() {
+    let (mut state, _) = state_with_scrollable_agents();
+    let mut projection = state.snapshot.clone().unwrap();
+    projection.boot_id = "restarted-local".into();
+    state.cache_endpoint_snapshot(&ClientEndpointId::Local, projection);
+    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
+    assert_eq!(state.agent_scroll, 0);
+}
+
 #[test]
 fn switching_machines_from_copy_mode_restores_terminal_input() {
     let (mut state, remote) = state_with_remote();

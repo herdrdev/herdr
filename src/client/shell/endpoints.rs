@@ -208,12 +208,18 @@ impl ClientShellState {
         let Some(snapshot) = endpoint.snapshot.clone() else {
             return false;
         };
-        if endpoint_id != &self.active_endpoint_id {
+        let switching_endpoint = endpoint_id != &self.active_endpoint_id;
+        let agent_scroll = self.agent_scroll;
+        if switching_endpoint {
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
             self.pending_pane_surface = None;
         }
         self.apply_active_snapshot(snapshot);
+        if switching_endpoint {
+            // The aggregate agent list belongs to the client, not one endpoint.
+            self.agent_scroll = agent_scroll;
+        }
         true
     }
 
