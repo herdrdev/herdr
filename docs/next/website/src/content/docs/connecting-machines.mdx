@@ -73,9 +73,11 @@ Removing or disabling the machine you are viewing returns you to Local. If Local
 
 ## Connection problems
 
-- **Reconnecting:** Herdr retries with bounded backoff after a network interruption, sleep, or SSH failure. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
+- **Reconnecting:** Herdr retries automatically after a network interruption, sleep, or SSH failure. Repeated failures increase the delay up to two minutes; brief successful connections do not reset it. A connection must remain healthy for a minute before the next interruption gets a fast retry. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
 - **Attention:** The target needs an action that cannot be completed in the background, such as host-key approval, authentication, or a compatible server. Other machines remain usable.
 - **Saved-machine file error:** An unreadable or invalid catalog leaves current connections unchanged. Herdr shows a notice and automatically retries reading it.
+
+When both installations support bridge idle cleanup, saved-machine connections to Linux and macOS also close their remote bridge after a minute without traffic in either direction. Sleep counts toward that deadline, which is checked when the host wakes. Quiet healthy connections exchange health checks; watching continuous output does not require typing. Cleanup leaves the remote Herdr server, sessions, and pane processes running. Older installations remain compatible without this optional cleanup.
 
 Background connections never answer prompts or install, update, restart, or hand off a server. For Attention, run the standalone setup command shown by Herdr in an interactive terminal, for example:
 

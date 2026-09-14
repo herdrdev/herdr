@@ -3,7 +3,22 @@
 use std::io;
 use std::time::Duration;
 
-pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
+pub(crate) fn run_remote_client_bridge(args: &[String]) -> io::Result<()> {
+    let idle_timeout = match args {
+        [] => false,
+        [option]
+            if option == "--idle-timeout-v1"
+                && crate::platform::REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED =>
+        {
+            true
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported remote client bridge option",
+            ))
+        }
+    };
     ensure_remote_server_running()?;
 
     let socket_path = crate::server::socket_paths::client_socket_path();
@@ -17,7 +32,7 @@ pub(crate) fn run_remote_client_bridge() -> io::Result<()> {
         )
     })?;
 
-    crate::platform::forward_remote_bridge_stdio(stream)
+    crate::platform::forward_remote_bridge_stdio(stream, idle_timeout)
 }
 
 fn ensure_remote_server_running() -> io::Result<()> {

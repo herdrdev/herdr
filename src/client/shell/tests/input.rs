@@ -221,8 +221,9 @@ fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility(
     assert!(visible.contains("\u{1b}[2;27H"));
 
     state.overlay = Some(ClientShellOverlay::Onboarding);
-    let hidden = state.compose(106, 20).expect("overlay frame");
-    assert!(String::from_utf8_lossy(&hidden.graphics).contains("a=d,d=i"));
+    let uncovered = state.compose(106, 20).expect("overlay frame");
+    assert!(!String::from_utf8_lossy(&uncovered.graphics).contains("a=d"));
+    assert!(String::from_utf8_lossy(&uncovered.graphics).contains("a=p"));
 
     state.overlay = None;
     let restored = state.compose(106, 20).expect("restored graphics frame");

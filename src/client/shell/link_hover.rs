@@ -317,7 +317,11 @@ impl ClientShellState {
         })
     }
 
-    pub(super) fn render_link_hover(&self, frame: &mut FrameData) {
+    pub(super) fn render_link_hover(
+        &self,
+        frame: &mut FrameData,
+        occlusion: &mut crate::kitty_graphics::surface::Occlusion,
+    ) {
         let Some(hover) = self
             .link_hover
             .as_ref()
@@ -331,6 +335,18 @@ impl ClientShellState {
             if row >= frame.height {
                 continue;
             }
+            occlusion.cover(
+                Rect::new(
+                    rect.x.saturating_add(region.start_col),
+                    row,
+                    region
+                        .end_col
+                        .saturating_sub(region.start_col)
+                        .saturating_add(1),
+                    1,
+                )
+                .intersection(Rect::new(0, 0, frame.width, frame.height)),
+            );
             for col in region.start_col..=region.end_col {
                 let col = rect.x.saturating_add(col);
                 if col >= frame.width {

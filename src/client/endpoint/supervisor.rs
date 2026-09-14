@@ -9,7 +9,9 @@ use crate::protocol::{ClientSurfaceSize, RenderEncoding};
 use interprocess::TryClone as _;
 
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(120);
+const MAX_LOCAL_RETRY_DELAY: Duration = Duration::from_secs(30);
+const STABLE_CONNECTION_PERIOD: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy)]
 pub(crate) struct EndpointConnectOptions {
@@ -51,6 +53,7 @@ struct ReconnectState {
     next_attempt: Option<Instant>,
     in_flight: bool,
     generation: Option<u64>,
+    online_since: Option<Instant>,
 }
 
 impl ReconnectState {
@@ -61,6 +64,7 @@ impl ReconnectState {
             next_attempt: Some(now),
             in_flight: false,
             generation: None,
+            online_since: None,
         }
     }
 }
@@ -200,15 +204,32 @@ impl EndpointSupervisors {
         state.in_flight = false;
         match status {
             ClientEndpointStatus::Online => {
-                state.attempts = 0;
+                if endpoint_id.is_local() {
+                    state.attempts = 0;
+                }
+                state.online_since.get_or_insert(now);
                 state.next_attempt = None;
             }
             ClientEndpointStatus::Attention | ClientEndpointStatus::Disabled => {
-                state.next_attempt = None
+                state.online_since = None;
+                state.next_attempt = None;
             }
             ClientEndpointStatus::Connecting | ClientEndpointStatus::Reconnecting => {
+                // A brief maintenance wake can complete a handshake without restoring the link.
+                if state.online_since.take().is_some_and(|connected| {
+                    now.saturating_duration_since(connected) >= STABLE_CONNECTION_PERIOD
+                }) {
+                    state.attempts = 0;
+                }
                 state.attempts = state.attempts.saturating_add(1);
-                state.next_attempt = Some(now + retry_delay(state.attempts));
+                let delay = retry_delay(state.attempts);
+                state.next_attempt = Some(
+                    now + if endpoint_id.is_local() {
+                        delay.min(MAX_LOCAL_RETRY_DELAY)
+                    } else {
+                        delay
+                    },
+                );
             }
         }
         true
@@ -334,7 +355,7 @@ fn retry_delay(attempt: u32) -> Duration {
     INITIAL_RETRY_DELAY
         .saturating_mul(
             1_u32
-                .checked_shl(attempt.saturating_sub(1).min(6))
+                .checked_shl(attempt.saturating_sub(1).min(8))
                 .unwrap_or(u32::MAX),
         )
         .min(MAX_RETRY_DELAY)
@@ -423,6 +444,33 @@ mod tests {
         );
         assert_eq!(supervisors.endpoints[&id].generation, None);
         assert_eq!(supervisors.endpoints[&other_id].generation, Some(3));
+    }
+
+    #[test]
+    fn brief_ssh_reconnections_do_not_reset_backoff() {
+        let now = Instant::now();
+        let profile = profile();
+        let id = ClientEndpointId::Ssh(profile.id.clone());
+        let mut supervisors = EndpointSupervisors::new(&[profile], now);
+        supervisors.endpoints.get_mut(&id).unwrap().generation = Some(2);
+        for attempt in 1..=5 {
+            let connected = now + Duration::from_secs(attempt * 20);
+            assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, connected));
+            let failed = connected + Duration::from_secs(15);
+            assert!(supervisors.disconnected(&id, 2, failed));
+            assert_eq!(
+                supervisors.endpoints[&id].next_attempt,
+                Some(failed + INITIAL_RETRY_DELAY * (1 << (attempt - 1)))
+            );
+        }
+        let connected = now + Duration::from_secs(200);
+        assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, connected));
+        let failed = connected + Duration::from_secs(60);
+        assert!(supervisors.disconnected(&id, 2, failed));
+        assert_eq!(
+            supervisors.endpoints[&id].next_attempt,
+            Some(failed + INITIAL_RETRY_DELAY)
+        );
     }
 
     #[test]

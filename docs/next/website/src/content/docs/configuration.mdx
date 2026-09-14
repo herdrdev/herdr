@@ -512,7 +512,9 @@ Search the [Config reference](/docs/config-reference/) for scrollback limits, ne
 
 ## Kitty graphics
 
-Herdr renders pane images by default in compatible outer terminals. To disable graphics rendering and the pane graphics API:
+Herdr renders pane images by default in compatible outer terminals. Popups, menus, and notifications temporarily hide only the image placements they overlap. Uncovered images stay visible, and hidden placements return when uncovered. Images do not dim with dialog backgrounds.
+
+To disable graphics rendering and the pane graphics API:
 
 ```toml
 [terminal]

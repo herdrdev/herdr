@@ -266,6 +266,13 @@ pub(crate) struct RemoteSshConfigPaths {
     pub(crate) multiplexing: bool,
 }
 
+pub(crate) const REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED: bool =
+    cfg!(any(target_os = "linux", target_os = "macos"));
+
+#[cfg(unix)]
+mod remote_bridge;
+#[cfg(all(test, unix))]
+mod remote_bridge_tests;
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]

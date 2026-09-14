@@ -121,15 +121,33 @@ pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> s
     Ok(())
 }
 
-pub(crate) fn forward_remote_bridge_stdio(stream: crate::ipc::LocalStream) -> std::io::Result<()> {
+pub(crate) fn forward_remote_bridge_stdio(
+    stream: crate::ipc::LocalStream,
+    idle_timeout: bool,
+) -> std::io::Result<()> {
+    forward_remote_bridge_stdio_with_timeout(
+        stream,
+        idle_timeout.then_some(super::remote_bridge::IDLE_TIMEOUT),
+    )
+}
+
+pub(super) fn forward_remote_bridge_stdio_with_timeout(
+    stream: crate::ipc::LocalStream,
+    idle_timeout: Option<std::time::Duration>,
+) -> std::io::Result<()> {
+    use super::remote_bridge::{Activity, TrackedIo};
     use interprocess::TryClone as _;
 
-    let mut stdout = std::io::stdout().lock();
-    let mut socket_to_stdout = stream.try_clone()?;
+    let activity = idle_timeout.map(Activity::start).transpose()?;
+    let mut stdout = TrackedIo::new(std::io::stdout().lock(), activity.clone());
+    let mut socket_to_stdout = TrackedIo::new(stream.try_clone()?, activity.clone());
     let mut stdin_to_socket = stream;
     let _upload = std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        let _ = copy_flush(&mut stdin, &mut stdin_to_socket);
+        let mut stdin = TrackedIo::new(std::io::stdin(), activity.clone());
+        let _ = copy_flush(
+            &mut stdin,
+            &mut TrackedIo::new(&mut stdin_to_socket, activity),
+        );
         let crate::ipc::LocalStream::UdSocket(stream) = stdin_to_socket;
         let _ = stream.inner().shutdown(std::net::Shutdown::Write);
     });

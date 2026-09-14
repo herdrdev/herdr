@@ -23,7 +23,7 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
                     ),
                 )
             })?;
-            crate::platform::forward_remote_bridge_stdio(stream)
+            crate::platform::forward_remote_bridge_stdio(stream, false)
         }
         [flag] if flag == "--check" => {
             println!("herdr-api-bridge-v1");

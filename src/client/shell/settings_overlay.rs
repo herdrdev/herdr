@@ -244,6 +244,7 @@ pub(super) fn render_settings_overlay(
     );
 
     Some(OverlayRender {
+        area: popup,
         primary,
         cancel: close,
         settings_popup: popup,

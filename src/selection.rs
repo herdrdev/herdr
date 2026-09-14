@@ -188,6 +188,55 @@ impl<P> Selection<P> {
         self.ordered()
     }
 
+    pub(crate) fn visible_rects(&self, inner: Rect, metrics: Option<ScrollMetrics>) -> [Rect; 3] {
+        let mut rects = [Rect::default(); 3];
+        if !self.is_visible() || inner.is_empty() {
+            return rects;
+        }
+        let ((start_row, start_col), (end_row, end_col)) = self.ordered();
+        let top = viewport_top_row(metrics);
+        let bottom = top.saturating_add(u32::from(inner.height));
+        let rect = |first: u32, end: u32, left: u16, right: u16| {
+            let first = first.max(top);
+            let end = end.min(bottom);
+            let left = left.min(inner.width);
+            let right = right.min(inner.width);
+            if first >= end || left >= right {
+                Rect::default()
+            } else {
+                Rect::new(
+                    inner.x + left,
+                    inner.y + (first - top) as u16,
+                    right - left,
+                    (end - first) as u16,
+                )
+            }
+        };
+        if start_row == end_row {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                end_col.saturating_add(1),
+            );
+        } else {
+            rects[0] = rect(
+                start_row,
+                start_row.saturating_add(1),
+                start_col,
+                inner.width,
+            );
+            rects[1] = rect(start_row.saturating_add(1), end_row, 0, inner.width);
+            rects[2] = rect(
+                end_row,
+                end_row.saturating_add(1),
+                0,
+                end_col.saturating_add(1),
+            );
+        }
+        rects
+    }
+
     /// Check whether a pane-relative cell (row, col) is inside the selection.
     pub fn contains(&self, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> bool {
         if !self.is_visible() {
@@ -322,6 +371,39 @@ pub fn write_osc52_bytes(bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_rects_match_selection_cells_when_scrolled_and_reversed() {
+        let inner = Rect::new(10, 5, 8, 6);
+        for (start, end) in [
+            ((0, 2), (0, 5)),
+            ((1, 3), (4, 2)),
+            ((4, 2), (1, 3)),
+            ((0, 0), (20, 7)),
+            ((20, 0), (22, 7)),
+        ] {
+            let selection = Selection::absolute_range((), start, end);
+            for top in [0, 2, 5, 20] {
+                let metrics = Some(ScrollMetrics {
+                    offset_from_bottom: 0,
+                    max_offset_from_bottom: top,
+                    viewport_rows: 6,
+                });
+                let rects = selection.visible_rects(inner, metrics);
+                for row in 0..inner.height {
+                    for col in 0..inner.width {
+                        assert_eq!(
+                            rects
+                                .iter()
+                                .any(|rect| rect.contains((inner.x + col, inner.y + row).into())),
+                            selection.contains(row, col, metrics),
+                            "start={start:?} end={end:?} top={top} row={row} col={col}",
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn make_sel(sr: u32, sc: u16, er: u32, ec: u16) -> Selection {
         let mut sel = Selection::anchor(PaneId::from_raw(0), sr as u16, sc, None);
