@@ -439,10 +439,6 @@ impl Workspace {
         self.tabs.get_mut(self.active_tab)
     }
 
-    pub fn active_tab_display_name(&self) -> Option<String> {
-        self.tab_display_name(self.active_tab)
-    }
-
     pub fn tab_display_name(&self, tab_idx: usize) -> Option<String> {
         let tab = self.tabs.get(tab_idx)?;
         Some(
