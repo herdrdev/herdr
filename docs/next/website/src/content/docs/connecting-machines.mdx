@@ -35,15 +35,19 @@ Run setup in an interactive terminal so Herdr can ask before installing or repla
 herdr machine add workbox
 ```
 
-The sidebar shows the machine as `workbox`, the SSH host without any `user@` prefix. Add `--label "Build machine"` to choose a different name. This uses the remote default session. A machine profile targets one remote session; it does not combine every session on the host.
+In an interactive terminal, Herdr discovers running sessions: it selects the only running session, or lets you choose with Up/Down and Enter when several are running. Esc or Ctrl+C cancels. If a successful query finds no running sessions, setup uses `default`. If no Herdr installation is found, setup offers to install it for `default`. If an installed binary cannot report its sessions, setup reports the error; pass `--remote-session <name>` to select a session explicitly.
 
-To use a named session instead, add the optional `--remote-session` flag:
+The sidebar shows the default session as `workbox`, the SSH host without any `user@` prefix. Add `--label "Build machine"` to choose a different name. A machine profile targets one remote session; it does not combine every session on the host. Non-interactive commands use `default` unless `--remote-session` is supplied.
+
+To skip discovery and use a specific session, add `--remote-session`:
 
 ```bash
 herdr machine add workbox --remote-session agents
 ```
 
 Without `--label`, this machine shows as `workbox/agents`. If the default name is already taken, `machine add` asks you to pass `--label`.
+
+On Windows servers, setup also checks executables used by Herdr processes owned by the SSH user. It validates their capabilities before reuse, so a compatible running build can be used even when SSH's `PATH` points to an older installation.
 
 Herdr checks both the installed binary and the running server. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.
 

@@ -1,3 +1,8 @@
+use std::io::IsTerminal as _;
+
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::style::{Attribute, SetAttribute};
+use crossterm::{cursor, execute, terminal};
 use serde::Serialize;
 
 use crate::client::endpoint::{EndpointCatalog, ProfileId, MAX_LABEL_BYTES};
@@ -206,7 +211,7 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
 struct AddArgs {
     target: String,
     label: Option<String>,
-    session: String,
+    session: Option<String>,
 }
 
 fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
@@ -249,7 +254,6 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         "usage: herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]"
             .to_owned()
     })?;
-    let session = session.unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_owned());
     Ok(AddArgs {
         target,
         label,
@@ -304,6 +308,27 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     };
+    let mut setup = None;
+    let session =
+        if session.is_none() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+            let discovered = (|| {
+                let connection = crate::remote::SavedSshSetup::connect(&target)?;
+                let sessions = connection.running_sessions()?;
+                let session = select_remote_session(&sessions, &target)?;
+                setup = Some(connection);
+                Ok::<_, std::io::Error>(session)
+            })();
+            match discovered {
+                Ok(session) => session,
+                Err(error) => {
+                    eprintln!("error: {error}; machine was not saved");
+                    crate::remote::print_saved_ssh_error_hint(&error, &target);
+                    return Ok(1);
+                }
+            }
+        } else {
+            session.unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_owned())
+        };
     let label_is_default = label.is_none();
     let label = label.unwrap_or_else(|| default_label(&target, &session));
     let mut catalog = load_catalog()?;
@@ -320,7 +345,11 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     }
-    let metadata = match crate::remote::prepare_saved_ssh(&target, &session) {
+    let metadata = match setup
+        .map(Ok)
+        .unwrap_or_else(|| crate::remote::SavedSshSetup::connect(&target))
+        .and_then(|setup| setup.prepare(&session))
+    {
         Ok(metadata) => metadata,
         Err(error) => {
             eprintln!("error: {error}; machine was not saved");
@@ -359,6 +388,83 @@ fn add(args: &[String]) -> std::io::Result<i32> {
     println!("Saved SSH machine {id}. Remote server is ready.");
     println!("Open Herdr clients connect automatically.");
     Ok(0)
+}
+
+fn select_remote_session(sessions: &[String], target: &str) -> std::io::Result<String> {
+    match sessions {
+        [] => return Ok(crate::session::DEFAULT_SESSION_NAME.to_owned()),
+        [session] => return Ok(session.clone()),
+        _ => {}
+    }
+
+    let _raw_mode = RawModeGuard::enable()?;
+    let mut output = std::io::stderr();
+    let mut selected = 0;
+    render_remote_session_picker(&mut output, target, sessions, selected, false)?;
+    loop {
+        let Event::Key(key) = crossterm::event::read()? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+        match key.code {
+            KeyCode::Up => selected = selected.checked_sub(1).unwrap_or(sessions.len() - 1),
+            KeyCode::Down => selected = (selected + 1) % sessions.len(),
+            KeyCode::Enter => return Ok(sessions[selected].clone()),
+            KeyCode::Esc => break,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+            _ => continue,
+        }
+        render_remote_session_picker(&mut output, target, sessions, selected, true)?;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "remote session selection cancelled",
+    ))
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> std::io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+fn render_remote_session_picker(
+    output: &mut impl std::io::Write,
+    target: &str,
+    sessions: &[String],
+    selected: usize,
+    redraw: bool,
+) -> std::io::Result<()> {
+    if redraw {
+        execute!(output, cursor::MoveUp((sessions.len() + 2) as u16))?;
+    }
+    execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
+    write!(output, "Running sessions on {target}:\r\n")?;
+    for (index, session) in sessions.iter().enumerate() {
+        execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
+        if index == selected {
+            execute!(output, SetAttribute(Attribute::Bold))?;
+            write!(output, "> {session}")?;
+            execute!(output, SetAttribute(Attribute::Reset))?;
+            write!(output, "\r\n")?;
+        } else {
+            write!(output, "  {session}\r\n")?;
+        }
+    }
+    execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
+    write!(output, "↑/↓ select · Enter confirm · Esc cancel\r\n")?;
+    output.flush()
 }
 
 fn rename(args: &[String]) -> std::io::Result<i32> {
@@ -480,8 +586,8 @@ mod tests {
     #[test]
     fn add_parser_preserves_values_across_argument_orders() {
         for (args, session) in [
-            (vec!["--label", "coder", "workstation.coder"], "default"),
-            (vec!["workstation.coder", "--label", "coder"], "default"),
+            (vec!["--label", "coder", "workstation.coder"], None),
+            (vec!["workstation.coder", "--label", "coder"], None),
             (
                 vec![
                     "--remote-session",
@@ -490,7 +596,7 @@ mod tests {
                     "--label",
                     "coder",
                 ],
-                "agents",
+                Some("agents"),
             ),
             (
                 vec![
@@ -498,7 +604,7 @@ mod tests {
                     "--remote-session=agents",
                     "workstation.coder",
                 ],
-                "agents",
+                Some("agents"),
             ),
         ] {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
@@ -507,7 +613,7 @@ mod tests {
                 AddArgs {
                     target: "workstation.coder".into(),
                     label: Some("coder".into()),
-                    session: session.into(),
+                    session: session.map(str::to_owned),
                 },
                 "{args:?}"
             );
@@ -518,7 +624,7 @@ mod tests {
     fn add_parser_leaves_label_unset_without_flag() {
         let parsed = parse_add_args(&["workstation.coder".to_owned()]).unwrap();
         assert_eq!(parsed.label, None);
-        assert_eq!(parsed.session, "default");
+        assert_eq!(parsed.session, None);
     }
 
     #[test]

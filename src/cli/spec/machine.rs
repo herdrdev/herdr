@@ -36,7 +36,7 @@ pub(super) fn command() -> Command {
                 )
                 .arg(
                     option("remote-session", "NAME")
-                        .help("Set the explicit Herdr session on the remote machine"),
+                        .help("Select a session explicitly (default without an interactive terminal)"),
                 ),
         )
         .subcommand(

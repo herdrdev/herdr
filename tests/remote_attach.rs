@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -77,7 +77,7 @@ fn check_authentication_output(framed_shell: bool) {
             r#"#!/bin/sh
 authenticate() {{
     : > "$FAKE_SSH_STARTED"
-    printf '%s\n%s\n' '{CHECK_NOTICE}' '{CHECK_URL}' >&2
+    printf '/bin/sh: expected probe noise\n%s\n%s' '{CHECK_NOTICE}' '{CHECK_URL}' >&2
     while [ ! -e "$FAKE_SSH_APPROVED" ]; do
         /bin/sleep 0.01
     done
@@ -94,7 +94,7 @@ if [ "$FAKE_SSH_FRAMED" = 1 ] && [ ! -e "$FAKE_SSH_STARTED" ]; then
 fi
 /bin/cat >/dev/null
 : > "$FAKE_SSH_ADVANCED"
-printf '%s\n' '{LATER_FAILURE}' >&2
+printf '\n%s\n' '{LATER_FAILURE}' >&2
 exit 255
 "#
         ),
@@ -128,22 +128,25 @@ exit 255
 
     cleanup.child = Some(child);
     let child = cleanup.child.as_mut().expect("registered child");
-    let stderr = child.stderr.take().expect("remote attach stderr");
+    let mut stderr = child.stderr.take().expect("remote attach stderr");
     let (line_tx, line_rx) = mpsc::channel();
     cleanup.reader = Some(thread::spawn(move || {
-        for line in BufReader::new(stderr).lines() {
-            if line_tx
-                .send(line.expect("read remote attach stderr"))
-                .is_err()
-            {
+        let mut buffer = [0; 4096];
+        while let Ok(len) = stderr.read(&mut buffer) {
+            if len == 0 || line_tx.send(buffer[..len].to_vec()).is_err() {
                 break;
             }
         }
     }));
 
     wait_for_file(&started_path, Duration::from_secs(2));
-    let notice = line_rx.recv_timeout(Duration::from_secs(2));
-    let url = line_rx.recv_timeout(Duration::from_secs(2));
+    let mut before_approval = Vec::new();
+    while !String::from_utf8_lossy(&before_approval).contains(CHECK_URL) {
+        match line_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(bytes) => before_approval.extend(bytes),
+            Err(_) => break,
+        }
+    }
     fs::write(&approval_path, b"approved").expect("release fake ssh approval");
     wait_for_file(&advanced_path, Duration::from_secs(2));
 
@@ -155,16 +158,21 @@ exit 255
         .expect("registered stderr reader")
         .join()
         .expect("join stderr reader");
-    let later_lines = line_rx.try_iter().collect::<Vec<_>>();
+    let later_bytes = line_rx.try_iter().flatten().collect::<Vec<_>>();
+    let later_lines = String::from_utf8_lossy(&later_bytes);
 
-    assert_eq!(notice.as_deref(), Ok(CHECK_NOTICE));
-    assert_eq!(url.as_deref(), Ok(CHECK_URL));
+    let before_approval = String::from_utf8_lossy(&before_approval);
+    assert!(before_approval.contains(CHECK_NOTICE), "{before_approval}");
     assert!(
-        later_lines.iter().any(|line| line == LATER_FAILURE),
+        before_approval.contains(CHECK_URL),
+        "partial prompt was hidden: {before_approval}"
+    );
+    assert!(
+        later_lines.contains(LATER_FAILURE),
         "later SSH stderr should also be visible: {later_lines:?}"
     );
     assert!(
-        later_lines.iter().any(|line| {
+        later_lines.lines().any(|line| {
             line.contains("error: remote binary discovery failed") && line.contains(LATER_FAILURE)
         }),
         "failed SSH stderr should remain in the contextual error: {later_lines:?}"
