@@ -4,6 +4,7 @@
 
 ### Fixed
 - Muse panes now report working while a turn is active. Detection covers the Muse Code 1.2.1 chrome (`❯` composer, `max` effort and `YOLO` footer segments, `— running (… · esc to interrupt)` activity lines above the todo list) and the braille spinner OSC title, while blocked question UI keeps priority over the spinner.
+- Muse panes parked awaiting background agents now report working instead of idle, matching the transient `Running in background` transcript line and the spinner-bearing workflow footer row.
 
 ## [0.9.0] - 2026-09-07
 

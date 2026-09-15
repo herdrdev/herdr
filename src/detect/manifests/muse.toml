@@ -1,5 +1,5 @@
 id = "muse"
-version = "2026.09.15.1"
+version = "2026.09.15.2"
 min_engine_version = 2
 updated_at = "2026-09-15T00:00:00Z"
 aliases = ["muse-code", "muse-cli"]
@@ -40,6 +40,16 @@ aliases = ["muse-code", "muse-cli"]
 # `Allow for this session`. Network approval shows `Yes, proceed` together with
 # `Yes, don't ask again this session`. Each approval rule requires a pair because Muse can
 # emit any one of these phrases as ordinary assistant text after a completed turn.
+#
+# While the main turn is parked awaiting background agents, Muse 1.2.1 shows no
+# `esc to interrupt` line and clears the spinner title, so neither the working
+# rule nor the OSC rule can fire. The background-task UI itself is the signal:
+# the transcript shows `└ Running in background · /workflows to monitor`
+# (replaced by `Finished ...` on completion) and the footer chrome shows
+# `└ <spinner> workflow <name> · <id>  <n>/<m> agents done`. Both matchers are
+# anchored on the `└` tree glyph so ordinary prose can never match, and the
+# footer arm additionally requires a live braille spinner so a lingering
+# completed row (which shows a static mark, not a spinner) cannot match.
 
 [[rules]]
 id = "workspace_trust_blocked"
@@ -89,6 +99,17 @@ not = [
   { contains = ["Allow this stage once", "Always allow in this workspace"] },
   { contains = ["Allow once", "Allow for this session"] },
   { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
+]
+
+[[rules]]
+id = "bg_tasks_working"
+state = "working"
+priority = 890
+region = "bottom_non_empty_lines(16)"
+visible_working = true
+any = [
+  { line_regex = ['^\s*└ Running in background'] },
+  { line_regex = ['^\s*└ [\x{2800}-\x{28FF}] workflow .* agents done'] },
 ]
 
 [[rules]]

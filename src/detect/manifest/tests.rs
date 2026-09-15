@@ -554,6 +554,46 @@ fn muse_manifest_detects_code_1_2_1_live_chrome() {
 }
 
 #[test]
+fn muse_manifest_detects_background_agents_as_working() {
+    // Main turn parked awaiting background agents: transcript shows the
+    // transient `Running in background` line with no esc-interrupt activity.
+    let bg_transcript = explain(
+        Agent::Muse,
+        "◆ Workflow(generated.model-chosen) · ctrl+o\n└ Running in background · /workflows to monitor\n\n── Voice input (⌥ + v to start) ───\n❯\n───\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+    );
+    assert_eq!(bg_transcript.state, AgentState::Working);
+    assert_eq!(
+        bg_transcript
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("bg_tasks_working")
+    );
+    assert!(bg_transcript.visible_working);
+
+    // Footer chrome with a live spinner and unfinished agent count.
+    let bg_footer = explain(
+        Agent::Muse,
+        "some completed transcript text\n\n── Voice input (⌥ + v to start) ───\n❯\n───\nmain · ↓ to select\n└ ⠸ workflow generated.model-chosen · 6be4d238  0/2+ agents done  1m 24s\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+    );
+    assert_eq!(bg_footer.state, AgentState::Working);
+    assert_eq!(
+        bg_footer.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("bg_tasks_working")
+    );
+    assert!(bg_footer.visible_working);
+
+    // Completed background work leaves `Finished ...` with no running line
+    // and no footer block: must read idle, never working.
+    let finished = explain(
+        Agent::Muse,
+        "◆ Finished muse-integration.wave1 · x · ctrl+o\n\n── Voice input (⌥ + v to start) ───\n❯\n───\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+    );
+    assert_eq!(finished.state, AgentState::Idle);
+    assert!(!finished.visible_working);
+}
+
+#[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
         r#"
