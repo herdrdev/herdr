@@ -83,6 +83,40 @@ fn lock_range(path: &Path, offset: u32) -> File {
     );
     file
 }
+
+#[test]
+fn session_backup_does_not_inherit_a_shared_parent_acl() {
+    let dir = Directory::new("session-backup-private");
+    powershell(
+        r#"
+$ErrorActionPreference = 'Stop'
+$acl = [System.IO.Directory]::GetAccessControl($env:HERDR_TEST_CONFIG_SOURCE)
+$everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($everyone, [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit', [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
+$acl.AddAccessRule($rule)
+[System.IO.Directory]::SetAccessControl($env:HERDR_TEST_CONFIG_SOURCE, $acl)
+"#,
+        &dir.0,
+    );
+    let path = dir.0.join("session.json");
+    let mut source = super::super::create_config_temporary(&path, true).unwrap();
+    source.write_all(b"private session").unwrap();
+    drop(source);
+    let expected_security = security(&path);
+
+    let mut writer = crate::persist::SessionWriter::new(path.clone());
+    writer.clear();
+
+    assert!(!path.exists());
+    let backups: Vec<_> = fs::read_dir(dir.0.join("session-backups"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(fs::read(&backups[0]).unwrap(), b"private session");
+    assert_eq!(security(&backups[0]), expected_security);
+}
+
 fn successful_update(case: &str) {
     let dir = Directory::new(case);
     let source = dir.0.join("config");

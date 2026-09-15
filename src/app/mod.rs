@@ -138,6 +138,7 @@ pub struct App {
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
+    session_writer: Arc<std::sync::Mutex<crate::persist::SessionWriter>>,
     pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     tab_bar_status_generation: u64,
@@ -370,7 +371,9 @@ impl App {
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let session_path = crate::persist::session_path();
         let (workspaces, active, selected) = if !policy.restore_session {
+            crate::logging::session_restored(&session_path, 0, "disabled");
             (Vec::new(), None, 0)
         } else if let Some(snap) = crate::persist::load() {
             let history = config
@@ -394,10 +397,31 @@ impl App {
             restored_terminals = terminals;
             restored_terminal_runtimes = terminal_runtimes.into();
             if ws.is_empty() {
-                crate::logging::session_restored(0, "empty");
+                crate::logging::session_restored(
+                    &session_path,
+                    0,
+                    if snap.workspaces.is_empty() {
+                        "empty"
+                    } else {
+                        "failed"
+                    },
+                );
                 (Vec::new(), None, 0)
             } else {
-                crate::logging::session_restored(ws.len(), "ok");
+                let complete = snap.workspaces.len() == ws.len()
+                    && snap.workspaces.iter().zip(&ws).all(|(saved, restored)| {
+                        saved.tabs.len() == restored.tabs.len()
+                            && saved
+                                .tabs
+                                .iter()
+                                .zip(&restored.tabs)
+                                .all(|(saved, restored)| saved.panes.len() == restored.panes.len())
+                    });
+                crate::logging::session_restored(
+                    &session_path,
+                    ws.len(),
+                    if complete { "ok" } else { "partial" },
+                );
                 let active = snap.active.filter(|&i| i < ws.len());
                 let selected = snap.selected.min(ws.len().saturating_sub(1));
                 (ws, active, selected)
@@ -599,6 +623,9 @@ impl App {
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
+            session_writer: Arc::new(std::sync::Mutex::new(crate::persist::SessionWriter::new(
+                session_path,
+            ))),
             pane_exit_checkpoint_pending: false,
             detached_process_children: Vec::new(),
             tab_bar_status_generation: 0,

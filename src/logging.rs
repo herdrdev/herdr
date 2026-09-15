@@ -331,12 +331,25 @@ pub(crate) fn session_clear_failed(path: &Path, err: &str) {
     );
 }
 
-pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {
+pub(crate) fn session_restored(path: &Path, workspaces: usize, outcome: &'static str) {
     tracing::info!(
         event = "persist.restore",
         subsystem = "persist",
         outcome,
+        path = %path.display(),
         workspaces,
+        "session restore evaluated"
+    );
+}
+
+pub(crate) fn session_restore_failed(path: &Path, outcome: &'static str, err: &str) {
+    tracing::warn!(
+        event = "persist.restore",
+        subsystem = "persist",
+        outcome,
+        path = %path.display(),
+        workspaces = 0,
+        err,
         "session restore evaluated"
     );
 }

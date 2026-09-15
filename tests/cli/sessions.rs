@@ -661,6 +661,282 @@ fn server_stop_then_restart_restores_pane_history() {
 }
 
 #[test]
+fn server_start_logs_missing_session_before_accepting_requests() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let session = "missing-restore";
+    let server = spawn_named_server(&config_home, &runtime_dir, session);
+    wait_for_socket(
+        &named_session_socket(&config_home, session),
+        Duration::from_secs(5),
+    );
+
+    let workspaces = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", session, "workspace", "list"],
+    );
+    assert!(workspaces["result"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let data_dir = config_home
+        .join(app_dir_name())
+        .join("sessions")
+        .join(session);
+    let log = fs::read_to_string(data_dir.join("herdr-server.log")).unwrap();
+    let restore = log
+        .lines()
+        .find(|line| line.contains("event=\"persist.restore\""))
+        .expect("startup must explain why no session was restored");
+    assert!(restore.contains("outcome=\"missing\""), "{restore}");
+    assert!(
+        restore.contains(&data_dir.join("session.json").display().to_string()),
+        "{restore}"
+    );
+
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", session]);
+    drop(server);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn server_start_preserves_unrestored_session_across_autosave_and_shutdown() {
+    for (session, original, appears_after_load) in [
+        (
+            "late-restore",
+            include_str!("../fixtures/session/current-herdr-session.json"),
+            true,
+        ),
+        (
+            "invalid-restore",
+            "{\"version\":3,\"workspaces\":[{\"custom_name\":\"original\"}]}\n",
+            false,
+        ),
+    ] {
+        let base = unique_test_dir();
+        let config_home = base.join("config");
+        let runtime_dir = base.join("runtime");
+        let data_dir = config_home
+            .join(app_dir_name())
+            .join("sessions")
+            .join(session);
+        let session_path = data_dir.join("session.json");
+        fs::create_dir_all(&data_dir).unwrap();
+        if !appears_after_load {
+            fs::write(&session_path, original).unwrap();
+        }
+
+        let server = spawn_named_server(&config_home, &runtime_dir, session);
+        wait_for_socket(
+            &named_session_socket(&config_home, session),
+            Duration::from_secs(5),
+        );
+        let workspaces = run_named_cli_json(
+            &config_home,
+            &runtime_dir,
+            &["--session", session, "workspace", "list"],
+        );
+        assert!(workspaces["result"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        if appears_after_load {
+            fs::write(&session_path, original).unwrap();
+        }
+
+        run_named_cli_json(
+            &config_home,
+            &runtime_dir,
+            &[
+                "--session",
+                session,
+                "workspace",
+                "create",
+                "--label",
+                "fresh",
+                "--cwd",
+                base.to_str().unwrap(),
+                "--no-focus",
+            ],
+        );
+        assert!(
+            wait_until(Duration::from_secs(12), Duration::from_millis(25), || {
+                fs::read(&session_path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .is_some_and(|snapshot| snapshot["workspaces"][0]["custom_name"] == "fresh")
+            }),
+            "fresh session should autosave after preserving the original"
+        );
+        let stopped = run_named_cli(&config_home, &runtime_dir, &["session", "stop", session]);
+        assert!(stopped.status.success());
+        drop(server);
+
+        let backups: Vec<_> = fs::read_dir(data_dir.join("session-backups"))
+            .expect("the unrestored session must remain recoverable")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1, "later saves must keep the first backup");
+        assert_eq!(fs::read(&backups[0]).unwrap(), original.as_bytes());
+        let log = fs::read_to_string(data_dir.join("herdr-server.log")).unwrap();
+        assert!(
+            log.lines().any(|line| {
+                line.contains("event=\"persist.backup\"")
+                    && line.contains(&backups[0].display().to_string())
+            }),
+            "the recovery path must be logged"
+        );
+        cleanup_test_base(&base);
+    }
+}
+
+#[test]
+fn server_start_logs_session_read_and_format_failures() {
+    for (session, content, outcome) in [
+        ("malformed", Some("{"), "parse_error"),
+        (
+            "future",
+            Some("{\"version\":4294967295,\"workspaces\":{\"new_schema\":true}}"),
+            "unsupported_version",
+        ),
+        ("unreadable", None, "read_error"),
+    ] {
+        let base = unique_test_dir();
+        let config_home = base.join("config");
+        let runtime_dir = base.join("runtime");
+        let data_dir = config_home
+            .join(app_dir_name())
+            .join("sessions")
+            .join(session);
+        let session_path = data_dir.join("session.json");
+        fs::create_dir_all(&data_dir).unwrap();
+        if let Some(content) = content {
+            fs::write(&session_path, content).unwrap();
+        } else {
+            std::os::unix::fs::symlink("session.json", &session_path).unwrap();
+        }
+        let server = spawn_named_server(&config_home, &runtime_dir, session);
+        wait_for_socket(
+            &named_session_socket(&config_home, session),
+            Duration::from_secs(5),
+        );
+        run_named_cli_json(
+            &config_home,
+            &runtime_dir,
+            &["--session", session, "workspace", "list"],
+        );
+        let log = fs::read_to_string(data_dir.join("herdr-server.log")).unwrap();
+        let stopped = run_named_cli(&config_home, &runtime_dir, &["session", "stop", session]);
+        assert!(stopped.status.success());
+        drop(server);
+
+        let restore = log
+            .lines()
+            .find(|line| line.contains("event=\"persist.restore\""))
+            .expect("startup must report read and format failures");
+        assert!(
+            restore.contains(&format!("outcome=\"{outcome}\"")),
+            "{restore}"
+        );
+        assert!(
+            restore.contains(&session_path.display().to_string()),
+            "{restore}"
+        );
+        cleanup_test_base(&base);
+    }
+}
+
+#[test]
+fn server_start_preserves_snapshot_when_restore_is_empty_or_incomplete() {
+    for (session, dropped_workspaces, expected_workspaces, outcome) in [
+        ("complete", 0, 2, "ok"),
+        ("partial", 1, 1, "partial"),
+        ("failed", 2, 0, "failed"),
+        ("empty", 0, 0, "empty"),
+    ] {
+        let base = unique_test_dir();
+        let config_home = base.join("config");
+        let runtime_dir = base.join("runtime");
+        let data_dir = config_home
+            .join(app_dir_name())
+            .join("sessions")
+            .join(session);
+        let session_path = data_dir.join("session.json");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut snapshot: serde_json::Value = serde_json::from_str(include_str!(
+            "../fixtures/session/current-herdr-session.json"
+        ))
+        .unwrap();
+        if session == "empty" {
+            snapshot["workspaces"] = serde_json::json!([]);
+        } else {
+            for (index, workspace) in snapshot["workspaces"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                workspace["identity_cwd"] = serde_json::json!(base);
+                if index < dropped_workspaces {
+                    workspace["tabs"] = serde_json::json!([]);
+                } else {
+                    for tab in workspace["tabs"].as_array_mut().unwrap() {
+                        for pane in tab["panes"].as_object_mut().unwrap().values_mut() {
+                            pane["cwd"] = serde_json::json!(base);
+                        }
+                    }
+                }
+            }
+        }
+        let original = serde_json::to_vec_pretty(&snapshot).unwrap();
+        fs::write(&session_path, &original).unwrap();
+        let server = spawn_named_server(&config_home, &runtime_dir, session);
+        wait_for_socket(
+            &named_session_socket(&config_home, session),
+            Duration::from_secs(5),
+        );
+        let workspaces = run_named_cli_json(
+            &config_home,
+            &runtime_dir,
+            &["--session", session, "workspace", "list"],
+        );
+        assert_eq!(
+            workspaces["result"]["workspaces"].as_array().unwrap().len(),
+            expected_workspaces
+        );
+        let stopped = run_named_cli(&config_home, &runtime_dir, &["session", "stop", session]);
+        assert!(stopped.status.success());
+        drop(server);
+
+        let log = fs::read_to_string(data_dir.join("herdr-server.log")).unwrap();
+        assert!(log.lines().any(|line| {
+            line.contains("event=\"persist.restore\"")
+                && line.contains(&format!("outcome=\"{outcome}\""))
+                && line.contains(&session_path.display().to_string())
+        }));
+        let backups: Vec<_> = fs::read_dir(data_dir.join("session-backups"))
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(backups, vec![original]);
+        if expected_workspaces == 0 {
+            assert!(!session_path.exists());
+        } else {
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(&session_path).unwrap()).unwrap();
+            assert_eq!(
+                saved["workspaces"].as_array().unwrap().len(),
+                expected_workspaces
+            );
+        }
+        cleanup_test_base(&base);
+    }
+}
+
+#[test]
 fn server_start_restores_legacy_session_through_api_identity() {
     let base = unique_test_dir();
     let config_home = base.join("config");

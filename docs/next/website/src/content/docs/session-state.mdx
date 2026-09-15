@@ -32,6 +32,12 @@ If the Herdr server stops and starts again, the original pane processes are gone
 
 Snapshot restore does not preserve running shells, servers, tests, or arbitrary processes. Panes that cannot use a stronger restore path come back as new shells in their saved directories.
 
+Startup logs a `persist.restore` result with the session file path, including missing files, read or parse errors, unsupported versions, and empty or incomplete restores.
+
+Before the first save or clear after startup, Herdr preserves an existing `session.json` in the adjacent `session-backups/` directory. If that backup fails, Herdr leaves the original file untouched. Later autosaves and restarts do not overwrite previous backups. Backups contain the session snapshot, not `session-history.json`, and remain until you remove them.
+
+The `persist.backup` log entry gives the recovery file path. To recover it, stop the affected server, copy the chosen backup over its `session.json`, then start it again. Herdr does not automatically restore backups, so intentionally closed workspaces stay closed.
+
 ## Pane screen history replay
 
 Pane screen history restores recent terminal contents after a full server restart without restoring the old process.

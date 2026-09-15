@@ -7,7 +7,7 @@ use super::snapshot::{
     SessionSnapshot, SNAPSHOT_VERSION,
 };
 
-fn session_path() -> PathBuf {
+pub(crate) fn session_path() -> PathBuf {
     crate::session::data_dir().join("session.json")
 }
 
@@ -23,7 +23,8 @@ fn resolve_write_target(path: &Path) -> std::io::Result<PathBuf> {
     for _ in 0..16 {
         let meta = match std::fs::symlink_metadata(&current) {
             Ok(meta) => meta,
-            Err(_) => return Ok(current),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(current),
+            Err(err) => return Err(err),
         };
         if !meta.file_type().is_symlink() {
             return Ok(current);
@@ -38,7 +39,7 @@ fn resolve_write_target(path: &Path) -> std::io::Result<PathBuf> {
                 .join(link)
         };
     }
-    Ok(current)
+    Err(std::io::Error::other("too many session file symlinks"))
 }
 
 pub(super) fn save_to_path(path: &Path, snapshot: &SessionSnapshot) -> std::io::Result<()> {
@@ -83,26 +84,6 @@ pub(super) fn clear_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
-pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>) {
-    let path = session_path();
-    let history_path = session_history_path();
-    if let Err(err) = save_to_paths(&path, &history_path, snapshot, history) {
-        crate::logging::session_save_failed(&path, &err.to_string());
-        return;
-    }
-    crate::logging::session_saved(&path, snapshot.workspaces.len());
-}
-
-pub fn clear() {
-    let path = session_path();
-    if let Err(err) = clear_path(&path) {
-        crate::logging::session_clear_failed(&path, &err.to_string());
-        return;
-    }
-    clear_history();
-    crate::logging::session_cleared(&path);
-}
-
 pub fn clear_history() {
     let path = session_history_path();
     if let Err(err) = clear_path(&path) {
@@ -112,30 +93,33 @@ pub fn clear_history() {
 
 pub fn load() -> Option<SessionSnapshot> {
     let path = session_path();
-    if !path.exists() {
-        return None;
-    }
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            crate::logging::session_restored(&path, 0, "missing");
+            return None;
+        }
         Err(err) => {
-            warn!(err = %err, "failed to read session file");
+            crate::logging::session_restore_failed(&path, "read_error", &err.to_string());
             return None;
         }
     };
     match parse_snapshot(&content) {
         Ok(snapshot) => Some(snapshot),
         Err(err) => {
-            if let Some(version) = snapshot_file_version(&content) {
-                if version > SNAPSHOT_VERSION {
-                    warn!(
-                        file_version = version,
-                        supported = SNAPSHOT_VERSION,
-                        "session file is from a newer herdr version, ignoring"
-                    );
-                    return None;
-                }
+            if let Some(version) =
+                snapshot_file_version(&content).filter(|version| *version > SNAPSHOT_VERSION)
+            {
+                crate::logging::session_restore_failed(
+                    &path,
+                    "unsupported_version",
+                    &format!(
+                        "snapshot version {version} is newer than supported {SNAPSHOT_VERSION}"
+                    ),
+                );
+            } else {
+                crate::logging::session_restore_failed(&path, "parse_error", &err);
             }
-            warn!(err = %err, "failed to parse session file, ignoring");
             None
         }
     }

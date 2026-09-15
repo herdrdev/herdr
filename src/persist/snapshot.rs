@@ -468,7 +468,13 @@ pub(super) fn parse_history_snapshot(content: &str) -> Result<SessionHistorySnap
 }
 
 pub(super) fn snapshot_file_version(content: &str) -> Option<u32> {
-    serde_json::from_str::<RawSessionSnapshot>(content)
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: u32,
+    }
+
+    serde_json::from_str::<Version>(content)
         .ok()
         .map(|raw| raw.version)
 }
