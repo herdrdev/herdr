@@ -1,14 +1,30 @@
 id = "muse"
-version = "2026.08.26.1"
+version = "2026.09.15.1"
 min_engine_version = 2
-updated_at = "2026-08-26T00:00:00Z"
+updated_at = "2026-09-15T00:00:00Z"
 aliases = ["muse-code", "muse-cli"]
 
-# Evidence: live bottom-buffer captures from Muse Code 0.2.1 in Herdr, using a local
-# deterministic Responses provider so each UI state could be held and inspected.
+# Evidence: live bottom-buffer captures from Muse Code 0.2.1 (original rules,
+# local deterministic Responses provider) plus Muse Code 1.2.1 (2026-09-15
+# refresh, live Herdr panes).
 #
-# Idle has a `⟩` prompt and `model · effort · cwd` footer. Active turns show
-# `◆ Working (... · esc to interrupt)` or another activity label with the same interrupt hint.
+# 0.2.1 idle has a `⟩` prompt and `model · effort · cwd` footer. Active turns
+# show `◆ Working (... · esc to interrupt)` or another activity label with the
+# same interrupt hint.
+#
+# 1.2.1 changes the chrome: the prompt glyph is now `❯`, the footer is
+# `model · effort · cwd` with new effort levels such as `max` and an optional
+# fourth `· YOLO` segment, and active turns render
+# `◆ <activity> — running (<elapsed> · esc to interrupt)` above the todo list.
+# The composer (`❯` plus footer) stays rendered while working, so prompt
+# shapes alone cannot prove idle; working evidence must outrank them. The todo
+# block plus the voice-input banner, composer, separator, and footer push the
+# running line more than 8 non-empty lines from the bottom, so the working
+# window is 16 lines.
+#
+# Muse also drives a braille spinner OSC title prefix while a turn is active
+# (`⠋ <label>`), cleared to a plain title when idle. Blocked question UI keeps
+# the spinner, so the OSC working rule sits below every blocked rule.
 #
 # Structured questions show two co-occurring footer controls:
 #   Enter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt
@@ -64,12 +80,15 @@ any = [
 id = "working_esc_interrupt"
 state = "working"
 priority = 900
-region = "bottom_non_empty_lines(8)"
+region = "bottom_non_empty_lines(16)"
 visible_working = true
 contains = ["esc to interrupt"]
 not = [
   { contains = ["Enter to select", "Tab for an optional note"] },
   { contains = ["Enter to toggle", "Esc to interrupt"] },
+  { contains = ["Allow this stage once", "Always allow in this workspace"] },
+  { contains = ["Allow once", "Allow for this session"] },
+  { contains = ["Yes, proceed", "Yes, don't ask again this session"] },
 ]
 
 [[rules]]
@@ -85,6 +104,14 @@ any = [
 ]
 
 [[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 800
+region = "osc_title"
+visible_working = true
+regex = ['^[\x{2800}-\x{28FF}] ']
+
+[[rules]]
 id = "idle_prompt"
 state = "idle"
 priority = 700
@@ -93,6 +120,8 @@ visible_idle = true
 any = [
   { line_regex = ['^\s*⟩\s*$'] },
   { line_regex = ['^\s*⟩\s+\S'] },
+  { line_regex = ['^\s*❯\s*$'] },
+  { line_regex = ['^\s*❯\s+\S'] },
 ]
 not = [
   { contains = ["esc to interrupt"] },
@@ -109,5 +138,5 @@ state = "idle"
 priority = 500
 region = "bottom_non_empty_lines(3)"
 visible_idle = true
-line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra) · ']
+line_regex = ['^\s*\S+ · (none|minimal|low|medium|high|xhigh|ultra|max) · ']
 not = [{ contains = ["esc to interrupt"] }]
