@@ -4572,11 +4572,11 @@ mod tests {
         };
         // Captured from Rohan after installing a new binary while the old daemon stayed alive.
         let installed = parse_client_status_json(
-            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check"]}"#,
+            r#"{"version":"0.8.2","protocol":23,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check"]}"#,
         )
         .unwrap();
         let running_binary = parse_client_status_json(
-            r#"{"version":"0.8.2","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","health_check"]}"#,
+            r#"{"version":"0.8.2","protocol":23,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","health_check"]}"#,
         )
         .unwrap();
         assert!(installed.supports_endpoint_requirement(&linux, true));
@@ -4603,7 +4603,7 @@ mod tests {
                 detached_server_daemon,
                 ..
             } = parse_remote_server_status_json(
-                r#"{"status":"running","running":true,"version":"0.8.2","protocol":22,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}"#,
+                r#"{"status":"running","running":true,"version":"0.8.2","protocol":23,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}"#,
             )
             .unwrap()
             .with_endpoint_negotiation(&live_negotiation) else {

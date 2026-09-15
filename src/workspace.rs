@@ -38,6 +38,23 @@ pub struct WorktreeSpaceMembership {
     pub is_linked_worktree: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestState {
+    Open,
+    Draft,
+    Closed,
+    Merged,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PullRequestInfo {
+    pub number: u64,
+    pub state: PullRequestState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceGitStatus {
     pub workspace_id: String,
@@ -188,6 +205,8 @@ pub struct Workspace {
     pub(crate) cached_git_status_key: PathBuf,
     /// Cached current git branch for the workspace repo.
     pub(crate) cached_git_branch: Option<String>,
+    pub(crate) cached_pull_request: Option<PullRequestInfo>,
+    pub(crate) cached_pull_request_repository: Option<String>,
     /// Cached ahead/behind counts for the workspace repo's current branch upstream.
     pub(crate) cached_git_ahead_behind: Option<(usize, usize)>,
     /// Cached derived Git repo metadata for worktree actions and status display.
@@ -257,6 +276,8 @@ impl Workspace {
             cached_auto_label,
             cached_git_status_key,
             cached_git_branch: git_branch(&identity_cwd),
+            cached_pull_request: None,
+            cached_pull_request_repository: None,
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space: None,
@@ -409,6 +430,8 @@ impl Workspace {
                 cached_auto_label,
                 cached_git_status_key,
                 cached_git_branch: git_branch(&initial_cwd),
+                cached_pull_request: None,
+                cached_pull_request_repository: None,
                 cached_git_ahead_behind: None,
                 cached_git_space,
                 worktree_space: None,
@@ -1198,6 +1221,8 @@ impl Workspace {
             cached_auto_label: fallback_label_from_cwd(&identity_cwd),
             cached_git_status_key: identity_cwd.clone(),
             cached_git_branch: git_branch(&identity_cwd),
+            cached_pull_request: None,
+            cached_pull_request_repository: None,
             cached_git_ahead_behind: None,
             cached_git_space: None,
             worktree_space: None,
@@ -1427,6 +1452,14 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_pull_request_state_is_tolerated() {
+        let pull_request: PullRequestInfo =
+            serde_json::from_str(r#"{"number":42,"state":"future_state"}"#).unwrap();
+
+        assert_eq!(pull_request.state, PullRequestState::Unknown);
+    }
 
     #[test]
     fn generated_workspace_ids_are_short_base32_handles() {

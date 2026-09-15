@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn pull_request_uses_main_branch_row_and_linked_worktree_row() {
+    let mut workspace = snapshot().workspaces.remove(0);
+    workspace.pull_request = Some(crate::workspace::PullRequestInfo {
+        number: 123,
+        state: crate::workspace::PullRequestState::Open,
+    });
+    let config = crate::config::SpacesSidebarConfig::default();
+
+    let main = super::super::sidebar::workspace_rows(
+        &workspace,
+        AgentStatus::Idle,
+        false,
+        &config,
+        crate::config::PullRequestIndicatorStyle::Symbols,
+    );
+    assert!(matches!(
+        main[1][1].kind,
+        crate::ui::ResolvedTokenKind::PullRequest { .. }
+    ));
+
+    let linked = super::super::sidebar::workspace_rows(
+        &workspace,
+        AgentStatus::Idle,
+        true,
+        &config,
+        crate::config::PullRequestIndicatorStyle::Symbols,
+    );
+    assert_eq!(linked.len(), 2);
+    assert!(matches!(
+        linked[1][0].kind,
+        crate::ui::ResolvedTokenKind::PullRequest { .. }
+    ));
+
+    let config = crate::config::SpacesSidebarConfig {
+        rows: vec![vec![crate::config::SpaceSidebarToken::Workspace]],
+        ..Default::default()
+    };
+    let branchless = super::super::sidebar::workspace_rows(
+        &workspace,
+        AgentStatus::Idle,
+        false,
+        &config,
+        crate::config::PullRequestIndicatorStyle::Symbols,
+    );
+    assert!(matches!(
+        branchless[1][0].kind,
+        crate::ui::ResolvedTokenKind::PullRequest { .. }
+    ));
+
+    workspace.pull_request.as_mut().unwrap().state = crate::workspace::PullRequestState::Unknown;
+    let unknown = super::super::sidebar::workspace_rows(
+        &workspace,
+        AgentStatus::Idle,
+        false,
+        &config,
+        crate::config::PullRequestIndicatorStyle::Symbols,
+    );
+    assert!(unknown
+        .iter()
+        .flatten()
+        .all(|token| !matches!(token.kind, crate::ui::ResolvedTokenKind::PullRequest { .. })));
+}
+
+#[test]
 fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
     let config = ClientShellConfig::from_config(&Config::default());
     let mut state = ClientShellState::new(config);
@@ -100,6 +164,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
         is_linked_worktree: false,
     });
     snapshot.workspaces.push(ClientShellWorkspace {
+        pull_request: None,
         workspace_id: "ws_2".into(),
         active_tab_id: "tab_ws2".into(),
         new_workspace_cwd: "/repo/feature".into(),

@@ -61,7 +61,10 @@ pub enum AppEvent {
         exit_reason: crate::platform::ChildExitReason,
     },
     /// A worktree-removal runtime could not be restored normally.
-    WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },
+    WorktreeRuntimeRestoreFailed {
+        pane_id: PaneId,
+        operation_id: u64,
+    },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
@@ -139,10 +142,15 @@ pub enum AppEvent {
     },
     /// A pane child emitted one or more executable BEL characters.
     /// The host-facing process forwards them to its outer terminal.
-    TerminalBell { pane_id: PaneId, count: u16 },
+    TerminalBell {
+        pane_id: PaneId,
+        count: u16,
+    },
     /// A pane child emitted a valid OSC 52 clipboard write. The main loop
     /// re-emits it through herdr's own clipboard writer.
-    ClipboardWrite { content: Vec<u8> },
+    ClipboardWrite {
+        content: Vec<u8>,
+    },
     /// A pane child reported its shell current directory through terminal
     /// metadata such as OSC 7.
     TerminalCwdReported {
@@ -154,6 +162,7 @@ pub enum AppEvent {
         results: Vec<WorkspaceGitStatus>,
         cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
     },
+    PullRequestsRefreshed(Vec<crate::app::pull_requests::WorkspacePullRequest>),
     /// A configured tab bar status command finished.
     TabBarCommandFinished {
         generation: u64,

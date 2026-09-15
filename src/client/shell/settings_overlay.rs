@@ -71,6 +71,7 @@ pub(super) fn render_settings_overlay(
             .iter()
             .any(|integration| integration.state == crate::api::schema::IntegrationState::Outdated);
     let mut tab_x = inner.x;
+    let mut tab_y = inner.y + 1;
     let mut tab_hits = Vec::new();
     for section in ClientSettingsSection::ALL {
         let badge = *section == ClientSettingsSection::Integrations && integration_badge;
@@ -79,8 +80,13 @@ pub(super) fn render_settings_overlay(
         } else {
             format!(" {} ", section.label())
         };
-        let width = display_width(&label).min(inner.right().saturating_sub(tab_x));
-        let rect = Rect::new(tab_x, inner.y + 1, width, 1);
+        let label_width = display_width(&label);
+        if tab_x > inner.x && tab_x.saturating_add(label_width) > inner.right() {
+            tab_x = inner.x;
+            tab_y = tab_y.saturating_add(1);
+        }
+        let width = label_width.min(inner.right().saturating_sub(tab_x));
+        let rect = Rect::new(tab_x, tab_y, width, 1);
         let active = *section == settings.section;
         let style = if active {
             Style::default()
@@ -107,24 +113,23 @@ pub(super) fn render_settings_overlay(
         }
         tab_hits.push((rect, *section));
         tab_x = tab_x.saturating_add(width.saturating_add(1));
-        if tab_x >= inner.right() {
-            break;
-        }
     }
+    let tabs_bottom = tab_y.saturating_add(1);
     put_text(
         buffer,
         inner.x,
-        inner.y + 2,
+        tabs_bottom,
         inner.width,
         &"─".repeat(inner.width as usize),
         Style::default().fg(palette.surface0).bg(palette.panel_bg),
     );
 
+    let content_y = tabs_bottom.saturating_add(2);
     let content = Rect::new(
         inner.x,
-        inner.y + 4,
+        content_y,
         inner.width,
-        inner.height.saturating_sub(7),
+        inner.bottom().saturating_sub(3).saturating_sub(content_y),
     );
     let mut choice_hits = Vec::new();
     match settings.section {
@@ -165,6 +170,22 @@ pub(super) fn render_settings_overlay(
                 "agent status indicators",
                 "choose color dots or distinct symbols for each state",
                 &["color dots  ● ● ● ○ ·", "distinct symbols  × ◐ ✓ ○ ·"],
+                settings.selected,
+                palette,
+                &mut choice_hits,
+            );
+        }
+        ClientSettingsSection::PullRequests => {
+            render_choice_section(
+                buffer,
+                content,
+                "pull request indicators",
+                "show the current branch pull request in spaces",
+                &[
+                    "off",
+                    "portable symbols  ○ ◇ × ◆",
+                    "GitHub icons (Nerd Font)     ",
+                ],
                 settings.selected,
                 palette,
                 &mut choice_hits,
@@ -283,7 +304,8 @@ fn render_choice_section(
         description,
         Style::default().fg(palette.overlay1).bg(palette.panel_bg),
     );
-    let row_gap = u16::from(choices.len() > 2);
+    let row_gap =
+        u16::from(choices.len() > 2 && area.height >= (choices.len() as u16).saturating_mul(2) + 2);
     for (index, choice) in choices.iter().enumerate() {
         let y = area.y + 3 + index as u16 * (1 + row_gap);
         if y >= area.bottom() {

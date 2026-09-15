@@ -415,6 +415,8 @@ fn restore_workspace(
             cached_auto_label,
             cached_git_status_key,
             cached_git_branch: crate::workspace::git_branch(&snap.identity_cwd),
+            cached_pull_request: None,
+            cached_pull_request_repository: None,
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space,

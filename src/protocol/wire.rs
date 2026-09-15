@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -1033,6 +1033,8 @@ pub struct ClientShellWorkspace {
     pub custom_label: bool,
     pub branch: Option<String>,
     pub git_ahead_behind: Option<(usize, usize)>,
+    #[serde(default)]
+    pub pull_request: Option<crate::workspace::PullRequestInfo>,
     pub tokens: Vec<(String, String)>,
     pub worktree: Option<ClientShellWorktree>,
     pub focused: bool,
@@ -2706,6 +2708,7 @@ mod tests {
             agent_view_label: None,
             agent_order: Vec::new(),
             workspaces: vec![ClientShellWorkspace {
+                pull_request: None,
                 workspace_id: "w1".into(),
                 active_tab_id: "w1:t1".into(),
                 new_workspace_cwd: "/tmp".into(),

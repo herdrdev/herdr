@@ -1049,6 +1049,17 @@
           ]
         },
         {
+          "key": "ui.pull_request_indicators",
+          "type": "enum",
+          "default": "\"symbols\"",
+          "description": "Show current-branch pull requests in Spaces using portable symbols, GitHub Nerd Font icons, or not at all.",
+          "values": [
+            "off",
+            "symbols",
+            "nerd_font"
+          ]
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

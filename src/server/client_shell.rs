@@ -63,6 +63,7 @@ pub(super) fn snapshot(
                 custom_label: state.custom_name.is_some(),
                 branch: state.branch(),
                 git_ahead_behind: state.git_ahead_behind(),
+                pull_request: state.cached_pull_request.clone(),
                 tokens,
                 worktree: workspace
                     .worktree

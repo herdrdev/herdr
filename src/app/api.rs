@@ -34,6 +34,14 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::PullRequestsRefreshed(results) => {
+                let changed = self.handle_pull_requests_refreshed(results);
+                if changed {
+                    self.render_dirty.request_generic();
+                    self.render_notify.notify_one();
+                }
+                changed
+            }
             AppEvent::TabBarCommandFinished {
                 generation,
                 segment_index,
@@ -65,9 +73,26 @@ impl App {
         } else {
             self.last_git_remote_status_refresh = Instant::now();
         }
+        let pull_request_identity_changed = results.iter().any(|result| {
+            self.state.workspaces.iter().any(|workspace| {
+                workspace.id == result.workspace_id
+                    && (workspace.cached_identity_cwd != result.resolved_identity_cwd
+                        || workspace.cached_git_status_key != result.status_cache_key
+                        || result.demand.branch && workspace.cached_git_branch != result.branch)
+            })
+        });
         let changed = self
             .state
             .apply_workspace_git_statuses(&self.terminal_runtimes, results);
+        if pull_request_identity_changed {
+            if self.pull_request_refresh_in_flight {
+                self.pull_request_refresh_due_after_in_flight = true;
+            } else {
+                self.last_pull_request_refresh = Instant::now()
+                    .checked_sub(super::PULL_REQUEST_REFRESH_INTERVAL)
+                    .unwrap_or_else(Instant::now);
+            }
+        }
         if changed {
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
@@ -113,6 +138,14 @@ impl App {
         } = ev
         {
             self.handle_git_status_refreshed(results, cache_updates);
+            return Vec::new();
+        }
+
+        if let AppEvent::PullRequestsRefreshed(results) = ev {
+            if self.handle_pull_requests_refreshed(results) {
+                self.render_dirty.request_generic();
+                self.render_notify.notify_one();
+            }
             return Vec::new();
         }
 

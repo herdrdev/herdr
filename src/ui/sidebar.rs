@@ -122,6 +122,7 @@ pub(crate) fn resolved_token_spans(
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
                     + usize::from(*ahead > 0 && *behind > 0)
             }
+            ResolvedTokenKind::PullRequest { text, .. } => display_width(text),
             _ => 0,
         })
         .collect::<Vec<_>>();
@@ -262,6 +263,19 @@ pub(crate) fn resolved_token_spans(
                         apply_token_style(Style::default().fg(palette.red), token.style),
                     ));
                 }
+            }
+            ResolvedTokenKind::PullRequest { text, state } => {
+                let color = match state {
+                    crate::workspace::PullRequestState::Open => palette.green,
+                    crate::workspace::PullRequestState::Draft => palette.overlay1,
+                    crate::workspace::PullRequestState::Closed => palette.red,
+                    crate::workspace::PullRequestState::Merged => palette.mauve,
+                    crate::workspace::PullRequestState::Unknown => continue,
+                };
+                spans.push(Span::styled(
+                    text.clone(),
+                    apply_token_style(Style::default().fg(color), token.style),
+                ));
             }
             ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
                 spans.push(Span::styled(

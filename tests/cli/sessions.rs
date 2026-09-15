@@ -389,7 +389,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  protocol: 22"),
+        full_stdout.contains("  protocol: 23"),
         "stdout: {full_stdout}"
     );
     assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
@@ -430,7 +430,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {server_stdout}"
     );
     assert!(
-        server_stdout.contains("private_protocol: 22"),
+        server_stdout.contains("private_protocol: 23"),
         "stdout: {server_stdout}"
     );
 
@@ -442,7 +442,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("protocol: 22"),
+        client_stdout.contains("protocol: 23"),
         "stdout: {client_stdout}"
     );
     assert!(
@@ -456,7 +456,7 @@ fn status_commands_report_client_and_server_versions() {
 
     let full_json = run_cli_json(&socket_path, &["status", "--json"]);
     assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(full_json["client"]["protocol"], 22);
+    assert_eq!(full_json["client"]["protocol"], 23);
     assert_eq!(full_json["client"]["endpoint_protocol_generation"], 1);
     assert_eq!(full_json["client"]["remote_host_bridge"], true);
     assert_eq!(full_json["server"]["status"], "running");
@@ -475,13 +475,13 @@ fn status_commands_report_client_and_server_versions() {
     let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
     assert_eq!(server_json["status"], "running");
     assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(server_json["protocol"], 22);
+    assert_eq!(server_json["protocol"], 23);
     assert_eq!(server_json["compatible"], true);
     assert_eq!(server_json["endpoint_compatible"], true);
 
     let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
     assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(client_json["protocol"], 22);
+    assert_eq!(client_json["protocol"], 23);
     assert_eq!(client_json["endpoint_protocol_generation"], 1);
     assert_eq!(client_json["remote_host_bridge"], true);
     assert!(client_json["binary"]

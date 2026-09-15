@@ -19,6 +19,7 @@ mod git_refresh;
 mod ids;
 pub(crate) mod pane_graphics;
 mod popup;
+pub(crate) mod pull_requests;
 mod runtime;
 mod session;
 pub mod state;
@@ -37,6 +38,7 @@ use std::time::{Duration, Instant};
 
 const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
+const PULL_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
@@ -120,6 +122,9 @@ pub struct App {
     pub(crate) last_git_remote_status_refresh: Instant,
     pub(crate) last_git_repo_discovery_refresh: Instant,
     pub(crate) git_refresh_in_flight: bool,
+    pub(crate) last_pull_request_refresh: Instant,
+    pub(crate) pull_request_refresh_in_flight: bool,
+    pub(crate) pull_request_refresh_due_after_in_flight: bool,
     pub(crate) git_refresh_due_after_in_flight: bool,
     pub(crate) git_identity_refresh_requested: bool,
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
@@ -579,6 +584,9 @@ impl App {
             last_git_remote_status_refresh: Instant::now() - GIT_REMOTE_STATUS_REFRESH_INTERVAL,
             last_git_repo_discovery_refresh: Instant::now(),
             git_refresh_in_flight: false,
+            last_pull_request_refresh: Instant::now() - PULL_REQUEST_REFRESH_INTERVAL,
+            pull_request_refresh_in_flight: false,
+            pull_request_refresh_due_after_in_flight: false,
             git_refresh_due_after_in_flight: false,
             git_identity_refresh_requested: false,
             git_status_cache: HashMap::new(),
@@ -1037,6 +1045,53 @@ mod tests {
         app.git_refresh_in_flight = true;
 
         assert_eq!(app.git_refresh_deadline(), None);
+    }
+
+    #[test]
+    fn pull_request_refresh_preserves_due_request_while_in_flight() {
+        let mut app = test_app();
+        app.pull_request_refresh_in_flight = true;
+        app.pull_request_refresh_due_after_in_flight = true;
+
+        app.handle_pull_requests_refreshed(Vec::new());
+
+        assert!(!app.pull_request_refresh_in_flight);
+        assert!(!app.pull_request_refresh_due_after_in_flight);
+        assert!(app.last_pull_request_refresh + PULL_REQUEST_REFRESH_INTERVAL <= Instant::now());
+    }
+
+    #[test]
+    fn failed_pull_request_refresh_preserves_cached_indicator() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("one");
+        workspace.cached_git_branch = Some("feature".into());
+        workspace.cached_pull_request = Some(crate::workspace::PullRequestInfo {
+            number: 42,
+            state: crate::workspace::PullRequestState::Open,
+        });
+        workspace.cached_pull_request_repository = Some("upstream/herdr".into());
+        let result = pull_requests::WorkspacePullRequest {
+            workspace_id: workspace.id.clone(),
+            cwd: workspace.cached_identity_cwd.clone(),
+            branch: "feature".into(),
+            pull_request: Err(()),
+        };
+        app.state.workspaces.push(workspace);
+
+        assert!(!app.handle_pull_requests_refreshed(vec![result]));
+        assert_eq!(
+            app.state.workspaces[0]
+                .cached_pull_request
+                .as_ref()
+                .map(|pull_request| pull_request.number),
+            Some(42)
+        );
+        assert_eq!(
+            app.state.workspaces[0]
+                .cached_pull_request_repository
+                .as_deref(),
+            Some("upstream/herdr")
+        );
     }
 
     #[test]

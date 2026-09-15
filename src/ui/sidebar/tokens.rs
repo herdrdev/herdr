@@ -20,7 +20,14 @@ pub(crate) enum ResolvedTokenKind {
     Agent(String),
     TerminalTitle(String),
     Branch(String),
-    GitStatus { ahead: usize, behind: usize },
+    GitStatus {
+        ahead: usize,
+        behind: usize,
+    },
+    PullRequest {
+        text: String,
+        state: crate::workspace::PullRequestState,
+    },
     Custom(String),
 }
 
@@ -36,7 +43,7 @@ impl ResolvedTokenKind {
             | Self::TerminalTitle(value)
             | Self::Branch(value)
             | Self::Custom(value) => Some(value),
-            Self::StateIcon | Self::GitStatus { .. } => None,
+            Self::StateIcon | Self::GitStatus { .. } | Self::PullRequest { .. } => None,
         }
     }
 }
@@ -46,8 +53,7 @@ impl ResolvedToken {
         Self { kind, style }
     }
 
-    #[cfg(test)]
-    pub(super) fn unstyled(kind: ResolvedTokenKind) -> Self {
+    pub(crate) fn unstyled(kind: ResolvedTokenKind) -> Self {
         Self::new(kind, SidebarTokenStyle::default())
     }
 }

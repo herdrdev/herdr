@@ -116,6 +116,25 @@ pub enum StatusIndicatorStyle {
     Symbols,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestIndicatorStyle {
+    Off,
+    #[default]
+    Symbols,
+    NerdFont,
+}
+
+impl PullRequestIndicatorStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Symbols => "symbols",
+            Self::NerdFont => "nerd_font",
+        }
+    }
+}
+
 impl StatusIndicatorStyle {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -962,6 +981,8 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// Pull request indicator style. Saved values are "off", "symbols", or "nerd_font".
+    pub pull_request_indicators: PullRequestIndicatorStyle,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1186,6 +1207,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            pull_request_indicators: PullRequestIndicatorStyle::Symbols,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),

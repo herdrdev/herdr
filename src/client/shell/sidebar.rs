@@ -232,6 +232,7 @@ pub(crate) fn render_sidebar(
                         displayed_workspace_status(snapshot, workspace, state.collapsed_groups),
                         entry.indented,
                         &config.spaces,
+                        config.pull_request_indicators,
                     )
                     .len()
                     .max(1)
@@ -288,7 +289,13 @@ pub(crate) fn render_sidebar(
             continue;
         };
         let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
-        let rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
+        let rows = workspace_rows(
+            workspace,
+            status,
+            entry.indented,
+            &config.spaces,
+            config.pull_request_indicators,
+        );
         let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
         if y.saturating_add(row_height) > body.bottom() {
             break;
@@ -612,6 +619,7 @@ pub(in crate::client::shell) fn workspace_rows(
     status: crate::api::schema::AgentStatus,
     indented: bool,
     config: &SpacesSidebarConfig,
+    pull_request_style: crate::config::PullRequestIndicatorStyle,
 ) -> Vec<Vec<crate::ui::ResolvedToken>> {
     let label = if indented && !workspace.custom_label {
         workspace
@@ -623,7 +631,7 @@ pub(in crate::client::shell) fn workspace_rows(
         &workspace.label
     };
     let token_values = workspace.tokens.iter().cloned().collect::<HashMap<_, _>>();
-    crate::ui::sidebar_space_rows(
+    let mut rows = crate::ui::sidebar_space_rows(
         config,
         crate::ui::SpaceTokenContext {
             workspace: label,
@@ -633,7 +641,51 @@ pub(in crate::client::shell) fn workspace_rows(
             tokens: &token_values,
             suppress_git_details: indented,
         },
-    )
+    );
+    if pull_request_style == crate::config::PullRequestIndicatorStyle::Off {
+        return rows;
+    }
+    let Some(pull_request) = workspace.pull_request.as_ref() else {
+        return rows;
+    };
+    let icon = match (pull_request_style, pull_request.state) {
+        (
+            crate::config::PullRequestIndicatorStyle::NerdFont,
+            crate::workspace::PullRequestState::Open,
+        ) => "",
+        (
+            crate::config::PullRequestIndicatorStyle::NerdFont,
+            crate::workspace::PullRequestState::Draft,
+        ) => "",
+        (
+            crate::config::PullRequestIndicatorStyle::NerdFont,
+            crate::workspace::PullRequestState::Closed,
+        ) => "",
+        (
+            crate::config::PullRequestIndicatorStyle::NerdFont,
+            crate::workspace::PullRequestState::Merged,
+        ) => "",
+        (_, crate::workspace::PullRequestState::Open) => "○",
+        (_, crate::workspace::PullRequestState::Draft) => "◇",
+        (_, crate::workspace::PullRequestState::Closed) => "×",
+        (_, crate::workspace::PullRequestState::Merged) => "◆",
+        (_, crate::workspace::PullRequestState::Unknown) => return rows,
+    };
+    let token = crate::ui::ResolvedToken::unstyled(crate::ui::ResolvedTokenKind::PullRequest {
+        text: format!("{icon} #{}", pull_request.number),
+        state: pull_request.state,
+    });
+    if indented {
+        rows.push(vec![token]);
+    } else if let Some(row) = rows.iter_mut().find(|row| {
+        row.iter()
+            .any(|token| matches!(token.kind, crate::ui::ResolvedTokenKind::Branch(_)))
+    }) {
+        row.push(token);
+    } else {
+        rows.push(vec![token]);
+    }
+    rows
 }
 
 pub(in crate::client::shell) fn render_workspace_rows(

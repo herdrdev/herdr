@@ -348,6 +348,15 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+Herdr can use the authenticated GitHub CLI (`gh`) to show the pull request for each current branch in the Spaces sidebar. The default uses portable symbols; Nerd Font users can select GitHub's Octicon glyphs, or turn the indicators off:
+
+```toml
+[ui]
+pull_request_indicators = "symbols" # "off", "symbols", or "nerd_font"
+```
+
+Linked worktrees get a conditional pull-request row. A repository's main space shows the pull request beside its branch. The cached indicator is cleared immediately when the branch changes.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

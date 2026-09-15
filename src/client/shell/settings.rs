@@ -17,6 +17,14 @@ fn indicator_index(style: crate::config::StatusIndicatorStyle) -> usize {
     usize::from(style == crate::config::StatusIndicatorStyle::Symbols)
 }
 
+fn pull_request_index(style: crate::config::PullRequestIndicatorStyle) -> usize {
+    match style {
+        crate::config::PullRequestIndicatorStyle::Off => 0,
+        crate::config::PullRequestIndicatorStyle::Symbols => 1,
+        crate::config::PullRequestIndicatorStyle::NerdFont => 2,
+    }
+}
+
 fn toast_index(delivery: crate::config::ToastDelivery) -> usize {
     match delivery {
         crate::config::ToastDelivery::Off => 0,
@@ -49,6 +57,9 @@ impl ClientShellState {
         match section {
             ClientSettingsSection::Theme => theme_index(&self.config.theme_name),
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
+            ClientSettingsSection::PullRequests => {
+                pull_request_index(self.config.pull_request_indicators)
+            }
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
             ClientSettingsSection::Integrations => 0,
@@ -98,6 +109,7 @@ impl ClientShellState {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
+                ClientSettingsSection::PullRequests => 3,
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
@@ -204,6 +216,17 @@ impl ClientShellState {
                 };
                 self.save_settings_edit(
                     crate::config::ConfigEdit::StatusIndicators(style),
+                    outcome,
+                );
+            }
+            ClientSettingsSection::PullRequests => {
+                let style = match selected {
+                    0 => crate::config::PullRequestIndicatorStyle::Off,
+                    1 => crate::config::PullRequestIndicatorStyle::Symbols,
+                    _ => crate::config::PullRequestIndicatorStyle::NerdFont,
+                };
+                self.save_settings_edit(
+                    crate::config::ConfigEdit::PullRequestIndicators(style),
                     outcome,
                 );
             }

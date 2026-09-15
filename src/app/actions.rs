@@ -1414,6 +1414,14 @@ impl AppState {
             }
 
             let ws = &mut self.workspaces[ws_idx];
+            let pull_request_identity_changed = ws.cached_identity_cwd
+                != result.resolved_identity_cwd
+                || ws.cached_git_status_key != result.status_cache_key
+                || result.demand.branch && ws.cached_git_branch != result.branch;
+            if pull_request_identity_changed {
+                changed |= ws.cached_pull_request.take().is_some();
+                ws.cached_pull_request_repository = None;
+            }
             if ws.cached_identity_cwd != result.resolved_identity_cwd {
                 ws.cached_identity_cwd = result.resolved_identity_cwd;
             }
@@ -1674,7 +1682,9 @@ impl AppState {
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
-            AppEvent::PluginCommandFinished { .. } => Vec::new(),
+            AppEvent::PluginCommandFinished { .. } | AppEvent::PullRequestsRefreshed(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -2554,6 +2564,11 @@ mod tests {
     fn apply_workspace_git_statuses_updates_matching_workspace() {
         let mut state = app_with_workspaces(&["one", "two"]);
         let first_id = state.workspaces[0].id.clone();
+        state.workspaces[0].cached_pull_request = Some(crate::workspace::PullRequestInfo {
+            number: 42,
+            state: crate::workspace::PullRequestState::Open,
+        });
+        state.workspaces[0].cached_pull_request_repository = Some("upstream/herdr".into());
         let first_cwd = state.workspaces[0].resolved_identity_cwd().unwrap();
         let second_id = state.workspaces[1].id.clone();
 
@@ -2574,6 +2589,8 @@ mod tests {
 
         assert!(changed);
         assert_eq!(state.workspaces[0].branch().as_deref(), Some("main"));
+        assert_eq!(state.workspaces[0].cached_pull_request, None);
+        assert_eq!(state.workspaces[0].cached_pull_request_repository, None);
         assert_eq!(state.workspaces[0].git_ahead_behind(), Some((2, 1)));
         assert_eq!(state.workspaces[1].id, second_id);
         assert_eq!(state.workspaces[1].git_ahead_behind(), None);

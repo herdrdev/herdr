@@ -1176,7 +1176,7 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
 
     state.open_settings_overlay();
     state.compose(106, 30).expect("settings overlay");
-    for _ in 0..3 {
+    for _ in 0..4 {
         let next = state.handle_input_bytes(b"\t");
         assert!(next.actions.is_empty());
     }
@@ -1293,4 +1293,24 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
             ..
         })) if integration_messages == &["installed codex"]
     ));
+}
+#[test]
+fn narrow_settings_keep_every_section_mouse_accessible() {
+    let mut config = Config::default();
+    config.ui.mobile_width_threshold = 0;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    state.select_settings_section(
+        ClientSettingsSection::Toast,
+        &mut ClientShellInput::default(),
+    );
+    state.compose(46, 30).expect("narrow settings overlay");
+
+    assert_eq!(
+        state.hits.settings_tabs.len(),
+        ClientSettingsSection::ALL.len()
+    );
+    assert_eq!(state.hits.settings_choices.len(), 4);
 }
