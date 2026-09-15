@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{Error as IoError, Read};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::{mem, ptr};
@@ -46,6 +46,8 @@ type CreatePseudoConsoleFn = unsafe extern "system" fn(
 ) -> HRESULT;
 type ResizePseudoConsoleFn = unsafe extern "system" fn(hpc: HPCON, size: COORD) -> HRESULT;
 type ClosePseudoConsoleFn = unsafe extern "system" fn(hpc: HPCON);
+type PackPseudoConsoleFn =
+    unsafe extern "system" fn(HANDLE, HANDLE, HANDLE, *mut HPCON) -> HRESULT;
 
 // These fields intentionally mirror the exported Win32 symbol names.
 #[allow(non_snake_case)]
@@ -55,6 +57,7 @@ struct ConPtyFuncs {
     CreatePseudoConsole: CreatePseudoConsoleFn,
     ResizePseudoConsole: ResizePseudoConsoleFn,
     ClosePseudoConsole: ClosePseudoConsoleFn,
+    ConptyPackPseudoConsole: Option<PackPseudoConsoleFn>,
 }
 
 unsafe impl Send for ConPtyFuncs {}
@@ -69,7 +72,7 @@ impl Drop for ConPtyFuncs {
 }
 
 impl ConPtyFuncs {
-    unsafe fn from_module(module: HMODULE, owned: bool) -> Result<Self, String> {
+    unsafe fn from_module(module: HMODULE, owned: bool, load_pack: bool) -> Result<Self, String> {
         if module.is_null() {
             return Err(IoError::last_os_error().to_string());
         }
@@ -79,6 +82,9 @@ impl ConPtyFuncs {
             CreatePseudoConsole: load_symbol(module, b"CreatePseudoConsole\0")?,
             ResizePseudoConsole: load_symbol(module, b"ResizePseudoConsole\0")?,
             ClosePseudoConsole: load_symbol(module, b"ClosePseudoConsole\0")?,
+            ConptyPackPseudoConsole: load_pack
+                .then(|| load_symbol(module, b"ConptyPackPseudoConsole\0"))
+                .transpose()?,
         })
     }
 }
@@ -97,7 +103,7 @@ unsafe fn load_symbol<T: Copy>(module: HMODULE, name: &'static [u8]) -> Result<T
 fn load_system_conpty() -> Result<ConPtyFuncs, String> {
     let kernel_name = wide_string(OsStr::new("kernel32.dll"));
     let module = unsafe { GetModuleHandleW(kernel_name.as_ptr()) };
-    unsafe { ConPtyFuncs::from_module(module, false) }
+    unsafe { ConPtyFuncs::from_module(module, false, false) }
 }
 
 fn load_app_local_conpty(path: &Path) -> Result<ConPtyFuncs, String> {
@@ -109,7 +115,7 @@ fn load_app_local_conpty(path: &Path) -> Result<ConPtyFuncs, String> {
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
         )
     };
-    match unsafe { ConPtyFuncs::from_module(module, true) } {
+    match unsafe { ConPtyFuncs::from_module(module, true, true) } {
         Ok(functions) => Ok(functions),
         Err(error) => {
             if !module.is_null() {
@@ -286,6 +292,14 @@ lazy_static! {
     static ref CONPTY: ConPtyFuncs = load_conpty();
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PseudoConsoleHandles {
+    signal: HANDLE,
+    reference: HANDLE,
+    process: HANDLE,
+}
+
 pub struct PsuedoCon {
     con: HPCON,
 }
@@ -300,6 +314,73 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
+    pub(crate) fn supports_handoff() -> bool {
+        CONPTY.ConptyPackPseudoConsole.is_some()
+    }
+
+    pub(crate) fn duplicate_for_handoff(
+        &self,
+        target_process: HANDLE,
+        input: HANDLE,
+        output: HANDLE,
+    ) -> Result<[usize; 5], Error> {
+        ensure!(Self::supports_handoff(), "system ConPTY cannot be transferred");
+        ensure!(!target_process.is_null(), "target process handle is invalid");
+        let handles = unsafe { *self.con.cast::<PseudoConsoleHandles>() };
+        let mut duplicates = [0; 5];
+        for (index, source) in [
+            input,
+            output,
+            handles.signal,
+            handles.reference,
+            handles.process,
+        ]
+        .iter()
+        .copied()
+        .enumerate()
+        {
+            match duplicate_handle_to_process(source, target_process) {
+                Ok(handle) => duplicates[index] = handle,
+                Err(error) => {
+                    close_handles_in_process(target_process, &duplicates[..index]);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(duplicates)
+    }
+
+    pub(crate) unsafe fn from_handoff(handles: [usize; 3]) -> Result<Self, Error> {
+        let [signal, reference, process] = handles.map(|handle| {
+            ensure!(
+                handle != 0 && handle != INVALID_HANDLE_VALUE as usize,
+                "transferred ConPTY handle is invalid"
+            );
+            Ok(unsafe { OwnedHandle::from_raw_handle(handle as _) })
+        });
+        let signal = signal?;
+        let reference = reference?;
+        let process = process?;
+        let pack = CONPTY
+            .ConptyPackPseudoConsole
+            .ok_or_else(|| anyhow::anyhow!("system ConPTY cannot adopt transferred handles"))?;
+        let mut con = INVALID_HANDLE_VALUE;
+        let result = pack(
+            process.as_raw_handle() as _,
+            reference.as_raw_handle() as _,
+            signal.as_raw_handle() as _,
+            &mut con,
+        );
+        ensure!(
+            result == S_OK && con != INVALID_HANDLE_VALUE && !con.is_null(),
+            "failed to pack transferred pseudo console: HRESULT {result}"
+        );
+        let _ = signal.into_raw_handle();
+        let _ = reference.into_raw_handle();
+        let _ = process.into_raw_handle();
+        Ok(Self { con })
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
@@ -394,5 +475,43 @@ impl PsuedoCon {
         Ok(WinChild {
             proc: Mutex::new(proc),
         })
+    }
+}
+
+fn duplicate_handle_to_process(source: HANDLE, target_process: HANDLE) -> Result<usize, Error> {
+    let mut duplicate = ptr::null_mut();
+    let result = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            source,
+            target_process,
+            &mut duplicate,
+            0,
+            0,
+            winapi::um::winnt::DUPLICATE_SAME_ACCESS,
+        )
+    };
+    ensure!(result != 0, "failed to duplicate ConPTY handle: {}", IoError::last_os_error());
+    Ok(duplicate as usize)
+}
+
+fn close_handles_in_process(process: HANDLE, handles: &[usize]) {
+    for handle in handles.iter().copied().filter(|handle| *handle != 0) {
+        let mut local = ptr::null_mut();
+        let duplicated = unsafe {
+            DuplicateHandle(
+                process,
+                handle as _,
+                GetCurrentProcess(),
+                &mut local,
+                0,
+                0,
+                winapi::um::winnt::DUPLICATE_SAME_ACCESS
+                    | winapi::um::winnt::DUPLICATE_CLOSE_SOURCE,
+            )
+        };
+        if duplicated != 0 {
+            unsafe { CloseHandle(local) };
+        }
     }
 }
