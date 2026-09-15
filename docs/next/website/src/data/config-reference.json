@@ -1042,10 +1042,11 @@
           "key": "ui.status_indicators",
           "type": "enum",
           "default": "\"dots\"",
-          "description": "Choose compact color dots or distinct static symbols for agent states.",
+          "description": "Choose compact color dots, distinct static symbols, or opt-in animated agent states.",
           "values": [
             "dots",
-            "symbols"
+            "symbols",
+            "animated"
           ]
         },
         {

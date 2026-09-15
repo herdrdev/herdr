@@ -112,6 +112,7 @@ pub(crate) fn resolved_token_spans(
     custom_style: Style,
     palette: &Palette,
     max_width: usize,
+    mut state_icon_offsets: Option<&mut Vec<usize>>,
 ) -> Vec<Span<'static>> {
     let fixed_widths = resolved
         .iter()
@@ -223,10 +224,21 @@ pub(crate) fn resolved_token_spans(
             ));
         }
         match &token.kind {
-            ResolvedTokenKind::StateIcon => spans.push(Span::styled(
-                state_icon.0.to_string(),
-                apply_token_style(state_icon.1, token.style),
-            )),
+            ResolvedTokenKind::StateIcon => {
+                if let Some(offsets) = state_icon_offsets.as_deref_mut() {
+                    let offset = spans
+                        .iter()
+                        .map(|span| display_width(span.content.as_ref()))
+                        .sum::<usize>();
+                    if offset.saturating_add(fixed_widths[index]) <= max_width {
+                        offsets.push(offset);
+                    }
+                }
+                spans.push(Span::styled(
+                    state_icon.0.to_string(),
+                    apply_token_style(state_icon.1, token.style),
+                ));
+            }
             ResolvedTokenKind::StateText(text) => spans.push(Span::styled(
                 truncate_end(text, budgets[index]),
                 apply_token_style(state_text_style, token.style),

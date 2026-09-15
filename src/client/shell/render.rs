@@ -247,6 +247,72 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) reveal_navigation_workspace: &'a mut bool,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    pub(super) spinner_frame: Option<usize>,
+}
+
+pub(super) fn render_shell_sidebar(
+    buffer: &mut Buffer,
+    area: Rect,
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    state: &mut ShellRenderState<'_>,
+    hits: &mut ShellHitMap,
+) {
+    if state.endpoints.len() > 1 {
+        if state.sidebar_collapsed {
+            super::endpoint_sidebar::render_collapsed(buffer, area, config, state, hits);
+        } else {
+            super::endpoint_sidebar::render_expanded(
+                buffer,
+                area,
+                Some(snapshot),
+                config,
+                state,
+                hits,
+            );
+        }
+    } else if state.sidebar_collapsed {
+        render_collapsed_sidebar(
+            buffer,
+            area,
+            snapshot,
+            config,
+            state
+                .selected_workspace_id
+                .map(|target| target.workspace_id.as_str()),
+            state.spinner_frame,
+            hits,
+        );
+    } else {
+        render_sidebar(buffer, area, snapshot, config, state, hits);
+    }
+    let sidebar_toggle = hits.sidebar_toggle;
+    hits.animated_status_cells
+        .retain(|cell| !super::contains(sidebar_toggle, (cell.x, cell.y)));
+}
+
+pub(super) fn record_animated_status_cells(
+    buffer: &Buffer,
+    hits: &mut ShellHitMap,
+    status: crate::api::schema::AgentStatus,
+    indicators: crate::config::StatusIndicatorStyle,
+    spinner_frame: Option<usize>,
+    positions: impl IntoIterator<Item = (u16, u16)>,
+) {
+    if status != crate::api::schema::AgentStatus::Working
+        || indicators != crate::config::StatusIndicatorStyle::Animated
+        || spinner_frame.is_none()
+    {
+        return;
+    }
+    hits.animated_status_cells
+        .extend(positions.into_iter().filter_map(|(x, y)| {
+            buffer.cell((x, y)).map(|cell| ClientAnimatedStatusCell {
+                x,
+                y,
+                cell: crate::protocol::CellData::from_ratatui_cell(cell),
+            })
+        }));
 }
 
 pub(super) fn render_shell(
@@ -267,46 +333,14 @@ pub(super) fn render_shell(
         );
     }
     if layout.sidebar.width > 0 {
-        if state.endpoints.len() > 1 {
-            if state.sidebar_collapsed {
-                super::endpoint_sidebar::render_collapsed(
-                    buffer,
-                    layout.sidebar,
-                    config,
-                    &mut state,
-                    &mut hits,
-                );
-            } else {
-                super::endpoint_sidebar::render_expanded(
-                    buffer,
-                    layout.sidebar,
-                    Some(snapshot),
-                    config,
-                    &mut state,
-                    &mut hits,
-                );
-            }
-        } else if state.sidebar_collapsed {
-            render_collapsed_sidebar(
-                buffer,
-                layout.sidebar,
-                snapshot,
-                config,
-                state
-                    .selected_workspace_id
-                    .map(|target| target.workspace_id.as_str()),
-                &mut hits,
-            );
-        } else {
-            render_sidebar(
-                buffer,
-                layout.sidebar,
-                snapshot,
-                config,
-                &mut state,
-                &mut hits,
-            );
-        }
+        render_shell_sidebar(
+            buffer,
+            layout.sidebar,
+            snapshot,
+            config,
+            &mut state,
+            &mut hits,
+        );
     }
     if layout.tab_bar.height > 0 {
         render_tab_bar(

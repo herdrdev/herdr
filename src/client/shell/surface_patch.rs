@@ -3,6 +3,7 @@ use super::*;
 pub(crate) struct ClientComposedSurfacePatch {
     pub(crate) rows: Vec<crate::protocol::PaneSurfacePatchRow>,
     pub(crate) cursor: Option<crate::protocol::CursorState>,
+    pub(crate) preserve_cursor: bool,
 }
 
 pub(crate) enum ClientPaneSurfacePatchOutcome {
@@ -195,6 +196,7 @@ impl ClientShellState {
                     visible: cursor.visible,
                     shape: cursor.shape,
                 }),
+            preserve_cursor: false,
         });
         if let Some(area) = fast_path_area {
             let applied = self
@@ -267,6 +269,8 @@ pub(crate) fn apply_composed_surface_patch(
             return None;
         }
     }
-    next.cursor = patch.cursor;
+    if !patch.preserve_cursor {
+        next.cursor = patch.cursor;
+    }
     Some(next)
 }

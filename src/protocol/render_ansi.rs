@@ -137,6 +137,12 @@ impl BlitEncoder {
         self.last_frame.as_ref() == Some(frame)
     }
 
+    pub(crate) fn current_cursor(&self) -> Option<CursorState> {
+        self.last_frame
+            .as_ref()
+            .and_then(|frame| frame.cursor.clone())
+    }
+
     pub(crate) fn encode_patch(
         &self,
         rows: &[PaneSurfacePatchRow],

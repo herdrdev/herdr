@@ -20,6 +20,56 @@ fn restore_mode_bar(
 }
 
 impl ClientShellState {
+    pub(crate) fn compose_spinner_patch(
+        &mut self,
+        cols: u16,
+        rows: u16,
+    ) -> Option<ClientComposedSurfacePatch> {
+        if self.mode != ClientShellMode::Terminal
+            || self.last_composed_size != Some((cols, rows))
+            || self.overlay.is_some()
+            || self.endpoint_error.is_some()
+            || self.config_diagnostic.is_some()
+            || self.visible_endpoint_notice.is_some()
+            || self.visible_notification.is_some()
+            || self.copy_feedback.is_some()
+            || self.chrome_drag.is_some()
+            || self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online)
+            || self.pending_pane_surface.is_some()
+            || self.pane_surface_generation != self.active_snapshot_generation
+        {
+            return None;
+        }
+        let snapshot = self.snapshot.as_deref()?;
+        let surface = self.pane_surface.as_ref()?;
+        if snapshot.revision != surface.projection_revision
+            || self.hits.animated_status_cells.is_empty()
+        {
+            return None;
+        }
+        let symbol = STATUS_SPINNER_FRAMES.get(self.spinner_frame)?;
+        let rows = self
+            .hits
+            .animated_status_cells
+            .iter()
+            .map(|spinner| {
+                let mut cell = spinner.cell.clone();
+                cell.symbol.clear();
+                cell.symbol.push_str(symbol);
+                crate::protocol::PaneSurfacePatchRow {
+                    x: spinner.x,
+                    y: spinner.y,
+                    cells: vec![cell],
+                }
+            })
+            .collect();
+        Some(ClientComposedSurfacePatch {
+            rows,
+            cursor: None,
+            preserve_cursor: true,
+        })
+    }
+
     fn compose_unavailable(&mut self, cols: u16, rows: u16) -> FrameData {
         let layout = self.layout(cols, rows);
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
@@ -69,6 +119,7 @@ impl ClientShellState {
             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
             dragged_workspace_id: None,
             workspace_drop_indicator_row: None,
+            spinner_frame: None,
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -204,6 +255,8 @@ impl ClientShellState {
                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                spinner_frame: (self.mode != ClientShellMode::Navigate)
+                    .then_some(self.spinner_frame),
             },
         );
         self.hits.panes = surface

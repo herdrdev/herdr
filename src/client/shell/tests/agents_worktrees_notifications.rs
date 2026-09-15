@@ -610,6 +610,134 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
 }
 
 #[test]
+fn animated_status_advances_only_on_its_desktop_deadline() {
+    use crate::config::StatusIndicatorStyle::Animated;
+
+    assert_eq!(status_icon(AgentStatus::Blocked, Animated, None), "▲");
+    assert_eq!(status_icon(AgentStatus::Done, Animated, None), "✓");
+    assert_eq!(status_icon(AgentStatus::Idle, Animated, None), "✓");
+    assert_eq!(status_icon(AgentStatus::Unknown, Animated, None), "·");
+
+    let mut projected = snapshot();
+    projected.agents = vec![ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("worker".into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Working,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: true,
+    }];
+    projected.workspaces[0].agent_status = AgentStatus::Working;
+    let mut config = Config::default();
+    config.ui.status_indicators = Animated;
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::StateIcon; 16]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected.clone()));
+    state.set_pane_surface(surface());
+    let mut full_state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    full_state.set_snapshot(Box::new(projected));
+    full_state.set_pane_surface(surface());
+
+    let first = state.compose(106, 30).expect("initial animated frame");
+    full_state.compose(106, 30).expect("initial full frame");
+    assert!(frame_rows(&first).iter().any(|row| row.contains('⠋')));
+    assert!(frame_rows(&first).iter().any(|row| row.contains("LIVE")));
+
+    let now = std::time::Instant::now();
+    assert_eq!(state.timer_delay(now), std::time::Duration::from_millis(80));
+    let deadline = state.next_spinner_frame.expect("spinner deadline");
+    full_state.timer_delay(now);
+    assert!(!state.tick_spinner(deadline - std::time::Duration::from_millis(1)));
+    assert_eq!(state.next_spinner_frame, Some(deadline));
+    assert!(state.tick_spinner(deadline));
+    assert!(full_state.tick_spinner(deadline));
+
+    let scroll_state = (state.workspace_scroll, state.agent_scroll);
+    let patch = state
+        .compose_spinner_patch(106, 30)
+        .expect("animated sidebar patch");
+    assert!(patch.rows.iter().all(|row| row.cells.len() == 1));
+    let patched = apply_composed_surface_patch(&first, patch).expect("applicable sidebar patch");
+    assert_eq!((state.workspace_scroll, state.agent_scroll), scroll_state);
+    let second = full_state.compose(106, 30).expect("advanced full frame");
+    assert_eq!(patched, second);
+    assert!(frame_rows(&second).iter().any(|row| row.contains('⠙')));
+    assert!(frame_rows(&second).iter().any(|row| row.contains("LIVE")));
+
+    state.snapshot.as_mut().expect("snapshot").workspaces[0].agent_status = AgentStatus::Idle;
+    state.endpoints[0]
+        .snapshot
+        .as_mut()
+        .expect("endpoint snapshot")
+        .workspaces[0]
+        .agent_status = AgentStatus::Idle;
+    state.agent_scroll = 1;
+    state
+        .compose(106, 7)
+        .expect("working agent scrolled out of view");
+    assert_eq!(
+        state.timer_delay(deadline),
+        std::time::Duration::from_millis(100)
+    );
+    assert_eq!(state.next_spinner_frame, None);
+
+    let projected = state.snapshot.as_mut().expect("snapshot");
+    projected.workspaces[0].agent_status = AgentStatus::Working;
+    projected.workspaces[0].worktree = Some(ClientShellWorktree {
+        key: "repo".into(),
+        label: "repo".into(),
+        is_linked_worktree: false,
+    });
+    let mut child = projected.workspaces[0].clone();
+    child.workspace_id = "ws_2".into();
+    child.agent_status = AgentStatus::Blocked;
+    child
+        .worktree
+        .as_mut()
+        .expect("worktree")
+        .is_linked_worktree = true;
+    projected.workspaces.push(child);
+    state.endpoints[0].snapshot = state.snapshot.clone();
+    state.collapsed_groups.insert("repo".into());
+    state.sidebar_collapsed = true;
+    state.compose(106, 7).expect("collapsed working workspace");
+    assert_eq!(
+        state.timer_delay(deadline),
+        std::time::Duration::from_millis(80)
+    );
+
+    state.chrome_drag = Some(ClientChromeDrag::SidebarWidth);
+    assert!(state.compose_spinner_patch(106, 30).is_none());
+    state.chrome_drag = None;
+    state.endpoints[0].status = ClientEndpointStatus::Reconnecting;
+    assert!(state.compose_spinner_patch(106, 30).is_none());
+    assert!(!state.tick_spinner(deadline + std::time::Duration::from_millis(80)));
+    state.endpoints[0].status = ClientEndpointStatus::Online;
+
+    state.config.status_indicators = crate::config::StatusIndicatorStyle::Dots;
+    assert_eq!(
+        state.timer_delay(deadline),
+        std::time::Duration::from_millis(100)
+    );
+    assert_eq!(state.spinner_frame, 0);
+    assert_eq!(state.next_spinner_frame, None);
+
+    state.config.status_indicators = Animated;
+    state.mode = ClientShellMode::Navigate;
+    assert!(!state.tick_spinner(deadline + std::time::Duration::from_millis(80)));
+    assert_eq!(state.spinner_frame, 0);
+    assert_eq!(state.next_spinner_frame, None);
+}
+
+#[test]
 fn workspace_state_text_does_not_stack_terminal_faint() {
     use crate::config::SpaceSidebarToken;
 

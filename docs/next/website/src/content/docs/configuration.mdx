@@ -346,7 +346,14 @@ Agent status uses compact colored dots by default. To distinguish blocked, worki
 status_indicators = "symbols"
 ```
 
-The symbols are static, so this option does not enable spinner animation.
+The symbols are static, so this option does not enable spinner animation. To animate working agents in the desktop sidebar, opt in explicitly:
+
+```toml
+[ui]
+status_indicators = "animated"
+```
+
+Animated indicators use `▲` for blocked, an 80 ms braille spinner for working, `✓` for done and idle, and `·` for unknown. Animation stops outside the desktop sidebar or when no connected agent is working. Because each frame writes terminal output, it can affect host-terminal cursor blinking and copy-mode snapshots; `dots` remains the default.
 
 ### Sidebar row layouts
 

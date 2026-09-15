@@ -7,6 +7,7 @@ pub(super) fn render_collapsed(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    spinner_frame: Option<usize>,
     hits: &mut ShellHitMap,
 ) {
     let rows = agent_rows(endpoints, active_endpoint_id, config);
@@ -15,27 +16,41 @@ pub(super) fn render_collapsed(
         if row.agent.focused {
             buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
         }
-        let initial = row.machine_label.chars().next().unwrap_or('?');
+        let initial = row.machine_label.chars().next().unwrap_or('?').to_string();
+        let initial_width = super::render::display_width(&initial)
+            .max(1)
+            .min(rect.width);
+        let style = Style::default()
+            .fg(if row.stale {
+                config.palette.overlay0
+            } else {
+                status_color(row.agent.status, &config.palette)
+            })
+            .add_modifier(if row.stale {
+                Modifier::DIM
+            } else {
+                Modifier::empty()
+            });
+        put_text(buffer, rect.x, rect.y, initial_width, &initial, style);
         put_text(
             buffer,
-            rect.x,
+            rect.x.saturating_add(initial_width),
             rect.y,
-            rect.width,
-            &format!(
-                "{initial}{}",
-                status_icon(row.agent.status, config.status_indicators)
+            rect.width.saturating_sub(initial_width),
+            status_icon(
+                row.agent.status,
+                config.status_indicators,
+                spinner_frame.filter(|_| !row.stale),
             ),
-            Style::default()
-                .fg(if row.stale {
-                    config.palette.overlay0
-                } else {
-                    status_color(row.agent.status, &config.palette)
-                })
-                .add_modifier(if row.stale {
-                    Modifier::DIM
-                } else {
-                    Modifier::empty()
-                }),
+            style,
+        );
+        super::render::record_animated_status_cells(
+            buffer,
+            hits,
+            row.agent.status,
+            config.status_indicators,
+            spinner_frame.filter(|_| !row.stale),
+            (rect.width > initial_width).then_some((rect.x.saturating_add(initial_width), rect.y)),
         );
         hits.endpoint_agents
             .push((rect, row.endpoint_id, row.agent.pane_id));
@@ -50,6 +65,7 @@ pub(super) fn render_expanded(
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
+    spinner_frame: Option<usize>,
     hits: &mut ShellHitMap,
 ) {
     if !super::agent_sidebar::render_agent_panel_header(
@@ -72,7 +88,14 @@ pub(super) fn render_expanded(
         hits,
         |row| row.agent.rows.len(),
         |buffer, rect, row, hits| {
-            super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
+            super::agent_sidebar::render_agent_row(
+                buffer,
+                rect,
+                &row.agent,
+                config,
+                spinner_frame.filter(|_| !row.stale),
+                hits,
+            );
             if row.stale {
                 buffer.set_style(
                     rect,
