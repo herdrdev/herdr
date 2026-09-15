@@ -474,6 +474,86 @@ fn muse_manifest_requires_complete_live_controls() {
 }
 
 #[test]
+fn muse_manifest_detects_code_1_2_1_live_chrome() {
+    // Captured from Muse Code 1.2.1: the running line sits 10 non-empty lines
+    // above the bottom (todo block plus voice banner, composer, separator,
+    // and footer), outside the previous 8-line working window.
+    let working = explain(
+        Agent::Muse,
+        "◆ Running command · Capture live snapshots for fixtures — running (0s · esc to interrupt)\n└ (ctrl+b to send to background)\n\n  ◆ Locate herdr repo and map state detection\n  ◇ Reproduce working-state miss with live evidence\n  ◇ Fix root cause without touching live session\n  ◇ Validate fix with tests + live check\n\n── Voice input (⌥ + v to start) ───\n❯\n───\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert_eq!(
+        working.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("working_esc_interrupt")
+    );
+    assert!(working.visible_working);
+
+    // The braille spinner OSC title marks an active turn even when no working
+    // line remains in the screen window.
+    let osc_working = osc_explain(
+        Agent::Muse,
+        "── Voice input (⌥ + v to start) ───\n❯\n───\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+        "⠹ Developer",
+        "",
+    );
+    assert_eq!(osc_working.state, AgentState::Working);
+    assert_eq!(
+        osc_working
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("osc_title_working")
+    );
+    assert!(osc_working.visible_working);
+
+    // Blocked question UI keeps the spinner title, so screen blocked rules
+    // must outrank the OSC working rule.
+    let blocked_with_spinner = osc_explain(
+        Agent::Muse,
+        "  › 1. Smart default (Recommended)  Auto-layout avoids short ends.\n    2. Strict rule                  Short ends can never hold chairs.\n\n  1 of 3\n  Enter to select · ↑/↓ to move · ←/→ to switch question · Tab for an optional note · Esc to interrupt\n\n── Voice input (⌥ + v to start) ───\n❯\n───\n  muse-spark-1.3-contributor · max · ~/Developer/restaurant-backoffice · YOLO",
+        "⠙ restaurant-backoffice",
+        "",
+    );
+    assert_eq!(blocked_with_spinner.state, AgentState::Blocked);
+    assert_eq!(
+        blocked_with_spinner
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("pick_request_blocked")
+    );
+    assert!(blocked_with_spinner.visible_blocker);
+
+    // 1.2.1 idle chrome: `❯` composer plus `max` effort and `YOLO` mode footer.
+    let idle = explain(
+        Agent::Muse,
+        "◆ Worked for 3h 50m 27s · 5:04 PM\n\n── Voice input (⌥ + v to start) ───\n❯ /goal pins a session objective with a progress bar\n───\n  muse-spark-1.3-contributor · max · ~/Developer/agentic-arch · YOLO",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert_eq!(
+        idle.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("idle_prompt")
+    );
+    assert!(idle.visible_idle);
+
+    // Footer-only idle still matches the widened effort list.
+    let footer_idle = explain(
+        Agent::Muse,
+        "some transcript text\n\n───\n  muse-spark-1.3-contributor · max · ~/Developer · YOLO",
+    );
+    assert_eq!(footer_idle.state, AgentState::Idle);
+    assert_eq!(
+        footer_idle
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("idle_status_fallback")
+    );
+    assert!(footer_idle.visible_idle);
+}
+
+#[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
         r#"
