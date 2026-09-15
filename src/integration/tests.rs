@@ -252,6 +252,7 @@ fn windows_supports_portable_integrations() {
     assert!(integration_target_supported(IntegrationTarget::Devin));
     assert!(integration_target_supported(IntegrationTarget::Mastracode));
     assert!(integration_target_supported(IntegrationTarget::Grok));
+    assert!(integration_target_supported(IntegrationTarget::Muse));
 
     assert!(integration_target_supported(IntegrationTarget::Pi));
     assert!(integration_target_supported(IntegrationTarget::Omp));
@@ -4848,4 +4849,159 @@ fn install_muse_errors_when_config_dir_missing() {
     clear_integration_path_env();
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn muse_registry_reports_label_command_and_version() {
+    use crate::api::schema::IntegrationTarget;
+
+    assert!(IntegrationTarget::ALL.contains(&IntegrationTarget::Muse));
+    assert_eq!(integration_target_label(IntegrationTarget::Muse), "muse");
+    assert_eq!(integration_target_command(IntegrationTarget::Muse), "muse");
+    assert_eq!(
+        integration_target_command_names(IntegrationTarget::Muse),
+        &["muse"]
+    );
+}
+
+#[test]
+fn muse_install_and_uninstall_dispatch_report_expected_messages() {
+    use crate::api::schema::IntegrationTarget;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    let muse_home = xdg_config.join("muse");
+    fs::create_dir_all(&muse_home).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    let installed = install_target(IntegrationTarget::Muse).unwrap();
+    assert_eq!(installed.len(), 2);
+    assert!(
+        installed[0].starts_with("installed muse integration hook to "),
+        "unexpected install message: {}",
+        installed[0]
+    );
+    assert!(
+        installed[1].starts_with("ensured muse settings at "),
+        "unexpected install message: {}",
+        installed[1]
+    );
+
+    let removed = uninstall_target(IntegrationTarget::Muse).unwrap();
+    assert_eq!(removed.len(), 2);
+    assert!(
+        removed[0].starts_with("removed muse hook at "),
+        "unexpected uninstall message: {}",
+        removed[0]
+    );
+    assert!(
+        removed[1].starts_with("removed herdr muse hook entries from "),
+        "unexpected uninstall message: {}",
+        removed[1]
+    );
+
+    let missing = uninstall_target(IntegrationTarget::Muse).unwrap();
+    assert_eq!(missing.len(), 2);
+    assert!(
+        missing[0].starts_with("no muse hook found at "),
+        "unexpected uninstall message: {}",
+        missing[0]
+    );
+    assert!(
+        missing[1].starts_with("no herdr muse hook entries found in "),
+        "unexpected uninstall message: {}",
+        missing[1]
+    );
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn muse_integration_status_tracks_install_state() {
+    use crate::api::schema::IntegrationTarget;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    let muse_home = xdg_config.join("muse");
+    fs::create_dir_all(&muse_home).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    let muse_status = || {
+        installed_integration_statuses()
+            .into_iter()
+            .find(|status| status.target == IntegrationTarget::Muse)
+            .expect("muse integration status")
+    };
+
+    let missing = muse_status();
+    assert_eq!(missing.state, IntegrationStatusKind::NotInstalled);
+    assert_eq!(missing.installed_version, None);
+    assert_eq!(missing.expected_version, MUSE_INTEGRATION_VERSION);
+    assert_eq!(
+        missing.path,
+        muse_home.join("hooks").join(MUSE_HOOK_INSTALL_NAME)
+    );
+
+    install_target(IntegrationTarget::Muse).unwrap();
+    let current = muse_status();
+    assert_eq!(current.state, IntegrationStatusKind::Current);
+    assert_eq!(current.installed_version, Some(MUSE_INTEGRATION_VERSION));
+
+    fs::write(
+        muse_home.join("hooks").join(MUSE_HOOK_INSTALL_NAME),
+        "#!/bin/sh\n# HERDR_INTEGRATION_ID=muse\n# HERDR_INTEGRATION_VERSION=0\n",
+    )
+    .unwrap();
+    let outdated = muse_status();
+    assert_eq!(outdated.installed_version, Some(0));
+    assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
+
+    let recommendation = integration_recommendations()
+        .into_iter()
+        .find(|recommendation| recommendation.target == IntegrationTarget::Muse)
+        .expect("muse integration recommendation");
+    assert_eq!(recommendation.label, "muse");
+    assert_eq!(recommendation.command, "muse");
+    assert_eq!(recommendation.state, IntegrationStatusKind::Outdated);
+    assert!(recommendation.available);
+    assert!(recommendation.needs_install());
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn muse_resume_plan_uses_resume_subcommand() {
+    use crate::agent_resume::{plan, session_ref_from_report, AgentSessionRef};
+
+    let session_ref =
+        session_ref_from_report("herdr:muse", "muse", Some("muse-id".into()), None).unwrap();
+    assert_eq!(session_ref, AgentSessionRef::id("muse-id").unwrap());
+    assert_eq!(
+        plan("herdr:muse", "muse", &session_ref).unwrap().argv,
+        vec!["muse", "resume", "muse-id"]
+    );
+}
+
+#[test]
+fn muse_holds_full_lifecycle_hook_authority() {
+    assert!(crate::detect::full_lifecycle_hook_authority(
+        "herdr:muse",
+        "muse"
+    ));
+    assert!(!crate::detect::session_identity_only_integration(
+        "herdr:muse",
+        "muse"
+    ));
+    assert!(!crate::agent_resume::is_reserved_native_state_source(
+        "herdr:muse",
+        "muse"
+    ));
 }

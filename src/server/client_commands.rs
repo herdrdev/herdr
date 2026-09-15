@@ -292,6 +292,20 @@ mod tests {
             actual.remove("pane.link.resolve").as_deref(),
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
+        // Freeze the additive IntegrationTarget::Muse variant the same way: the
+        // generation-1 fixture keeps the pre-Muse integration.install digest,
+        // and the appended enum value (back-compatible: old clients never send
+        // it, old servers reject it cleanly) is pinned here instead of
+        // rewriting the published contract.
+        let mut expected = expected;
+        assert_eq!(
+            expected.remove("integration.install").as_deref(),
+            Some("913055b838166650fee6713332c1cc436efd4f8fae9a2064d8f9b6616a7a66f8")
+        );
+        assert_eq!(
+            actual.remove("integration.install").as_deref(),
+            Some("33e1f096a0770af349712ab54486da1018f6c331853cef5f9f84ca2051226ea8")
+        );
 
         assert_eq!(
             actual, expected,

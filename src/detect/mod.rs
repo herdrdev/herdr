@@ -333,6 +333,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
             | ("herdr:kimi", "kimi")
+            | ("herdr:muse", "muse")
     )
 }
 
@@ -1049,6 +1050,13 @@ mod tests {
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+    }
+
+    #[test]
+    fn muse_is_full_lifecycle_hook_authority() {
+        assert!(full_lifecycle_hook_authority("herdr:muse", "muse"));
+        assert!(!session_identity_only_integration("herdr:muse", "muse"));
+        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Muse));
     }
 
     #[test]

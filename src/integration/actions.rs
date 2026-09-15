@@ -4,11 +4,12 @@ use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
     install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
-    install_letta, install_mastracode, install_omp, install_opencode, install_pi, install_qodercli,
-    install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
-    uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
-    uninstall_kilo, uninstall_kimi, uninstall_letta, uninstall_mastracode, uninstall_omp,
-    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    install_letta, install_mastracode, install_muse, install_omp, install_opencode, install_pi,
+    install_qodercli, install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex,
+    uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok,
+    uninstall_hermes, uninstall_kilo, uninstall_kimi, uninstall_letta, uninstall_mastracode,
+    uninstall_muse, uninstall_omp, uninstall_opencode, uninstall_pi, uninstall_qodercli,
+    uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -311,6 +312,19 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 format!(
                     "registered grok hook config at {}",
                     installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Muse => {
+            let installed = install_muse()?;
+            vec![
+                format!(
+                    "installed muse integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "ensured muse settings at {}",
+                    installed.settings_path.display()
                 ),
             ]
         }
@@ -763,6 +777,33 @@ pub(crate) fn uninstall_target(
                 messages.push(format!(
                     "no grok hook config found at {}",
                     result.config_path.display()
+                ));
+            }
+            messages
+        }
+        crate::api::schema::IntegrationTarget::Muse => {
+            let result = uninstall_muse()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed muse hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no muse hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.updated_settings {
+                messages.push(format!(
+                    "removed herdr muse hook entries from {}",
+                    result.settings_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no herdr muse hook entries found in {}",
+                    result.settings_path.display()
                 ));
             }
             messages

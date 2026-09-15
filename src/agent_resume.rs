@@ -225,6 +225,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:muse", "muse", AgentSessionRefKind::Id) => {
+            vec!["muse".into(), "resume".into(), session_ref.value.clone()]
+        }
         ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
@@ -283,6 +286,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
             | ("herdr:letta", "letta")
+            | ("herdr:muse", "muse")
     )
 }
 
@@ -315,6 +319,7 @@ mod tests {
         assert!(is_reserved_native_state_source("herdr:codex", "codex"));
         assert!(is_reserved_native_state_source("herdr:devin", "devin"));
         assert!(!is_reserved_native_state_source("herdr:kimi", "kimi"));
+        assert!(!is_reserved_native_state_source("herdr:muse", "muse"));
         assert!(!is_reserved_native_state_source(
             "herdr:opencode",
             "opencode"
@@ -539,6 +544,16 @@ mod tests {
         );
         assert_eq!(
             plan(
+                "herdr:muse",
+                "muse",
+                &AgentSessionRef::id("muse-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["muse", "resume", "muse-session"]
+        );
+        assert_eq!(
+            plan(
                 "herdr:letta",
                 "letta",
                 &AgentSessionRef::id("conversation-123").unwrap()
@@ -700,6 +715,11 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
+
+        let session_ref =
+            session_ref_from_report("herdr:muse", "muse", Some("muse-id".into()), None).unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "muse-id");
     }
 
     #[test]
@@ -853,6 +873,20 @@ mod tests {
             "herdr:antigravity_cli",
             "agy",
             &AgentSessionRef::path(&agy_session).unwrap()
+        )
+        .is_none());
+        assert!(session_ref_from_snapshot(
+            "herdr:muse",
+            "muse",
+            AgentSessionRefKind::Id,
+            "muse-session"
+        )
+        .is_some());
+        let muse_session = absolute_test_path("muse-session");
+        assert!(plan(
+            "herdr:muse",
+            "muse",
+            &AgentSessionRef::path(&muse_session).unwrap()
         )
         .is_none());
     }
