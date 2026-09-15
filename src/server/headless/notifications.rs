@@ -618,7 +618,8 @@ impl HeadlessServer {
                 let changed = self.app.handle_internal_event_with_render_impact(ev);
                 let api_focus_succeeded = super::client_views::forward_proxied_api_response(
                     focused_worktree_response.take(),
-                );
+                )
+                .is_some();
                 self.reconcile_client_shell_locations();
                 if shell_navigation_pending {
                     self.app.accept_current_focus_without_events();

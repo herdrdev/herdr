@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "pane_graphics.rs"]
 mod pane_graphics_tests;
+#[path = "pane_move.rs"]
+mod pane_move_tests;
 #[path = "surface_interest.rs"]
 mod surface_interest_tests;
 
