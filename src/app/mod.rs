@@ -381,7 +381,7 @@ impl App {
                 .pane_history
                 .then(crate::persist::load_history)
                 .flatten();
-            let (ws, terminals, terminal_runtimes) = crate::persist::restore(
+            let ((ws, terminals, terminal_runtimes), report) = crate::persist::restore(
                 &snap,
                 history.as_ref(),
                 24,
@@ -408,19 +408,14 @@ impl App {
                 );
                 (Vec::new(), None, 0)
             } else {
-                let complete = snap.workspaces.len() == ws.len()
-                    && snap.workspaces.iter().zip(&ws).all(|(saved, restored)| {
-                        saved.tabs.len() == restored.tabs.len()
-                            && saved
-                                .tabs
-                                .iter()
-                                .zip(&restored.tabs)
-                                .all(|(saved, restored)| saved.panes.len() == restored.panes.len())
-                    });
                 crate::logging::session_restored(
                     &session_path,
                     ws.len(),
-                    if complete { "ok" } else { "partial" },
+                    if report.is_degraded() {
+                        "partial"
+                    } else {
+                        "ok"
+                    },
                 );
                 let active = snap.active.filter(|&i| i < ws.len());
                 let selected = snap.selected.min(ws.len().saturating_sub(1));

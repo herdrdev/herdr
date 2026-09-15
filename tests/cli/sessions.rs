@@ -856,6 +856,7 @@ fn server_start_preserves_snapshot_when_restore_is_empty_or_incomplete() {
         ("partial", 1, 1, "partial"),
         ("failed", 2, 0, "failed"),
         ("empty", 0, 0, "empty"),
+        ("cwd-fallback", 0, 2, "partial"),
     ] {
         let base = unique_test_dir();
         let config_home = base.join("config");
@@ -885,7 +886,11 @@ fn server_start_preserves_snapshot_when_restore_is_empty_or_incomplete() {
                 } else {
                     for tab in workspace["tabs"].as_array_mut().unwrap() {
                         for pane in tab["panes"].as_object_mut().unwrap().values_mut() {
-                            pane["cwd"] = serde_json::json!(base);
+                            pane["cwd"] = if session == "cwd-fallback" {
+                                serde_json::json!(base.join("missing-cwd"))
+                            } else {
+                                serde_json::json!(base)
+                            };
                         }
                     }
                 }
@@ -931,6 +936,16 @@ fn server_start_preserves_snapshot_when_restore_is_empty_or_incomplete() {
                 saved["workspaces"].as_array().unwrap().len(),
                 expected_workspaces
             );
+            if session == "cwd-fallback" {
+                for workspace in saved["workspaces"].as_array().unwrap() {
+                    for tab in workspace["tabs"].as_array().unwrap() {
+                        for pane in tab["panes"].as_object().unwrap().values() {
+                            assert_ne!(pane["cwd"], serde_json::json!(base.join("missing-cwd")));
+                            assert!(Path::new(pane["cwd"].as_str().unwrap()).is_dir());
+                        }
+                    }
+                }
+            }
         }
         cleanup_test_base(&base);
     }
