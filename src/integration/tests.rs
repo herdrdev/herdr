@@ -3070,6 +3070,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_INTEGRATION_VERSION,
         ),
         ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
+        ("muse", MUSE_HOOK_ASSET, MUSE_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -3088,6 +3089,7 @@ fn process_owned_integration_assets_do_not_report_release() {
         ("kimi", KIMI_HOOK_ASSET),
         ("kilo", KILO_PLUGIN_ASSET),
         ("hermes", HERMES_PLUGIN_INIT_ASSET),
+        ("muse", MUSE_HOOK_ASSET),
     ] {
         assert!(
             !asset.contains("pane.release_agent"),
@@ -4623,5 +4625,227 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
 
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn muse_dir_honors_xdg_config_home() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    assert_eq!(muse_dir().unwrap(), xdg_config.join("muse"));
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn muse_dir_defaults_to_config_muse() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    std::env::set_var("HOME", &home);
+
+    assert_eq!(muse_dir().unwrap(), home.join(".config").join("muse"));
+
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn muse_hook_events_cover_session_and_lifecycle() {
+    assert_eq!(MUSE_HOOK_EVENTS.len(), 8);
+    assert!(MUSE_HOOK_EVENTS.contains(&("SessionStart", None, "session")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("UserPromptSubmit", None, "working")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("PreToolUse", None, "working")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("PostToolUse", None, "working")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("PermissionRequest", None, "blocked")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("Stop", None, "idle")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("Interrupt", None, "idle")));
+    assert!(MUSE_HOOK_EVENTS.contains(&("SessionEnd", None, "release")));
+}
+
+#[test]
+fn muse_hook_asset_reports_session_and_skips_subagents() {
+    assert!(MUSE_HOOK_ASSET.contains("HERDR_INTEGRATION_ID=muse"));
+    assert!(MUSE_HOOK_ASSET.contains("herdr:muse"));
+    assert!(MUSE_HOOK_ASSET.contains("agent_id"));
+    assert!(MUSE_HOOK_ASSET.contains("session_id"));
+    #[cfg(windows)]
+    {
+        assert!(MUSE_HOOK_ASSET.contains("report-agent-session"));
+        assert!(MUSE_HOOK_ASSET.contains("report-agent "));
+    }
+    #[cfg(not(windows))]
+    {
+        assert!(MUSE_HOOK_ASSET.contains("pane.report_agent_session"));
+        assert!(MUSE_HOOK_ASSET.contains("pane.report_agent"));
+    }
+}
+
+#[test]
+fn install_muse_writes_hook_and_updates_settings() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    let muse_home = xdg_config.join("muse");
+    fs::create_dir_all(&muse_home).unwrap();
+    fs::write(
+        muse_home.join("settings.json"),
+        r#"{"theme":"dark","hooks":{}}"#,
+    )
+    .unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    let installed = install_muse().unwrap();
+    let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.settings_path).unwrap()).unwrap();
+
+    assert_eq!(
+        installed.hook_path,
+        muse_home.join("hooks").join(MUSE_HOOK_INSTALL_NAME)
+    );
+    assert_eq!(installed.settings_path, muse_home.join("settings.json"));
+    assert_eq!(hook_content, MUSE_HOOK_ASSET);
+    assert_eq!(settings["theme"], "dark");
+    for (event, matcher, action) in MUSE_HOOK_EVENTS {
+        let entry = &settings["hooks"][event][0];
+        let command = entry["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            command.contains(MUSE_HOOK_INSTALL_NAME) && command.ends_with(action),
+            "expected muse {event} hook command to end with {action}, got {command}"
+        );
+        assert_eq!(entry["hooks"][0]["type"], "command");
+        match matcher {
+            Some(matcher) => assert_eq!(entry["matcher"], matcher),
+            None => assert!(
+                entry.get("matcher").is_none(),
+                "expected muse {event} hook entry to have no matcher"
+            ),
+        }
+    }
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_muse_is_idempotent_for_hook_entries() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    let muse_home = xdg_config.join("muse");
+    fs::create_dir_all(&muse_home).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    install_muse().unwrap();
+    install_muse().unwrap();
+
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(muse_home.join("settings.json")).unwrap())
+            .unwrap();
+    for (event, _, _) in MUSE_HOOK_EVENTS {
+        assert_eq!(
+            settings["hooks"][event].as_array().unwrap().len(),
+            1,
+            "expected hooks.{event} to be idempotent"
+        );
+    }
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_muse_removes_herdr_hooks_and_preserves_others() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    let muse_home = xdg_config.join("muse");
+    fs::create_dir_all(&muse_home).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    install_muse().unwrap();
+
+    let hook_path = muse_home.join("hooks").join(MUSE_HOOK_INSTALL_NAME);
+    let mut settings: Value =
+        serde_json::from_str(&fs::read_to_string(muse_home.join("settings.json")).unwrap())
+            .unwrap();
+    settings["hooks"]["UserPromptSubmit"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": "echo keep",
+                "timeout": 10
+            }]
+        }));
+    fs::write(
+        muse_home.join("settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let result = uninstall_muse().unwrap();
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(muse_home.join("settings.json")).unwrap())
+            .unwrap();
+
+    assert!(result.removed_hook_file);
+    assert!(result.updated_settings);
+    assert_eq!(result.hook_path, hook_path);
+    assert_eq!(result.settings_path, muse_home.join("settings.json"));
+    assert!(!hook_path.exists());
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "echo keep"
+    );
+    assert!(settings["hooks"].get("SessionStart").is_none());
+    assert!(settings["hooks"].get("PreToolUse").is_none());
+    assert!(settings["hooks"].get("PostToolUse").is_none());
+    assert!(settings["hooks"].get("PermissionRequest").is_none());
+    assert!(settings["hooks"].get("Stop").is_none());
+    assert!(settings["hooks"].get("Interrupt").is_none());
+    assert!(settings["hooks"].get("SessionEnd").is_none());
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_muse_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let xdg_config = base.join("xdg");
+    fs::create_dir_all(&xdg_config).unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+    std::env::set_var("HOME", base.join("home"));
+
+    let err = install_muse().unwrap_err().to_string();
+    assert!(err.contains("muse config directory not found"));
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }

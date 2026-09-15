@@ -320,6 +320,34 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 2;
+const MUSE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "herdr-agent-state.ps1"
+} else {
+    "herdr-agent-state.sh"
+};
+const MUSE_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/muse/herdr-agent-state.ps1")
+} else {
+    include_str!("assets/muse/herdr-agent-state.sh")
+};
+const MUSE_INTEGRATION_VERSION: u32 = 1;
+/// `(event, matcher, reported action)`, mirroring [`KIMI_HOOK_EVENTS`]. Muse
+/// hook entries are Claude-shaped (`{matcher, hooks: [{type, command,
+/// timeout}]}`); no event needs a matcher yet, so all matchers are `None`.
+/// `SessionEnd` maps to `release` for table completeness, but the hook script
+/// only accepts `session|working|blocked|idle` and exits 0 on anything else,
+/// so the installed SessionEnd hook is currently inert: process exit owns
+/// lifecycle release.
+const MUSE_HOOK_EVENTS: [(&str, Option<&str>, &str); 8] = [
+    ("SessionStart", None, "session"),
+    ("UserPromptSubmit", None, "working"),
+    ("PreToolUse", None, "working"),
+    ("PostToolUse", None, "working"),
+    ("PermissionRequest", None, "blocked"),
+    ("Stop", None, "idle"),
+    ("Interrupt", None, "idle"),
+    ("SessionEnd", None, "release"),
+];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

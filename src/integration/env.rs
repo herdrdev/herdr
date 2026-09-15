@@ -84,6 +84,21 @@ pub(crate) fn devin_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".config").join("devin"))
 }
 
+// Muse honors no config-home env var of its own, so this follows the devin_dir
+// XDG pattern: $XDG_CONFIG_HOME, then %APPDATA% on Windows, then ~/.config.
+pub(crate) fn muse_dir() -> io::Result<PathBuf> {
+    if let Some(value) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return expand_tilde_path(PathBuf::from(value)).map(|path| path.join("muse"));
+    }
+
+    #[cfg(windows)]
+    if let Some(value) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(value).join("muse"));
+    }
+
+    Ok(home_dir()?.join(".config").join("muse"))
+}
+
 pub(crate) fn droid_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".factory"))
 }
