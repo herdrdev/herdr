@@ -716,6 +716,39 @@ fn output_len(output: &SharedOutput) -> usize {
     output.lock().unwrap_or_else(|p| p.into_inner()).text.len()
 }
 
+fn sidebar_row_click(screen: &str, label: &str) -> Vec<u8> {
+    let sidebar_width = screen
+        .lines()
+        .find_map(|line| line.chars().position(|character| character == '│'))
+        .expect("visible sidebar boundary");
+    let row = screen
+        .lines()
+        .position(|line| {
+            line.chars()
+                .take(sidebar_width)
+                .collect::<String>()
+                .contains(label)
+        })
+        .unwrap_or_else(|| panic!("sidebar row {label:?} is not visible: {screen}"))
+        + 1;
+    format!("\x1b[<0;7;{row}M\x1b[<0;7;{row}m").into_bytes()
+}
+
+#[test]
+fn sidebar_row_click_tracks_restored_workspace_count() {
+    for restored in [false, true] {
+        let screen = format!(
+            " machines                │\n                         │\n ▾ Local                 │local-returned in pane output\n{}   · local-returned      └─────────────────\n",
+            if restored { "   · restored            │\n" } else { "" }
+        );
+        let row = if restored { 5 } else { 4 };
+        assert_eq!(
+            sidebar_row_click(&screen, "local-returned"),
+            format!("\x1b[<0;7;{row}M\x1b[<0;7;{row}m").into_bytes()
+        );
+    }
+}
+
 /// Spawns a server + real thin client under a PTY and waits until the client
 /// has attached and rendered a frame. Returns the pieces plus a shared buffer
 /// that keeps accumulating PTY output (including teardown) on a background
@@ -1074,20 +1107,22 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         local_pane,
         "printf 'LOCAL_RECOVERED_SURFACE\\n'",
     );
-    let watermark = output_len(&output);
     // Select the fresh workspace below Local's restored workspace.
-    input.write_all(b"\x1b[<0;7;5M\x1b[<0;7;5m").unwrap();
+    // A fast shutdown may leave no saved workspace, so locate the actual row.
+    input
+        .write_all(&sidebar_row_click(&screen_text(), "local-returned"))
+        .unwrap();
     assert!(
         wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("LOCAL_RECOVERED_SURFACE")
+            screen_text().contains("LOCAL_RECOVERED_SURFACE")
         }),
         "recovered Local must be selectable: {}",
-        read_output(&output)
+        screen_text()
     );
     // A coherent frame precedes the final host-effects fence; input stays gated until then.
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(100), || {
-            if read_output(&output)[watermark..].contains("LOCAL_INPUT_RECOVERED") {
+            if screen_text().contains("LOCAL_INPUT_RECOVERED") {
                 return true;
             }
             input
@@ -1096,7 +1131,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
             false
         }),
         "recovered Local must accept input: {}",
-        read_output(&output)
+        screen_text()
     );
     drop(input);
     drop(client);

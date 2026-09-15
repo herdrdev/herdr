@@ -1581,9 +1581,13 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
     let api_socket = runtime_dir.join("herdr.sock");
     let started_marker = base.join("agent-started");
     let exited_marker = base.join("agent-exited");
+    let ready_marker = base.join("shell-ready");
     let shell_marker = base.join("shell-after-agent");
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
+    let delayed_shell = bin.join("delayed-shell");
+    fs::write(&delayed_shell, "#!/bin/sh\n/bin/sleep 0.4\nexec /bin/sh\n").unwrap();
+    fs::set_permissions(&delayed_shell, fs::Permissions::from_mode(0o755)).unwrap();
     let fake_pi = bin.join("pi");
     fs::write(
         &fake_pi,
@@ -1601,7 +1605,10 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
         &config_home,
         &runtime_dir,
         &api_socket,
-        &[("PATH", path.as_str())],
+        &[
+            ("PATH", path.as_str()),
+            ("SHELL", delayed_shell.to_str().unwrap()),
+        ],
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
     register_runtime_dir(&runtime_dir);
@@ -1618,6 +1625,22 @@ fn live_handoff_keeps_agent_started_pane_after_agent_exits() {
         .as_str()
         .unwrap()
         .to_string();
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:shell-ready",
+            "method": "pane.send_input",
+            "params": {
+                "pane_id": pane_id,
+                "text": format!("printf ready > {}", ready_marker.display()),
+                "keys": ["Enter"]
+            }
+        }),
+    ));
+    // Creation acknowledges the PTY, not an idle interactive shell. A real
+    // shell command must execute before this raw agent.start request.
+    support::wait_for_file(&ready_marker, Duration::from_secs(5));
 
     let started = request(
         &api_socket,
