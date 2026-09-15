@@ -12,7 +12,7 @@ mod writer;
 
 pub use self::io::{clear_history, load, load_history};
 pub use self::restore::restore;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub use self::restore::{handoff_pane_aliases, restore_handoff};
 pub use self::snapshot::{
     capture, capture_history, DirectionSnapshot, LayoutSnapshot, SessionHistorySnapshot,

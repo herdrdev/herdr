@@ -26,27 +26,27 @@ impl TerminalRuntime {
         self.0.duplicate_handoff_fd()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn preserve_for_handoff(self) {
         self.0.preserve_for_handoff()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn assume_handoff_ownership(&mut self) {
         self.0.assume_handoff_ownership();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn set_handoff_reader_paused(&self, paused: bool) {
         self.0.set_handoff_reader_paused(paused);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         self.0.pause_handoff_reader(timeout)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn handoff_runtime_state(
         &self,
         pane_id: u32,
@@ -54,13 +54,13 @@ impl TerminalRuntime {
         self.0.handoff_runtime_state(pane_id)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn handoff_history_ansi(&self) -> Option<String> {
         self.0.handoff_history_ansi()
     }
 
-    #[cfg(unix)]
-    pub fn from_handoff_fd(
+    #[cfg(any(unix, windows))]
+    pub fn from_handoff(
         import: crate::handoff_runtime::ImportedHandoffRuntime,
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
@@ -69,7 +69,7 @@ impl TerminalRuntime {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
-        crate::pane::PaneRuntime::from_handoff_fd(
+        crate::pane::PaneRuntime::from_handoff(
             import,
             scrollback_limit_bytes,
             host_terminal_theme,
@@ -79,6 +79,24 @@ impl TerminalRuntime {
             render_dirty,
         )
         .map(Self)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn windows_handoff_supported(&self) -> bool {
+        self.0.windows_handoff_supported()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn duplicate_windows_handoff(
+        &self,
+        target: &std::process::Child,
+    ) -> std::io::Result<crate::pty::backend::WindowsPtyHandoff> {
+        self.0.duplicate_windows_handoff(target)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn activate_after_handoff(&self) -> std::io::Result<()> {
+        self.0.activate_after_handoff()
     }
 
     // Wrapper mirrors pane runtime construction arguments.

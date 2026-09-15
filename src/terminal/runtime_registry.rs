@@ -37,7 +37,7 @@ impl TerminalRuntimeRegistry {
         self.runtimes.values()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&TerminalId, &TerminalRuntime)> {
         self.runtimes.iter()
     }
@@ -49,7 +49,7 @@ impl TerminalRuntimeRegistry {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn assume_handoff_ownership(&mut self) {
         for runtime in self.runtimes.values_mut() {
             runtime.assume_handoff_ownership();
@@ -67,11 +67,22 @@ impl TerminalRuntimeRegistry {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn drain_for_handoff(
         &mut self,
     ) -> impl Iterator<Item = (TerminalId, TerminalRuntime)> + '_ {
         self.runtimes.drain()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn activate_after_handoff(&self) {
+        for (terminal_id, runtime) in &self.runtimes {
+            if let Err(err) = runtime.activate_after_handoff() {
+                // A timeout leaves activation queued. Continue with every pane;
+                // after COMMIT an ACK error cannot unwind the owning server.
+                tracing::warn!(terminal = %terminal_id, %err, "failed to acknowledge handoff activation; continuing as owner");
+            }
+        }
     }
 
     #[cfg(test)]
