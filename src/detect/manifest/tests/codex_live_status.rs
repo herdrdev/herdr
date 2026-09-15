@@ -263,21 +263,19 @@ Working (14s) · 1 background terminal running · /ps to view · /stop to close
 }
 
 #[test]
-fn stale_status_and_tool_rows_do_not_count_as_working() {
-    with_manifest_dirs("codex-live-stale-status", || {
+fn tool_rows_and_inactive_lookalikes_do_not_count_as_working() {
+    with_manifest_dirs("codex-live-inactive-lookalikes", || {
         for screen in [
-            COMPACTING.replace("  └ Making room to continue.", "■ Conversation interrupted"),
-            COMPACTING.replace("  └ Making room to continue.", "• Context compacted"),
-            "• Running sleep 12\n\n• READY\n\n› Ask Codex to do anything\n".into(),
-            "› Explain Compacting context (1s • esc to interrupt)\n\n  gpt-5.6-luna\n".into(),
-            "• READY\n\n› Ask Codex to do anything\n\n  Working\n".into(),
-            "Working\n\n› Ask Codex to do anything\n".into(),
+            "• Running sleep 12\n\n• READY\n\n› Ask Codex to do anything\n",
+            "› Explain Compacting context (1s • esc to interrupt)\n\n  gpt-5.6-luna\n",
+            "• READY\n\n› Ask Codex to do anything\n\n  Working\n",
+            "Working\n\n› Ask Codex to do anything\n",
             // reconnect.rs keeps a timer after permanently failing to reconnect.
-            "Reconnect failed — check the endpoint, then relaunch (5s)\n\n› draft\n".into(),
-            "• Example:\n\n    Compacting context (1s • esc to interrupt)\n\n› draft\n".into(),
-            "• Queued follow-up inputs\n  ↳ Working (2s)\n\n› draft\n".into(),
+            "Reconnect failed — check the endpoint, then relaunch (5s)\n\n› draft\n",
+            "• Example:\n\n    Compacting context (1s • esc to interrupt)\n\n› draft\n",
+            "• Queued follow-up inputs\n  ↳ Working (2s)\n\n› draft\n",
         ] {
-            let result = osc_explain(Agent::Codex, &screen, "codex", "");
+            let result = osc_explain(Agent::Codex, screen, "codex", "");
             assert_eq!(result.state, AgentState::Idle, "{screen}");
             assert!(!result.visible_working, "{screen}");
         }

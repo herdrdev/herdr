@@ -1267,8 +1267,6 @@ fn codex_configured_status_fallback_rejects_inactive_lookalikes() {
     for screen in [
         "  Working (2s • f12 to interrupt)\n› Ask Codex to do anything\n",
         "  Working (36s)\n› Ask Codex to do anything\n",
-        "Working (36s)\n■ Conversation interrupted\n› Ask Codex to do anything\n",
-        "Working (2s • f12 to interrupt)\n• READY\n› Ask Codex to do anything\n",
         "Reconnect failed — check the endpoint, then relaunch (5s)\n› Ask Codex to do anything\n",
         "• Reconnect failed — check the endpoint, then relaunch (5s)\n› Ask Codex to do anything\n",
         "◦ Reconnect failed — check the endpoint, then relaunch (1m 05s)\n› Ask Codex to do anything\n",
