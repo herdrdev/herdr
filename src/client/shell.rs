@@ -35,7 +35,7 @@ mod surface_patch;
 mod text_editor;
 mod word_selection;
 mod worktrees;
-use text_editor::TextEditor;
+pub(crate) use text_editor::TextEditor;
 use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;

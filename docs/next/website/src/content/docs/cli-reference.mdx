@@ -51,14 +51,14 @@ with the installed binary. Use `--json` for the full JSON Schema document, or
 
 ```bash
 herdr machine list
-herdr machine add workbox --label "Build machine"
+herdr machine add workbox
 herdr machine rename <profile-id> --label "New name"
 herdr machine disable <profile-id>
 herdr machine enable <profile-id>
 herdr machine remove <profile-id>
 ```
 
-By default, `machine add` uses the remote default session. Add `--remote-session <name>` only for a named session. `machine list` accepts optional `--json` for scripts. See [Connecting machines](/docs/connecting-machines/) for the full setup and connection guide.
+`machine add` discovers running remote sessions, selects the only running session automatically, or opens an Up/Down and Enter picker when several are running. Use `--remote-session <name>` for explicit or non-interactive setup. Interactive setup prefills an editable display label: the SSH target for the default session, or `<ssh-target>/<session>` for a named session. Add `--label <label>` to skip that prompt; non-interactive setup accepts the computed default. `machine list` accepts optional `--json` for scripts. See [Connecting machines](/docs/connecting-machines/) for the full setup and connection guide.
 
 `machine add` checks the remote installation's capabilities, installs or updates with approval only when needed, and starts the requested session's background server before saving. Compatible release versions do not need to match. Run setup in an interactive terminal when installation or restart approval is required; failed or cancelled setup does not save a profile. Replacing a running server requires explicit approval with a default answer of No, and stops its pane processes. `machine add` never enables experimental handoff implicitly.
 

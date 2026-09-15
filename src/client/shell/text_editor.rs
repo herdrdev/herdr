@@ -3,7 +3,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct TextEditor {
+pub(crate) struct TextEditor {
     text: String,
     cursor: usize,
     replace_on_type: bool,

@@ -20,12 +20,11 @@ pub(super) fn command() -> Command {
                 )
                 .arg(
                     option("label", "LABEL")
-                        .required(true)
-                        .help("Set the machine label shown in the sidebar"),
+                        .help("Override the SSH target shown as the machine label"),
                 )
                 .arg(
                     option("remote-session", "NAME")
-                        .help("Set the explicit Herdr session on the remote machine"),
+                        .help("Select an explicit Herdr session instead of discovering one"),
                 ),
         )
         .subcommand(
