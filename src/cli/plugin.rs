@@ -1331,7 +1331,7 @@ fn run_plugin_build_command(
         .stderr(Stdio::piped());
     scrub_herdr_runtime_env(&mut child);
 
-    let mut child = match child.spawn() {
+    let (mut child, build_guard) = match crate::platform::spawn_plugin_build_command(&mut child) {
         Ok(child) => child,
         Err(err) => {
             return Err(Box::new(PluginBuildFailure {
@@ -1348,7 +1348,14 @@ fn run_plugin_build_command(
     let stderr_reader = stderr.map(|stderr| {
         std::thread::spawn(move || read_tail_capped_output(stderr, PLUGIN_BUILD_OUTPUT_MAX_BYTES))
     });
-    let status = child.wait().map_err(|error| {
+    let status = child.wait();
+    build_guard.finish().map_err(|error| {
+        Box::new(PluginBuildFailure {
+            context: context.clone(),
+            kind: PluginBuildFailureKind::Cleanup { error },
+        })
+    })?;
+    let status = status.map_err(|error| {
         Box::new(PluginBuildFailure {
             context: context.clone(),
             kind: PluginBuildFailureKind::Wait { error },
@@ -1412,6 +1419,9 @@ struct PluginBuildFailure {
 
 #[derive(Debug)]
 enum PluginBuildFailureKind {
+    Cleanup {
+        error: io::Error,
+    },
     Start {
         error: io::Error,
     },
@@ -1430,6 +1440,9 @@ impl fmt::Display for PluginBuildFailure {
         writeln!(f, "error: plugin build failed")?;
         write_build_context(f, &self.context)?;
         match &self.kind {
+            PluginBuildFailureKind::Cleanup { error } => {
+                writeln!(f, "  subprocess cleanup failed: {error}")?;
+            }
             PluginBuildFailureKind::Start { error } => {
                 writeln!(f, "  error: failed to start: {error}")?;
             }
@@ -1679,6 +1692,10 @@ fn print_plugin_pane_help() {
     eprintln!("  herdr plugin pane focus <pane_id>");
     eprintln!("  herdr plugin pane close <pane_id>");
 }
+
+#[cfg(all(test, windows))]
+#[path = "plugin_build_tests.rs"]
+mod windows_build_tests;
 
 #[cfg(test)]
 mod tests {

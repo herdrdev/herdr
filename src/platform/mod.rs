@@ -107,6 +107,23 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command) 
 #[cfg(not(windows))]
 fn configure_background_command_platform(_command: &mut std::process::Command) {}
 
+#[cfg(not(windows))]
+pub(crate) struct PluginBuildGuard;
+
+#[cfg(not(windows))]
+pub(crate) fn spawn_plugin_build_command(
+    command: &mut std::process::Command,
+) -> std::io::Result<(std::process::Child, PluginBuildGuard)> {
+    command.spawn().map(|child| (child, PluginBuildGuard))
+}
+
+#[cfg(not(windows))]
+impl PluginBuildGuard {
+    pub(crate) fn finish(self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
     pub(crate) live_handoff: bool,

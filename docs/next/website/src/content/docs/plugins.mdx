@@ -230,6 +230,11 @@ plugin context or Herdr socket env. Plugin authors should document required
 system tools such as `cargo`, `npm`, `bun`, or `lua`; Herdr reports build
 failures but does not install missing toolchains.
 
+On Windows, each build command and its descendants run in an install-owned job.
+When the build command exits, Herdr terminates any remaining descendants before
+moving or removing the checkout. Build commands must finish their work before
+exiting; launch runtime processes from plugin actions or startup hooks instead.
+
 ## Startup hooks
 
 `[[startup]]` commands run once for each enabled plugin after Herdr restores the

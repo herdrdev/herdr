@@ -326,8 +326,9 @@ use windows_sys::{
             },
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-                JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+                QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
@@ -919,6 +920,13 @@ pub(crate) struct StatusCommandGuard {
 
 impl StatusCommandGuard {
     pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
+        let process = child
+            .raw_handle()
+            .ok_or_else(|| std::io::Error::other("status command has no process handle"))?;
+        Self::for_suspended_process(process.cast(), child.id())
+    }
+
+    fn for_suspended_process(process: HANDLE, process_id: Option<u32>) -> std::io::Result<Self> {
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             return Err(std::io::Error::last_os_error());
@@ -951,22 +959,14 @@ impl StatusCommandGuard {
             return Err(error);
         }
 
-        let Some(process) = child.raw_handle() else {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(std::io::Error::other(
-                "status command has no process handle",
-            ));
-        };
-        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
+        if unsafe { AssignProcessToJobObject(job, process) } == 0 {
             let error = std::io::Error::last_os_error();
             unsafe {
                 CloseHandle(job);
             }
             return Err(error);
         }
-        if let Err(error) = resume_suspended_process(child.id()) {
+        if let Err(error) = resume_suspended_process(process_id) {
             unsafe {
                 CloseHandle(job);
             }
@@ -974,6 +974,69 @@ impl StatusCommandGuard {
         }
 
         Ok(Self { job: job as usize })
+    }
+}
+
+pub(crate) struct PluginBuildGuard(StatusCommandGuard);
+
+pub(crate) fn spawn_plugin_build_command(
+    command: &mut std::process::Command,
+) -> std::io::Result<(std::process::Child, PluginBuildGuard)> {
+    use std::os::windows::io::AsRawHandle;
+
+    // Assign the job before the build can spawn a detached descendant. Such a
+    // descendant otherwise keeps the temporary checkout locked after build exit.
+    configure_status_command(command);
+    let mut child = command.spawn()?;
+    match StatusCommandGuard::for_suspended_process(child.as_raw_handle().cast(), Some(child.id()))
+    {
+        Ok(job) => Ok((child, PluginBuildGuard(job))),
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
+        }
+    }
+}
+
+impl PluginBuildGuard {
+    pub(crate) fn finish(self) -> std::io::Result<()> {
+        let job = self.0.job as HANDLE;
+        if unsafe { TerminateJobObject(job, 1) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // Termination is asynchronous. Wait for descendants to release cwd and
+        // output handles before the installer renames or removes the checkout.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                unsafe { std::mem::zeroed() };
+            let size = u32::try_from(size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>())
+                .map_err(|_| std::io::Error::other("job accounting size exceeds u32"))?;
+            if unsafe {
+                QueryInformationJobObject(
+                    job,
+                    JobObjectBasicAccountingInformation,
+                    std::ptr::from_mut(&mut accounting).cast(),
+                    size,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if accounting.ActiveProcesses == 0 {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "plugin build subprocesses did not exit after termination",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
