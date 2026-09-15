@@ -230,6 +230,7 @@ impl HeadlessServer {
             Method::CommandInvoke(_)
                 | Method::PaneClose(_)
                 | Method::PaneEditScrollback(_)
+                | Method::PaneMove(_)
                 | Method::PaneSplit(_)
                 | Method::TabClose(_)
                 | Method::TabCreate(_)

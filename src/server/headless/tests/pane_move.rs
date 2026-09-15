@@ -185,6 +185,7 @@ async fn public_pane_move_without_effective_focus_preserves_client_views() {
         let remaining_tab = server.app.public_tab_id(0, 1).unwrap();
         let destination_tab = server.app.public_tab_id(1, 0).unwrap();
         let (_control, _render) = connect_test_shell(&mut server, 9, 80, 23);
+        let (_source_control, _source_render) = connect_test_shell(&mut server, 10, 80, 23);
         // Keep a valid view distinct from the server default in every case.
         assert!(server.focus_shell_client_on_tab(9, &remaining_tab));
         let location_before = server.clients[&9].shell_location.clone();
@@ -221,6 +222,15 @@ async fn public_pane_move_without_effective_focus_preserves_client_views() {
             "{case}"
         );
         assert_eq!(server.app.state.active, Some(0));
+        if case == "no-focus" {
+            // A later change to the server default must not move this client.
+            server.app.state.switch_workspace_tab(1, 0);
+            assert_eq!(
+                server.shell_tab_id_for_client(10).as_deref(),
+                Some(remaining_tab.as_str()),
+                "the removed source tab must be reconciled to the remaining source tab"
+            );
+        }
         shutdown_test_runtimes(&mut server);
     }
 }
