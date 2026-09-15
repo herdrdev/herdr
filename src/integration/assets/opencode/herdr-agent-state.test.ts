@@ -223,6 +223,25 @@ test("routes nested child prompts to their own root, not the last active root", 
   ]);
 });
 
+test("anchors a sessionless session.error to the tracked root session", async () => {
+  const plugin = await loadPlugin();
+
+  await plugin.event({
+    event: {
+      type: "session.status",
+      properties: { sessionID: "root-session", status: { type: "busy" } },
+    },
+  });
+  await plugin.event({ event: { type: "session.error", properties: {} } });
+
+  expect(requests.map(requestMethod)).toEqual([
+    "pane.report_agent",
+    "pane.report_agent",
+  ]);
+  expect(requests.map(requestState)).toEqual(["working", "blocked"]);
+  expect(requests.map(requestSessionID)).toEqual(["root-session", "root-session"]);
+});
+
 function requestMethod(request: unknown): unknown {
   return isRecord(request) ? request.method : undefined;
 }

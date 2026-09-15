@@ -110,10 +110,15 @@ function reportSession(sessionID) {
 }
 
 function reportState(state, sessionID) {
+  // Some events (session-independent errors, aborted requests) carry no
+  // sessionID. Reporting without a session reference re-anchors the pane to no
+  // session, after which the server ignores every later sessioned report and
+  // the pane stays stuck in the reported state. Fall back to the tracked root.
+  const sid = sessionID ?? reportedRootSessionID;
   const params = { state };
-  if (sessionID) {
-    reportedRootSessionID = sessionID;
-    params.agent_session_id = sessionID;
+  if (sid) {
+    reportedRootSessionID = sid;
+    params.agent_session_id = sid;
   }
   return request("pane.report_agent", params);
 }
