@@ -2009,7 +2009,7 @@ impl PaneRuntime {
         let windows_powershell_prompt_cwd_reporting =
             uses_windows_powershell_pane_shell(shell_config);
         let mut cmd = pane_shell_command_builder(shell_config)?;
-        cmd.cwd(cwd);
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
@@ -2051,7 +2051,7 @@ impl PaneRuntime {
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
         let mut cmd = crate::platform::pane_custom_command_pty_builder(command);
-        cmd.cwd(cwd);
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(
@@ -2098,7 +2098,7 @@ impl PaneRuntime {
         for arg in args {
             cmd.arg(arg);
         }
-        cmd.cwd(cwd);
+        cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
         Self::spawn_command_builder(

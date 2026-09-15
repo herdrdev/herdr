@@ -82,6 +82,15 @@ pub(crate) fn plugin_runtime_path(path: &std::path::Path) -> std::path::PathBuf 
     plugin_runtime_path_platform(path)
 }
 
+pub(crate) fn normalize_cwd_for_launch(path: &std::path::Path) -> std::path::PathBuf {
+    normalize_cwd_for_launch_platform(path)
+}
+
+#[cfg(not(windows))]
+fn normalize_cwd_for_launch_platform(path: &std::path::Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
 #[cfg(not(windows))]
 fn plugin_runtime_path_platform(path: &std::path::Path) -> std::path::PathBuf {
     path.to_path_buf()
