@@ -21,7 +21,16 @@ pub(super) fn is_modal_paste_shortcut_for_platform(
 }
 
 fn is_modal_paste_shortcut(key: &crate::input::TerminalKey) -> bool {
-    is_modal_paste_shortcut_for_platform(key, cfg!(target_os = "macos"))
+    is_modal_paste_shortcut_for_platform(
+        key,
+        cfg!(target_os = "macos")
+            || std::env::var_os("SSH_CONNECTION").is_some()
+            || std::env::var_os("SSH_TTY").is_some()
+            || std::env::var_os("COLAB_GPU").is_some()
+            || std::env::var_os("COLAB_RELEASE_TAG").is_some()
+            || std::env::var_os("COLAB_BACKEND_VERSION").is_some()
+            || std::env::var_os("TMUX").is_some(),
+    )
 }
 
 fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHostThemeUpdate> {

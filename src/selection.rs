@@ -334,13 +334,30 @@ fn is_wsl() -> bool {
     )
 }
 
+fn is_colab() -> bool {
+    std::env::var_os("COLAB_GPU").is_some()
+        || std::env::var_os("COLAB_RELEASE_TAG").is_some()
+        || std::env::var_os("COLAB_BACKEND_VERSION").is_some()
+}
+
+fn is_tmux() -> bool {
+    std::env::var_os("TMUX").is_some()
+}
+
 fn should_prefer_osc52_for_env(
     ssh_connection: Option<&OsStr>,
     ssh_tty: Option<&OsStr>,
     vscode_ipc_hook_cli: Option<&OsStr>,
+    colab: bool,
+    tmux: bool,
     wsl: bool,
 ) -> bool {
-    ssh_connection.is_some() || ssh_tty.is_some() || vscode_ipc_hook_cli.is_some() || wsl
+    ssh_connection.is_some()
+        || ssh_tty.is_some()
+        || vscode_ipc_hook_cli.is_some()
+        || colab
+        || tmux
+        || wsl
 }
 
 fn should_prefer_osc52() -> bool {
@@ -348,6 +365,8 @@ fn should_prefer_osc52() -> bool {
         std::env::var_os("SSH_CONNECTION").as_deref(),
         std::env::var_os("SSH_TTY").as_deref(),
         std::env::var_os("VSCODE_IPC_HOOK_CLI").as_deref(),
+        is_colab(),
+        is_tmux(),
         is_wsl(),
     )
 }
@@ -364,8 +383,15 @@ pub fn write_osc52_bytes(bytes: &[u8]) {
     }
 
     let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout();
+    if is_tmux() {
+        let wrapped = crate::terminal_notify::wrap_tmux_passthrough(sequence.as_bytes());
+        let _ = stdout.write_all(&wrapped);
+        let _ = stdout.write_all(sequence.as_bytes());
+    } else {
+        let _ = stdout.write_all(sequence.as_bytes());
+    }
+    let _ = stdout.flush();
 }
 
 #[cfg(test)]
@@ -424,20 +450,38 @@ mod tests {
             Some(OsStr::new("1 2 3 4")),
             None,
             None,
-            false
+            false,
+            false,
+            false,
         ));
         assert!(should_prefer_osc52_for_env(
             None,
             Some(OsStr::new("/dev/ttys001")),
             None,
-            false
+            false,
+            false,
+            false,
         ));
-        assert!(!should_prefer_osc52_for_env(None, None, None, false));
+        assert!(!should_prefer_osc52_for_env(
+            None, None, None, false, false, false
+        ));
     }
 
     #[test]
     fn wsl_sessions_prefer_osc52() {
-        assert!(should_prefer_osc52_for_env(None, None, None, true));
+        assert!(should_prefer_osc52_for_env(
+            None, None, None, false, false, true
+        ));
+    }
+
+    #[test]
+    fn colab_and_tmux_sessions_prefer_osc52() {
+        assert!(should_prefer_osc52_for_env(
+            None, None, None, true, false, false
+        ));
+        assert!(should_prefer_osc52_for_env(
+            None, None, None, false, true, false
+        ));
     }
 
     #[test]
@@ -446,7 +490,9 @@ mod tests {
             None,
             None,
             Some(OsStr::new("/tmp/vscode-remote-cli.sock")),
-            false
+            false,
+            false,
+            false,
         ));
     }
 

@@ -1134,3 +1134,194 @@ fn context_menu_keyboard_and_outside_click_are_client_owned() {
     assert!(outside.repaint);
     assert!(state.overlay.is_none());
 }
+
+#[test]
+fn pane_wheel_scroll_on_scrollbar_rect_adjusts_scrollback_and_focuses() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scrollbar_rect = Some(SurfaceRect {
+        x: 3,
+        y: 0,
+        width: 1,
+        height: 2,
+    });
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    let track = pane.scrollbar_rect.expect("scrollbar track");
+
+    let scroll = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: track.x,
+        row: track.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert!(scroll.repaint);
+    assert!(scroll.requests.is_empty());
+    let [ClientShellAction::Endpoint { request, .. }] = &scroll.actions[..] else {
+        panic!("expected endpoint scroll action");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneScroll(params)
+            if params.pane_id == "pane_1" && params.offset_from_bottom == 3
+    ));
+}
+
+#[test]
+fn pane_wheel_scroll_on_unfocused_pane_focuses_and_routes_inner_mouse_event() {
+    let mut snap = snapshot();
+    snap.focused_pane_id = Some("pane_2".into());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert!(matches!(
+        &outcome.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1")
+    ));
+    assert!(matches!(
+        &outcome.requests[..],
+        [ClientMessage::ClientShellPaneInput { pane_id, events }]
+            if pane_id == "pane_1" && matches!(&events[..], [ClientPaneInputEvent::Mouse {
+                kind: crate::protocol::ClientMouseKind::ScrollUp,
+                ..
+            }])
+    ));
+}
+
+#[test]
+fn pane_wheel_scroll_on_mouse_reporting_inner_rect_forwards_mouse_event() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert!(matches!(
+        &outcome.requests[..],
+        [ClientMessage::ClientShellPaneInput { pane_id, events }]
+            if pane_id == "pane_1" && matches!(&events[..], [ClientPaneInputEvent::Mouse {
+                kind: crate::protocol::ClientMouseKind::ScrollUp,
+                ..
+            }])
+    ));
+}
+
+#[test]
+fn pane_wheel_scroll_on_mouse_reporting_border_adjusts_scrollback_not_child_app() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].rect = SurfaceRect {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 4,
+    };
+    pane_surface.panes[0].inner_rect = SurfaceRect {
+        x: 1,
+        y: 1,
+        width: 8,
+        height: 2,
+    };
+    pane_surface.panes[0].mouse_reporting = true;
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: pane.rect.x,
+        row: pane.rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert!(outcome.requests.is_empty(), "border scroll should not send child mouse reporting input");
+    assert!(outcome.repaint);
+    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+        panic!("expected endpoint scroll action");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneScroll(params)
+            if params.pane_id == "pane_1" && params.offset_from_bottom == 3
+    ));
+}
+
+#[test]
+fn pane_selection_scroll_incorporates_in_flight_scroll_targets() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+
+    // Start selection drag
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    // First scroll while selecting
+    let first_scroll = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(matches!(
+        &first_scroll.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::PaneScroll(params) if params.offset_from_bottom == 3)
+    ));
+
+    // Second scroll before server replies (in-flight target offset is 3)
+    let _second_scroll = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert_eq!(state.pane_scroll_queued.get("pane_1").copied(), Some(6));
+}
+

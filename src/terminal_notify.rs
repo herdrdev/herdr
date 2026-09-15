@@ -92,7 +92,7 @@ fn sanitize_text(text: impl AsRef<str>) -> String {
         .collect()
 }
 
-fn wrap_tmux_passthrough(sequence: &[u8]) -> Vec<u8> {
+pub(crate) fn wrap_tmux_passthrough(sequence: &[u8]) -> Vec<u8> {
     let mut wrapped = Vec::with_capacity(sequence.len() + 16);
     wrapped.extend_from_slice(b"\x1bPtmux;");
     for &byte in sequence {

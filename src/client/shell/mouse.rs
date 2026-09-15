@@ -149,16 +149,22 @@ impl ClientShellState {
 
     fn selection_scroll_metrics(&self, hit: &PaneHit) -> Option<crate::pane::ScrollMetrics> {
         let metrics = hit.scroll?;
-        Some(
-            self.selection_autoscroll
-                .as_ref()
-                .filter(|autoscroll| autoscroll.pane_id == hit.pane_id)
-                .map_or(metrics, |autoscroll| crate::pane::ScrollMetrics {
-                    offset_from_bottom: autoscroll.offset_from_bottom,
-                    max_offset_from_bottom: autoscroll.max_offset_from_bottom,
-                    viewport_rows: metrics.viewport_rows,
-                }),
-        )
+        let offset_from_bottom = self
+            .pane_scroll_targets
+            .get(&hit.pane_id)
+            .copied()
+            .or_else(|| {
+                self.selection_autoscroll
+                    .as_ref()
+                    .filter(|autoscroll| autoscroll.pane_id == hit.pane_id)
+                    .map(|autoscroll| autoscroll.offset_from_bottom)
+            })
+            .unwrap_or(metrics.offset_from_bottom);
+        Some(crate::pane::ScrollMetrics {
+            offset_from_bottom,
+            max_offset_from_bottom: metrics.max_offset_from_bottom,
+            viewport_rows: metrics.viewport_rows,
+        })
     }
 
     fn active_selection_pane(&self) -> Option<PaneHit> {
@@ -2264,13 +2270,17 @@ impl ClientShellState {
             | MouseEventKind::ScrollDown
             | MouseEventKind::ScrollLeft
             | MouseEventKind::ScrollRight => {
-                if let Some(hit) = self
+                let pane_hit = self
                     .hits
                     .panes
                     .iter()
-                    .find(|hit| super::contains(hit.inner_rect, point))
-                    .cloned()
-                {
+                    .find(|hit| {
+                        super::contains(hit.inner_rect, point)
+                            || hit.scrollbar_rect.is_some_and(|rect| super::contains(rect, point))
+                            || super::contains(hit.rect, point)
+                    })
+                    .cloned();
+                if let Some(hit) = pane_hit {
                     if self.focused_pane_id().as_deref() != Some(hit.pane_id.as_str()) {
                         self.push_endpoint_method(
                             crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
@@ -2279,7 +2289,47 @@ impl ClientShellState {
                             outcome,
                         );
                     }
-                    self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
+                    if hit.scrollbar_rect.is_some_and(|rect| super::contains(rect, point)) {
+                        let current_offset = self
+                            .pane_scroll_targets
+                            .get(&hit.pane_id)
+                            .copied()
+                            .unwrap_or_else(|| hit.scroll.map_or(0, |metrics| metrics.offset_from_bottom));
+                        let max_offset = hit.scroll.map_or(0, |metrics| metrics.max_offset_from_bottom);
+                        let next_offset = match mouse.kind {
+                            MouseEventKind::ScrollUp => current_offset
+                                .saturating_add(self.config.mouse_scroll_lines)
+                                .min(max_offset),
+                            MouseEventKind::ScrollDown => current_offset
+                                .saturating_sub(self.config.mouse_scroll_lines),
+                            _ => current_offset,
+                        };
+                        if next_offset != current_offset {
+                            self.push_pane_scroll_offset(hit.pane_id, next_offset, outcome);
+                            outcome.repaint = true;
+                        }
+                    } else if super::contains(hit.inner_rect, point) || !hit.mouse_reporting {
+                        self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
+                    } else {
+                        let current_offset = self
+                            .pane_scroll_targets
+                            .get(&hit.pane_id)
+                            .copied()
+                            .unwrap_or_else(|| hit.scroll.map_or(0, |metrics| metrics.offset_from_bottom));
+                        let max_offset = hit.scroll.map_or(0, |metrics| metrics.max_offset_from_bottom);
+                        let next_offset = match mouse.kind {
+                            MouseEventKind::ScrollUp => current_offset
+                                .saturating_add(self.config.mouse_scroll_lines)
+                                .min(max_offset),
+                            MouseEventKind::ScrollDown => current_offset
+                                .saturating_sub(self.config.mouse_scroll_lines),
+                            _ => current_offset,
+                        };
+                        if next_offset != current_offset {
+                            self.push_pane_scroll_offset(hit.pane_id, next_offset, outcome);
+                            outcome.repaint = true;
+                        }
+                    }
                 }
             }
             _ => {}
