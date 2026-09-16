@@ -295,6 +295,31 @@ impl ClientShellState {
             .as_deref()
             .map(|snapshot| (snapshot.boot_id.as_str(), snapshot.revision))
     }
+    pub(crate) fn apply_endpoint_snapshot_delta_for_generation(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        generation: u64,
+        delta: &crate::protocol::delta::ClientShellSnapshotDelta,
+    ) -> Result<Option<Box<ClientShellSnapshot>>, String> {
+        let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+        else {
+            return Ok(None);
+        };
+        if endpoint
+            .snapshot_generation
+            .is_some_and(|snapshot_generation| snapshot_generation != generation)
+        {
+            return Ok(None);
+        }
+        let Some(snapshot) = endpoint.snapshot.as_mut() else {
+            return Err("cannot apply metadata delta without a baseline snapshot".into());
+        };
+        delta.apply_to(snapshot)?;
+        Ok(Some(snapshot.clone()))
+    }
 
     pub(crate) fn set_endpoint_agent_view_projection_for_generation(
         &mut self,

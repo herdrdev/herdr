@@ -2905,13 +2905,12 @@ impl PaneRuntime {
         self.content_seq.load(Ordering::Acquire)
     }
 
-    /// Resize if the dimensions actually changed.
-    pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
+    pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) -> bool {
         let rows = rows.max(2);
         let cols = cols.max(4);
         let size = (rows, cols, cell_width_px, cell_height_px);
         if self.current_size.get() == size {
-            return;
+            return false;
         }
         self.current_size.set(size);
         let _content_write_guard = match self.content_write_lock.lock() {
@@ -2933,6 +2932,7 @@ impl PaneRuntime {
             cell_height_px,
             terminal_responses,
         );
+        true
     }
 
     #[cfg(unix)]

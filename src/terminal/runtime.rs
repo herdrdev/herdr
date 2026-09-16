@@ -249,8 +249,8 @@ impl TerminalRuntime {
         self.0.set_full_lifecycle_authority_active(active);
     }
 
-    pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
-        self.0.resize(rows, cols, cell_width_px, cell_height_px);
+    pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) -> bool {
+        self.0.resize(rows, cols, cell_width_px, cell_height_px)
     }
 
     #[cfg(unix)]

@@ -537,11 +537,13 @@ impl PendingEndpointActivation {
         endpoint_id: &ClientEndpointId,
         generation: u64,
         surface: crate::protocol::PaneSurfaceFrame,
+        shell: Option<&mut crate::client::shell::ClientShellState>,
     ) -> SurfaceActivationProgress {
         let lease = match &self.phase {
             ActivationPhase::ActivatingTarget { .. } => &self.target,
             ActivationPhase::RestoringSource { .. } => &self.source,
-            ActivationPhase::SynchronizingPresentation { lease, .. } => lease,
+            ActivationPhase::SynchronizingPresentation { lease, .. }
+            | ActivationPhase::AwaitingPresentationEffects { lease, .. } => lease,
             _ => return SurfaceActivationProgress::Stale,
         };
         if !endpoint_matches(lease, endpoint_id, generation, &surface.boot_id) {
@@ -552,11 +554,70 @@ impl PendingEndpointActivation {
         }
         match &mut self.phase {
             ActivationPhase::ActivatingTarget { evidence, .. }
-            | ActivationPhase::RestoringSource { evidence, .. }
-            | ActivationPhase::SynchronizingPresentation { evidence, .. } => {
-                evidence.record_surface(surface)
+            | ActivationPhase::RestoringSource { evidence, .. } => {
+                evidence.record_surface(surface);
+            }
+            ActivationPhase::SynchronizingPresentation { evidence, .. } => {
+                evidence.record_surface(surface.clone());
+                if let Some(shell) = shell {
+                    shell.set_pane_surface(surface);
+                }
+            }
+            ActivationPhase::AwaitingPresentationEffects { .. } => {
+                if let Some(shell) = shell {
+                    shell.set_pane_surface(surface);
+                }
             }
             _ => unreachable!("checked activation phase"),
+        }
+        self.progress()
+    }
+
+    pub(crate) fn receive_surface_delta(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        generation: u64,
+        delta: crate::protocol::delta::ClientShellSurfaceDelta,
+        shell: Option<&mut crate::client::shell::ClientShellState>,
+    ) -> SurfaceActivationProgress {
+        let lease = match &self.phase {
+            ActivationPhase::ActivatingTarget { .. } => &self.target,
+            ActivationPhase::RestoringSource { .. } => &self.source,
+            ActivationPhase::SynchronizingPresentation { lease, .. }
+            | ActivationPhase::AwaitingPresentationEffects { lease, .. } => lease,
+            _ => return SurfaceActivationProgress::Stale,
+        };
+        if !endpoint_matches(lease, endpoint_id, generation, &delta.boot_id) {
+            return SurfaceActivationProgress::Stale;
+        }
+        match &mut self.phase {
+            ActivationPhase::ActivatingTarget { evidence, .. }
+            | ActivationPhase::RestoringSource { evidence, .. } => {
+                if let Some(surface) = evidence.surface.as_mut() {
+                    let mut graphics = std::mem::take(&mut surface.graphics);
+                    let result = delta.apply_to(surface, &mut graphics);
+                    surface.graphics = graphics;
+                    if result.is_err() {
+                        return SurfaceActivationProgress::Pending;
+                    }
+                }
+            }
+            ActivationPhase::SynchronizingPresentation { evidence, .. } => {
+                if let Some(surface) = evidence.surface.as_mut() {
+                    let mut graphics = std::mem::take(&mut surface.graphics);
+                    let _ = delta.apply_to(surface, &mut graphics);
+                    surface.graphics = graphics;
+                }
+                if let Some(shell) = shell {
+                    let _ = shell.apply_surface_delta(delta);
+                }
+            }
+            ActivationPhase::AwaitingPresentationEffects { .. } => {
+                if let Some(shell) = shell {
+                    let _ = shell.apply_surface_delta(delta);
+                }
+            }
+            _ => {}
         }
         self.progress()
     }
@@ -876,22 +937,11 @@ impl PendingEndpointActivation {
         endpoints: &mut EndpointRegistry,
     ) -> Result<ActivationCompletion, String> {
         if let ActivationPhase::SynchronizingPresentation {
-            lease,
-            acknowledged_revision,
-            evidence,
-            completion,
-            ..
+            lease, completion, ..
         } = &self.phase
         {
             let lease = lease.clone();
             let completion = (**completion).clone();
-            let surface = coherent_completion_surface(
-                shell,
-                &lease,
-                evidence,
-                *acknowledged_revision,
-                self.geometry(),
-            )?;
             if endpoints.active_id() != &lease.endpoint_id
                 || !shell.endpoint_projection_available(&lease.endpoint_id)
                 || !shell.activate_endpoint_projection(&lease.endpoint_id)
@@ -900,7 +950,6 @@ impl PendingEndpointActivation {
                     "endpoint became unavailable during presentation synchronization".into(),
                 );
             }
-            shell.set_pane_surface(surface);
             self.start_presentation_effects_fence(endpoints, lease, completion)?;
             return Ok(ActivationCompletion::AwaitingPresentationEffects);
         }
@@ -913,7 +962,8 @@ impl PendingEndpointActivation {
             return Ok((**completion).clone());
         }
 
-        let (lease, evidence, acknowledgement_revision, completion) = match &self.phase {
+        let geometry = self.geometry();
+        let (lease, evidence_owned, acknowledgement_revision, completion) = match &mut self.phase {
             ActivationPhase::ActivatingTarget {
                 evidence,
                 acknowledged_revision,
@@ -951,9 +1001,9 @@ impl PendingEndpointActivation {
         let surface = coherent_completion_surface(
             shell,
             &lease,
-            evidence,
+            evidence_owned,
             acknowledgement_revision,
-            self.geometry(),
+            geometry,
         )?;
         endpoints.set_surface_active(&lease.endpoint_id, true);
         shell.set_endpoint_status(&lease.endpoint_id, ClientEndpointStatus::Online);

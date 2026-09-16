@@ -625,7 +625,7 @@ pub(super) fn install_client_shell_snapshot(
     let generation = connection.generation;
     let project_snapshot =
         !projection_pending && endpoints.active_id() == endpoint_id && connection.surface_active;
-    let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
+    let (chrome_patch, composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
         let waits_for_selected_surface = projection_pending
             || (endpoints.active_id() == endpoint_id
                 && !project_snapshot
@@ -645,29 +645,50 @@ pub(super) fn install_client_shell_snapshot(
         }
         let graphics_cleanup = shell.take_pending_graphics_cleanup();
         let next_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
-        (
-            shell.compose(state.reported_size.0, state.reported_size.1),
-            (previous_size != next_size).then(|| {
-                client_shell_resize_message(
-                    shell,
-                    state.reported_size.0,
-                    state.reported_size.1,
-                    state.reported_cell_size.0,
-                    state.reported_cell_size.1,
-                    state.pixel_geometry_exact,
-                )
-            }),
-            graphics_cleanup,
-        )
+        let resize = (previous_size != next_size).then(|| {
+            client_shell_resize_message(
+                shell,
+                state.reported_size.0,
+                state.reported_size.1,
+                state.reported_cell_size.0,
+                state.reported_cell_size.1,
+                state.pixel_geometry_exact,
+            )
+        });
+        let chrome_patch = if resize.is_none() && !projection_pending && !waits_for_selected_surface
+        {
+            shell.compose_chrome_patch(
+                state.reported_size.0,
+                state.reported_size.1,
+                state.blit_encoder.last_frame(),
+            )
+        } else {
+            None
+        };
+        let composed = if chrome_patch.is_none() {
+            shell.compose(state.reported_size.0, state.reported_size.1)
+        } else {
+            None
+        };
+        (chrome_patch, composed, resize, graphics_cleanup)
     } else {
-        (None, None, Vec::new())
+        (None, None, None, Vec::new())
     };
     apply_client_shell_input_source_changes(state, prefix_input_source);
     state.present_graphics(&graphics_cleanup);
     if let Some(resize) = resize {
         endpoints.send_to(endpoint_id, &resize);
     }
-    if let Some(frame) = composed {
+    if let Some(patch) = chrome_patch {
+        let presented = state.present_surface_patch(patch).unwrap_or(false);
+        if !presented {
+            if let Some(shell) = state.shell.as_mut() {
+                if let Some(frame) = shell.compose(state.reported_size.0, state.reported_size.1) {
+                    state.present_frame(frame);
+                }
+            }
+        }
+    } else if let Some(frame) = composed {
         if projection_pending {
             state.present_frame(frame);
         } else {

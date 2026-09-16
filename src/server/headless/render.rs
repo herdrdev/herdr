@@ -496,9 +496,23 @@ impl HeadlessServer {
                     self.server_config_diagnostic_without_keybindings.clone()
                 };
                 candidate.revision = client.shell_projection_revision;
-                if client.shell_snapshot.as_ref() != Some(&candidate)
-                    || client.shell_agent_view != agent_view
+                let agent_view_changed = client.shell_agent_view != agent_view;
+                let snapshot_content_changed = client.shell_snapshot.as_ref() != Some(&candidate);
+                if snapshot_content_changed || agent_view_changed {
+                    client.pending_raw_shell_snapshot = Some(candidate.clone());
+                }
+                const SNAPSHOT_COALESCE: std::time::Duration = std::time::Duration::from_millis(50);
+                let coalesce_due = client
+                    .last_snapshot_streamed_at
+                    .is_none_or(|sent_at| sent_at.elapsed() >= SNAPSHOT_COALESCE);
+                if (snapshot_content_changed
+                    || agent_view_changed
+                    || client.pending_raw_shell_snapshot.is_some())
+                    && (coalesce_due || agent_view_changed)
                 {
+                    if let Some(pending) = client.pending_raw_shell_snapshot.take() {
+                        candidate = pending;
+                    }
                     client.shell_projection_revision =
                         client.shell_projection_revision.saturating_add(1);
                     candidate.revision = client.shell_projection_revision;
@@ -520,7 +534,47 @@ impl HeadlessServer {
                     } else {
                         None
                     };
-                    let snapshot_message =
+                    let snapshot_message = if client.snapshot_codec
+                        == crate::protocol::endpoint::SNAPSHOT_CODEC_DELTA_V2
+                    {
+                        let raw_snapshot = candidate.clone();
+                        let delta = client.raw_shell_snapshot.as_ref().and_then(|base| {
+                            crate::protocol::delta::ClientShellSnapshotDelta::diff(
+                                base,
+                                &raw_snapshot,
+                            )
+                        });
+                        if let Some(delta) = delta {
+                            match crate::protocol::delta::encode_snapshot_delta(&delta) {
+                                Ok(data) => ServerMessage::EndpointControl {
+                                    kind: crate::protocol::endpoint::SNAPSHOT_CODEC_DELTA_V2.into(),
+                                    data,
+                                },
+                                Err(err) => {
+                                    warn!(
+                                        client_id,
+                                        err = %err,
+                                        "failed to encode endpoint snapshot delta"
+                                    );
+                                    broken_clients.push(client_id);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            match crate::protocol::endpoint::snapshot_message(&candidate) {
+                                Ok(message) => message,
+                                Err(err) => {
+                                    warn!(
+                                        client_id,
+                                        err = %err,
+                                        "failed to encode endpoint snapshot"
+                                    );
+                                    broken_clients.push(client_id);
+                                    continue;
+                                }
+                            }
+                        }
+                    } else {
                         match crate::protocol::endpoint::snapshot_message(&candidate) {
                             Ok(message) => message,
                             Err(err) => {
@@ -528,7 +582,8 @@ impl HeadlessServer {
                                 broken_clients.push(client_id);
                                 continue;
                             }
-                        };
+                        }
+                    };
                     let projection_framed = match projection_message
                         .as_ref()
                         .map(Self::frame_server_message)
@@ -559,8 +614,12 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     }
+                    if client.snapshot_codec == crate::protocol::endpoint::SNAPSHOT_CODEC_DELTA_V2 {
+                        client.raw_shell_snapshot = Some(candidate.clone());
+                    }
                     client.shell_snapshot = Some(candidate);
                     client.shell_agent_view = agent_view;
+                    client.last_snapshot_streamed_at = Some(std::time::Instant::now());
                 }
                 shell_projection_revision = client.shell_projection_revision;
                 if !client.shell_surface_active {
@@ -662,18 +721,23 @@ impl HeadlessServer {
             let mut next_shell_graphics_delivery = None;
             let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {
                 next_shell_graphics_delivery = Some(delivery);
-                client
-                    .render_state
-                    .prepare_pane_surface(protocol::PaneSurfaceFrame {
-                        boot_id: self.client_shell_boot_id.clone(),
-                        projection_revision: shell_projection_revision,
-                        surface_revision: 0,
-                        frame,
-                        panes,
-                        splits,
-                        popup,
-                        graphics,
-                    })
+                let is_v2 =
+                    client.surface_codec == crate::protocol::endpoint::SURFACE_CODEC_DELTA_V2;
+                let candidate = protocol::PaneSurfaceFrame {
+                    boot_id: self.client_shell_boot_id.clone(),
+                    projection_revision: shell_projection_revision,
+                    surface_revision: 0,
+                    frame,
+                    panes,
+                    splits,
+                    popup,
+                    graphics,
+                };
+                if is_v2 {
+                    client.render_state.prepare_pane_surface_v2(candidate)
+                } else {
+                    client.render_state.prepare_pane_surface(candidate)
+                }
             } else {
                 client.render_state.prepare_frame(frame)
             };

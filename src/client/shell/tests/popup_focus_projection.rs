@@ -633,7 +633,7 @@ fn popup_command_blocks_underlying_input_until_surface_or_error() {
 }
 
 #[test]
-fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
+fn shell_clears_stale_hits_on_mismatched_projection_but_still_composes() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -644,7 +644,10 @@ fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
     replacement.revision = 2;
     state.set_snapshot(Box::new(replacement));
     assert!(state.hits.panes.is_empty());
-    assert!(state.compose(106, 20).is_none());
+    state
+        .compose(106, 20)
+        .expect("snapshot-ahead pair still presents");
+    assert!(!state.hits.panes.is_empty());
 
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -654,7 +657,10 @@ fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
     replacement_surface.projection_revision = 2;
     state.set_pane_surface(replacement_surface);
     assert!(state.hits.panes.is_empty());
-    assert!(state.compose(106, 20).is_none());
+    state
+        .compose(106, 20)
+        .expect("surface-ahead pair still presents");
+    assert!(!state.hits.panes.is_empty());
 }
 
 #[test]

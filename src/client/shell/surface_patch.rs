@@ -3,11 +3,40 @@ use super::*;
 pub(crate) struct ClientComposedSurfacePatch {
     pub(crate) rows: Vec<crate::protocol::PaneSurfacePatchRow>,
     pub(crate) cursor: Option<crate::protocol::CursorState>,
+    pub(crate) appended_hyperlinks: Vec<String>,
 }
 
 pub(crate) enum ClientPaneSurfacePatchOutcome {
     Rejected,
     Applied(Option<ClientComposedSurfacePatch>),
+}
+
+fn row_hits_pane(
+    row: &crate::protocol::PaneSurfacePatchRow,
+    pane: &crate::protocol::PaneSurfacePane,
+    current: &crate::protocol::PaneSurfaceFrame,
+) -> bool {
+    let terminal_row = row.x >= pane.inner_rect.x
+        && row.y >= pane.inner_rect.y
+        && row.y < pane.inner_rect.y.saturating_add(pane.inner_rect.height)
+        && row
+            .x
+            .saturating_add(row.cells.len().min(u16::MAX as usize) as u16)
+            <= pane.inner_rect.x.saturating_add(pane.inner_rect.width);
+    let scrollbar_rect = pane.scrollbar_rect.or_else(|| {
+        current
+            .panes
+            .iter()
+            .find(|existing| existing.pane_id == pane.pane_id)
+            .and_then(|existing| existing.scrollbar_rect)
+    });
+    let scrollbar_row = scrollbar_rect.is_some_and(|rect| {
+        row.x == rect.x
+            && row.y >= rect.y
+            && row.y < rect.y.saturating_add(rect.height)
+            && row.cells.len() == usize::from(rect.width)
+    });
+    terminal_row || scrollbar_row
 }
 
 fn row_fits_frame(row: &crate::protocol::PaneSurfacePatchRow, frame: &FrameData) -> bool {
@@ -138,31 +167,16 @@ impl ClientShellState {
             }
         }
         for row in &patch.rows {
+            let pane_source = if patch.panes.is_empty() {
+                current.panes.as_slice()
+            } else {
+                patch.panes.as_slice()
+            };
             if !row_fits_frame(row, &current.frame)
                 || row.cells.is_empty()
-                || !patch.panes.iter().any(|pane| {
-                    let terminal_row = row.x >= pane.inner_rect.x
-                        && row.y >= pane.inner_rect.y
-                        && row.y < pane.inner_rect.y.saturating_add(pane.inner_rect.height)
-                        && row
-                            .x
-                            .saturating_add(row.cells.len().min(u16::MAX as usize) as u16)
-                            <= pane.inner_rect.x.saturating_add(pane.inner_rect.width);
-                    let scrollbar_rect = pane.scrollbar_rect.or_else(|| {
-                        current
-                            .panes
-                            .iter()
-                            .find(|existing| existing.pane_id == pane.pane_id)
-                            .and_then(|existing| existing.scrollbar_rect)
-                    });
-                    let scrollbar_row = scrollbar_rect.is_some_and(|rect| {
-                        row.x == rect.x
-                            && row.y >= rect.y
-                            && row.y < rect.y.saturating_add(rect.height)
-                            && row.cells.len() == usize::from(rect.width)
-                    });
-                    terminal_row || scrollbar_row
-                })
+                || !pane_source
+                    .iter()
+                    .any(|pane| row_hits_pane(row, pane, current))
             {
                 return ClientPaneSurfacePatchOutcome::Rejected;
             }
@@ -188,20 +202,20 @@ impl ClientShellState {
                 .collect(),
             cursor: patch
                 .cursor
-                .clone()
+                .as_ref()
                 .map(|cursor| crate::protocol::CursorState {
                     x: area.x.saturating_add(cursor.x),
                     y: area.y.saturating_add(cursor.y),
                     visible: cursor.visible,
                     shape: cursor.shape,
                 }),
+            appended_hyperlinks: Vec::new(),
         });
         if let Some(area) = fast_path_area {
-            let applied = self
-                .pane_surface
-                .as_mut()
-                .is_some_and(|surface| apply_patch_to_surface(surface, &patch));
-            if !applied {
+            let Some(surface) = self.pane_surface.as_mut() else {
+                return ClientPaneSurfacePatchOutcome::Rejected;
+            };
+            if !apply_patch_to_surface(surface, &patch) {
                 return ClientPaneSurfacePatchOutcome::Rejected;
             }
             for updated in &patch.panes {
@@ -213,6 +227,7 @@ impl ClientShellState {
                 else {
                     continue;
                 };
+                hit.content_revision = updated.content_revision;
                 hit.scrollbar_rect = updated.scrollbar_rect.map(|rect| {
                     Rect::new(
                         area.x.saturating_add(rect.x),
@@ -253,6 +268,141 @@ impl ClientShellState {
             self.set_pane_surface(next);
         }
         ClientPaneSurfacePatchOutcome::Applied(composed_patch)
+    }
+
+    pub(crate) fn apply_pane_surface_delta(
+        &mut self,
+        delta: crate::protocol::delta::ClientShellSurfaceDelta,
+    ) -> ClientPaneSurfacePatchOutcome {
+        let Some(current) = self.pane_surface.as_ref() else {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        };
+        if self.pane_surface_generation != self.active_snapshot_generation
+            || delta.boot_id != current.boot_id
+            || delta.base_surface_revision != current.surface_revision
+        {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        }
+
+        let Some(surface) = self.pane_surface.as_mut() else {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        };
+        if delta.validate(surface, self.graphics.scene()).is_err() {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        }
+        if delta.apply_to(surface, self.graphics.scene_mut()).is_err() {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        }
+        if let Some(gfx_delta) = &delta.graphics {
+            self.graphics.update_resident_assets(gfx_delta);
+        }
+        self.popup_terminal_id = self.pane_surface.as_ref().and_then(|surface| {
+            surface
+                .popup
+                .as_deref()
+                .map(|popup| popup.terminal_id.clone())
+        });
+
+        if delta.popup.is_some() || delta.graphics.is_some() {
+            // Popup and graphics both require compose_graphics / overlay layout.
+            // The cell-only blit path presents IMAGE_REQUESTED text without Kitty APC.
+            return ClientPaneSurfacePatchOutcome::Applied(None);
+        }
+
+        for span in &delta.spans {
+            let start = span.x;
+            let end = start.saturating_add(span.cells.len() as u16);
+            self.unpresented_damage
+                .entry(span.y)
+                .and_modify(|(min_x, max_x)| {
+                    *min_x = (*min_x).min(start);
+                    *max_x = (*max_x).max(end);
+                })
+                .or_insert((start, end));
+        }
+
+        for row_move in &delta.row_moves {
+            let Some((pane_x, pane_end)) = self.pane_surface.as_ref().and_then(|surface| {
+                surface
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_id == row_move.pane_id)
+                    .map(|pane| {
+                        (
+                            pane.inner_rect.x,
+                            pane.inner_rect.x.saturating_add(pane.inner_rect.width),
+                        )
+                    })
+            }) else {
+                continue;
+            };
+            for offset in 0..row_move.count {
+                let y = row_move.dst_y.saturating_add(offset);
+                self.unpresented_damage
+                    .entry(y)
+                    .and_modify(|(min_x, max_x)| {
+                        *min_x = (*min_x).min(pane_x);
+                        *max_x = (*max_x).max(pane_end);
+                    })
+                    .or_insert((pane_x, pane_end));
+            }
+        }
+
+        let projection_matches = self
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot.revision == delta.projection_revision);
+        if !projection_matches {
+            return ClientPaneSurfacePatchOutcome::Applied(None);
+        }
+        let Some((cols, rows)) = self.last_composed_size else {
+            return ClientPaneSurfacePatchOutcome::Applied(None);
+        };
+        let area = self.layout(cols, rows).pane_surface;
+        let Some(surface) = self.pane_surface.as_ref() else {
+            return ClientPaneSurfacePatchOutcome::Rejected;
+        };
+
+        let mut damage: Vec<(u16, (u16, u16))> = self
+            .unpresented_damage
+            .iter()
+            .map(|(&y, &span)| (y, span))
+            .collect();
+        damage.sort_by_key(|(y, _)| *y);
+        let mut patch_rows = Vec::new();
+        for (y, (min_x, max_x)) in damage {
+            if y >= surface.frame.height || min_x >= max_x || max_x > surface.frame.width {
+                continue;
+            }
+            let width = usize::from(surface.frame.width);
+            let start = usize::from(y) * width + usize::from(min_x);
+            let end = usize::from(y) * width + usize::from(max_x);
+            if end > surface.frame.cells.len() {
+                continue;
+            }
+            patch_rows.push(crate::protocol::PaneSurfacePatchRow {
+                x: area.x.saturating_add(min_x),
+                y: area.y.saturating_add(y),
+                cells: surface.frame.cells[start..end].to_vec(),
+            });
+        }
+
+        let cursor_state = match &delta.cursor {
+            crate::protocol::delta::SurfaceFieldUpdate::Set(cursor) => cursor.as_ref(),
+            crate::protocol::delta::SurfaceFieldUpdate::Unchanged => surface.frame.cursor.as_ref(),
+        };
+        let cursor = cursor_state.map(|cursor| crate::protocol::CursorState {
+            x: area.x.saturating_add(cursor.x),
+            y: area.y.saturating_add(cursor.y),
+            visible: cursor.visible,
+            shape: cursor.shape,
+        });
+
+        ClientPaneSurfacePatchOutcome::Applied(Some(ClientComposedSurfacePatch {
+            rows: patch_rows,
+            cursor,
+            appended_hyperlinks: delta.appended_hyperlinks.clone(),
+        }))
     }
 }
 

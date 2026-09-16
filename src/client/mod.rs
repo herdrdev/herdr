@@ -1341,9 +1341,18 @@ async fn run_client_loop(
                         )));
                     }
                     ServerMessage::PaneSurface(surface) => {
+                        if let Err(err) = crate::protocol::delta::validate_surface_seed(&surface) {
+                            warn!(%err, "invalid surface seed received; ignoring");
+                            continue;
+                        }
                         if activation_message {
                             let progress = pending_activation.as_mut().map(|pending| {
-                                pending.receive_surface(&endpoint_id, generation, surface)
+                                pending.receive_surface(
+                                    &endpoint_id,
+                                    generation,
+                                    surface,
+                                    state.shell.as_mut(),
+                                )
                             });
                             if matches!(progress, Some(endpoint::SurfaceActivationProgress::Ready))
                             {
@@ -1903,7 +1912,110 @@ async fn run_client_loop(
                                 debug!(%kind, "ignoring unknown endpoint control message");
                                 continue;
                             }
-                            Ok(endpoint::EndpointControlMessage::Snapshot(snapshot)) => snapshot,
+                            Ok(endpoint::EndpointControlMessage::Snapshot(snapshot)) => {
+                                if let Err(err) =
+                                    crate::protocol::delta::validate_snapshot_seed(&snapshot)
+                                {
+                                    warn!(%err, "invalid snapshot seed received; ignoring");
+                                    continue;
+                                }
+                                snapshot
+                            }
+                            Ok(endpoint::EndpointControlMessage::SnapshotDelta(delta)) => {
+                                let updated_snapshot = if let Some(shell) = state.shell.as_mut() {
+                                    match shell.apply_endpoint_snapshot_delta_for_generation(
+                                        &endpoint_id,
+                                        generation,
+                                        &delta,
+                                    ) {
+                                        Ok(Some(snapshot)) => Some(snapshot),
+                                        Ok(None) => continue,
+                                        Err(error) => {
+                                            warn!(%error, "failed to apply endpoint snapshot delta");
+                                            None
+                                        }
+                                    }
+                                } else {
+                                    None
+                                };
+                                let Some(snapshot) = updated_snapshot else {
+                                    continue;
+                                };
+                                snapshot
+                            }
+                            Ok(endpoint::EndpointControlMessage::SurfaceDelta(delta)) => {
+                                if activation_message {
+                                    let progress = pending_activation.as_mut().map(|pending| {
+                                        pending.receive_surface_delta(
+                                            &endpoint_id,
+                                            generation,
+                                            *delta,
+                                            state.shell.as_mut(),
+                                        )
+                                    });
+                                    if matches!(
+                                        progress,
+                                        Some(endpoint::SurfaceActivationProgress::Ready)
+                                    ) {
+                                        if let Some(event) = complete_endpoint_activation(
+                                            &mut state,
+                                            &mut write_stream,
+                                            &mut pending_activation,
+                                            &mut endpoint_commands,
+                                        )? {
+                                            scheduled_activation = Some(event);
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if !endpoint_active {
+                                    continue;
+                                }
+                                let outcome = state
+                                    .shell
+                                    .as_mut()
+                                    .map(|shell| shell.apply_surface_delta(*delta));
+                                let compose_fallback = match outcome {
+                                    Some(shell::ClientPaneSurfacePatchOutcome::Applied(Some(
+                                        patch,
+                                    ))) => match state.present_surface_patch(patch) {
+                                        Ok(true) => {
+                                            if let Some(shell) = state.shell.as_mut() {
+                                                shell.commit_presentation_success();
+                                            }
+                                            false
+                                        }
+                                        Ok(false) => true,
+                                        Err(error) => {
+                                            warn!(
+                                                %error,
+                                                "failed to present retained surface delta patch"
+                                            );
+                                            state.request_repaint();
+                                            false
+                                        }
+                                    },
+                                    Some(shell::ClientPaneSurfacePatchOutcome::Applied(None)) => {
+                                        true
+                                    }
+                                    Some(shell::ClientPaneSurfacePatchOutcome::Rejected) | None => {
+                                        false
+                                    }
+                                };
+                                apply_client_shell_input_source_changes(
+                                    &mut state,
+                                    &mut prefix_input_source,
+                                );
+                                if compose_fallback {
+                                    let composed = state.shell.as_mut().and_then(|shell| {
+                                        shell.compose(state.reported_size.0, state.reported_size.1)
+                                    });
+                                    if let Some(frame) = composed {
+                                        state.present_frame(frame);
+                                    }
+                                }
+                                continue;
+                            }
                             Err(message)
                                 if federated
                                     || !endpoint::protocol_failure_is_fatal(&endpoint_id) =>

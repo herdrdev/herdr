@@ -212,7 +212,8 @@ pub(super) fn resize_tab_panes(
     tab: &crate::workspace::Tab,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
-) {
+) -> bool {
+    let mut changed = false;
     let multi_pane = tab.layout.pane_count() > 1;
 
     if tab.zoomed {
@@ -228,15 +229,16 @@ pub(super) fn resize_tab_panes(
             let pane_inner = pane_inner_rect(area, borders);
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
+                let resized = rt.resize(
                     inner_rect.height,
                     inner_rect.width,
                     cell_size.width_px,
                     cell_size.height_px,
                 );
+                changed = resized || changed;
             }
         }
-        return;
+        return changed;
     }
 
     for info in apply_pane_chrome(
@@ -252,15 +254,17 @@ pub(super) fn resize_tab_panes(
         {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
             if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
+                let resized = rt.resize(
                     inner_rect.height,
                     inner_rect.width,
                     cell_size.width_px,
                     cell_size.height_px,
                 );
+                changed = resized || changed;
             }
         }
     }
+    changed
 }
 
 /// Compute pane layout info and optionally resize pane runtimes to match.
@@ -272,13 +276,13 @@ pub(super) fn compute_pane_infos_for_tab(
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
-) -> Vec<PaneInfo> {
+) -> (Vec<PaneInfo>, bool) {
     let Some(tab) = app
         .workspaces
         .get(ws_idx)
         .and_then(|workspace| workspace.tabs.get(tab_idx))
     else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
 
     let multi_pane = tab.layout.pane_count() > 1;
@@ -293,6 +297,7 @@ pub(super) fn compute_pane_infos_for_tab(
         let pane_inner = pane_inner_rect(area, borders);
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
+        let mut geometry_changed = false;
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
@@ -301,22 +306,26 @@ pub(super) fn compute_pane_infos_for_tab(
                     !app.direct_attach_resize_locks.contains(terminal_id)
                 })
             {
-                rt.resize(
+                let resized = rt.resize(
                     inner_rect.height,
                     inner_rect.width,
                     cell_size.width_px,
                     cell_size.height_px,
                 );
+                geometry_changed = resized || geometry_changed;
             }
         }
-        return vec![PaneInfo {
-            id: focused_id,
-            rect: area,
-            inner_rect,
-            scrollbar_rect,
-            borders,
-            is_focused: true,
-        }];
+        return (
+            vec![PaneInfo {
+                id: focused_id,
+                rect: area,
+                inner_rect,
+                scrollbar_rect,
+                borders,
+                is_focused: true,
+            }],
+            geometry_changed,
+        );
     }
 
     let mut pane_infos = apply_pane_chrome(
@@ -325,7 +334,7 @@ pub(super) fn compute_pane_infos_for_tab(
         app.pane_gaps,
         app.pane_outer_borders,
     );
-
+    let mut geometry_changed = false;
     for info in &mut pane_infos {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
@@ -339,20 +348,20 @@ pub(super) fn compute_pane_infos_for_tab(
                     !app.direct_attach_resize_locks.contains(terminal_id)
                 })
             {
-                rt.resize(
+                let resized = rt.resize(
                     inner_rect.height,
                     inner_rect.width,
                     cell_size.width_px,
                     cell_size.height_px,
                 );
+                geometry_changed = resized || geometry_changed;
             }
         }
 
         info.inner_rect = inner_rect;
         info.scrollbar_rect = scrollbar_rect;
     }
-
-    pane_infos
+    (pane_infos, geometry_changed)
 }
 
 #[cfg(test)]
@@ -373,7 +382,7 @@ fn compute_pane_infos(
     else {
         return Vec::new();
     };
-    compute_pane_infos_for_tab(
+    let (infos, _) = compute_pane_infos_for_tab(
         app,
         terminal_runtimes,
         workspace_index,
@@ -381,9 +390,9 @@ fn compute_pane_infos(
         area,
         resize_panes,
         cell_size,
-    )
+    );
+    infos
 }
-
 pub(super) fn render_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,

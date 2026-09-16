@@ -215,6 +215,58 @@ impl ClientState {
         self.scene = scene;
     }
 
+    #[allow(dead_code)] // Graphics scene inspection for delta verification and tests
+    pub(crate) fn scene(&self) -> &SurfaceGraphicsScene {
+        &self.scene
+    }
+
+    pub(crate) fn scene_mut(&mut self) -> &mut SurfaceGraphicsScene {
+        &mut self.scene
+    }
+
+    #[allow(dead_code)] // Unified graphics delta application for direct scene mutation
+    pub(crate) fn apply_graphics_delta(
+        &mut self,
+        delta: &crate::protocol::delta::SurfaceGraphicsDelta,
+    ) {
+        for rem in &delta.removed_assets {
+            self.assets.remove(rem);
+            self.stale_images.push(host_image_id(&self.scope, rem));
+            self.scene.assets.retain(|a| &a.key != rem);
+        }
+        for add in &delta.added_assets {
+            if add.data.len() as u64 == add.key.data_len {
+                self.assets.insert(add.key.clone(), add.data.clone());
+            }
+            if !self.scene.assets.iter().any(|a| a.key == add.key) {
+                self.scene.assets.push(add.clone());
+            }
+        }
+        for rem in &delta.removed_placements {
+            self.scene.placements.retain(|p| {
+                !(p.asset == rem.asset && p.logical_placement_id == rem.logical_placement_id)
+            });
+        }
+        for add in &delta.added_placements {
+            self.scene.placements.push(add.clone());
+        }
+        self.scene.retained_assets = delta.retained_assets.clone();
+    }
+
+    pub(crate) fn update_resident_assets(
+        &mut self,
+        delta: &crate::protocol::delta::SurfaceGraphicsDelta,
+    ) {
+        for rem in &delta.removed_assets {
+            self.assets.remove(rem);
+            self.stale_images.push(host_image_id(&self.scope, rem));
+        }
+        for add in &delta.added_assets {
+            if add.data.len() as u64 == add.key.data_len {
+                self.assets.insert(add.key.clone(), add.data.clone());
+            }
+        }
+    }
     pub(crate) fn encode(
         &mut self,
         visibility: Visibility,
@@ -1321,5 +1373,82 @@ mod tests {
             &Occlusion::default(),
         );
         assert!(String::from_utf8_lossy(&bytes).contains("a=t,t=d"));
+    }
+
+    #[test]
+    fn graphics_delta_qualifies_placements_by_asset_and_logical_id() {
+        let mut state = ClientState::default();
+        state.set_scope("endpoint:boot-1");
+        let image_a = asset(
+            SurfaceGraphicsTarget::Pane {
+                pane_id: "w1:p1".into(),
+            },
+            1,
+            vec![1, 2, 3, 4],
+        );
+        let image_b = asset(
+            SurfaceGraphicsTarget::Pane {
+                pane_id: "w1:p2".into(),
+            },
+            2,
+            vec![5, 6, 7, 8],
+        );
+        let placement_a = SurfaceGraphicsPlacement {
+            asset: image_a.key.clone(),
+            logical_placement_id: 3,
+            x: 0,
+            y: 0,
+            cols: 2,
+            rows: 2,
+            x_offset: 0,
+            y_offset: 0,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            z: 0,
+            scrollback_offset: 0,
+        };
+        let placement_b = SurfaceGraphicsPlacement {
+            asset: image_b.key.clone(),
+            logical_placement_id: 3,
+            x: 5,
+            y: 5,
+            cols: 2,
+            rows: 2,
+            x_offset: 0,
+            y_offset: 0,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            z: 0,
+            scrollback_offset: 0,
+        };
+
+        let initial_delta = crate::protocol::delta::SurfaceGraphicsDelta {
+            added_assets: vec![image_a.clone(), image_b.clone()],
+            removed_assets: Vec::new(),
+            added_placements: vec![placement_a.clone(), placement_b.clone()],
+            removed_placements: Vec::new(),
+            retained_assets: Vec::new(),
+        };
+        state.apply_graphics_delta(&initial_delta);
+        assert_eq!(state.scene().placements.len(), 2);
+
+        // Remove only placement 3 for image_a, keeping placement 3 for image_b
+        let remove_a_delta = crate::protocol::delta::SurfaceGraphicsDelta {
+            added_assets: Vec::new(),
+            removed_assets: Vec::new(),
+            added_placements: Vec::new(),
+            removed_placements: vec![crate::protocol::delta::SurfaceGraphicsPlacementKey {
+                asset: image_a.key.clone(),
+                logical_placement_id: 3,
+            }],
+            retained_assets: Vec::new(),
+        };
+        state.apply_graphics_delta(&remove_a_delta);
+        assert_eq!(state.scene().placements.len(), 1);
+        assert_eq!(state.scene().placements[0].asset, image_b.key);
     }
 }

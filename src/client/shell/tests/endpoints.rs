@@ -1615,15 +1615,9 @@ fn future_surface_waits_for_its_exact_snapshot_revision() {
             .pane_surface
             .as_ref()
             .map(|surface| surface.projection_revision),
-        Some(1)
-    );
-    assert_eq!(
-        state
-            .pending_pane_surface
-            .as_ref()
-            .map(|surface| surface.projection_revision),
         Some(2)
     );
+    assert!(state.pending_pane_surface.is_none());
 
     let mut next = snapshot();
     next.revision = 2;
@@ -1707,7 +1701,7 @@ fn reconnect_same_endpoint_accepts_new_generation_surface_revision() {
         state.set_pane_surface(previous_surface.clone());
         previous_surface.projection_revision += 1;
         state.set_pane_surface(previous_surface);
-        assert!(state.pending_pane_surface.is_some());
+        assert!(state.pending_pane_surface.is_none());
         state.agent_scroll = 7;
 
         state.mark_endpoint_disconnected(&endpoint_id);

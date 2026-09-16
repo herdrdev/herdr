@@ -127,10 +127,9 @@ async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
     // Text changes while an image is visible must reuse its uploaded pixels.
     write_shared_test_pane(&mut server, pane_id, b"\rupdated text");
     assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
-    let ServerMessage::PaneSurface(text_update) =
-        read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
-    else {
-        panic!("expected retained text and image scene");
+    let text_msg = read_server_message(receive_render(&client_rx, Duration::from_millis(100)));
+    let ServerMessage::PaneSurface(text_update) = text_msg else {
+        panic!("expected retained text and image scene, got {text_msg:?}");
     };
     assert_eq!(
         text_update.graphics.placements,

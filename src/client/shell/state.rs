@@ -145,6 +145,7 @@ pub(super) struct PaneHit {
     pub(super) scrollbar_rect: Option<Rect>,
     pub(super) scroll: Option<crate::pane::ScrollMetrics>,
     pub(super) pane_id: String,
+    pub(super) content_revision: u64,
     pub(super) popup: bool,
     pub(super) mouse_reporting: bool,
     pub(super) sgr_pixel_mouse: bool,
@@ -839,10 +840,11 @@ pub(crate) struct ClientShellState {
     pub(super) snapshot: Option<Box<ClientShellSnapshot>>,
     pub(super) active_snapshot_generation: Option<u64>,
     pub(super) pane_surface_generation: Option<u64>,
-    pub(super) pane_surface: Option<PaneSurfaceFrame>,
+    pub(crate) pane_surface: Option<PaneSurfaceFrame>,
     /// A future projection surface waits here until its matching snapshot arrives. The visible
     /// pane surface always remains an exact snapshot pair.
     pub(super) pending_pane_surface: Option<PaneSurfaceFrame>,
+    pub(super) unpresented_damage: HashMap<u16, (u16, u16)>,
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
@@ -1002,6 +1004,7 @@ impl ClientShellState {
             pane_surface_generation: None,
             pane_surface: None,
             pending_pane_surface: None,
+            unpresented_damage: HashMap::new(),
             graphics: crate::kitty_graphics::surface::ClientState::default(),
             graphics_cell_size: crate::kitty_graphics::HostCellSize {
                 width_px: 1,
@@ -1558,8 +1561,19 @@ impl ClientShellState {
                     && surface.projection_revision > snapshot.revision
             }) {
                 self.pending_pane_surface = Some(surface);
+            } else if self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| surface.boot_id == snapshot.boot_id)
+            {
+                // Snapshot skipped past this successor. Install it so the
+                // receive revision chain can continue; compose still presents
+                // when projection is behind the snapshot.
+                self.install_pane_surface(surface, true);
             }
         }
+        // Do not rewrite the receive surface's projection here. A later P2
+        // cell delta must still apply after metadata has already advanced to P3.
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
     }
@@ -1572,7 +1586,7 @@ impl ClientShellState {
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
-        if surface.boot_id != snapshot.boot_id || surface.projection_revision < snapshot.revision {
+        if surface.boot_id != snapshot.boot_id {
             return;
         }
         if self.pane_surface.as_ref().is_some_and(|current| {
@@ -1584,25 +1598,22 @@ impl ClientShellState {
         }) {
             return;
         }
-        if surface.projection_revision == snapshot.revision.saturating_add(1) {
-            // The next expected surface waits separately for its exact snapshot. Keeping the
-            // current pair avoids treating this speculative successor as presentation evidence.
-            self.pending_pane_surface = Some(surface);
-            self.hits = ShellHitMap::default();
-            return;
-        }
-        // A surface that skips one or more revisions supersedes any retained pair, but is still
-        // not rendered until its matching snapshot arrives. Retain it monotonically so delayed
-        // intermediate surfaces cannot replace it.
+        // Install immediately so later surface deltas apply against the
+        // server's last surface_revision. compose() still presents when the
+        // snapshot has not caught up, which keeps 4-client attach races from
+        // freezing the first clients.
         self.install_pane_surface(surface, true);
     }
 
-    fn install_pane_surface(&mut self, mut surface: PaneSurfaceFrame, retain_future: bool) {
+    pub(super) fn install_pane_surface(
+        &mut self,
+        mut surface: PaneSurfaceFrame,
+        retain_future: bool,
+    ) {
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
         if surface.boot_id != snapshot.boot_id
-            || surface.projection_revision < snapshot.revision
             || (!retain_future && surface.projection_revision != snapshot.revision)
             || self.pane_surface.as_ref().is_some_and(|current| {
                 self.pane_surface_generation == self.active_snapshot_generation
@@ -1619,6 +1630,7 @@ impl ClientShellState {
         if surface.projection_revision != snapshot.revision {
             self.hits = ShellHitMap::default();
         }
+        self.unpresented_damage.clear();
         self.acknowledge_active_surface_agents(&surface);
         let previous_popup = self.popup_terminal_id.clone();
         let next_popup = surface
@@ -1765,6 +1777,63 @@ impl ClientShellState {
         self.invalidate_link_hover();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
+    }
+
+    pub(crate) fn apply_surface_delta(
+        &mut self,
+        delta: crate::protocol::delta::ClientShellSurfaceDelta,
+    ) -> crate::client::shell::surface_patch::ClientPaneSurfacePatchOutcome {
+        self.apply_pane_surface_delta(delta)
+    }
+    pub(crate) fn commit_presentation_success(&mut self) {
+        self.unpresented_damage.clear();
+        if let Some(surface) = self.pane_surface.as_ref() {
+            if let Some((cols, rows)) = self.last_composed_size {
+                let layout = self.layout(cols, rows);
+                let area = layout.pane_surface;
+                self.hits.panes = surface
+                    .panes
+                    .iter()
+                    .map(|pane| PaneHit {
+                        rect: Rect::new(
+                            area.x.saturating_add(pane.rect.x),
+                            area.y.saturating_add(pane.rect.y),
+                            pane.rect.width,
+                            pane.rect.height,
+                        ),
+                        inner_rect: Rect::new(
+                            area.x.saturating_add(pane.inner_rect.x),
+                            area.y.saturating_add(pane.inner_rect.y),
+                            pane.inner_rect.width,
+                            pane.inner_rect.height,
+                        ),
+                        scrollbar_rect: pane.scrollbar_rect.map(|rect| {
+                            Rect::new(
+                                area.x.saturating_add(rect.x),
+                                area.y.saturating_add(rect.y),
+                                rect.width,
+                                rect.height,
+                            )
+                        }),
+                        scroll: pane.scroll.map(|metrics| crate::pane::ScrollMetrics {
+                            offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            viewport_rows: usize::try_from(metrics.viewport_rows)
+                                .unwrap_or(usize::MAX),
+                        }),
+                        pane_id: pane.pane_id.clone(),
+                        content_revision: pane.content_revision,
+                        popup: false,
+                        mouse_reporting: pane.mouse_reporting,
+                        sgr_pixel_mouse: pane.sgr_pixel_mouse,
+                        pixel_width: pane.pixel_width,
+                        pixel_height: pane.pixel_height,
+                    })
+                    .collect();
+            }
+        }
     }
 
     pub(crate) fn tick_popup_pending(&mut self, now: std::time::Instant) {

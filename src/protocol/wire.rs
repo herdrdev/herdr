@@ -1108,6 +1108,25 @@ pub struct PaneSurfacePane {
     pub pixel_height: u32,
 }
 
+impl PaneSurfacePane {
+    /// Identity and layout the client needs to place cells. `content_revision`
+    /// is omitted: it changes on every terminal write and is not required to
+    /// blit a spinner glyph.
+    pub fn wire_visible_eq(&self, other: &Self) -> bool {
+        self.pane_id == other.pane_id
+            && self.rect == other.rect
+            && self.inner_rect == other.inner_rect
+            && self.scrollbar_rect == other.scrollbar_rect
+            && self.scroll == other.scroll
+            && self.focused == other.focused
+            && self.mouse_reporting == other.mouse_reporting
+            && self.sgr_pixel_mouse == other.sgr_pixel_mouse
+            && self.alternate_screen_active == other.alternate_screen_active
+            && self.pixel_width == other.pixel_width
+            && self.pixel_height == other.pixel_height
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, bincode::Decode)]
 pub struct PaneSurfaceScrollMetrics {
     pub offset_from_bottom: u64,

@@ -199,10 +199,12 @@ impl ClientState {
             patch.rows
         };
         let encode_started = crate::render_prof::timer();
-        let Some(encoded) =
-            self.blit_encoder
-                .encode_patch(&rows, patch.cursor.clone(), self.draw_host_cursor)
-        else {
+        let Some(encoded) = self.blit_encoder.encode_patch_with_hyperlinks(
+            &rows,
+            patch.cursor.clone(),
+            (!patch.appended_hyperlinks.is_empty()).then_some(patch.appended_hyperlinks.as_slice()),
+            self.draw_host_cursor,
+        ) else {
             crate::render_prof::event("client_surface_patch.fallback.encode");
             return Ok(false);
         };
@@ -212,7 +214,12 @@ impl ClientState {
         stdout.write_all(&encoded.bytes)?;
         stdout.flush()?;
         crate::render_prof::duration_since("client_surface_patch.write", write_started);
-        let committed = self.blit_encoder.commit_patch(&rows, patch.cursor, encoded);
+        let committed = self.blit_encoder.commit_patch_with_hyperlinks(
+            &rows,
+            patch.cursor,
+            (!patch.appended_hyperlinks.is_empty()).then_some(patch.appended_hyperlinks.as_slice()),
+            encoded,
+        );
         crate::render_prof::event(if committed {
             "client_surface_patch.success"
         } else {
@@ -270,5 +277,8 @@ impl ClientState {
         let _ = stdout.flush();
         self.blit_encoder.commit(frame_data, encoded);
         self.repaint_pending = false;
+        if let Some(shell) = self.shell.as_mut() {
+            shell.commit_presentation_success();
+        }
     }
 }

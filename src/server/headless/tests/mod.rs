@@ -703,6 +703,8 @@ async fn client_shell_attach_seeds_workspace() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -735,6 +737,8 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -764,10 +768,9 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         })
     );
     assert!(server.clients.contains_key(&client_id));
-    let ServerMessage::ClientShellEndpointResponseChunk { data, .. } =
-        read_server_message(control_rx.recv().expect("busy endpoint response"))
-    else {
-        panic!("expected busy endpoint response");
+    let received = read_server_message(control_rx.recv().expect("busy endpoint response"));
+    let ServerMessage::ClientShellEndpointResponseChunk { data, .. } = received else {
+        panic!("expected busy endpoint response, got {received:?}");
     };
     let response =
         serde_json::from_slice::<api::schema::ErrorResponse>(&data).expect("typed busy response");
@@ -853,6 +856,8 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: false,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -963,6 +968,8 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -1030,7 +1037,10 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
                 initial_surface.surface_revision
             );
             assert_eq!(patch.surface_revision, initial_surface.surface_revision + 1);
-            assert_eq!(patch.panes.len(), 1);
+            assert!(
+                patch.panes.is_empty(),
+                "glyph ticks omit unchanged pane metadata"
+            );
             assert!(!patch.rows.is_empty());
             assert!(patch
                 .rows
@@ -1132,6 +1142,8 @@ fn connect_test_shell(
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -1315,10 +1327,9 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
             && row.y < small_initial.frame.height
     }));
     assert_eq!(large_patch.rows, small_patch.rows);
-    assert_ne!(
-        large_patch.panes[0].inner_rect,
-        small_patch.panes[0].inner_rect
-    );
+    if let (Some(large), Some(small)) = (large_patch.panes.first(), small_patch.panes.first()) {
+        assert_ne!(large.inner_rect, small.inner_rect);
+    }
     assert!(frame_text(
         &server.clients[&7]
             .render_state
@@ -1417,14 +1428,14 @@ async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
         .test_process_pty_bytes(b"\rFIRST_PATCH");
     assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([first_pane])));
     let first_patch = recv_pane_surface_patch(&first_render, "first patch");
-    assert_eq!(first_patch.panes.len(), 1);
+    assert!(first_patch.panes.is_empty());
     assert!(second_render.try_recv().is_err());
 
     server.app.state.workspaces[0].test_runtimes[&second_pane]
         .test_process_pty_bytes(b"\rSECOND_PATCH");
     assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([second_pane])));
     let second_patch = recv_pane_surface_patch(&second_render, "second patch");
-    assert_eq!(second_patch.panes.len(), 1);
+    assert!(second_patch.panes.is_empty());
     assert!(first_render.try_recv().is_err());
 
     shutdown_test_runtimes(&mut server);
@@ -1595,6 +1606,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer: local_writer,
         })
     );
@@ -1621,6 +1634,8 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             endpoint_keybindings: true,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer: endpoint_writer,
         })
     );
@@ -2525,6 +2540,8 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );
@@ -2777,6 +2794,8 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             endpoint_keybindings: false,
             mouse_capture: false,
             surface_active: true,
+            snapshot_codec: crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into(),
+            surface_codec: crate::protocol::endpoint::SURFACE_CODEC_V1.into(),
             writer,
         })
     );

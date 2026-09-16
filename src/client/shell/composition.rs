@@ -146,16 +146,30 @@ impl ClientShellState {
         if self.snapshot.is_none() || self.pane_surface.is_none() {
             return Some(self.compose_unavailable(cols, rows));
         }
-        let snapshot = self.snapshot.as_deref()?;
-        // Do not compose a retained surface while waiting for its matching snapshot or
-        // connection generation.
-        if self.pending_pane_surface.is_some()
-            || self.pane_surface_generation != self.active_snapshot_generation
-        {
+        if let Some(pending) = self.pending_pane_surface.take() {
+            let matches = self.snapshot.as_ref().is_some_and(|snapshot| {
+                pending.boot_id == snapshot.boot_id
+                    && pending.projection_revision == snapshot.revision
+            });
+            let newer = self.snapshot.as_ref().is_some_and(|snapshot| {
+                pending.boot_id == snapshot.boot_id
+                    && pending.projection_revision > snapshot.revision
+            });
+            if matches {
+                self.install_pane_surface(pending, false);
+            } else if newer {
+                // Keep the successor, but still present the current matching pair.
+                // Returning None here skipped compose_graphics after IMAGE_REQUESTED
+                // landed on the cell-only path.
+                self.pending_pane_surface = Some(pending);
+            }
+        }
+        if self.pane_surface_generation != self.active_snapshot_generation {
             return None;
         }
+        let snapshot = self.snapshot.as_deref()?;
         let surface = self.pane_surface.as_ref()?;
-        if snapshot.revision != surface.projection_revision {
+        if snapshot.boot_id != surface.boot_id {
             return None;
         }
         let layout = self.layout(cols, rows);
@@ -238,6 +252,7 @@ impl ClientShellState {
                     viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
                 }),
                 pane_id: pane.pane_id.clone(),
+                content_revision: pane.content_revision,
                 popup: false,
                 mouse_reporting: pane.mouse_reporting,
                 sgr_pixel_mouse: pane.sgr_pixel_mouse,
@@ -557,6 +572,7 @@ impl ClientShellState {
                     scrollbar_rect: None,
                     scroll: None,
                     pane_id: popup.terminal_id.clone(),
+                    content_revision: 0,
                     popup: true,
                     mouse_reporting: popup.mouse_reporting,
                     sgr_pixel_mouse: popup.sgr_pixel_mouse,
@@ -691,6 +707,153 @@ impl ClientShellState {
         }
         self.compose_graphics(&mut frame, layout, &occlusion);
         Some(frame)
+    }
+
+    pub(crate) fn compose_chrome_patch(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        encoder_baseline: Option<&FrameData>,
+    ) -> Option<crate::client::shell::surface_patch::ClientComposedSurfacePatch> {
+        if self.mode != ClientShellMode::Terminal
+            || self.overlay.is_some()
+            || self.endpoint_error.is_some()
+            || self.config_diagnostic.is_some()
+            || self.visible_endpoint_notice.is_some()
+            || self.visible_notification.is_some()
+            || self.copy_feedback.is_some()
+            || self.selection.is_some()
+            || self.copy_mode.is_some()
+            || self.selection_highlight_clear_deadline.is_some()
+        {
+            return None;
+        }
+        let baseline = encoder_baseline?;
+        if baseline.width != cols || baseline.height != rows {
+            return None;
+        }
+        let surface = self.pane_surface.as_ref()?;
+        let layout = self.layout(cols, rows);
+        if surface.frame.width != layout.pane_surface.width
+            || surface.frame.height != layout.pane_surface.height
+        {
+            return None;
+        }
+        if surface.popup.is_some()
+            || !surface.graphics.placements.is_empty()
+            || !surface.graphics.retained_assets.is_empty()
+        {
+            return None;
+        }
+        let snapshot = self.snapshot.as_deref()?;
+
+        let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
+        self.hits = render::render_shell(
+            &mut buffer,
+            layout,
+            snapshot,
+            &self.config,
+            render::ShellRenderState {
+                endpoints: &self.endpoints,
+                active_endpoint_id: &self.active_endpoint_id,
+                collapsed_endpoints: &self.collapsed_endpoints,
+                collapsed_groups: &self.collapsed_groups,
+                remote_collapsed_groups: &self.remote_collapsed_groups,
+                workspace_scroll: &mut self.workspace_scroll,
+                agent_scroll: &mut self.agent_scroll,
+                tab_scroll: &mut self.tab_scroll,
+                reveal_focused_workspace: &mut self.reveal_focused_workspace,
+                reveal_focused_tab: &mut self.reveal_focused_tab,
+                sidebar_collapsed: self.sidebar_collapsed,
+                sidebar_section_split: self.sidebar_section_split,
+                tab_drag_insert_index: None,
+                selected_workspace_id: None,
+                reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
+                dragged_workspace_id: None,
+                workspace_drop_indicator_row: None,
+            },
+        );
+
+        let pane_x = layout.pane_surface.x;
+        let pane_y = layout.pane_surface.y;
+        let pane_w = layout.pane_surface.width;
+        let pane_h = layout.pane_surface.height;
+
+        let mut patch_rows = Vec::new();
+        let blank_cell = || crate::protocol::CellData {
+            symbol: " ".to_owned(),
+            fg: 0,
+            bg: 0,
+            modifier: 0,
+            skip: false,
+            hyperlink: None,
+        };
+        for y in 0..pane_y {
+            let mut cells = Vec::with_capacity(usize::from(cols));
+            for col in 0..cols {
+                let cell_data = buffer
+                    .cell((col, y))
+                    .map(crate::protocol::CellData::from_ratatui_cell)
+                    .unwrap_or_else(blank_cell);
+                cells.push(cell_data);
+            }
+            patch_rows.push(crate::protocol::PaneSurfacePatchRow { x: 0, y, cells });
+        }
+        for local_y in 0..pane_h {
+            let y = pane_y + local_y;
+            if pane_x > 0 {
+                let mut cells = Vec::with_capacity(usize::from(pane_x));
+                for col in 0..pane_x {
+                    let cell_data = buffer
+                        .cell((col, y))
+                        .map(crate::protocol::CellData::from_ratatui_cell)
+                        .unwrap_or_else(blank_cell);
+                    cells.push(cell_data);
+                }
+                patch_rows.push(crate::protocol::PaneSurfacePatchRow { x: 0, y, cells });
+            }
+            let right = pane_x.saturating_add(pane_w);
+            if right < cols {
+                let mut cells = Vec::with_capacity(usize::from(cols - right));
+                for col in right..cols {
+                    let cell_data = buffer
+                        .cell((col, y))
+                        .map(crate::protocol::CellData::from_ratatui_cell)
+                        .unwrap_or_else(blank_cell);
+                    cells.push(cell_data);
+                }
+                patch_rows.push(crate::protocol::PaneSurfacePatchRow { x: right, y, cells });
+            }
+        }
+        for y in (pane_y + pane_h)..rows {
+            let mut cells = Vec::with_capacity(usize::from(cols));
+            for col in 0..cols {
+                let cell_data = buffer
+                    .cell((col, y))
+                    .map(crate::protocol::CellData::from_ratatui_cell)
+                    .unwrap_or_else(blank_cell);
+                cells.push(cell_data);
+            }
+            patch_rows.push(crate::protocol::PaneSurfacePatchRow { x: 0, y, cells });
+        }
+
+        let cursor = surface
+            .frame
+            .cursor
+            .as_ref()
+            .map(|c| crate::protocol::CursorState {
+                x: pane_x.saturating_add(c.x),
+                y: pane_y.saturating_add(c.y),
+                visible: c.visible,
+                shape: c.shape,
+            });
+        Some(
+            crate::client::shell::surface_patch::ClientComposedSurfacePatch {
+                rows: patch_rows,
+                cursor,
+                appended_hyperlinks: Vec::new(),
+            },
+        )
     }
 }
 

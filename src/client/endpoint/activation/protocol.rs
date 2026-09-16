@@ -68,7 +68,7 @@ pub(super) fn endpoint_matches(
 pub(super) fn coherent_completion_surface(
     shell: &crate::client::shell::ClientShellState,
     lease: &EndpointLease,
-    evidence: &ActivationEvidence,
+    evidence: &mut ActivationEvidence,
     acknowledgement_revision: Option<u64>,
     geometry: crate::protocol::ClientSurfaceSize,
 ) -> Result<crate::protocol::PaneSurfaceFrame, String> {
@@ -77,10 +77,10 @@ pub(super) fn coherent_completion_surface(
     })?;
     let surface = evidence
         .surface
-        .clone()
+        .as_ref()
         .ok_or_else(|| "endpoint activation completed without a surface".to_owned())?;
     if surface.projection_revision < acknowledgement_revision
-        || !surface_matches_geometry(&surface, geometry)
+        || !surface_matches_geometry(surface, geometry)
     {
         return Err("endpoint activation lost its acknowledged surface evidence".into());
     }
@@ -92,6 +92,7 @@ pub(super) fn coherent_completion_surface(
     ) {
         return Err("endpoint activation lost its coherent snapshot/surface pair".into());
     }
+    let surface = evidence.surface.take().expect("validated surface evidence");
     Ok(surface)
 }
 

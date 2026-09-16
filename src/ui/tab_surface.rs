@@ -16,6 +16,7 @@ pub(crate) struct TabSurfaceLayout {
     pub(crate) target: Option<TabSurfaceTarget>,
     pub(crate) pane_infos: Vec<PaneInfo>,
     pub(crate) split_borders: Vec<SplitBorder>,
+    pub(crate) geometry_changed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -72,22 +73,26 @@ pub(crate) fn compute_tab_surface_for(
             }
         })
         .unwrap_or_default();
-    let pane_infos = target.map_or_else(Vec::new, |target| {
-        compute_pane_infos_for_tab(
-            app,
-            terminal_runtimes,
-            target.workspace_index,
-            target.tab_index,
-            area,
-            resize_panes,
-            cell_size,
-        )
-    });
+    let (pane_infos, geometry_changed) = target.map_or_else(
+        || (Vec::new(), false),
+        |target| {
+            compute_pane_infos_for_tab(
+                app,
+                terminal_runtimes,
+                target.workspace_index,
+                target.tab_index,
+                area,
+                resize_panes,
+                cell_size,
+            )
+        },
+    );
 
     TabSurfaceLayout {
         target,
         pane_infos,
         split_borders,
+        geometry_changed,
     }
 }
 
@@ -98,13 +103,13 @@ pub(crate) fn resize_tab_surface(
     tab_index: usize,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
-) {
+) -> bool {
     let Some(tab) = app
         .workspaces
         .get(workspace_index)
         .and_then(|workspace| workspace.tabs.get(tab_index))
     else {
-        return;
+        return false;
     };
     resize_tab_panes(
         app,
@@ -113,7 +118,7 @@ pub(crate) fn resize_tab_surface(
         tab,
         area,
         cell_size,
-    );
+    )
 }
 
 pub(crate) fn render_tab_surface(

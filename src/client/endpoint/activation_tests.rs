@@ -439,11 +439,11 @@ fn activation_requires_an_exact_snapshot_surface_revision_pair() {
         SurfaceActivationProgress::Pending
     );
     assert_eq!(
-        activation.receive_surface(&target, 7, surface("remote-boot", 1, "pane")),
+        activation.receive_surface(&target, 7, surface("remote-boot", 1, "pane"), None),
         SurfaceActivationProgress::Pending
     );
     assert_eq!(
-        activation.receive_surface(&target, 7, surface("remote-boot", 2, "pane")),
+        activation.receive_surface(&target, 7, surface("remote-boot", 2, "pane"), None),
         SurfaceActivationProgress::Ready
     );
 }
@@ -484,7 +484,7 @@ fn typed_target_ack_sets_a_floor_for_same_boot_activation_evidence() {
         SurfaceActivationProgress::Pending
     );
     assert_eq!(
-        activation.receive_surface(&target, 7, surface("remote-boot", 3, "pane")),
+        activation.receive_surface(&target, 7, surface("remote-boot", 3, "pane"), None),
         SurfaceActivationProgress::Pending,
         "a delayed same-boot surface below the acknowledgement floor is not evidence"
     );
@@ -493,7 +493,7 @@ fn typed_target_ack_sets_a_floor_for_same_boot_activation_evidence() {
         SurfaceActivationProgress::Pending
     );
     assert_eq!(
-        activation.receive_surface(&target, 7, surface("remote-boot", 4, "pane")),
+        activation.receive_surface(&target, 7, surface("remote-boot", 4, "pane"), None),
         SurfaceActivationProgress::Ready
     );
 }
@@ -502,11 +502,11 @@ fn typed_target_ack_sets_a_floor_for_same_boot_activation_evidence() {
 fn stale_generation_and_boot_are_not_activation_evidence() {
     let mut activation = machine();
     assert_eq!(
-        activation.receive_surface(&endpoint(), 6, surface("remote-boot", 1, "pane")),
+        activation.receive_surface(&endpoint(), 6, surface("remote-boot", 1, "pane"), None),
         SurfaceActivationProgress::Stale
     );
     assert_eq!(
-        activation.receive_surface(&endpoint(), 7, surface("old-boot", 1, "pane")),
+        activation.receive_surface(&endpoint(), 7, surface("old-boot", 1, "pane"), None),
         SurfaceActivationProgress::Stale
     );
 }
@@ -757,7 +757,7 @@ fn resize_invalidates_already_recorded_surface_evidence() {
         SurfaceActivationProgress::Pending
     );
     assert_eq!(
-        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 1, "pane")),
+        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 1, "pane"), None),
         SurfaceActivationProgress::Ready
     );
     let resize = crate::protocol::ClientMessage::ClientShellResize {
@@ -807,7 +807,7 @@ fn resize_during_activation_reaches_the_pending_target() {
         .unwrap();
     assert_eq!(remote_sent.lock().unwrap().last(), Some(&resized));
     assert_eq!(
-        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 1, "pane")),
+        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 1, "pane"), None),
         SurfaceActivationProgress::Pending,
         "a surface for the prior geometry cannot commit"
     );
@@ -856,7 +856,7 @@ fn rapid_a_to_b_to_a_restores_source_before_a_fresh_latest_epoch() {
         "B is released before A can be restored"
     );
     assert_eq!(
-        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 2, "pane")),
+        activation.receive_surface(&endpoint(), 7, surface("remote-boot", 2, "pane"), None),
         SurfaceActivationProgress::Stale,
         "delayed B activation evidence cannot satisfy A restoration"
     );
@@ -894,7 +894,8 @@ fn rapid_a_to_b_to_a_restores_source_before_a_fresh_latest_epoch() {
         activation.receive_surface(
             &ClientEndpointId::Local,
             1,
-            surface("local-boot", 2, "pane")
+            surface("local-boot", 2, "pane"),
+            Some(&mut shell),
         ),
         SurfaceActivationProgress::Ready
     );
@@ -923,7 +924,8 @@ fn rapid_a_to_b_to_a_restores_source_before_a_fresh_latest_epoch() {
         activation.receive_surface(
             &ClientEndpointId::Local,
             1,
-            surface("local-boot", 3, "pane")
+            surface("local-boot", 3, "pane"),
+            Some(&mut shell),
         ),
         SurfaceActivationProgress::Ready
     );
@@ -1034,7 +1036,7 @@ fn local_escape(source_state: &str) {
         SurfaceActivationProgress::Stale
     );
     assert_eq!(
-        activation.receive_surface(&disconnected, 7, surface("remote-boot", 2, "stale")),
+        activation.receive_surface(&disconnected, 7, surface("remote-boot", 2, "stale"), None),
         SurfaceActivationProgress::Stale
     );
 
@@ -1062,7 +1064,8 @@ fn local_escape(source_state: &str) {
         activation.receive_surface(
             &ClientEndpointId::Local,
             1,
-            surface("local-boot", 2, "pane")
+            surface("local-boot", 2, "pane"),
+            Some(&mut shell),
         ),
         SurfaceActivationProgress::Ready
     );
@@ -1091,7 +1094,8 @@ fn local_escape(source_state: &str) {
         activation.receive_surface(
             &ClientEndpointId::Local,
             1,
-            surface("local-boot", 3, "pane")
+            surface("local-boot", 3, "pane"),
+            Some(&mut shell),
         ),
         SurfaceActivationProgress::Ready
     );
@@ -1201,7 +1205,7 @@ fn local_selection_abandons_every_unfinished_remote_handoff_phase() {
             "client-shell-surface:30:off"
         ));
         assert_eq!(
-            local.receive_surface(&endpoint(), 7, surface("remote-boot", 2, "stale")),
+            local.receive_surface(&endpoint(), 7, surface("remote-boot", 2, "stale"), None),
             SurfaceActivationProgress::Stale
         );
     }
@@ -1588,4 +1592,147 @@ fn resize_message_preserves_the_latest_surface_dimensions() {
         resize_geometry(&resize()),
         Some(crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 })
     );
+}
+
+#[test]
+fn pending_seed_graphics_removal_and_installed_delta_transitions() {
+    use crate::protocol::{
+        SurfaceGraphicsAsset, SurfaceGraphicsAssetKey, SurfaceGraphicsFormat,
+        SurfaceGraphicsPlacement, SurfaceGraphicsSource, SurfaceGraphicsTarget,
+    };
+
+    let (mut shell, mut endpoints, _local_sent, _remote_sent) = shell_and_registry();
+    let target = endpoint();
+    let mut activation = PendingEndpointActivation::begin(
+        &shell,
+        &mut endpoints,
+        target.clone(),
+        None,
+        resize(),
+        30,
+        Instant::now(),
+    )
+    .unwrap();
+
+    let _ = activation.receive_response(
+        &ClientEndpointId::Local,
+        1,
+        "client-shell-surface:30:off",
+        &surface_success("client-shell-surface:30:off", false, 1),
+        &mut endpoints,
+    );
+
+    let asset_key = SurfaceGraphicsAssetKey {
+        source: SurfaceGraphicsSource::Terminal {
+            target: SurfaceGraphicsTarget::Pane {
+                pane_id: "pane_1".into(),
+            },
+            image_id: 1,
+        },
+        image_width: 10,
+        image_height: 10,
+        format: SurfaceGraphicsFormat::Png,
+        data_len: 4,
+        data_fingerprint: 1234,
+    };
+    let asset = SurfaceGraphicsAsset {
+        key: asset_key.clone(),
+        data: vec![1, 2, 3, 4],
+    };
+    let placement = SurfaceGraphicsPlacement {
+        asset: asset_key.clone(),
+        logical_placement_id: 1,
+        x: 0,
+        y: 0,
+        cols: 2,
+        rows: 2,
+        x_offset: 0,
+        y_offset: 0,
+        source_x: 0,
+        source_y: 0,
+        source_width: 10,
+        source_height: 10,
+        z: 0,
+        scrollback_offset: 0,
+    };
+
+    // 1. Initial pending seed with graphics
+    let mut seed_surface = surface("remote-boot", 1, "pane_1");
+    seed_surface.graphics.assets.push(asset);
+    seed_surface.graphics.placements.push(placement);
+
+    assert_eq!(
+        activation.receive_snapshot(&target, 7, &test_snapshot("remote-boot", 1)),
+        SurfaceActivationProgress::Pending
+    );
+    assert_eq!(
+        activation.receive_surface(&target, 7, seed_surface, Some(&mut shell)),
+        SurfaceActivationProgress::Pending
+    );
+
+    // 2. Before transfer: delta arrives removing the graphics placement from pending seed
+    let remove_delta = crate::protocol::delta::ClientShellSurfaceDelta {
+        boot_id: "remote-boot".into(),
+        projection_revision: 1,
+        base_surface_revision: 1,
+        surface_revision: 2,
+        spans: Vec::new(),
+        row_moves: Vec::new(),
+        panes: Vec::new(),
+        splits: None,
+        cursor: crate::protocol::delta::SurfaceFieldUpdate::Unchanged,
+        appended_hyperlinks: Vec::new(),
+        graphics: Some(crate::protocol::delta::SurfaceGraphicsDelta {
+            added_assets: Vec::new(),
+            removed_assets: Vec::new(),
+            added_placements: Vec::new(),
+            removed_placements: vec![crate::protocol::delta::SurfaceGraphicsPlacementKey {
+                asset: asset_key.clone(),
+                logical_placement_id: 1,
+            }],
+            retained_assets: Vec::new(),
+        }),
+        popup: None,
+    };
+    assert_eq!(
+        activation.receive_surface_delta(&target, 7, remove_delta, Some(&mut shell)),
+        SurfaceActivationProgress::Pending
+    );
+
+    // 3. Target ack arrives -> complete transfer
+    assert_eq!(
+        activation.receive_response(
+            &target,
+            7,
+            "client-shell-surface:30:on",
+            &surface_success("client-shell-surface:30:on", true, 1),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Ready
+    );
+    assert!(matches!(
+        activation.complete(&mut shell, &mut endpoints),
+        Ok(ActivationCompletion::AwaitingPresentationSync { .. })
+    ));
+
+    // 4. During SynchronizingPresentation, delta routes to shell
+    let sync_delta = crate::protocol::delta::ClientShellSurfaceDelta {
+        boot_id: "remote-boot".into(),
+        projection_revision: 1,
+        base_surface_revision: 2,
+        surface_revision: 3,
+        spans: Vec::new(),
+        row_moves: Vec::new(),
+        panes: Vec::new(),
+        splits: None,
+        cursor: crate::protocol::delta::SurfaceFieldUpdate::Unchanged,
+        appended_hyperlinks: Vec::new(),
+        graphics: None,
+        popup: None,
+    };
+    assert_eq!(
+        activation.receive_surface_delta(&target, 7, sync_delta, Some(&mut shell)),
+        SurfaceActivationProgress::Pending
+    );
+    assert_eq!(shell.pane_surface.as_ref().unwrap().surface_revision, 3);
 }

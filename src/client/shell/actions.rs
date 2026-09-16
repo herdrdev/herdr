@@ -265,9 +265,10 @@ impl ClientShellState {
         };
         let pane_id = selection.pane_id.clone();
         let content_revision = self
-            .pane_surface
-            .as_ref()
-            .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
+            .hits
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_id)
             .map(|pane| pane.content_revision)
             // Read an explicit selection atomically from the live terminal. Output
             // between the displayed frame and this request must not reject the copy.

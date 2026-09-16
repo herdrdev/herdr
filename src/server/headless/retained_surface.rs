@@ -28,6 +28,47 @@ fn patch_intersects_hyperlinks(
         })
 }
 
+#[inline(always)]
+fn cell_equals_with_link_map(
+    existing: &protocol::CellData,
+    desired: &protocol::CellData,
+    link_map: &[u32],
+) -> bool {
+    if link_map.is_empty() {
+        existing == desired
+    } else {
+        let d_link = desired
+            .hyperlink
+            .and_then(|idx| link_map.get(idx as usize).copied());
+        existing.symbol == desired.symbol
+            && existing.fg == desired.fg
+            && existing.bg == desired.bg
+            && existing.modifier == desired.modifier
+            && existing.hyperlink == d_link
+    }
+}
+
+#[inline(always)]
+fn materialize_cells_with_link_map(
+    desired: &[protocol::CellData],
+    link_map: &[u32],
+) -> Vec<protocol::CellData> {
+    if link_map.is_empty() {
+        desired.to_vec()
+    } else {
+        desired
+            .iter()
+            .map(|cell| {
+                let mut c = cell.clone();
+                if let Some(idx) = c.hyperlink {
+                    c.hyperlink = link_map.get(idx as usize).copied();
+                }
+                c
+            })
+            .collect()
+    }
+}
+
 fn patch_row_changed(frame: &FrameData, row: &protocol::PaneSurfacePatchRow) -> Option<bool> {
     if row.y >= frame.height
         || row.x.saturating_add(u16::try_from(row.cells.len()).ok()?) > frame.width
@@ -46,6 +87,7 @@ fn changed_rows(
     frame: &FrameData,
     area: protocol::SurfaceRect,
     patch: &crate::pane::TerminalDirtyPatch,
+    link_map: &[u32],
 ) -> Option<Vec<protocol::PaneSurfacePatchRow>> {
     if !rect_fits_frame(area, frame) {
         return None;
@@ -66,13 +108,15 @@ fn changed_rows(
         let desired = &cells[..width];
         let mut offset = 0;
         while offset < width {
-            if existing[offset] == desired[offset] {
+            if cell_equals_with_link_map(&existing[offset], &desired[offset], link_map) {
                 offset += 1;
                 continue;
             }
             let start = offset;
             offset += 1;
-            while offset < width && existing[offset] != desired[offset] {
+            while offset < width
+                && !cell_equals_with_link_map(&existing[offset], &desired[offset], link_map)
+            {
                 offset += 1;
             }
             // Include the following cell so a wide-to-narrow (or
@@ -82,7 +126,7 @@ fn changed_rows(
             rows.push(protocol::PaneSurfacePatchRow {
                 x: area.x.checked_add(u16::try_from(start).ok()?)?,
                 y,
-                cells: desired[start..end].to_vec(),
+                cells: materialize_cells_with_link_map(&desired[start..end], link_map),
             });
             offset = end;
         }
@@ -90,6 +134,189 @@ fn changed_rows(
     Some(rows)
 }
 
+fn detect_pane_row_move(
+    frame: &FrameData,
+    pane: &protocol::PaneSurfacePane,
+    patch: &crate::pane::TerminalDirtyPatch,
+    link_map: &[u32],
+) -> Option<(protocol::PaneRowMove, Vec<protocol::PaneSurfacePatchRow>)> {
+    if patch.rows.len() <= 1 {
+        return None;
+    }
+    let height = usize::from(pane.inner_rect.height);
+    let width = usize::from(pane.inner_rect.width);
+    if height < 4 || width == 0 {
+        return None;
+    }
+
+    let frame_width = usize::from(frame.width);
+    let pane_x = usize::from(pane.inner_rect.x);
+    let pane_y = usize::from(pane.inner_rect.y);
+
+    let mut best_candidate = None;
+    let mut best_saved = 0usize;
+
+    for d in [-1isize, 1, -2, 2] {
+        let (src_start, dst_start, max_count) = if d < 0 {
+            let k = (-d) as usize;
+            if k >= height {
+                continue;
+            }
+            (k, 0, height - k)
+        } else {
+            let k = d as usize;
+            if k >= height {
+                continue;
+            }
+            (0, k, height - k)
+        };
+
+        let mut current_run_start = 0;
+        let mut current_run_len = 0;
+        let mut current_run_changed = 0;
+
+        for i in 0..max_count {
+            let src_local = src_start + i;
+            let dst_local = dst_start + i;
+
+            let src_frame_start = (pane_y + src_local) * frame_width + pane_x;
+            let Some(src_cells) = frame.cells.get(src_frame_start..src_frame_start + width) else {
+                current_run_len = 0;
+                current_run_changed = 0;
+                continue;
+            };
+
+            let dst_frame_start = (pane_y + dst_local) * frame_width + pane_x;
+            let Some(dst_cells) = frame.cells.get(dst_frame_start..dst_frame_start + width) else {
+                current_run_len = 0;
+                current_run_changed = 0;
+                continue;
+            };
+
+            let desired_cells =
+                if let Some((_, row)) = patch.rows.iter().find(|(y, _)| *y == dst_local as u16) {
+                    if row.len() < width {
+                        current_run_len = 0;
+                        current_run_changed = 0;
+                        continue;
+                    }
+                    &row[..width]
+                } else {
+                    dst_cells
+                };
+
+            let mut matching = true;
+            for col in 0..width {
+                if !cell_equals_with_link_map(&src_cells[col], &desired_cells[col], link_map) {
+                    matching = false;
+                    break;
+                }
+            }
+
+            if matching {
+                let dst_changed = (0..width).any(|col| {
+                    !cell_equals_with_link_map(&dst_cells[col], &desired_cells[col], link_map)
+                });
+                if current_run_len == 0 {
+                    current_run_start = i;
+                    current_run_len = 1;
+                    current_run_changed = if dst_changed { 1 } else { 0 };
+                } else {
+                    current_run_len += 1;
+                    if dst_changed {
+                        current_run_changed += 1;
+                    }
+                }
+                if current_run_changed >= 2 && current_run_changed > best_saved {
+                    best_saved = current_run_changed;
+                    let run_src = src_start + current_run_start;
+                    let run_dst = dst_start + current_run_start;
+                    let src_y = pane.inner_rect.y + run_src as u16;
+                    let dst_y = pane.inner_rect.y + run_dst as u16;
+                    best_candidate = Some((
+                        protocol::PaneRowMove {
+                            pane_id: pane.pane_id.clone(),
+                            src_y,
+                            dst_y,
+                            count: current_run_len as u16,
+                        },
+                        d,
+                        run_dst,
+                        current_run_len,
+                    ));
+                }
+            } else {
+                current_run_len = 0;
+                current_run_changed = 0;
+            }
+        }
+    }
+
+    let (row_move, d, run_dst_start, run_count) = best_candidate?;
+
+    let mut residual_spans = Vec::new();
+
+    for local_y in 0..height {
+        let frame_start = (pane_y + local_y) * frame_width + pane_x;
+        let Some(dst_cells) = frame.cells.get(frame_start..frame_start + width) else {
+            continue;
+        };
+        let desired = if let Some((_, row)) = patch.rows.iter().find(|(y, _)| *y == local_y as u16)
+        {
+            if row.len() < width {
+                continue;
+            }
+            &row[..width]
+        } else {
+            dst_cells
+        };
+
+        let post_move_retained = if local_y >= run_dst_start && local_y < run_dst_start + run_count
+        {
+            let src_local = if d < 0 {
+                local_y + ((-d) as usize)
+            } else {
+                local_y - (d as usize)
+            };
+            let src_frame_start = (pane_y + src_local) * frame_width + pane_x;
+            frame
+                .cells
+                .get(src_frame_start..src_frame_start + width)
+                .unwrap_or(dst_cells)
+        } else {
+            dst_cells
+        };
+
+        let mut offset = 0;
+        let y = pane.inner_rect.y + local_y as u16;
+        while offset < width {
+            if cell_equals_with_link_map(&post_move_retained[offset], &desired[offset], link_map) {
+                offset += 1;
+                continue;
+            }
+            let start = offset;
+            offset += 1;
+            while offset < width
+                && !cell_equals_with_link_map(
+                    &post_move_retained[offset],
+                    &desired[offset],
+                    link_map,
+                )
+            {
+                offset += 1;
+            }
+            let end = offset.saturating_add(1).min(width);
+            residual_spans.push(protocol::PaneSurfacePatchRow {
+                x: pane.inner_rect.x + start as u16,
+                y,
+                cells: materialize_cells_with_link_map(&desired[start..end], link_map),
+            });
+            offset = end;
+        }
+    }
+
+    Some((row_move, residual_spans))
+}
 fn retained_scrollbar_patch(
     app: &app::App,
     frame: &FrameData,
@@ -197,9 +424,14 @@ struct CollectedPanePatch {
     graphics_may_have_placements: bool,
 }
 
+enum RetainedRecipientPayload {
+    Patch(protocol::PaneSurfacePatch),
+    Delta(Box<crate::protocol::delta::ClientShellSurfaceDelta>),
+}
+
 struct RetainedRecipientUpdate {
     client_id: u64,
-    patch: protocol::PaneSurfacePatch,
+    payload: RetainedRecipientPayload,
     graphics: Option<(
         protocol::PaneSurfaceFrame,
         crate::kitty_graphics::surface::DeliveryCache,
@@ -268,11 +500,12 @@ impl HeadlessServer {
             if client.render_state.requires_recompute() {
                 fallback!("recompute_pending");
             }
+            let is_v2 = client.surface_codec == crate::protocol::endpoint::SURFACE_CODEC_DELTA_V2;
             let Some(surface) = client.render_state.last_pane_surface() else {
                 fallback!("no_baseline");
             };
             if surface.boot_id != self.client_shell_boot_id
-                || surface.projection_revision != client.shell_projection_revision
+                || (!is_v2 && surface.projection_revision != client.shell_projection_revision)
                 || surface.frame.width != *cols
                 || surface.frame.height != *rows
                 || surface.popup.is_some()
@@ -349,14 +582,24 @@ impl HeadlessServer {
         for recipient in recipients {
             let client_id = recipient.client_id;
             let surface = recipient.surface;
+            let is_v2 = self.clients.get(&client_id).is_some_and(|c| {
+                c.surface_codec == crate::protocol::endpoint::SURFACE_CODEC_DELTA_V2
+            });
             let mut panes = surface.panes.clone();
-            let projection_revision = surface.projection_revision;
+            let projection_revision = self
+                .clients
+                .get(&client_id)
+                .map_or(surface.projection_revision, |c| c.shell_projection_revision);
             let base_surface_revision = surface.surface_revision;
             let mut changed_panes = Vec::with_capacity(collected.len());
+            let mut changed_panes_delta = Vec::with_capacity(collected.len());
             let mut patch_rows = Vec::new();
+            let mut row_moves = Vec::new();
             let mut metadata_changed = false;
-            let mut refresh_graphics = !surface.graphics.placements.is_empty()
+            let had_graphics = !surface.graphics.placements.is_empty()
                 || !surface.graphics.retained_assets.is_empty();
+            let mut may_have_graphics = false;
+            let appended_hyperlinks = Vec::new();
             for collected_pane in &collected {
                 let Some(pane) = panes
                     .iter_mut()
@@ -377,14 +620,33 @@ impl HeadlessServer {
                 ) {
                     fallback!("hyperlink");
                 }
-                refresh_graphics |= collected_pane.graphics_may_have_placements;
+                may_have_graphics |= collected_pane.graphics_may_have_placements;
                 let previous_pane = pane.clone();
-                let Some(rows) =
-                    changed_rows(&surface.frame, pane.inner_rect, &collected_pane.patch)
-                else {
-                    fallback!("invalid_patch");
-                };
-                patch_rows.extend(rows);
+                let link_map = Vec::new();
+                if is_v2 {
+                    if let Some((row_move, residual)) =
+                        detect_pane_row_move(&surface.frame, pane, &collected_pane.patch, &link_map)
+                    {
+                        row_moves.push(row_move);
+                        patch_rows.extend(residual);
+                    } else if let Some(rows) = changed_rows(
+                        &surface.frame,
+                        pane.inner_rect,
+                        &collected_pane.patch,
+                        &link_map,
+                    ) {
+                        patch_rows.extend(rows);
+                    } else {
+                        fallback!("invalid_patch");
+                    }
+                } else {
+                    let Some(rows) =
+                        changed_rows(&surface.frame, pane.inner_rect, &collected_pane.patch, &[])
+                    else {
+                        fallback!("invalid_patch");
+                    };
+                    patch_rows.extend(rows);
+                }
                 let Some(scrollbar_rows) = retained_scrollbar_patch(
                     &self.app,
                     &surface.frame,
@@ -406,21 +668,58 @@ impl HeadlessServer {
                         viewport_rows: metrics.viewport_rows as u64,
                     }
                 });
-                metadata_changed |= *pane != previous_pane;
-                changed_panes.push(pane.clone());
+                metadata_changed |= !previous_pane.wire_visible_eq(pane);
+                if is_v2 {
+                    if let Some(pane_delta) =
+                        crate::protocol::delta::PaneSurfacePaneDelta::diff(&previous_pane, pane)
+                    {
+                        changed_panes_delta.push(pane_delta);
+                    }
+                }
+                if !previous_pane.wire_visible_eq(pane) {
+                    changed_panes.push(pane.clone());
+                }
             }
 
             let cursor = retained_cursor(&self.app, &panes);
             let cursor_changed = cursor != surface.frame.cursor;
-            let patch = protocol::PaneSurfacePatch {
-                boot_id: self.client_shell_boot_id.clone(),
-                projection_revision,
-                base_surface_revision,
-                surface_revision: 0,
-                rows: patch_rows,
-                panes: changed_panes,
-                cursor,
+            let patch_is_empty = patch_rows.is_empty() && row_moves.is_empty();
+            let rebind_pending = is_v2 && projection_revision != surface.projection_revision;
+            let payload = if is_v2 {
+                let delta = crate::protocol::delta::ClientShellSurfaceDelta {
+                    boot_id: self.client_shell_boot_id.clone(),
+                    projection_revision,
+                    base_surface_revision,
+                    surface_revision: 0,
+                    spans: patch_rows,
+                    row_moves,
+                    panes: changed_panes_delta,
+                    splits: None,
+                    cursor: crate::protocol::delta::SurfaceFieldUpdate::diff(
+                        &surface.frame.cursor,
+                        &cursor,
+                    ),
+                    appended_hyperlinks: appended_hyperlinks.clone(),
+                    graphics: None,
+                    popup: None,
+                };
+                match delta.into_legacy_patch(surface) {
+                    Ok(patch) => RetainedRecipientPayload::Patch(patch),
+                    Err(delta) => RetainedRecipientPayload::Delta(Box::new(delta)),
+                }
+            } else {
+                let patch = protocol::PaneSurfacePatch {
+                    boot_id: self.client_shell_boot_id.clone(),
+                    projection_revision,
+                    base_surface_revision,
+                    surface_revision: 0,
+                    rows: patch_rows,
+                    panes: changed_panes,
+                    cursor,
+                };
+                RetainedRecipientPayload::Patch(patch)
             };
+            let refresh_graphics = had_graphics || may_have_graphics;
             let mut graphics_changed = false;
             let graphics = if refresh_graphics {
                 let Some(target) = self.shell_target_for_client(client_id) else {
@@ -428,7 +727,18 @@ impl HeadlessServer {
                 };
                 let client = &self.clients[&client_id];
                 let mut next_surface = surface.clone();
-                crate::server::render_stream::apply_pane_surface_patch(&mut next_surface, &patch);
+                match &payload {
+                    RetainedRecipientPayload::Patch(p) => {
+                        crate::server::render_stream::apply_pane_surface_patch(
+                            &mut next_surface,
+                            p,
+                        );
+                    }
+                    RetainedRecipientPayload::Delta(d) => {
+                        let mut scene = crate::protocol::SurfaceGraphicsScene::default();
+                        let _ = d.apply_to(&mut next_surface, &mut scene);
+                    }
+                }
                 let Some((graphics, delivery)) =
                     crate::server::client_shell_graphics::collect_retained(
                         &self.app,
@@ -447,12 +757,20 @@ impl HeadlessServer {
             } else {
                 None
             };
-            if patch.rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
+            if patch_is_empty
+                && !cursor_changed
+                && !metadata_changed
+                && !graphics_changed
+                && appended_hyperlinks.is_empty()
+            {
+                // Metadata-only projection rebinds are applied locally on snapshot
+                // apply; do not emit an empty surface frame.
+                let _ = rebind_pending;
                 continue;
             }
             updates.push(RetainedRecipientUpdate {
                 client_id,
-                patch,
+                payload,
                 graphics,
             });
         }
@@ -466,7 +784,7 @@ impl HeadlessServer {
         for update in updates {
             let RetainedRecipientUpdate {
                 client_id,
-                patch,
+                payload,
                 graphics,
             } = update;
             let Some(client) = self.clients.get_mut(&client_id) else {
@@ -477,15 +795,20 @@ impl HeadlessServer {
                 deferred += 1;
                 continue;
             };
-            // The published row patch cannot carry images. Reuse the retained text/layout
-            // in a graphics-capable surface message rather than invoking the full renderer.
             let (prepared, graphics_delivery) = if let Some((surface, delivery)) = graphics {
                 (
                     client.render_state.prepare_pane_surface(surface),
                     Some(delivery),
                 )
             } else {
-                (client.render_state.prepare_pane_surface_patch(patch), None)
+                match payload {
+                    RetainedRecipientPayload::Patch(patch) => {
+                        (client.render_state.prepare_pane_surface_patch(patch), None)
+                    }
+                    RetainedRecipientPayload::Delta(delta) => {
+                        (client.render_state.prepare_pane_surface_delta(*delta), None)
+                    }
+                }
             };
             let Some(prepared) = prepared else {
                 client.defer_full_render();
@@ -587,6 +910,7 @@ mod tests {
                 height: 1,
             },
             &patch,
+            &[],
         )
         .expect("valid patch");
 
@@ -624,6 +948,7 @@ mod tests {
                 height: 1,
             },
             &patch,
+            &[],
         )
         .expect("valid patch");
 
@@ -660,9 +985,218 @@ mod tests {
                 height: 2,
             },
             &patch,
+            &[],
         )
         .expect("valid patch");
 
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn row_move_detects_scroll_and_emits_only_residual_spans() {
+        let frame = FrameData {
+            width: 4,
+            height: 4,
+            cells: vec![
+                cell("0"),
+                cell("0"),
+                cell("0"),
+                cell("0"),
+                cell("1"),
+                cell("1"),
+                cell("1"),
+                cell("1"),
+                cell("2"),
+                cell("2"),
+                cell("2"),
+                cell("2"),
+                cell("3"),
+                cell("3"),
+                cell("3"),
+                cell("3"),
+            ],
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let pane = protocol::PaneSurfacePane {
+            pane_id: "pane-scroll".into(),
+            content_revision: 1,
+            scroll: None,
+            focused: true,
+            mouse_reporting: false,
+            sgr_pixel_mouse: false,
+            alternate_screen_active: false,
+            scrollbar_rect: None,
+            rect: protocol::SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            inner_rect: protocol::SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            pixel_width: 100,
+            pixel_height: 100,
+        };
+        // After 1-line scroll up: row 0 becomes '1', row 1 becomes '2', row 2 becomes '3', row 3 has new line 'N'
+        let patch = crate::pane::TerminalDirtyPatch {
+            rows: vec![
+                (0, vec![cell("1"), cell("1"), cell("1"), cell("1")]),
+                (1, vec![cell("2"), cell("2"), cell("2"), cell("2")]),
+                (2, vec![cell("3"), cell("3"), cell("3"), cell("3")]),
+                (3, vec![cell("N"), cell("N"), cell("N"), cell("N")]),
+            ],
+        };
+        let (row_move, residual) =
+            detect_pane_row_move(&frame, &pane, &patch, &[]).expect("row move detected");
+        assert_eq!(row_move.src_y, 1);
+        assert_eq!(row_move.dst_y, 0);
+        assert_eq!(row_move.count, 3);
+        // Residual spans only contain row 3 ('N's)
+        assert_eq!(residual.len(), 1);
+        assert_eq!(residual[0].y, 3);
+        assert_eq!(
+            residual[0].cells,
+            vec![cell("N"), cell("N"), cell("N"), cell("N")]
+        );
+    }
+
+    #[test]
+    fn row_move_detects_scroll_with_shared_prefix_and_trailing_blanks() {
+        let frame = FrameData {
+            width: 8,
+            height: 4,
+            cells: vec![
+                cell("P"),
+                cell("0"),
+                cell("_"),
+                cell("1"),
+                cell("."),
+                cell("."),
+                cell(" "),
+                cell(" "),
+                cell("P"),
+                cell("0"),
+                cell("_"),
+                cell("2"),
+                cell("."),
+                cell("."),
+                cell(" "),
+                cell(" "),
+                cell("P"),
+                cell("0"),
+                cell("_"),
+                cell("3"),
+                cell("."),
+                cell("."),
+                cell(" "),
+                cell(" "),
+                cell("P"),
+                cell("0"),
+                cell("_"),
+                cell("4"),
+                cell("."),
+                cell("."),
+                cell(" "),
+                cell(" "),
+            ],
+            cursor: None,
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let pane = protocol::PaneSurfacePane {
+            pane_id: "pane-scroll-realistic".into(),
+            content_revision: 1,
+            scroll: None,
+            focused: true,
+            mouse_reporting: false,
+            sgr_pixel_mouse: false,
+            alternate_screen_active: false,
+            scrollbar_rect: None,
+            rect: protocol::SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 4,
+            },
+            inner_rect: protocol::SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 4,
+            },
+            pixel_width: 100,
+            pixel_height: 100,
+        };
+        // After 1-line scroll up with trailing blanks and prefix sharing:
+        let patch = crate::pane::TerminalDirtyPatch {
+            rows: vec![
+                (
+                    0,
+                    vec![
+                        cell("P"),
+                        cell("0"),
+                        cell("_"),
+                        cell("2"),
+                        cell("."),
+                        cell("."),
+                        cell(" "),
+                        cell(" "),
+                    ],
+                ),
+                (
+                    1,
+                    vec![
+                        cell("P"),
+                        cell("0"),
+                        cell("_"),
+                        cell("3"),
+                        cell("."),
+                        cell("."),
+                        cell(" "),
+                        cell(" "),
+                    ],
+                ),
+                (
+                    2,
+                    vec![
+                        cell("P"),
+                        cell("0"),
+                        cell("_"),
+                        cell("4"),
+                        cell("."),
+                        cell("."),
+                        cell(" "),
+                        cell(" "),
+                    ],
+                ),
+                (
+                    3,
+                    vec![
+                        cell("P"),
+                        cell("0"),
+                        cell("_"),
+                        cell("5"),
+                        cell("."),
+                        cell("."),
+                        cell(" "),
+                        cell(" "),
+                    ],
+                ),
+            ],
+        };
+        let (row_move, residual) = detect_pane_row_move(&frame, &pane, &patch, &[])
+            .expect("row move detected with blanks");
+        assert_eq!(row_move.src_y, 1);
+        assert_eq!(row_move.dst_y, 0);
+        assert_eq!(residual.len(), 1);
+        assert_eq!(residual[0].x, 3);
+        assert_eq!(residual[0].y, 3);
+        assert_eq!(residual[0].cells, vec![cell("5"), cell(".")]);
     }
 }

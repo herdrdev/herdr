@@ -284,8 +284,14 @@ pub(super) fn agent_row(
         .cloned()
         .collect::<HashMap<_, _>>();
     let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let status_key = status_text(agent.agent_status);
     let state_text = labels
-        .get(status_text(agent.agent_status))
+        .get(status_key)
+        .or_else(|| {
+            (agent.agent_status == crate::api::schema::AgentStatus::Done)
+                .then(|| labels.get("idle"))
+                .flatten()
+        })
         .map(String::as_str)
         .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
     let canonical_agent = agent
