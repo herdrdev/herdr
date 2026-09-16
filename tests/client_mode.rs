@@ -719,7 +719,11 @@ fn output_len(output: &SharedOutput) -> usize {
 fn sidebar_row_click(screen: &str, label: &str) -> Vec<u8> {
     let sidebar_width = screen
         .lines()
-        .find_map(|line| line.chars().position(|character| character == '│'))
+        .find_map(|line| {
+            line.chars()
+                .position(|character| character == '│')
+                .filter(|column| *column > 0)
+        })
         .expect("visible sidebar boundary");
     let row = screen
         .lines()
@@ -732,6 +736,15 @@ fn sidebar_row_click(screen: &str, label: &str) -> Vec<u8> {
         .unwrap_or_else(|| panic!("sidebar row {label:?} is not visible: {screen}"))
         + 1;
     format!("\x1b[<0;7;{row}M\x1b[<0;7;{row}m").into_bytes()
+}
+
+#[test]
+fn sidebar_row_click_ignores_notice_borders() {
+    let screen = "┌─────────────────────────┐\n│● Endpoint unavailable   │\n└─────────────────────────┘\n   · local-returned      │\n";
+    assert_eq!(
+        sidebar_row_click(screen, "local-returned"),
+        b"\x1b[<0;7;4M\x1b[<0;7;4m"
+    );
 }
 
 #[test]
@@ -1087,6 +1100,58 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         "Local recovery must not steal selection: {}",
         screen_text()
     );
+    let local_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    send_pane_shell_command(
+        &api_socket,
+        local_pane,
+        "printf 'LOCAL_WHILE_REMOTE_STALLED\\n'",
+    );
+    {
+        struct ResumeBridge(libc::pid_t);
+        impl Drop for ResumeBridge {
+            fn drop(&mut self) {
+                unsafe { libc::kill(self.0, libc::SIGCONT) };
+            }
+        }
+        let bridge: libc::pid_t = fs::read_to_string(&bridge_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(bridge, libc::SIGSTOP) }, 0);
+        let _resume_bridge = ResumeBridge(bridge);
+        input
+            .write_all(&sidebar_row_click(&screen_text(), "local-returned"))
+            .unwrap();
+        assert!(
+            wait_until(Duration::from_secs(3), Duration::from_millis(20), || {
+                screen_text().contains("LOCAL_WHILE_REMOTE_STALLED")
+            }),
+            "one Local selection must not wait for the remote bridge: {}",
+            screen_text()
+        );
+        assert!(
+            wait_until(Duration::from_secs(3), Duration::from_millis(100), || {
+                if screen_text().contains("LOCAL_INPUT_WHILE_REMOTE_STALLED") {
+                    return true;
+                }
+                input
+                    .write_all(b"printf 'LOCAL_%s\\n' INPUT_WHILE_REMOTE_STALLED\r")
+                    .unwrap();
+                false
+            }),
+            "Local input must become usable while the remote bridge remains stopped"
+        );
+    }
+    input
+        .write_all(&sidebar_row_click(&screen_text(), "remote-ready"))
+        .unwrap();
+    assert!(wait_until(
+        Duration::from_secs(10),
+        Duration::from_millis(20),
+        || screen_text().contains("REMOTE_STILL_SELECTED")
+    ));
+
     let watermark = output_len(&output);
     remote_server.child.kill().unwrap();
     assert!(
@@ -1101,7 +1166,6 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         "losing the selected remote must keep host mouse reporting enabled"
     );
 
-    let local_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
     send_pane_shell_command(
         &api_socket,
         local_pane,

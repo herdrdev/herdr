@@ -49,7 +49,7 @@ For keyboard navigation, press `prefix+w`, then use the workspace navigation key
 
 When highlighting a workspace on another machine, press Enter before using other keyboard actions. This prevents pane, tab, workspace, or custom-command shortcuts from acting on the current machine by mistake. Clicking cancels a remote desktop keyboard preview. Expanded sidebars respect each machine's collapsed worktree groups.
 
-Local opens immediately on startup without waiting for SSH connections. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
+Local opens immediately on startup without waiting for SSH connections. Selecting Local also cancels an unfinished remote switch without waiting for the remote machine to reply. If Local itself is reconnecting, your selection resumes when it is ready. Local accepts input once its fresh screen and terminal settings are ready. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
 
 When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.
 

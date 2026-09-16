@@ -38,6 +38,8 @@ pub(super) struct ClientState {
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
     /// an acknowledged target snapshot/surface pair commits.
     pub(super) presentation_frozen: bool,
+    /// Latest explicit Local selection awaiting this client's replacement Local connection.
+    pub(super) deferred_local_activation: Option<endpoint::EndpointActivationIntent>,
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
     pub(super) shell: Option<shell::ClientShellState>,
@@ -57,6 +59,47 @@ impl Drop for ClientState {
 }
 
 impl ClientState {
+    #[cfg(test)]
+    pub(super) fn test_new() -> Self {
+        Self {
+            blit_encoder: render_ansi::BlitEncoder::new(),
+            mouse_capture_active: false,
+            endpoint_mouse_capture_requested: false,
+            endpoint_sgr_pixels_requested: false,
+            host_theme_updates: Vec::new(),
+            direct_mouse_capture_preference: false,
+            shell_mouse_capture_preference: false,
+            direct_keyboard_protocol: Default::default(),
+            pane_keyboard_report_all: false,
+            keyboard_report_all_active: false,
+            reported_size: (100, 30),
+            reported_cell_size: (0, 0),
+            sound_config: Default::default(),
+            kitty_graphics_enabled: false,
+            pixel_geometry_enabled: false,
+            pixel_geometry_exact: false,
+            #[cfg(unix)]
+            direct_graphics_response: Default::default(),
+            #[cfg(unix)]
+            retired_direct_graphics: None,
+            #[cfg(unix)]
+            pending_surface_graphics: HashMap::new(),
+            attach_escape: None,
+            #[cfg(unix)]
+            mouse_scroll_lines: 3,
+            remote_image_paste_key: None,
+            redraw_on_focus_gained: false,
+            repaint_pending: false,
+            presentation_frozen: false,
+            deferred_local_activation: None,
+            draw_host_cursor: false,
+            detached_process_children: Vec::new(),
+            shell: Some(shell::ClientShellState::new(
+                shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+            )),
+        }
+    }
+
     pub(super) fn request_repaint(&mut self) {
         self.repaint_pending = true;
     }

@@ -150,6 +150,37 @@ fn switching_machines_preserves_aggregate_agent_scroll_and_visible_rows() {
 }
 
 #[test]
+fn local_agent_click_can_cancel_a_pending_remote_switch() {
+    for reconnecting in [false, true] {
+        let (mut state, remote) = state_with_scrollable_agents();
+        assert!(state.activate_endpoint(remote, &mut ClientShellInput::default()));
+        if reconnecting {
+            state.mark_endpoint_disconnected(&ClientEndpointId::Local);
+        }
+        state.compose(100, 28).unwrap();
+        let (rect, _, pane_id) = state
+            .hits
+            .endpoint_agents
+            .iter()
+            .find(|(_, endpoint, _)| endpoint.is_local())
+            .unwrap()
+            .clone();
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 2,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        })]);
+        assert!(
+            matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: Some(ClientEndpointFocusTarget::Pane(target)),
+        }] if target == &pane_id)
+        );
+    }
+}
+
+#[test]
 fn aggregate_agent_scroll_still_clamps_when_rows_shrink_on_activation() {
     let (mut state, remote) = state_with_scrollable_agents();
     for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
@@ -1394,6 +1425,71 @@ fn clicking_remote_machine_name_requests_activation_without_mutating_projection(
             .as_deref()
             .map(|snapshot| snapshot.boot_id.as_str()),
         Some("boot-1")
+    );
+}
+
+#[test]
+fn clicking_local_can_cancel_a_remote_switch_while_local_is_still_displayed() {
+    for workspace in [false, true] {
+        let (mut state, remote) = state_with_remote();
+        state.compose(100, 28).unwrap();
+        let mut pending = ClientShellInput::default();
+        assert!(state.activate_endpoint(remote, &mut pending));
+        assert_eq!(state.active_endpoint_id, ClientEndpointId::Local);
+        let rect = if workspace {
+            state
+                .hits
+                .workspaces
+                .iter()
+                .find(|hit| hit.endpoint_id.is_local())
+                .unwrap()
+                .rect
+        } else {
+            state
+                .hits
+                .machines
+                .iter()
+                .find(|hit| hit.endpoint_id.is_local())
+                .unwrap()
+                .rect
+        };
+        let outcome = state.handle_raw_events(vec![
+            RawInputEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x + 5,
+                row: rect.y,
+                modifiers: KeyModifiers::empty(),
+            }),
+            RawInputEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: rect.x + 5,
+                row: rect.y,
+                modifiers: KeyModifiers::empty(),
+            }),
+        ]);
+        assert!(
+            matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local, target,
+        }] if target.is_some() == workspace)
+        );
+    }
+}
+
+#[test]
+fn reconnecting_local_selection_still_reaches_the_runtime() {
+    let (mut state, _) = state_with_remote();
+    state.mark_endpoint_disconnected(&ClientEndpointId::Local);
+    let mut outcome = ClientShellInput::default();
+    state.focus_or_activate(
+        ClientEndpointId::Local,
+        ClientEndpointFocusTarget::Workspace("local-workspace".into()),
+        &mut outcome,
+    );
+    assert!(
+        matches!(outcome.actions.as_slice(), [ClientShellAction::ActivateEndpoint {
+        endpoint_id: ClientEndpointId::Local,
+        target: Some(ClientEndpointFocusTarget::Workspace(id)),
+    }] if id == "local-workspace")
     );
 }
 
