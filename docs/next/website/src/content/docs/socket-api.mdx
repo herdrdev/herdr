@@ -817,6 +817,21 @@ The first response acknowledges the subscription. Later lines are pushed events.
 Lifecycle subscriptions start when the request is accepted and do not replay
 events retained before that point.
 
+Lifecycle and agent-status events are drained in bounded batches, in order within
+each subscription. Event history is not durable. If a subscriber falls behind
+the retained history, including while its subscriptions are being initialized,
+the server sends an error response with the original request `id` and
+`error.code: "events_lost"`, then closes that subscription connection instead of
+silently continuing with missing events. Other clients remain connected.
+The history is shared across event types, so an overrun is reported even when
+the evicted events might not have matched this subscription's filters.
+
+On `events_lost`, open a new subscription and wait for `subscription_started`.
+Buffer its events while requesting `session.snapshot`, install the snapshot,
+then apply the buffered events and continue reading. Slow readers can still
+exhaust the bounded history; increasing client read throughput or reducing
+event load may be necessary.
+
 Workspace event subscriptions include `workspace.created`, `workspace.updated`, `workspace.metadata_updated`, `workspace.renamed`, `workspace.moved`, `workspace.reordered`, `workspace.closed`, and `workspace.focused`. `workspace.metadata_updated` reports token changes and TTL expiry without invoking plugin event hooks. Other workspace events describe Herdr UI/runtime lifecycle. `workspace.created` includes optional `workspace.worktree` provenance when the workspace belongs to a worktree group. `workspace.moved` includes the moved `workspace_id`, requested `insert_index`, and updated ordered `workspaces` list. `workspace.reordered` includes the atomically moved `workspace_ids`, optional `before_workspace_id`, and authoritative ordered `workspaces` list. `workspace.closed` includes a final `workspace` snapshot when Herdr can still identify it before removal.
 Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`,
 `tab.renamed`, and `tab.moved`. `tab.moved` includes the moved `tab_id`,

@@ -734,7 +734,7 @@ fn stream_subscriptions(
     if let Err(err) = write_json_line(
         &mut stream,
         &SuccessResponse {
-            id: request_id,
+            id: request_id.clone(),
             result: ResponseResult::SubscriptionStarted {},
         },
     ) {
@@ -750,7 +750,23 @@ fn stream_subscriptions(
         }
 
         for subscription in &mut subscriptions {
-            if let Some(event) = subscription.poll(api_tx, event_hub) {
+            let events = match subscription.poll_batch(api_tx, event_hub) {
+                Ok(events) => events,
+                Err(error) => {
+                    write_json_line_allow_disconnect(
+                        &mut stream,
+                        &ErrorResponse {
+                            id: request_id,
+                            error,
+                        },
+                    )?;
+                    return Ok(());
+                }
+            };
+            for event in events {
+                if should_stop_connection(&mut stream, running)? {
+                    return Ok(());
+                }
                 if let Err(err) = write_json_line(&mut stream, &event) {
                     if is_connection_closed_error(&err) {
                         return Ok(());
@@ -1499,6 +1515,173 @@ mod tests {
         let result = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(result.is_ok());
         server_thread.join().unwrap();
+    }
+
+    fn renamed_event(index: usize) -> crate::api::schema::EventEnvelope {
+        crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::WorkspaceRenamed,
+            data: crate::api::schema::EventData::WorkspaceRenamed {
+                workspace_id: "workspace_1".into(),
+                label: format!("flood-{index}"),
+            },
+        }
+    }
+
+    fn read_subscription_line(reader: &mut BufReader<LocalStream>) -> serde_json::Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("subscription response");
+        serde_json::from_str(&line).expect("subscription JSON")
+    }
+
+    #[test]
+    fn subscriptions_drain_retained_bursts_without_per_event_poll_delay() {
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (mut client, server, _path) = local_stream_pair("sub-burst");
+        client
+            .set_recv_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .write_all(
+                b"{\"id\":\"burst\",\"method\":\"events.subscribe\",\"params\":{\"subscriptions\":[{\"type\":\"workspace.renamed\"}]}}\n",
+            )
+            .unwrap();
+
+        let running = Arc::new(AtomicBool::new(true));
+        let event_hub = EventHub::default();
+        let server_hub = event_hub.clone();
+        let server_running = Arc::clone(&running);
+        let server_thread = std::thread::spawn(move || {
+            handle_connection(server, &api_tx, &server_hub, &server_running, None)
+        });
+        let mut reader = BufReader::new(client);
+        assert_eq!(
+            read_subscription_line(&mut reader)["result"]["type"],
+            "subscription_started"
+        );
+        for index in 0..128 {
+            event_hub.push(renamed_event(index));
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut labels = Vec::new();
+        while labels.len() < 128 && Instant::now() < deadline {
+            let event = read_subscription_line(&mut reader);
+            labels.push(event["data"]["label"].as_str().unwrap().to_string());
+        }
+        running.store(false, Ordering::Relaxed);
+        drop(reader);
+        server_thread.join().unwrap().unwrap();
+        assert_eq!(
+            labels,
+            (0..128)
+                .map(|index| format!("flood-{index}"))
+                .collect::<Vec<_>>(),
+            "a retained burst must not wait 100 ms for every event"
+        );
+    }
+
+    #[test]
+    fn subscriptions_report_history_loss_before_sending_a_partial_stream() {
+        assert_subscription_history_loss(false);
+    }
+
+    #[test]
+    fn subscriptions_report_history_loss_before_initial_agent_status() {
+        assert_subscription_history_loss(true);
+    }
+
+    fn assert_subscription_history_loss(agent_status: bool) {
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (mut client, server, _path) = local_stream_pair("sub-gap");
+        client
+            .set_recv_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let subscriptions = if agent_status {
+            serde_json::json!([{
+                "type": "pane.agent_status_changed",
+                "pane_id": "pane_1",
+                "agent_status": "working"
+            }])
+        } else {
+            serde_json::json!([
+                {"type": "workspace.renamed"},
+                {
+                    "type": "pane.output_matched",
+                    "pane_id": "pane_1",
+                    "source": "recent",
+                    "match": {"type": "substring", "value": "never"}
+                }
+            ])
+        };
+        let request = serde_json::json!({
+            "id": "history-gap",
+            "method": "events.subscribe",
+            "params": {"subscriptions": subscriptions}
+        });
+        writeln!(client, "{request}").unwrap();
+
+        let running = Arc::new(AtomicBool::new(true));
+        let event_hub = EventHub::default();
+        let server_hub = event_hub.clone();
+        let server_running = Arc::clone(&running);
+        let server_thread = std::thread::spawn(move || {
+            handle_connection(server, &api_tx, &server_hub, &server_running, None)
+        });
+
+        // The setup probe pins the subscription cursor before this burst.
+        let probe = api_rx.blocking_recv().expect("subscription setup probe");
+        for index in 0..600 {
+            event_hub.push(renamed_event(index));
+        }
+        let result = match probe.request.method {
+            Method::PaneGet(_) => ResponseResult::PaneInfo {
+                pane: pane_info("pane_1", crate::api::schema::AgentStatus::Working),
+            },
+            Method::PaneRead(_) => ResponseResult::PaneRead {
+                read: crate::api::schema::PaneReadResult {
+                    pane_id: "pane_1".into(),
+                    workspace_id: "workspace_1".into(),
+                    tab_id: "tab_1".into(),
+                    source: crate::api::schema::ReadSource::RecentUnwrapped,
+                    format: crate::api::schema::ReadFormat::Text,
+                    text: String::new(),
+                    revision: 0,
+                    truncated: false,
+                },
+            },
+            other => panic!("unexpected setup probe: {other:?}"),
+        };
+        probe
+            .respond_to
+            .send(
+                serde_json::to_string(&SuccessResponse {
+                    id: probe.request.id,
+                    result,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let mut reader = BufReader::new(client);
+        assert_eq!(
+            read_subscription_line(&mut reader)["result"]["type"],
+            "subscription_started"
+        );
+        let response = read_subscription_line(&mut reader);
+        let expected_error = response["error"]["code"] == "events_lost";
+        if expected_error {
+            let mut line = String::new();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+        }
+        running.store(false, Ordering::Relaxed);
+        drop(reader);
+        drop(api_rx);
+        server_thread.join().unwrap().unwrap();
+        assert_eq!(
+            response["error"]["code"], "events_lost",
+            "agent_status={agent_status}: {response}"
+        );
+        assert_eq!(response["id"], "history-gap");
     }
 }
 

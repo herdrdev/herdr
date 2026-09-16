@@ -635,6 +635,10 @@ workspace 的 get/list 响应会公开生成的 `tokens` 映射,空间侧边栏�
 
 第一个响应确认订阅。之后的行是推送的事件。生命周期事件订阅从请求被接受时开始,不会重放在此之前保留的事件。
 
+生命周期和智能体状态事件按有界批次发送,每个订阅内保持事件顺序。事件历史不是持久日志。如果订阅者落后到保留范围之外,包括订阅初始化期间,服务器会发送包含原请求 `id` 和 `error.code: "events_lost"` 的错误响应,然后关闭该订阅连接,而不是静默跳过缺失事件后继续发送。其他客户端的连接不受影响。各类事件共享历史缓冲,因此即使被淘汰的事件可能不匹配此订阅的过滤条件,仍会报告溢出。
+
+收到 `events_lost` 后,建立新订阅并等待 `subscription_started`。请求 `session.snapshot` 时缓冲新订阅的事件,安装快照后按顺序应用缓冲事件,然后继续读取。读取过慢仍可能耗尽有界历史,因此可能需要提高客户端读取速度或减少事件负载。
+
 工作区事件订阅包括 `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed` 和 `workspace.focused`。`workspace.metadata_updated` 报告令牌变更和 TTL 到期,但不会调用插件事件钩子。其他工作区事件描述 Herdr UI/运行时的生命周期。当工作区属于 worktree 组时,`workspace.created` 包含可选的 `workspace.worktree` 来源信息。`workspace.moved` 包含被移动的 `workspace_id`、请求的 `insert_index` 和更新后的有序 `workspaces` 列表。`workspace.reordered` 包含原子移动的 `workspace_ids`、可选的 `before_workspace_id` 和服务器确认的有序 `workspaces` 列表。在移除前 Herdr 仍能识别时,`workspace.closed` 包含最终的 `workspace` 快照。
 标签页事件订阅包括 `tab.created`、`tab.closed`、`tab.focused`、`tab.renamed` 和 `tab.moved`。`tab.moved` 包含被移动的 `tab_id`、`workspace_id`、请求的 `insert_index` 和该工作区更新后的有序 `tabs` 列表。
 窗格事件订阅包括 `pane.created`、`pane.updated`、`pane.closed`、`pane.focused`、`pane.moved`、`pane.exited`、`pane.agent_detected`、`pane.output_matched`、`pane.agent_status_changed` 和 `pane.scroll_changed`。`pane.focused` 也会上报任意连接到此服务器的客户端手动选择窗格的变化，不会移动其他客户端的视图，且载荷不包含客户端身份。重复选择已选中的窗格不会再次发出事件。终端标题变化可能发出 `pane.updated`,但如果原始标题只有旋转指示符发生变化且 `terminal_title_stripped` 不变,则不会发出。`pane.scroll_changed` 只针对一个 `pane_id`,每当 Herdr 观察到滚动快照变化时,都会发出 `pane_id`、`workspace_id` 和当前 `scroll` 指标。
