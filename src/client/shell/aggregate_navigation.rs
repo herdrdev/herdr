@@ -346,6 +346,7 @@ pub(super) fn navigator_rows(
                                 stale,
                                 current: endpoint.endpoint_id == *active_endpoint_id
                                     && snapshot.focused_pane_id.as_deref() == Some(&pane.pane_id),
+                                matches_query: true,
                                 target: ClientNavigatorTarget::Pane {
                                     endpoint_id: endpoint.endpoint_id.clone(),
                                     pane_id: pane.pane_id.clone(),
@@ -353,10 +354,9 @@ pub(super) fn navigator_rows(
                             });
                         }
                     }
-                    if !filtering
-                        || filter(tab.agent_status) && (endpoint_query_matches || text(&tab.label))
-                        || !panes.is_empty()
-                    {
+                    let tab_matches = !filtering
+                        || filter(tab.agent_status) && (endpoint_query_matches || text(&tab.label));
+                    if tab_matches || !panes.is_empty() {
                         children.push(ClientNavigatorRow {
                             depth: 1 + depth_offset,
                             label: tab.label.clone(),
@@ -371,6 +371,7 @@ pub(super) fn navigator_rows(
                             status: None,
                             stale,
                             current: false,
+                            matches_query: tab_matches,
                             target: ClientNavigatorTarget::Tab {
                                 endpoint_id: endpoint.endpoint_id.clone(),
                                 tab_id: tab.tab_id.clone(),
@@ -390,6 +391,7 @@ pub(super) fn navigator_rows(
                         status: None,
                         stale,
                         current: false,
+                        matches_query: workspace_matches,
                         target: ClientNavigatorTarget::Workspace {
                             endpoint_id: endpoint.endpoint_id.clone(),
                             workspace_id: workspace.workspace_id.clone(),
@@ -410,6 +412,7 @@ pub(super) fn navigator_rows(
                     status: None,
                     stale,
                     current: false,
+                    matches_query: endpoint_query_matches,
                     target: ClientNavigatorTarget::Machine {
                         endpoint_id: endpoint.endpoint_id.clone(),
                     },
@@ -427,6 +430,7 @@ pub(super) fn navigator_selected_index(
 ) -> Option<usize> {
     match navigator.selected.as_ref() {
         Some(target) => rows.iter().position(|row| row.target == *target),
+        None if !navigator.query.trim().is_empty() => rows.iter().position(|row| row.matches_query),
         None => (!rows.is_empty()).then_some(0),
     }
 }
