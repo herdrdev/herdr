@@ -1947,7 +1947,7 @@ fn probe_remote_endpoint(
         remote_herdr.clone(),
         path.clone(),
         ssh.session_name.clone(),
-        None,
+        endpoint_probe_ssh_options(ssh),
         true,
     )?;
     let mut stream = crate::ipc::connect_local_stream(&path)?;
@@ -1957,6 +1957,13 @@ fn probe_remote_endpoint(
         Ok(negotiation) => Ok(negotiation),
         Err(probe_error) => Err(bridge.reported_failure().unwrap_or(probe_error)),
     }
+}
+
+// Setup may have just completed password or keyboard-interactive authentication.
+// Reuse that interactive control connection for the noninteractive endpoint probe;
+// a fresh BatchMode SSH invocation cannot answer the same prompt.
+fn endpoint_probe_ssh_options(ssh: &RemoteSsh) -> Option<&ManagedSshOptions> {
+    ssh.options()
 }
 
 #[derive(Debug, Deserialize)]
@@ -3658,6 +3665,25 @@ mod tests {
                 "-o".to_string(),
                 "ControlPersist=yes".to_string(),
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn endpoint_probe_reuses_interactive_ssh_control_socket() {
+        let mut managed_config = write_managed_ssh_config().expect("write managed config");
+        let control_path = PathBuf::from("/tmp/herdr-password-auth/control");
+        managed_config.options.control_path = Some(control_path.clone());
+        let ssh = RemoteSsh {
+            target: "example".to_string(),
+            session_name: crate::session::DEFAULT_SESSION_NAME.into(),
+            managed_config: Some(managed_config),
+            noninteractive: false,
+        };
+
+        assert_eq!(
+            endpoint_probe_ssh_options(&ssh).and_then(|options| options.control_path.as_ref()),
+            Some(&control_path)
         );
     }
 
