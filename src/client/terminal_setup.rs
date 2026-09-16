@@ -41,6 +41,15 @@ pub(super) fn setup_terminal_with_capabilities(
     mouse_capture: bool,
 ) -> io::Result<TerminalGuard> {
     ratatui::init();
+    let mut terminal_guard = TerminalGuard {
+        reset_keyboard_enhancements: false,
+        reset_modify_other_keys: false,
+        reset_host_color_scheme_reports: false,
+        restore_claimed: Arc::new(AtomicBool::new(false)),
+        restored: false,
+        #[cfg(windows)]
+        restore_windows_input_mode: None,
+    };
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let host_color_scheme_reports =
         should_enable_host_color_scheme_reports(enable_client_protocols);
@@ -54,13 +63,19 @@ pub(super) fn setup_terminal_with_capabilities(
         } else {
             WindowsVirtualTerminalInputSetup::default()
         };
+    #[cfg(windows)]
+    {
+        terminal_guard.restore_windows_input_mode = windows_virtual_terminal_input.restore_mode;
+    }
 
     if enable_client_protocols {
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
+            terminal_guard.reset_host_color_scheme_reports = true;
             write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
         }
+        terminal_guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
     } else {
         if should_query_host_terminal_theme() {
@@ -73,6 +88,7 @@ pub(super) fn setup_terminal_with_capabilities(
     #[cfg(windows)]
     if enable_client_protocols && windows_vti_input_backend_enabled() && !windows_ssh_session {
         windows_virtual_terminal_input = enable_windows_virtual_terminal_input();
+        terminal_guard.restore_windows_input_mode = windows_virtual_terminal_input.restore_mode;
     }
 
     #[cfg(windows)]
@@ -81,33 +97,21 @@ pub(super) fn setup_terminal_with_capabilities(
         && windows_virtual_terminal_input.active
         && windows_win32_input_mode_enabled()
     {
-        if let Err(err) = enable_windows_win32_input_mode(&mut io::stdout()) {
-            if let Some(mode) = windows_virtual_terminal_input.restore_mode {
-                restore_windows_input_mode_value(mode);
-            }
-            return Err(err);
-        }
+        enable_windows_win32_input_mode(&mut io::stdout())?;
     }
 
     let modify_other_keys_mode = enable_client_protocols
         .then(crate::input::host_modify_other_keys_mode)
         .flatten();
     if let Some(mode) = modify_other_keys_mode {
+        terminal_guard.reset_modify_other_keys = true;
         io::stdout().write_all(mode.set_sequence())?;
         io::stdout().flush()?;
     }
 
     execute!(io::stdout(), DisableLineWrap)?;
 
-    Ok(TerminalGuard {
-        reset_keyboard_enhancements: enable_client_protocols,
-        reset_modify_other_keys: modify_other_keys_mode.is_some(),
-        reset_host_color_scheme_reports: host_color_scheme_reports,
-        restore_claimed: Arc::new(AtomicBool::new(false)),
-        restored: false,
-        #[cfg(windows)]
-        restore_windows_input_mode: windows_virtual_terminal_input.restore_mode,
-    })
+    Ok(terminal_guard)
 }
 
 pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
