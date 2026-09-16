@@ -261,6 +261,10 @@ impl ClientConnection {
         self.render_state.request_repaint();
     }
 
+    pub(crate) fn request_recompute(&mut self) {
+        self.render_state.request_recompute();
+    }
+
     pub(crate) fn track_shell_input(
         &mut self,
         target: ClientShellInputTarget,

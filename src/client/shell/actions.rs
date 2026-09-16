@@ -269,7 +269,7 @@ impl ClientShellState {
             .as_ref()
             .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
             .map(|pane| pane.content_revision)
-            // Read a manual mouse selection atomically from the live terminal. Output
+            // Read an explicit selection atomically from the live terminal. Output
             // between the displayed frame and this request must not reject the copy.
             .filter(|_| !live);
         let (anchor, cursor) = selection.ordered_cells();

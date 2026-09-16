@@ -265,6 +265,9 @@ impl HeadlessServer {
                 crate::render_prof::event("retained_surface.recipient_deferred");
                 continue;
             }
+            if client.render_state.requires_recompute() {
+                fallback!("recompute_pending");
+            }
             let Some(surface) = client.render_state.last_pane_surface() else {
                 fallback!("no_baseline");
             };

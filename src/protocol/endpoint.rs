@@ -49,6 +49,9 @@ pub struct EndpointClientHello {
     /// Accept the optional cell-retaining surface encoding on this connection.
     #[serde(default)]
     pub surface_reuse: bool,
+    /// Accept the optional surface-delta encoding on this connection.
+    #[serde(default)]
+    pub surface_delta: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -143,6 +146,7 @@ impl EndpointServerWelcome {
             methods,
             capabilities: vec![
                 super::surface_reuse::CAPABILITY.into(),
+                super::surface_delta::CAPABILITY.into(),
                 SURFACE_INTEREST_CAPABILITY.into(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
                 HEALTH_CHECK_CAPABILITY.into(),
@@ -186,6 +190,7 @@ mod tests {
             mouse_capture: true,
             surface_active: true,
             surface_reuse: false,
+            surface_delta: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -333,9 +338,11 @@ mod tests {
         let mut value = serde_json::to_value(hello()).unwrap();
         value.as_object_mut().unwrap().remove("surface_active");
         value.as_object_mut().unwrap().remove("surface_reuse");
+        value.as_object_mut().unwrap().remove("surface_delta");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
+        assert!(!decoded.surface_delta);
     }
 
     #[test]
@@ -345,6 +352,7 @@ mod tests {
             welcome.capabilities,
             vec![
                 super::super::surface_reuse::CAPABILITY.to_string(),
+                super::super::surface_delta::CAPABILITY.to_string(),
                 SURFACE_INTEREST_CAPABILITY.to_string(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.to_string(),
                 HEALTH_CHECK_CAPABILITY.to_string(),

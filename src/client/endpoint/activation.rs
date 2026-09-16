@@ -13,11 +13,31 @@ use protocol::*;
 
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn release_surface_best_effort(
+    lease: &EndpointLease,
+    endpoints: &mut EndpointRegistry,
+    request_id: String,
+) {
+    if !endpoints.accepts(&lease.endpoint_id, lease.generation) {
+        return;
+    }
+    endpoints.set_surface_active(&lease.endpoint_id, false);
+    let _ = endpoints.send_to(
+        &lease.endpoint_id,
+        &crate::protocol::ClientMessage::ClientShellFocus { focused: false },
+    );
+    match surface_interest_request(&lease.boot_id, request_id, false) {
+        Ok(request) => {
+            let _ = endpoints.send_to(&lease.endpoint_id, &request);
+        }
+        Err(error) => tracing::warn!(%error, "could not request abandoned surface cleanup"),
+    }
+}
+
 impl PendingEndpointActivation {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn begin(
+    pub(crate) fn prepare(
         shell: &crate::client::shell::ClientShellState,
-        endpoints: &mut EndpointRegistry,
+        endpoints: &EndpointRegistry,
         target: ClientEndpointId,
         focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
         resize: crate::protocol::ClientMessage,
@@ -60,16 +80,14 @@ impl PendingEndpointActivation {
         let source_is_target = source.endpoint_id == target_lease.endpoint_id;
         // Validate every typed lifecycle and optional focus envelope before the first transport
         // write. Any error above this line is guaranteed not to have changed either endpoint.
-        let source_release_request = (source_available && !source_is_target)
-            .then(|| {
-                surface_interest_request(
-                    &source.boot_id,
-                    format!("client-shell-surface:{serial}:off"),
-                    false,
-                )
-            })
-            .transpose()
+        if source_available && !source_is_target {
+            surface_interest_request(
+                &source.boot_id,
+                format!("client-shell-surface:{serial}:off"),
+                false,
+            )
             .map_err(|error| ActivationBeginError::Preflight(error.to_string()))?;
+        }
         surface_interest_request(
             &target_lease.boot_id,
             format!("client-shell-surface:{serial}:on"),
@@ -85,14 +103,13 @@ impl PendingEndpointActivation {
             .map_err(|error| ActivationBeginError::Preflight(error.to_string()))?;
         }
 
-        endpoints.freeze_input();
-        let mut activation = Self {
+        Ok(Self {
             source,
             source_available,
             target: target_lease,
             focus,
             host_focused: shell.host_focus_baseline(),
-            resize: resize.clone(),
+            resize,
             phase: ActivationPhase::ReleasingSource {
                 request_id: format!("client-shell-surface:{serial}:off"),
             },
@@ -101,44 +118,82 @@ impl PendingEndpointActivation {
             next_focus_serial: 0,
             rollback_error: None,
             successor: None,
-        };
+        })
+    }
 
-        // Reconnecting the selected endpoint has no live source surface to release. All normal
-        // handoffs must make the source locally inactive before a target request is even sent.
-        if source_is_target || !source_available {
-            if let Err(error) = activation.start_target(endpoints, resize) {
-                return Err(ActivationBeginError::Partial {
-                    activation: Box::new(activation),
-                    error,
-                });
-            }
-        } else {
-            // `surface.set(false)` removes the viewer, but old servers only emit the PTY focus
-            // loss while the viewer is still active. Revoke it explicitly before source-off.
-            if endpoints.send_to(
-                &activation.source.endpoint_id,
-                &crate::protocol::ClientMessage::ClientShellFocus { focused: false },
-            ) != EndpointSendOutcome::Sent
-            {
-                return Err(ActivationBeginError::Partial {
-                    activation: Box::new(activation),
-                    error: "source endpoint focus revoke could not be sent".into(),
-                });
-            }
-            let request = source_release_request.expect("validated source release request");
-            if endpoints.send_to(&activation.source.endpoint_id, &request)
-                != EndpointSendOutcome::Sent
-            {
-                return Err(ActivationBeginError::Partial {
-                    activation: Box::new(activation),
-                    error: "source endpoint release could not be sent".into(),
-                });
-            }
-            // This is deliberately before the acknowledgement: the source is no longer viewed
-            // locally while its release is in flight, and pane input is consequently blocked.
-            endpoints.set_surface_active(&activation.source.endpoint_id, false);
+    pub(crate) fn start(
+        mut self,
+        endpoints: &mut EndpointRegistry,
+    ) -> Result<Self, ActivationBeginError> {
+        endpoints.freeze_input();
+        match self.start_prepared(endpoints) {
+            Ok(()) => Ok(self),
+            Err(error) => Err(ActivationBeginError::Partial {
+                activation: Box::new(self),
+                error,
+            }),
         }
-        Ok(activation)
+    }
+
+    fn start_prepared(&mut self, endpoints: &mut EndpointRegistry) -> Result<(), String> {
+        let source_is_target = self.source.endpoint_id == self.target.endpoint_id;
+        // Local must not depend on a remote acknowledgement to become usable.
+        if source_is_target || !self.source_available || self.target.endpoint_id.is_local() {
+            if self.source_available && !source_is_target {
+                release_surface_best_effort(
+                    &self.source,
+                    endpoints,
+                    format!("client-shell-surface:{}:off", self.epoch),
+                );
+            }
+            return self.start_target(endpoints, self.resize.clone());
+        }
+        // Old servers emit PTY focus loss only while the viewer is still active.
+        if endpoints.send_to(
+            &self.source.endpoint_id,
+            &crate::protocol::ClientMessage::ClientShellFocus { focused: false },
+        ) != EndpointSendOutcome::Sent
+        {
+            return Err("source endpoint focus revoke could not be sent".into());
+        }
+        let request = surface_interest_request(
+            &self.source.boot_id,
+            format!("client-shell-surface:{}:off", self.epoch),
+            false,
+        )
+        .map_err(|error| error.to_string())?;
+        if endpoints.send_to(&self.source.endpoint_id, &request) != EndpointSendOutcome::Sent {
+            return Err("source endpoint release could not be sent".into());
+        }
+        endpoints.set_surface_active(&self.source.endpoint_id, false);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn begin(
+        shell: &crate::client::shell::ClientShellState,
+        endpoints: &mut EndpointRegistry,
+        target: ClientEndpointId,
+        focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
+        resize: crate::protocol::ClientMessage,
+        serial: u64,
+        now: Instant,
+    ) -> Result<Self, ActivationBeginError> {
+        Self::prepare(shell, endpoints, target, focus, resize, serial, now)?.start(endpoints)
+    }
+
+    pub(crate) fn abandon(&self, endpoints: &mut EndpointRegistry) {
+        endpoints.freeze_input();
+        for lease in [&self.source, &self.target] {
+            release_surface_best_effort(
+                lease,
+                endpoints,
+                format!("client-shell-surface:{}:abandon", self.epoch),
+            );
+            if self.source.endpoint_id == self.target.endpoint_id {
+                break;
+            }
+        }
     }
 
     pub(crate) fn target(&self) -> &ClientEndpointId {

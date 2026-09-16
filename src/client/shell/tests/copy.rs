@@ -22,6 +22,7 @@ fn pasted_help_and_copy_queries_normalize_single_line_text() {
         pane_id: "pane_1".into(),
         content_revision: 0,
         geometry: (80, 24),
+        alternate_screen_active: false,
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
         offset_from_bottom: 0,
         max_offset_from_bottom: 0,
@@ -194,6 +195,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
             if params.pane_id == "pane_1"
                 && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
                 && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 2 }
+                && params.content_revision.is_none()
     ));
 
     let (repaint, actions) = state.handle_endpoint_result(
@@ -506,7 +508,7 @@ fn keyboard_copy_mode_owns_cursor_selection_copy_and_scroll_restore() {
         action,
         ClientShellAction::Endpoint { request, .. }
             if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
-                if params.content_revision == Some(0))
+                if params.content_revision.is_none())
     )));
     assert!(copy.actions.iter().any(|action| matches!(
         action,
@@ -517,6 +519,133 @@ fn keyboard_copy_mode_owns_cursor_selection_copy_and_scroll_restore() {
                     if params.offset_from_bottom == 0
             )
     )));
+}
+
+#[test]
+fn keyboard_selections_survive_output_and_copy_live_ranges() {
+    // Character and linewise selections have distinct anchor/range projections.
+    for selection_key in [b"v", b"V"] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface.clone());
+        state.compose(106, 20).expect("composed frame");
+        state.handle_input_bytes(b"\x02[");
+        state.handle_input_bytes(selection_key);
+        state.handle_input_bytes(b"k");
+        let range = state
+            .selection
+            .as_ref()
+            .expect("selected range")
+            .ordered_cells();
+
+        pane_surface.surface_revision += 1;
+        pane_surface.panes[0].content_revision += 2;
+        pane_surface.frame.cells[0].symbol = "X".into();
+        state.set_pane_surface(pane_surface);
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+        assert_eq!(
+            state
+                .selection
+                .as_ref()
+                .expect("retained range")
+                .ordered_cells(),
+            range
+        );
+
+        let copied = state.handle_input_bytes(b"y");
+        assert!(copied.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
+                    if params.content_revision.is_none()
+                        && (params.anchor.row, params.anchor.col) == range.0
+                        && (params.cursor.row, params.cursor.col) == range.1)
+        )));
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.is_none());
+    }
+}
+
+#[test]
+fn empty_keyboard_anchor_keeps_search_fallback_revision_guard() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 0,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    state.handle_input_bytes(b"\x02[");
+    let search = state.handle_input_bytes(b"/LIVE\r");
+    let [ClientShellAction::Endpoint { request, .. }] = &search.actions[..] else {
+        panic!("search request");
+    };
+    let found = crate::api::schema::PaneTextRange {
+        start: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
+        end: crate::api::schema::PaneTextPoint { row: 0, col: 3 },
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(copy_search_result(vec![found], Some(0))),
+    );
+    state.handle_input_bytes(b"v");
+    assert!(!state.selection.as_ref().unwrap().is_visible());
+    let copy = state.handle_input_bytes(b"y");
+    assert!(copy.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(params)
+                if params.anchor == found.start
+                    && params.cursor == found.end
+                    && params.content_revision == Some(0))
+    )));
+}
+
+#[test]
+fn keyboard_selection_does_not_return_after_resize_or_screen_switch() {
+    for screen_switch in [false, true] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 0,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface.clone());
+        state.compose(106, 20).expect("composed frame");
+        state.handle_input_bytes(b"\x02[");
+        state.handle_input_bytes(b"vk");
+        assert!(state.selection.is_some());
+        pane_surface.surface_revision += 1;
+        pane_surface.panes[0].content_revision += 2;
+        if screen_switch {
+            pane_surface.panes[0].alternate_screen_active = true;
+        } else {
+            pane_surface.panes[0].inner_rect.width -= 1;
+        }
+        state.set_pane_surface(pane_surface);
+        assert!(state.selection.is_none());
+        assert!(state.copy_mode.as_ref().unwrap().selection.is_none());
+        state.compose(106, 20).expect("changed frame");
+        state.handle_input_bytes(b"l");
+        assert!(
+            state.selection.is_none(),
+            "movement must not resurrect the old anchor"
+        );
+    }
 }
 
 #[test]

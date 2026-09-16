@@ -27,6 +27,8 @@ herdr session delete side-project
 
 A named session has its own panes, tabs, workspaces, sockets, and runtime state. It still shares the same global config file.
 
+When deleting a session, use the exact name shown by `herdr session list`, including letter case. On case-insensitive filesystems, `herdr session delete foo` refuses to delete a session named `Foo`.
+
 Use `--json` for scripts:
 
 ```bash

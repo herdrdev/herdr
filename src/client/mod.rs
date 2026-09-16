@@ -414,6 +414,7 @@ async fn run_client_loop(
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
         presentation_frozen: false,
+        deferred_local_activation: None,
         draw_host_cursor,
         detached_process_children: Vec::new(),
         shell: config.shell_config.map(shell::ClientShellState::new),
@@ -539,6 +540,10 @@ async fn run_client_loop(
             handshake.endpoint_methods.unwrap_or_default(),
             handshake.endpoint_capabilities.unwrap_or_default(),
         );
+        let surface_reuse = negotiation.supports_capability(protocol::surface_reuse::CAPABILITY);
+        let surface_delta = negotiation.supports_capability(protocol::surface_delta::CAPABILITY);
+        let surface_decoder = (surface_reuse || surface_delta)
+            .then(|| protocol::surface_reuse::Decoder::new(surface_delta));
         let transport = start_endpoint_transport(
             stream,
             (),
@@ -546,7 +551,7 @@ async fn run_client_loop(
             endpoint::ClientEndpointId::Local,
             1,
             max_frame_size,
-            negotiation.supports_capability(protocol::surface_reuse::CAPABILITY),
+            surface_decoder,
         )?;
         let mut registry = endpoint::EndpointRegistry::new(transport, 1, negotiation);
         if state.shell.is_some() {
@@ -815,7 +820,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -979,7 +984,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -1083,7 +1088,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -1198,6 +1203,8 @@ async fn run_client_loop(
                     }
                     let surface_reuse =
                         negotiation.supports_capability(protocol::surface_reuse::CAPABILITY);
+                    let surface_delta =
+                        negotiation.supports_capability(protocol::surface_delta::CAPABILITY);
                     let agent_view_projection_supported = negotiation.supports_capability(
                         crate::protocol::endpoint::AGENT_VIEW_PROJECTION_CAPABILITY,
                     );
@@ -1220,6 +1227,8 @@ async fn run_client_loop(
                     if let Some(frame) = frame {
                         state.present_frame(frame);
                     }
+                    let surface_decoder = (surface_reuse || surface_delta)
+                        .then(|| protocol::surface_reuse::Decoder::new(surface_delta));
                     let reader_tx = event_tx.clone();
                     std::thread::spawn(move || {
                         server_reader_thread(
@@ -1229,7 +1238,7 @@ async fn run_client_loop(
                             MAX_GRAPHICS_FRAME_SIZE,
                             endpoint_id,
                             generation,
-                            surface_reuse,
+                            surface_decoder,
                         );
                     });
                 }
@@ -1255,7 +1264,7 @@ async fn run_client_loop(
                     target,
                     force,
                     now,
-                    &event_tx,
+                    &mut scheduled_activation,
                 )?;
             }
             ClientLoopEvent::ServerMessage {
@@ -1736,7 +1745,7 @@ async fn run_client_loop(
                             &mut write_stream,
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
-                            &event_tx,
+                            &mut scheduled_activation,
                         )?;
                         let repaint = repaint || dispatch_repaint;
                         if replay_mouse.is_empty() {
@@ -1768,7 +1777,7 @@ async fn run_client_loop(
                                 &mut pending_activation,
                                 &mut endpoint_commands,
                                 &mut prefix_input_source,
-                                &event_tx,
+                                &mut scheduled_activation,
                             )? {
                                 return Ok(());
                             }
@@ -1954,6 +1963,14 @@ async fn run_client_loop(
                             }
                         }
                         write_stream.mark_ready(&endpoint_id, generation);
+                        if endpoint_id.is_local() {
+                            if let Some(event) =
+                                take_ready_local_activation(&mut state, &write_stream)
+                            {
+                                scheduled_activation = Some(event);
+                                continue;
+                            }
+                        }
                         let selected_endpoint = endpoint_catalog
                             .selected_profile
                             .as_ref()
@@ -1970,7 +1987,11 @@ async fn run_client_loop(
                         let needs_surface = write_stream
                             .connection(&selected_endpoint)
                             .is_some_and(|connection| !connection.surface_active);
-                        if activation_ready && needs_surface && pending_activation.is_none() {
+                        if activation_ready
+                            && needs_surface
+                            && pending_activation.is_none()
+                            && state.deferred_local_activation.is_none()
+                        {
                             scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
                                 endpoint_id: selected_endpoint,
                                 target: None,
@@ -2105,7 +2126,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }

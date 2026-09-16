@@ -1000,16 +1000,12 @@ impl ClientShellState {
                 if endpoint_id == self.active_endpoint_id {
                     self.mode = ClientShellMode::Terminal;
                     self.navigate_workspace_id = None;
-                } else if self.endpoint_is_online(&endpoint_id) {
+                    if endpoint_id.is_local() {
+                        self.activate_endpoint(endpoint_id, outcome);
+                    }
+                } else if self.activate_endpoint(endpoint_id, outcome) {
                     self.mode = ClientShellMode::Terminal;
                     self.navigate_workspace_id = None;
-                    outcome.actions.push(ClientShellAction::ActivateEndpoint {
-                        endpoint_id,
-                        target: None,
-                    });
-                } else {
-                    let label = self.endpoint_label(&endpoint_id).to_owned();
-                    self.receive_endpoint_unavailable(format!("{label} is not ready"));
                 }
             }
             Some(ClientMobileTarget::NewWorkspace) => {

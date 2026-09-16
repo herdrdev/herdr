@@ -4,6 +4,8 @@ use super::*;
 mod pane_graphics_tests;
 #[path = "pane_move.rs"]
 mod pane_move_tests;
+#[path = "surface_delta.rs"]
+mod surface_delta_tests;
 #[path = "surface_interest.rs"]
 mod surface_interest_tests;
 
@@ -690,6 +692,7 @@ async fn client_shell_attach_seeds_workspace() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 6,
             surface_cols: 80,
             surface_rows: 23,
@@ -721,6 +724,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -838,6 +842,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 77,
             surface_cols: 80,
             surface_rows: 23,
@@ -947,6 +952,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,
@@ -1115,6 +1121,7 @@ fn connect_test_shell(
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id,
             surface_cols,
             surface_rows,
@@ -1577,6 +1584,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 13,
             surface_cols: 80,
             surface_rows: 23,
@@ -1602,6 +1610,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 14,
             surface_cols: 80,
             surface_rows: 23,
@@ -2505,6 +2514,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 9,
             surface_cols: 80,
             surface_rows: 23,
@@ -2756,6 +2766,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
+            surface_delta: false,
             client_id: 12,
             surface_cols: 80,
             surface_rows: 23,

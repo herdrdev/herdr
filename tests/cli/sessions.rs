@@ -661,6 +661,75 @@ fn server_stop_then_restart_restores_pane_history() {
 }
 
 #[test]
+fn unloaded_session_survives_autosave_and_shutdown_when_recovery_is_blocked() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let data_dir = config_home.join(app_dir_name());
+    fs::create_dir_all(&data_dir).unwrap();
+    let session_path = data_dir.join("session.json");
+    let original = b"{unreadable layout";
+    fs::write(&session_path, original).unwrap();
+    fs::write(data_dir.join("session-backups"), b"blocks recovery").unwrap();
+
+    let mut herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+    run_cli_json(
+        &socket_path,
+        &["workspace", "create", "--cwd", base.to_str().unwrap()],
+    );
+    assert!(wait_until(
+        Duration::from_secs(10),
+        Duration::from_millis(25),
+        || {
+            fs::read_to_string(data_dir.join("herdr-server.log"))
+                .is_ok_and(|log| log.contains("event=\"persist.save\""))
+        }
+    ));
+    assert_eq!(fs::read(&session_path).unwrap(), original);
+
+    assert!(run_cli(&socket_path, &["server", "stop"]).status.success());
+    let pid = herdr.child.process_id();
+    assert!(herdr.child.wait().unwrap().success());
+    unregister_spawned_herdr_pid(pid);
+    assert_eq!(fs::read(&session_path).unwrap(), original);
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
+fn session_appearing_after_startup_is_preserved_before_autosave() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let data_dir = config_home.join(app_dir_name());
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+    // The server has already evaluated restore, but has not created any layout.
+    let original = include_bytes!("../fixtures/session/current-herdr-session.json");
+    fs::write(data_dir.join("session.json"), original).unwrap();
+    run_cli_json(
+        &socket_path,
+        &["workspace", "create", "--cwd", base.to_str().unwrap()],
+    );
+    assert!(wait_until(
+        Duration::from_secs(10),
+        Duration::from_millis(25),
+        || {
+            fs::read_to_string(data_dir.join("herdr-server.log"))
+                .is_ok_and(|log| log.contains("event=\"persist.save\""))
+        }
+    ));
+    let backups: Vec<_> = fs::read_dir(data_dir.join("session-backups"))
+        .expect("late session must be preserved before autosave")
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(backups, vec![original.to_vec()]);
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
 fn server_start_restores_legacy_session_through_api_identity() {
     let base = unique_test_dir();
     let config_home = base.join("config");

@@ -82,6 +82,15 @@ pub(crate) fn plugin_runtime_path(path: &std::path::Path) -> std::path::PathBuf 
     plugin_runtime_path_platform(path)
 }
 
+pub(crate) fn normalize_cwd_for_launch(path: &std::path::Path) -> std::path::PathBuf {
+    normalize_cwd_for_launch_platform(path)
+}
+
+#[cfg(not(windows))]
+fn normalize_cwd_for_launch_platform(path: &std::path::Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
 #[cfg(not(windows))]
 fn plugin_runtime_path_platform(path: &std::path::Path) -> std::path::PathBuf {
     path.to_path_buf()
@@ -144,9 +153,17 @@ pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std:
     command.spawn().map(|child| child.id())
 }
 
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn prepare_server_process(_handoff_import: bool) -> std::io::Result<bool> {
+    Ok(false)
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
+
+    #[cfg(target_os = "macos")]
+    macos::configure_server_daemon_context(command);
 
     unsafe {
         command.pre_exec(|| {

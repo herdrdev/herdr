@@ -301,17 +301,44 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
         return Err("deleting the default session is not supported".to_string());
     }
     validate_name(name)?;
-    let socket_path = api_socket_path_for(Some(name));
+    let Some(dir) = exact_session_dir_for_delete(name)? else {
+        return Ok(session_info(Some(name)));
+    };
+    let socket_path = dir.join("herdr.sock");
     if is_running_at(&socket_path) {
         return Err(format!(
             "session {name} is running; stop it before deleting"
         ));
     }
     let info = session_info(Some(name));
-    let dir = data_dir_for(Some(name));
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Ok(info),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(info),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn exact_session_dir_for_delete(name: &str) -> Result<Option<PathBuf>, String> {
+    let sessions_dir = crate::config::config_dir().join("sessions");
+    let entries = match std::fs::read_dir(&sessions_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.to_string()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|err| err.to_string())?;
+        if entry.file_name() == std::ffi::OsStr::new(name) {
+            return Ok(Some(entry.path()));
+        }
+    }
+
+    // A path lookup alone can resolve a different spelling on case-insensitive
+    // filesystems. Never probe its socket or delete it without an exact entry.
+    match std::fs::symlink_metadata(sessions_dir.join(name)) {
+        Ok(_) => Err(format!(
+            "session {name} does not match an exact session name; use the spelling shown by `herdr session list`"
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
     }
 }

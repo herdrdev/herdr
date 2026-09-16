@@ -107,6 +107,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
         pane_id: "pane_1".into(),
         content_revision: 0,
         geometry: (80, 24),
+        alternate_screen_active: false,
         cursor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
         offset_from_bottom: 0,
         max_offset_from_bottom: 0,

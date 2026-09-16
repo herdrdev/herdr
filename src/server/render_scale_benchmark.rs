@@ -312,9 +312,172 @@ fn print_token_rule_profiles() {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SurfaceDamagePattern {
+    Dense,
+    Checkerboard,
+}
+
+impl SurfaceDamagePattern {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Dense => "dense",
+            Self::Checkerboard => "checkerboard",
+        }
+    }
+
+    fn apply(self, surface: &mut PaneSurfaceFrame, iteration: usize) {
+        for (index, cell) in surface.frame.cells.iter_mut().enumerate() {
+            cell.symbol = if matches!(self, Self::Checkerboard) && !index.is_multiple_of(2) {
+                "c"
+            } else if iteration.is_multiple_of(2) {
+                "a"
+            } else {
+                "b"
+            }
+            .into();
+        }
+    }
+}
+
+struct SurfaceEncodingClient {
+    state: super::render_stream::ClientRenderState,
+    decoder: Option<crate::protocol::surface_reuse::Decoder>,
+}
+
+fn surface_encoding_client(mode: &str, surface: &PaneSurfaceFrame) -> SurfaceEncodingClient {
+    let reuse = mode == "reuse";
+    let delta = mode == "delta";
+    let mut client = SurfaceEncodingClient {
+        state: super::render_stream::ClientRenderState::new(
+            crate::protocol::RenderEncoding::SemanticFrame,
+        ),
+        decoder: (reuse || delta).then(|| crate::protocol::surface_reuse::Decoder::new(delta)),
+    };
+    client.state.enable_surface_reuse(reuse);
+    client.state.enable_surface_delta(delta);
+    let initial = client
+        .state
+        .prepare_pane_surface(surface.clone())
+        .expect("initial surface should be prepared");
+    if let Some(decoder) = client.decoder.as_mut() {
+        decoder.decode(initial.message().clone()).unwrap();
+    }
+    client.state.commit_sent_frame(initial);
+    client
+}
+
+fn profile_surface_damage(
+    surface: &PaneSurfaceFrame,
+    pattern: SurfaceDamagePattern,
+    mode: &str,
+    client_count: usize,
+) {
+    let mut clients = (0..client_count)
+        .map(|_| surface_encoding_client(mode, surface))
+        .collect::<Vec<_>>();
+    let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+    let mut bytes_per_update = 0usize;
+    for iteration in 0..WARMUP_COUNT + SAMPLE_COUNT {
+        let mut candidate = surface.clone();
+        candidate.projection_revision = iteration as u64 + 2;
+        pattern.apply(&mut candidate, iteration);
+        if iteration > 0 && matches!(pattern, SurfaceDamagePattern::Checkerboard) {
+            let previous = clients[0].state.last_pane_surface().unwrap();
+            let changed = previous
+                .frame
+                .cells
+                .iter()
+                .zip(&candidate.frame.cells)
+                .filter(|(old, new)| old != new)
+                .count();
+            assert_eq!(changed, candidate.frame.cells.len().div_ceil(2));
+        }
+        let started = Instant::now();
+        bytes_per_update = 0;
+        for client in &mut clients {
+            let prepared = client
+                .state
+                .prepare_pane_surface(candidate.clone())
+                .expect("damage should produce a surface update");
+            let mut bytes = Vec::new();
+            crate::protocol::write_message(&mut bytes, prepared.message()).unwrap();
+            bytes_per_update += bytes.len();
+            let decoded = crate::protocol::read_message(
+                &mut bytes.as_slice(),
+                crate::protocol::MAX_GRAPHICS_FRAME_SIZE,
+            )
+            .unwrap();
+            black_box(if let Some(decoder) = client.decoder.as_mut() {
+                decoder.decode(decoded).unwrap()
+            } else {
+                decoded
+            });
+            client.state.commit_sent_frame(prepared);
+        }
+        if iteration >= WARMUP_COUNT {
+            samples.push(started.elapsed());
+        }
+    }
+    let stats = summarize(samples);
+    println!(
+        "  {:<11}  {client_count:>7}  {mode:>7}  {:>9}  {:>12}",
+        pattern.name(),
+        stats.median_us,
+        bytes_per_update
+    );
+}
+
+fn print_surface_damage_profiles() {
+    println!("surface dense/checkerboard encode + decode at {COLS}x{ROWS}");
+    println!("  pattern       clients     mode  median_us  bytes/update");
+    for pane_count in [1, 15] {
+        let mut pipeline = RenderPipeline::new(active_panes(pane_count));
+        pipeline.render_once();
+        let rendered = super::client_shell::render_pane_surface(
+            &mut pipeline.app,
+            Some(crate::ui::TabSurfaceTarget {
+                workspace_index: 0,
+                tab_index: 0,
+            }),
+            Rect::new(0, 0, COLS, ROWS),
+            true,
+            false,
+            HostCellSize::default(),
+            &pipeline.graphics_delivery,
+            1,
+        );
+        let mut surface = PaneSurfaceFrame {
+            boot_id: "bench-boot".into(),
+            projection_revision: 1,
+            surface_revision: 0,
+            frame: rendered.frame,
+            panes: rendered.panes,
+            splits: rendered.splits,
+            popup: rendered.popup,
+            graphics: rendered.graphics,
+        };
+        // Normalize the baseline so dense and checkerboard iterations have stable damage.
+        for cell in &mut surface.frame.cells {
+            cell.symbol = "a".into();
+        }
+        println!("  active panes={pane_count}");
+        for pattern in [
+            SurfaceDamagePattern::Dense,
+            SurfaceDamagePattern::Checkerboard,
+        ] {
+            for client_count in [1, 15] {
+                for mode in ["legacy", "reuse", "delta"] {
+                    profile_surface_damage(&surface, pattern, mode, client_count);
+                }
+            }
+        }
+    }
+}
+
 fn print_surface_reuse_profiles() {
     println!("surface encode + decode at {COLS}x{ROWS}");
-    println!("  layout       panes  cells_changed  reuse  median_us  bytes_per_update");
+    println!("  layout       panes  cells_changed  mode     median_us  bytes_per_update");
     for (label, build) in [
         ("background", workspaces as fn(usize) -> Vec<Workspace>),
         ("active", active_panes),
@@ -346,17 +509,8 @@ fn print_surface_reuse_profiles() {
                 graphics: rendered.graphics,
             };
             for cells_changed in [false, true] {
-                for enabled in [false, true] {
-                    let mut state = super::render_stream::ClientRenderState::new(
-                        crate::protocol::RenderEncoding::SemanticFrame,
-                    );
-                    state.enable_surface_reuse(enabled);
-                    let mut decoder = crate::protocol::surface_reuse::Decoder::default();
-                    let initial = state.prepare_pane_surface(surface.clone()).unwrap();
-                    if enabled {
-                        decoder.decode(initial.message().clone()).unwrap();
-                    }
-                    state.commit_sent_frame(initial);
+                for mode in ["legacy", "reuse", "delta"] {
+                    let mut client = surface_encoding_client(mode, &surface);
                     let mut samples = Vec::new();
                     let mut bytes_per_update = 0;
                     for index in 0..WARMUP_COUNT + SAMPLE_COUNT {
@@ -367,7 +521,7 @@ fn print_surface_reuse_profiles() {
                                 if index % 2 == 0 { "a" } else { "b" }.into();
                         }
                         let started = Instant::now();
-                        let prepared = state.prepare_pane_surface(candidate).unwrap();
+                        let prepared = client.state.prepare_pane_surface(candidate).unwrap();
                         let mut bytes = Vec::new();
                         crate::protocol::write_message(&mut bytes, prepared.message()).unwrap();
                         bytes_per_update = bytes.len();
@@ -376,19 +530,19 @@ fn print_surface_reuse_profiles() {
                             crate::protocol::MAX_FRAME_SIZE,
                         )
                         .unwrap();
-                        black_box(if enabled {
+                        black_box(if let Some(decoder) = client.decoder.as_mut() {
                             decoder.decode(decoded).unwrap()
                         } else {
                             decoded
                         });
-                        state.commit_sent_frame(prepared);
+                        client.state.commit_sent_frame(prepared);
                         if index >= WARMUP_COUNT {
                             samples.push(started.elapsed());
                         }
                     }
                     let stats = summarize(samples);
                     println!(
-                    "  {label:<10}  {count:>5}  {cells_changed:>13}  {enabled:>5}  {:>9}  {bytes_per_update:>16}",
+                    "  {label:<10}  {count:>5}  {cells_changed:>13}  {mode:>7}  {:>9}  {bytes_per_update:>16}",
                     stats.median_us
                 );
                 }
@@ -406,4 +560,5 @@ async fn render_scale_profile() {
     print_snapshot_encoding_profiles("active panes", active_panes);
     print_token_rule_profiles();
     print_surface_reuse_profiles();
+    print_surface_damage_profiles();
 }

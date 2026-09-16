@@ -5,63 +5,6 @@ pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 const ENDPOINT_ERROR_TIMEOUT_SECS: u64 = 5;
 
-fn pane_surface_row<'a>(
-    surface: &'a PaneSurfaceFrame,
-    pane: &crate::protocol::PaneSurfacePane,
-    absolute_row: u32,
-) -> Option<&'a [crate::protocol::CellData]> {
-    let viewport_top = pane
-        .scroll
-        .map(|scroll| {
-            scroll
-                .max_offset_from_bottom
-                .saturating_sub(scroll.offset_from_bottom) as u32
-        })
-        .unwrap_or(0);
-    let viewport_row = u16::try_from(absolute_row.checked_sub(viewport_top)?).ok()?;
-    if viewport_row >= pane.inner_rect.height {
-        return None;
-    }
-    let start = (usize::from(pane.inner_rect.y) + usize::from(viewport_row))
-        * usize::from(surface.frame.width)
-        + usize::from(pane.inner_rect.x);
-    surface
-        .frame
-        .cells
-        .get(start..start + usize::from(pane.inner_rect.width))
-}
-
-fn selection_cells_unchanged(
-    selection: &crate::selection::Selection<String>,
-    previous_surface: &PaneSurfaceFrame,
-    previous_pane: &crate::protocol::PaneSurfacePane,
-    next_surface: &PaneSurfaceFrame,
-    next_pane: &crate::protocol::PaneSurfacePane,
-) -> bool {
-    let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
-    (start_row..=end_row).all(|row| {
-        let first_col = if row == start_row { start_col } else { 0 };
-        let last_col = if row == end_row {
-            end_col
-        } else {
-            previous_pane.inner_rect.width.saturating_sub(1)
-        };
-        pane_surface_row(previous_surface, previous_pane, row)
-            .zip(pane_surface_row(next_surface, next_pane, row))
-            .and_then(|(previous, next)| {
-                previous
-                    .get(usize::from(first_col)..=usize::from(last_col))
-                    .zip(next.get(usize::from(first_col)..=usize::from(last_col)))
-            })
-            .is_some_and(|(previous, next)| {
-                previous
-                    .iter()
-                    .zip(next)
-                    .all(|(previous, next)| previous.symbol == next.symbol)
-            })
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientShellKeybindingSource {
     Local,
@@ -874,6 +817,7 @@ pub(super) struct ClientCopyModeState {
     pub(super) pane_id: String,
     pub(super) content_revision: u64,
     pub(super) geometry: (u16, u16),
+    pub(super) alternate_screen_active: bool,
     pub(super) cursor: crate::api::schema::PaneTextPoint,
     pub(super) offset_from_bottom: usize,
     pub(super) max_offset_from_bottom: usize,
@@ -1729,7 +1673,7 @@ impl ClientShellState {
             Some(gesture) => Some(&gesture.pane_id),
             None => self.selection.as_ref().map(|selection| &selection.pane_id),
         };
-        let selection_content_changed = selection_pane.is_some_and(|pane_id| {
+        let selection_invalidated = selection_pane.is_some_and(|pane_id| {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;
             };
@@ -1741,34 +1685,15 @@ impl ClientShellState {
             let (Some(previous), Some(next)) = (previous, next) else {
                 return false;
             };
-            if previous.inner_rect.width != next.inner_rect.width
+            previous.inner_rect.width != next.inner_rect.width
                 || previous.inner_rect.height != next.inner_rect.height
                 || previous.alternate_screen_active != next.alternate_screen_active
-            {
-                return true;
-            }
-            if previous.content_revision == next.content_revision {
-                return false;
-            }
-            match (&self.word_selection_gesture, &self.selection) {
-                // Word gestures cache boundaries outside the selected cells too.
-                (Some(_), _) => true,
-                (None, Some(selection)) => {
-                    self.config.copy_on_select
-                        && (!previous.content_revision.is_multiple_of(2)
-                            || !next.content_revision.is_multiple_of(2)
-                            || !selection_cells_unchanged(
-                                selection,
-                                previous_surface,
-                                previous,
-                                &surface,
-                                next,
-                            ))
-                }
-                (None, None) => false,
-            }
+                // Ordinary selections are live buffer ranges. Only word gestures
+                // cache content-dependent boundaries that output can invalidate.
+                || (self.word_selection_gesture.is_some()
+                    && previous.content_revision != next.content_revision)
         });
-        if selection_content_changed {
+        if selection_invalidated {
             self.word_selection_gesture = None;
             self.selection = None;
             self.stop_selection_autoscroll();
@@ -1795,19 +1720,22 @@ impl ClientShellState {
                 .find(|pane| pane.pane_id == copy_mode.pane_id)
             {
                 let geometry = (pane.inner_rect.width, pane.inner_rect.height);
-                if copy_mode.content_revision != pane.content_revision
-                    || copy_mode.geometry != geometry
-                {
+                let coordinates_changed = copy_mode.geometry != geometry
+                    || copy_mode.alternate_screen_active != pane.alternate_screen_active;
+                if copy_mode.content_revision != pane.content_revision || coordinates_changed {
                     copy_mode.content_revision = pane.content_revision;
                     copy_mode.geometry = geometry;
-                    copy_mode.selection = None;
+                    copy_mode.alternate_screen_active = pane.alternate_screen_active;
+                    if coordinates_changed {
+                        copy_mode.selection = None;
+                        invalidated_copy_pane = Some(copy_mode.pane_id.clone());
+                    }
                     copy_mode.search_matches.clear();
                     copy_mode.search_total = 0;
                     copy_mode.search_current = None;
                     copy_mode.search_current_global = None;
                     copy_mode.search_generation = copy_mode.search_generation.saturating_add(1);
                     copy_mode.copy_after_search = false;
-                    invalidated_copy_pane = Some(copy_mode.pane_id.clone());
                 }
                 if let Some(scroll) = pane.scroll {
                     let actual_offset =

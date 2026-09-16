@@ -78,7 +78,7 @@ herdr
 launchctl managername
 ```
 
-如果输出为 `Background`，请停止服务器，然后从普通 GUI 终端重新启动 Herdr:
+自动启动的 macOS 服务器显示 `Background` 是正常的，不能仅凭此判断钥匙串访问有问题。如果钥匙串访问失败，且服务器是通过 SSH 或后台任务启动的，请停止服务器，然后从普通 GUI 终端重新启动 Herdr:
 
 ```bash
 herdr server stop
@@ -86,6 +86,14 @@ herdr
 ```
 
 停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
+
+## macOS 注销后 SSH 或 DNS 失败
+
+自动启动的 macOS 服务器使用用户级服务上下文，避免注销后窗格与 macOS 服务的连接失效。显式运行 `herdr server` 时仍会保留调用方的上下文。
+
+旧服务器可能在注销后继续运行，但无法查询用户信息或解析 DNS。症状包括 `No user exists for uid 501`、`Could not get manager name.` 和 `curl: (6) Could not resolve host`。重新登录不能修复该服务器。请停止受影响的会话，然后从新登录会话的 GUI 终端启动 Herdr。这会结束正在运行的窗格进程，但会恢复保存的会话布局。实时移交会保留源服务器的服务上下文和现有窗格进程。因此，旧服务器需要完全重启会话才能应用此修复；移交无法修复继承的上下文。
+
+如果新启动的服务器仍出现此问题，请在 `herdr-server.log` 中查找 `could not select persistent user service context`。所需的 macOS API 不可用时，Herdr 会保留继承的上下文。详情见 [Herdr issue #4100](https://github.com/herdrdev/herdr/issues/4100)。
 
 ## 找不到 `herdr` 命令
 

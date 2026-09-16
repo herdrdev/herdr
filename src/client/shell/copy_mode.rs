@@ -70,15 +70,18 @@ impl ClientShellState {
         self.stop_selection_autoscroll();
         self.selection_highlight_clear_deadline = None;
         self.reset_copy_pipeline();
-        let content_revision = self
+        let (content_revision, alternate_screen_active) = self
             .pane_surface
             .as_ref()
             .and_then(|surface| surface.panes.iter().find(|pane| pane.pane_id == pane_id))
-            .map_or(0, |pane| pane.content_revision);
+            .map_or((0, false), |pane| {
+                (pane.content_revision, pane.alternate_screen_active)
+            });
         self.copy_mode = Some(ClientCopyModeState {
             pane_id,
             content_revision,
             geometry: (hit.inner_rect.width, hit.inner_rect.height),
+            alternate_screen_active,
             cursor,
             offset_from_bottom: metrics.offset_from_bottom,
             max_offset_from_bottom: metrics.max_offset_from_bottom,
@@ -814,12 +817,11 @@ impl ClientShellState {
     }
 
     pub(super) fn exit_copy_mode(&mut self, copy: bool, outcome: &mut ClientShellInput) {
-        if copy
-            && !self
-                .selection
-                .as_ref()
-                .is_some_and(crate::selection::Selection::is_visible)
-        {
+        let live_selection = self
+            .selection
+            .as_ref()
+            .is_some_and(crate::selection::Selection::is_visible);
+        if copy && !live_selection {
             if let Some((pane_id, text_match)) = self.copy_mode.as_ref().and_then(|copy_mode| {
                 copy_mode
                     .search_current
@@ -843,7 +845,9 @@ impl ClientShellState {
                 .as_ref()
                 .is_some_and(crate::selection::Selection::is_visible)
         {
-            self.request_selection_copy(outcome, false);
+            // A visible explicit selection is live. If the fallback above supplied
+            // a search match, retain the revision that established its boundaries.
+            self.request_selection_copy(outcome, live_selection);
         }
         self.selection = None;
         self.selection_highlight_clear_deadline = None;

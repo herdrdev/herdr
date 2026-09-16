@@ -18,6 +18,8 @@ pub(crate) enum ClientRenderState {
         last_surface: Option<Box<PaneSurfaceFrame>>,
         surface_revision: u64,
         surface_reuse: bool,
+        surface_delta: bool,
+        recompute_pending: bool,
     },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
     TerminalAnsi {
@@ -34,6 +36,8 @@ impl ClientRenderState {
                 last_surface: None,
                 surface_revision: 0,
                 surface_reuse: false,
+                surface_delta: false,
+                recompute_pending: false,
             },
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
                 blit_encoder: BlitEncoder::new(),
@@ -47,6 +51,35 @@ impl ClientRenderState {
         if let Self::Semantic { surface_reuse, .. } = self {
             *surface_reuse = enabled;
         }
+    }
+
+    pub(crate) fn enable_surface_delta(&mut self, enabled: bool) {
+        if let Self::Semantic { surface_delta, .. } = self {
+            *surface_delta = enabled;
+        }
+    }
+
+    pub(crate) fn request_recompute(&mut self) {
+        if let Self::Semantic {
+            surface_delta: true,
+            recompute_pending,
+            ..
+        } = self
+        {
+            *recompute_pending = true;
+        } else {
+            self.request_repaint();
+        }
+    }
+
+    pub(crate) fn requires_recompute(&self) -> bool {
+        matches!(
+            self,
+            Self::Semantic {
+                recompute_pending: true,
+                ..
+            }
+        )
     }
 
     pub(crate) fn reset_baseline(&mut self) {
@@ -127,11 +160,14 @@ impl ClientRenderState {
             last_surface,
             surface_revision,
             surface_reuse,
+            surface_delta,
+            recompute_pending,
         } = self
         else {
             return None;
         };
-        if surface.graphics.assets.is_empty()
+        if !*recompute_pending
+            && surface.graphics.assets.is_empty()
             && last_surface.as_deref().is_some_and(|last| {
                 last.projection_revision == surface.projection_revision
                     && last.frame == surface.frame
@@ -145,26 +181,41 @@ impl ClientRenderState {
             return None;
         }
         surface.surface_revision = surface_revision.saturating_add(1);
-        let mut committed_surface = surface.clone();
-        committed_surface.graphics.assets.clear();
-        let reused = (*surface_reuse)
+        let assets = std::mem::take(&mut surface.graphics.assets);
+        let committed_surface = surface.clone();
+        surface.graphics.assets = assets;
+        let mut message = ServerMessage::PaneSurface(surface);
+        let delta = (*surface_delta)
             .then_some(last_surface.as_deref())
             .flatten()
-            .filter(|last| {
-                last.boot_id == surface.boot_id
-                    && last.frame == surface.frame
-                    // Popup cells are not part of the reusable grid; keep their compact codec.
-                    && surface.popup.is_none()
-                    && surface.graphics.assets.is_empty()
-            })
             .and_then(|last| {
-                crate::protocol::surface_reuse::message(last.surface_revision, &mut surface)
-                    .map_err(|error| tracing::warn!(%error, "failed to encode surface reuse"))
+                crate::protocol::surface_delta::message(last, &mut message)
+                    .map_err(|error| tracing::warn!(%error, "failed to encode surface delta"))
                     .ok()
                     .flatten()
             });
+        let reused = if let ServerMessage::PaneSurface(surface) = &mut message {
+            (delta.is_none() && *surface_reuse)
+                .then_some(last_surface.as_deref())
+                .flatten()
+                .filter(|last| {
+                    last.boot_id == surface.boot_id
+                        && last.frame == surface.frame
+                        // Popup cells are not part of the reusable grid; keep their compact codec.
+                        && surface.popup.is_none()
+                        && surface.graphics.assets.is_empty()
+                })
+                .and_then(|last| {
+                    crate::protocol::surface_reuse::message(last.surface_revision, surface)
+                        .map_err(|error| tracing::warn!(%error, "failed to encode surface reuse"))
+                        .ok()
+                        .flatten()
+                })
+        } else {
+            None
+        };
         Some(PreparedRender::Semantic {
-            message: reused.unwrap_or(ServerMessage::PaneSurface(surface)),
+            message: delta.or(reused).unwrap_or(message),
             committed_surface: Box::new(committed_surface),
         })
     }
@@ -181,6 +232,9 @@ impl ClientRenderState {
         else {
             return None;
         };
+        if self.requires_recompute() {
+            return None;
+        }
         let last = last_surface.as_deref()?;
         if last.boot_id != patch.boot_id
             || last.projection_revision != patch.projection_revision
@@ -201,6 +255,7 @@ impl ClientRenderState {
                 Self::Semantic {
                     last_surface,
                     surface_revision,
+                    recompute_pending,
                     ..
                 },
                 PreparedRender::Semantic {
@@ -209,6 +264,7 @@ impl ClientRenderState {
             ) => {
                 *surface_revision = committed_surface.surface_revision;
                 *last_surface = Some(committed_surface);
+                *recompute_pending = false;
             }
             (
                 Self::Semantic {
@@ -514,6 +570,46 @@ mod tests {
                 pixel_height: 0,
             })),
             graphics: crate::protocol::SurfaceGraphicsScene::default(),
+        }
+    }
+
+    #[test]
+    fn surface_delta_recompute_preserves_wire_baseline_but_epoch_reset_drops_it() {
+        for enabled in [false, true] {
+            let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
+            state.enable_surface_delta(enabled);
+            let mut surface = popup_surface("popup");
+            surface.popup = None;
+            surface.frame = FrameData::from_ratatui_buffer(
+                &ratatui::buffer::Buffer::empty(Rect::new(0, 0, 120, 40)),
+                None,
+            );
+            let initial = state.prepare_pane_surface(surface.clone()).unwrap();
+            state.commit_sent_frame(initial);
+            state.request_recompute();
+            assert_eq!(state.last_pane_surface().is_some(), enabled);
+            assert_eq!(state.requires_recompute(), enabled);
+            // A freshness request still emits a new revision when every cell is equal.
+            let fresh = state.prepare_pane_surface(surface.clone()).unwrap();
+            assert_eq!(
+                matches!(fresh.message(), ServerMessage::EndpointControl { kind, .. }
+                if kind == crate::protocol::surface_delta::MESSAGE_KIND),
+                enabled
+            );
+            assert_eq!(
+                state.requires_recompute(),
+                enabled,
+                "prepare must not commit"
+            );
+            state.commit_sent_frame(fresh);
+            assert!(!state.requires_recompute());
+            assert_eq!(state.last_pane_surface().unwrap().surface_revision, 2);
+            state.request_repaint();
+            assert!(state.last_pane_surface().is_none());
+            let recovery = state.prepare_pane_surface(surface).unwrap();
+            assert!(
+                matches!(recovery.message(), ServerMessage::PaneSurface(frame) if frame.surface_revision == 3)
+            );
         }
     }
 

@@ -78,7 +78,7 @@ Herdr のペインからサーバーの起動コンテキストを確認しま�
 launchctl managername
 ```
 
-`Background` と表示された場合は、サーバーを停止し、通常の GUI ターミナルから Herdr を再起動してください:
+自動起動された macOS サーバーでは `Background` は正常で、この表示だけでは Keychain の問題を意味しません。Keychain にアクセスできず、サーバーを SSH やバックグラウンドジョブから起動していた場合は、停止して通常の GUI ターミナルから Herdr を再起動してください:
 
 ```bash
 herdr server stop
@@ -86,6 +86,14 @@ herdr
 ```
 
 サーバーを停止するとペインのプロセスも終了します。Herdr のペインは長時間動作するサーバーの macOS 起動コンテキストを継承するため、SSH やバックグラウンドジョブから起動されたサーバーは対話型 Keychain サービスにアクセスできないことがあります。詳細は [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) を参照してください。
+
+## macOS のログアウト後に SSH や DNS が失敗する
+
+自動起動された macOS サーバーはユーザー単位のサービスコンテキストを使用するため、ログアウトしてもペインと macOS サービスの接続が無効になりません。明示的な `herdr server` 起動では、呼び出し元のコンテキストを維持します。
+
+古いサーバーはログアウト後も動作し続ける一方、ユーザー情報の検索や DNS が使えなくなることがあります。症状には `No user exists for uid 501`、`Could not get manager name.`、`curl: (6) Could not resolve host` などがあります。再ログインだけでは修復されません。対象セッションを停止し、新しいログインの GUI ターミナルから Herdr を起動してください。実行中のペインプロセスは終了しますが、保存されたセッション配置は復元されます。ライブハンドオフは元のサーバーのサービスコンテキストと既存のペインプロセスを維持します。そのため、古いサーバーにこの修正を適用するにはセッションの完全な再起動が必要です。ハンドオフでは継承したコンテキストを修復できません。
+
+新しく起動したサーバーでも問題が起きる場合は、`herdr-server.log` の `could not select persistent user service context` を確認してください。必要な macOS API が利用できない場合、Herdr は継承したコンテキストを維持します。[Herdr issue #4100](https://github.com/herdrdev/herdr/issues/4100) を参照してください。
 
 ## `herdr` コマンドが見つからない
 

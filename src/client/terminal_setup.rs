@@ -476,6 +476,54 @@ impl Drop for TerminalGuard {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Default)]
+    struct SharedOutput(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl io::Write for SharedOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn windows_native_mouse_capture_never_resets_encoding_after_native_enable() {
+        let mut output = SharedOutput::default();
+        for sgr_pixels in [false, false, true, false] {
+            let start = output.0.borrow().len();
+            let native_output = output.clone();
+            let native_boundary = std::cell::Cell::new(0);
+            set_windows_native_mouse_capture(&mut output, true, sgr_pixels, |enabled| {
+                assert!(enabled);
+                // ConPTY enables host SGR during native capture, before our VT requests.
+                native_output
+                    .0
+                    .borrow_mut()
+                    .extend_from_slice(b"\x1b[?1003h\x1b[?1006h");
+                native_boundary.set(native_output.0.borrow().len());
+                Ok(())
+            })
+            .unwrap();
+
+            let bytes = output.0.borrow();
+            let before = std::str::from_utf8(&bytes[start..native_boundary.get()]).unwrap();
+            let after = std::str::from_utf8(&bytes[native_boundary.get()..]).unwrap();
+            assert!(before.contains("\x1b[?1016l"));
+            for reset in ["\x1b[?1005l", "\x1b[?1006l", "\x1b[?1016l"] {
+                assert!(
+                    !after.contains(reset),
+                    "mouse format reset after native capture (sgr_pixels={sgr_pixels}): {after:?}"
+                );
+            }
+            assert!(after.contains("\x1b[?1003h\x1b[?1006h"));
+            assert_eq!(after.contains("\x1b[?1016h"), sgr_pixels);
+        }
+    }
+
     #[test]
     fn windows_native_mouse_capture_restores_reporting_after_reset() {
         let mut output = Vec::new();
@@ -488,7 +536,7 @@ mod tests {
 
         assert_eq!(
             output,
-            b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016l"
+            b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
         );
     }
 }
