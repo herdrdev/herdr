@@ -706,6 +706,9 @@ fn session_appearing_after_startup_is_preserved_before_autosave() {
     let data_dir = config_home.join(app_dir_name());
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
+    // The API socket binds before restore; a read-only App request waits for it.
+    let ready = run_cli_json(&socket_path, &["workspace", "list"]);
+    assert_eq!(ready["result"]["workspaces"], serde_json::json!([]));
     // The server has already evaluated restore, but has not created any layout.
     let original = include_bytes!("../fixtures/session/current-herdr-session.json");
     fs::write(data_dir.join("session.json"), original).unwrap();
