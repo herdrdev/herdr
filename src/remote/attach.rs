@@ -627,6 +627,14 @@ impl RemoteSsh {
 
     fn base_command(&self) -> Command {
         let mut command = Command::new("ssh");
+        // A command launched in a Herdr pane inherits these variables. SSH
+        // configurations can forward them with SendEnv, which makes the
+        // remote `remote-client-bridge` process look like a nested Herdr.
+        // The remote launcher must always establish an independent runtime.
+        command
+            .env_remove(crate::HERDR_ENV_VAR)
+            .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+            .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
         apply_managed_ssh_options(&mut command, self.options());
         command
     }
@@ -3895,6 +3903,31 @@ mod tests {
 
         assert_eq!(args, vec!["-C", "-T", "example"]);
         assert_eq!(ssh.scp_command().get_args().collect::<Vec<_>>(), vec!["-C"]);
+    }
+
+    #[test]
+    fn remote_ssh_command_removes_inherited_herdr_runtime_environment() {
+        let ssh = RemoteSsh {
+            target: "example".to_string(),
+            session_name: crate::session::DEFAULT_SESSION_NAME.into(),
+            managed_config: None,
+            noninteractive: false,
+        };
+
+        let command = ssh.command();
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy())
+            .collect::<Vec<_>>();
+
+        assert!(removed.iter().any(|name| name == crate::HERDR_ENV_VAR));
+        assert!(removed
+            .iter()
+            .any(|name| name == crate::api::SOCKET_PATH_ENV_VAR));
+        assert!(removed
+            .iter()
+            .any(|name| { name == crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR }));
     }
 
     #[test]
