@@ -27,6 +27,8 @@ herdr session delete side-project
 
 命名会话拥有自己的窗格、标签页、工作区、socket 和运行时状态。它仍然共享同一个全局配置文件。
 
+删除会话时，请使用 `herdr session list` 显示的完整名称，大小写必须一致。在不区分大小写的文件系统上，`herdr session delete foo` 会拒绝删除名为 `Foo` 的会话。
+
 脚本中使用 `--json`:
 
 ```bash

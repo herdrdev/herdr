@@ -301,17 +301,44 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
         return Err("deleting the default session is not supported".to_string());
     }
     validate_name(name)?;
-    let socket_path = api_socket_path_for(Some(name));
+    let Some(dir) = exact_session_dir_for_delete(name)? else {
+        return Ok(session_info(Some(name)));
+    };
+    let socket_path = dir.join("herdr.sock");
     if is_running_at(&socket_path) {
         return Err(format!(
             "session {name} is running; stop it before deleting"
         ));
     }
     let info = session_info(Some(name));
-    let dir = data_dir_for(Some(name));
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Ok(info),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(info),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn exact_session_dir_for_delete(name: &str) -> Result<Option<PathBuf>, String> {
+    let sessions_dir = crate::config::config_dir().join("sessions");
+    let entries = match std::fs::read_dir(&sessions_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.to_string()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|err| err.to_string())?;
+        if entry.file_name() == std::ffi::OsStr::new(name) {
+            return Ok(Some(entry.path()));
+        }
+    }
+
+    // A path lookup alone can resolve a different spelling on case-insensitive
+    // filesystems. Never probe its socket or delete it without an exact entry.
+    match std::fs::symlink_metadata(sessions_dir.join(name)) {
+        Ok(_) => Err(format!(
+            "session {name} does not match an exact session name; use the spelling shown by `herdr session list`"
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
     }
 }
@@ -1031,6 +1058,115 @@ mod tests {
     #[test]
     fn delete_default_session_is_rejected() {
         assert!(delete_session(DEFAULT_SESSION_NAME).is_err());
+    }
+
+    fn with_delete_session_config(test: impl FnOnce()) {
+        let _guard = env_lock().lock().unwrap();
+        #[cfg(unix)]
+        let config_home = PathBuf::from(format!("/tmp/hs-delete-{}", std::process::id()));
+        #[cfg(not(unix))]
+        let config_home = std::env::temp_dir().join(format!("hs-delete-{}", std::process::id()));
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::fs::create_dir_all(&config_home).unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        test();
+        std::fs::remove_dir_all(config_home).unwrap();
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    #[test]
+    fn delete_session_preserves_differently_cased_name() {
+        with_delete_session_config(|| {
+            let dir = data_dir_for(Some("Foo"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("session.json"), b"saved session").unwrap();
+            let case_insensitive = data_dir_for(Some("foo")).exists();
+
+            let result = delete_session("foo");
+
+            assert_eq!(
+                std::fs::read(dir.join("session.json")).unwrap(),
+                b"saved session"
+            );
+            if case_insensitive {
+                let err = result.expect_err("a case alias must not delete a session");
+                assert!(err.contains("exact"), "{err}");
+            } else {
+                result.expect("deleting a missing session remains idempotent");
+            }
+        });
+    }
+
+    #[test]
+    fn delete_session_removes_exact_stopped_name_only() {
+        with_delete_session_config(|| {
+            let dir = data_dir_for(Some("Foo"));
+            let other = data_dir_for(Some("other"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(dir.join("session.json"), b"saved session").unwrap();
+
+            let info = delete_session("Foo").unwrap();
+
+            assert_eq!(info.name, "Foo");
+            assert!(!info.running);
+            assert!(!dir.exists());
+            assert!(other.exists());
+        });
+    }
+
+    #[test]
+    fn delete_session_missing_name_remains_idempotent() {
+        with_delete_session_config(|| {
+            assert_eq!(delete_session("missing").unwrap().name, "missing");
+            std::fs::create_dir_all(data_dir_for(Some("other"))).unwrap();
+            assert_eq!(delete_session("missing").unwrap().name, "missing");
+        });
+    }
+
+    #[test]
+    fn delete_session_distinguishes_case_sensitive_siblings() {
+        with_delete_session_config(|| {
+            let upper = data_dir_for(Some("Foo"));
+            let lower = data_dir_for(Some("foo"));
+            std::fs::create_dir_all(&upper).unwrap();
+            if lower.exists() {
+                return; // This filesystem cannot store both spellings independently.
+            }
+            std::fs::create_dir_all(&lower).unwrap();
+            std::fs::write(upper.join("session.json"), b"upper session").unwrap();
+
+            delete_session("foo").unwrap();
+
+            assert!(!lower.exists());
+            assert_eq!(
+                std::fs::read(upper.join("session.json")).unwrap(),
+                b"upper session"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_session_preserves_running_session() {
+        with_delete_session_config(|| {
+            let dir = data_dir_for(Some("Foo"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("session.json"), b"saved session").unwrap();
+            let listener = crate::ipc::bind_local_listener(&dir.join("herdr.sock")).unwrap();
+
+            let err = delete_session("Foo").expect_err("running session must be preserved");
+
+            assert!(err.contains("running"), "{err}");
+            assert_eq!(
+                std::fs::read(dir.join("session.json")).unwrap(),
+                b"saved session"
+            );
+            drop(listener);
+        });
     }
 
     #[test]
