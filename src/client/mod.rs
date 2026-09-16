@@ -414,6 +414,7 @@ async fn run_client_loop(
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
         presentation_frozen: false,
+        deferred_local_activation: None,
         draw_host_cursor,
         detached_process_children: Vec::new(),
         shell: config.shell_config.map(shell::ClientShellState::new),
@@ -819,7 +820,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -983,7 +984,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -1087,7 +1088,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }
@@ -1263,7 +1264,7 @@ async fn run_client_loop(
                     target,
                     force,
                     now,
-                    &event_tx,
+                    &mut scheduled_activation,
                 )?;
             }
             ClientLoopEvent::ServerMessage {
@@ -1744,7 +1745,7 @@ async fn run_client_loop(
                             &mut write_stream,
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
-                            &event_tx,
+                            &mut scheduled_activation,
                         )?;
                         let repaint = repaint || dispatch_repaint;
                         if replay_mouse.is_empty() {
@@ -1776,7 +1777,7 @@ async fn run_client_loop(
                                 &mut pending_activation,
                                 &mut endpoint_commands,
                                 &mut prefix_input_source,
-                                &event_tx,
+                                &mut scheduled_activation,
                             )? {
                                 return Ok(());
                             }
@@ -1962,6 +1963,14 @@ async fn run_client_loop(
                             }
                         }
                         write_stream.mark_ready(&endpoint_id, generation);
+                        if endpoint_id.is_local() {
+                            if let Some(event) =
+                                take_ready_local_activation(&mut state, &write_stream)
+                            {
+                                scheduled_activation = Some(event);
+                                continue;
+                            }
+                        }
                         let selected_endpoint = endpoint_catalog
                             .selected_profile
                             .as_ref()
@@ -1978,7 +1987,11 @@ async fn run_client_loop(
                         let needs_surface = write_stream
                             .connection(&selected_endpoint)
                             .is_some_and(|connection| !connection.surface_active);
-                        if activation_ready && needs_surface && pending_activation.is_none() {
+                        if activation_ready
+                            && needs_surface
+                            && pending_activation.is_none()
+                            && state.deferred_local_activation.is_none()
+                        {
                             scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
                                 endpoint_id: selected_endpoint,
                                 target: None,
@@ -2113,7 +2126,7 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &mut endpoint_commands,
                         &mut prefix_input_source,
-                        &event_tx,
+                        &mut scheduled_activation,
                     )? {
                         return Ok(());
                     }

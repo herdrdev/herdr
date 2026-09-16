@@ -976,14 +976,33 @@ fn rapid_a_to_b_to_a_restores_source_before_a_fresh_latest_epoch() {
 }
 
 #[test]
-fn disconnected_committed_source_does_not_block_switching_to_a_live_endpoint() {
-    let (mut shell, mut endpoints, local_sent, _remote_sent) = shell_and_registry();
+fn local_activation_does_not_wait_for_a_disconnected_stalled_or_failed_remote() {
+    for source_state in ["disconnected", "stalled", "write-failed"] {
+        local_escape(source_state);
+    }
+}
+
+fn local_escape(source_state: &str) {
+    let (mut shell, mut endpoints, local_sent, remote_sent) = shell_and_registry();
     let disconnected = endpoint();
     endpoints.set_surface_active(&ClientEndpointId::Local, false);
     endpoints.set_surface_active(&disconnected, true);
     assert!(endpoints.set_active(&disconnected));
     assert!(shell.activate_endpoint_projection(&disconnected));
-    endpoints.disconnect(&disconnected);
+    match source_state {
+        "disconnected" => endpoints.disconnect(&disconnected),
+        "write-failed" => endpoints.insert(
+            disconnected.clone(),
+            FakeTransport {
+                sent: remote_sent,
+                fail_after_write: true,
+            },
+            7,
+            negotiation(),
+            true,
+        ),
+        _ => {}
+    }
 
     let mut activation = PendingEndpointActivation::begin(
         &shell,
@@ -995,16 +1014,28 @@ fn disconnected_committed_source_does_not_block_switching_to_a_live_endpoint() {
         Instant::now(),
     )
     .unwrap();
-    assert_eq!(activation.source_command_lane(), None);
+    let local_activations = local_sent
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(surface_set_active)
+        .collect::<Vec<_>>();
+    assert_eq!(local_activations, vec![true], "Local must not wait for SSH");
+    assert!(!endpoints.active_surface_available());
+    assert_eq!(endpoints.active_id(), &disconnected);
     assert_eq!(
-        local_sent
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(surface_set_active)
-            .collect::<Vec<_>>(),
-        vec![true],
-        "there is no unavailable source release to await"
+        activation.receive_response(
+            &disconnected,
+            7,
+            "client-shell-surface:22:off",
+            &surface_success("client-shell-surface:22:off", false, 1),
+            &mut endpoints,
+        ),
+        SurfaceActivationProgress::Stale
+    );
+    assert_eq!(
+        activation.receive_surface(&disconnected, 7, surface("remote-boot", 2, "stale")),
+        SurfaceActivationProgress::Stale
     );
 
     assert_eq!(
@@ -1082,6 +1113,261 @@ fn disconnected_committed_source_does_not_block_switching_to_a_live_endpoint() {
     );
     assert_eq!(endpoints.active_id(), &ClientEndpointId::Local);
     assert_ne!(endpoints.active_id(), &disconnected);
+    assert!(
+        !endpoints.active_surface_available(),
+        "runtime opens input only after the effects fence"
+    );
+}
+
+#[test]
+fn local_selection_abandons_every_unfinished_remote_handoff_phase() {
+    use crate::client::{
+        endpoint_commands::EndpointCommands, shell_runtime::begin_endpoint_activation, ClientState,
+    };
+    for phase in ["release", "target", "rollback", "restore"] {
+        let (shell, mut endpoints, local_sent, _remote_sent) = shell_and_registry();
+        let mut abandoned = PendingEndpointActivation::begin(
+            &shell,
+            &mut endpoints,
+            endpoint(),
+            None,
+            resize(),
+            30,
+            Instant::now(),
+        )
+        .unwrap();
+        if phase != "release" {
+            abandoned.receive_response(
+                &ClientEndpointId::Local,
+                1,
+                "client-shell-surface:30:off",
+                &surface_success("client-shell-surface:30:off", false, 1),
+                &mut endpoints,
+            );
+        }
+        if matches!(phase, "rollback" | "restore") {
+            assert_eq!(
+                abandoned.rollback(&mut endpoints, "cancel".into(), false),
+                ActivationRollback::Pending
+            );
+        }
+        if phase == "restore" {
+            abandoned.receive_response(
+                &endpoint(),
+                7,
+                "client-shell-surface:30:rollback-target-off",
+                &surface_success("client-shell-surface:30:rollback-target-off", false, 1),
+                &mut endpoints,
+            );
+        }
+        local_sent.lock().unwrap().clear();
+        let mut state = ClientState::test_new();
+        state.shell = Some(shell);
+        let mut commands = EndpointCommands::default();
+        let mut pending = Some(abandoned);
+        let mut serial = 31;
+        let mut scheduled = None;
+        for _ in 0..2 {
+            begin_endpoint_activation(
+                &mut state,
+                &mut endpoints,
+                &mut commands,
+                &mut pending,
+                &mut serial,
+                ClientEndpointId::Local,
+                None,
+                false,
+                Instant::now(),
+                &mut scheduled,
+            )
+            .unwrap();
+        }
+        assert_eq!(serial, 32, "repeated Local selection must coalesce");
+        let local = pending.as_mut().unwrap();
+        assert_eq!(local.target(), &ClientEndpointId::Local);
+        assert!(!endpoints.active_surface_available());
+        assert!(state.presentation_frozen);
+        let activations = local_sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(surface_set_active)
+            .collect::<Vec<_>>();
+        assert_eq!(activations, vec![false, true], "phase: {phase}");
+        assert!(!local.accepts_response(
+            &ClientEndpointId::Local,
+            1,
+            "local-boot",
+            "client-shell-surface:30:off"
+        ));
+        assert_eq!(
+            local.receive_surface(&endpoint(), 7, surface("remote-boot", 2, "stale")),
+            SurfaceActivationProgress::Stale
+        );
+    }
+}
+
+#[test]
+fn local_selection_waits_for_fresh_metadata_without_abandoning_remote() {
+    use crate::client::{
+        endpoint_commands::EndpointCommands,
+        shell_runtime::{begin_endpoint_activation, take_ready_local_activation},
+        ClientLoopEvent, ClientState,
+    };
+    for replaced_generation in [false, true] {
+        let (mut shell, mut endpoints, local_sent, remote_sent) = shell_and_registry();
+        shell.set_endpoint_snapshot_for_generation(
+            &ClientEndpointId::Local,
+            1,
+            Box::new(test_snapshot("local-boot", 1)),
+        );
+        let mut state = ClientState::test_new();
+        state.shell = Some(shell);
+        let mut commands = EndpointCommands::default();
+        let mut pending = None;
+        let mut serial = 40;
+        let mut scheduled = None;
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut commands,
+            &mut pending,
+            &mut serial,
+            endpoint(),
+            None,
+            false,
+            Instant::now(),
+            &mut scheduled,
+        )
+        .unwrap();
+        if replaced_generation {
+            endpoints.insert(
+                ClientEndpointId::Local,
+                FakeTransport {
+                    sent: local_sent.clone(),
+                    fail_after_write: false,
+                },
+                2,
+                negotiation(),
+                false,
+            );
+        } else {
+            endpoints.disconnect(&ClientEndpointId::Local);
+        }
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut commands,
+            &mut pending,
+            &mut serial,
+            ClientEndpointId::Local,
+            Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+                "selected-local".into(),
+            )),
+            false,
+            Instant::now(),
+            &mut scheduled,
+        )
+        .unwrap();
+        assert_eq!(
+            pending.as_ref().map(PendingEndpointActivation::target),
+            Some(&endpoint())
+        );
+        assert!(remote_sent.lock().unwrap().is_empty());
+        assert_eq!(serial, 41);
+        assert!(state.deferred_local_activation.is_some());
+        assert!(take_ready_local_activation(&mut state, &endpoints).is_none());
+        if !replaced_generation {
+            endpoints.insert(
+                ClientEndpointId::Local,
+                FakeTransport {
+                    sent: local_sent,
+                    fail_after_write: false,
+                },
+                2,
+                negotiation(),
+                false,
+            );
+        }
+        assert!(take_ready_local_activation(&mut state, &endpoints).is_none());
+        state
+            .shell
+            .as_mut()
+            .unwrap()
+            .cache_endpoint_snapshot_inactive_for_generation(
+                &ClientEndpointId::Local,
+                2,
+                Box::new(test_snapshot("local-boot", 1)),
+            );
+        let event = take_ready_local_activation(&mut state, &endpoints).unwrap();
+        let ClientLoopEvent::ActivateEndpoint {
+            endpoint_id,
+            target,
+            force,
+        } = event
+        else {
+            panic!("expected retained Local selection");
+        };
+        assert_eq!(endpoint_id, ClientEndpointId::Local);
+        assert_eq!(
+            target,
+            Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(
+                "selected-local".into()
+            ))
+        );
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut commands,
+            &mut pending,
+            &mut serial,
+            endpoint_id,
+            target,
+            force,
+            Instant::now(),
+            &mut scheduled,
+        )
+        .unwrap();
+        assert_eq!(pending.as_ref().unwrap().target(), &ClientEndpointId::Local);
+        assert_eq!(serial, 42);
+        assert!(!endpoints.active_surface_available());
+        assert!(state.deferred_local_activation.is_none());
+    }
+}
+
+#[test]
+fn newer_remote_selection_cancels_deferred_local_selection() {
+    use crate::client::{
+        endpoint_commands::EndpointCommands, shell_runtime::begin_endpoint_activation, ClientState,
+    };
+    let (shell, mut endpoints, _, _) = shell_and_registry();
+    let mut state = ClientState::test_new();
+    state.shell = Some(shell);
+    let mut commands = EndpointCommands::default();
+    let mut pending = None;
+    let mut serial = 50;
+    let mut scheduled = None;
+    endpoints.disconnect(&ClientEndpointId::Local);
+    for endpoint_id in [ClientEndpointId::Local, endpoint()] {
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut commands,
+            &mut pending,
+            &mut serial,
+            endpoint_id.clone(),
+            None,
+            false,
+            Instant::now(),
+            &mut scheduled,
+        )
+        .unwrap();
+        assert_eq!(
+            state.deferred_local_activation.is_some(),
+            endpoint_id.is_local()
+        );
+    }
+    assert_eq!(pending.as_ref().unwrap().target(), &endpoint());
 }
 
 #[test]

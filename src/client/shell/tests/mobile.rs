@@ -119,6 +119,31 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         }] if activated == &endpoint_id
     ));
 
+    // Local is still projected until the remote handoff completes.
+    state.mode = ClientShellMode::Navigate;
+    state.compose(44, 30).unwrap();
+    let local = state
+        .hits
+        .mobile_targets
+        .iter()
+        .find_map(|(rect, target)| {
+            matches!(target, ClientMobileTarget::Machine(ClientEndpointId::Local)).then_some(*rect)
+        })
+        .unwrap();
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: local.x,
+        row: local.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: None,
+        }]
+    ));
+
     state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
     assert!(state.activate_endpoint_projection(&endpoint_id));
     let mut remote_surface = surface();
