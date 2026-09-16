@@ -4,8 +4,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
-use tracing::{debug, error, info, warn};
+#[cfg(unix)]
+use interprocess::local_socket::traits::ListenerExt as _;
+use interprocess::local_socket::traits::Stream as _;
+#[cfg(unix)]
+use tracing::error;
+use tracing::{debug, info, warn};
 
 #[cfg(all(test, unix))]
 use std::fs;
@@ -34,8 +38,10 @@ const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
 pub struct ServerHandle {
     _thread: std::thread::JoinHandle<()>,
     path: PathBuf,
-    identity: SocketFileIdentity,
+    identity: Option<SocketFileIdentity>,
     running: Arc<AtomicBool>,
+    #[cfg(windows)]
+    listener_control: crate::platform::WindowsListenerControl,
 }
 
 impl Drop for ServerHandle {
@@ -52,7 +58,33 @@ impl Drop for ServerHandle {
 
 impl ServerHandle {
     pub(crate) fn remove_socket_file_if_owned(&self) -> std::io::Result<()> {
-        remove_socket_file_if_owned(&self.path, &self.identity)
+        self.identity.as_ref().map_or(Ok(()), |identity| {
+            remove_socket_file_if_owned(&self.path, identity)
+        })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn pause_listener_for_handoff(&self) -> std::io::Result<()> {
+        self.listener_control.pause()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn duplicate_listener_for_handoff(
+        &self,
+        target: &std::process::Child,
+    ) -> std::io::Result<crate::platform::WindowsListenerHandoff> {
+        self.listener_control.duplicate_for_handoff(target)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn resume_listener_after_handoff(&self) -> std::io::Result<()> {
+        self.listener_control.resume()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn release_listener_after_handoff(&mut self) -> std::io::Result<()> {
+        self.identity = None;
+        self.listener_control.release_after_commit()
     }
 }
 
@@ -65,8 +97,11 @@ pub(crate) fn start_server_with_stop_control(
 }
 
 fn default_capabilities() -> Option<ServerCapabilities> {
+    let live_handoff = crate::platform::capabilities().live_handoff;
+    #[cfg(windows)]
+    let live_handoff = live_handoff && crate::pty::backend::windows_handoff_available();
     Some(ServerCapabilities {
-        live_handoff: crate::platform::capabilities().live_handoff,
+        live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
@@ -88,45 +123,129 @@ fn start_server_inner(
     let identity = socket_file_identity(&path)?;
     info!(path = %path.display(), "api server listening");
 
-    let running = Arc::new(AtomicBool::new(true));
-    let listener_running = Arc::clone(&running);
-    let thread = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let api_tx = api_tx.clone();
-                    let event_hub = event_hub.clone();
-                    let capabilities = capabilities.clone();
-                    let server_stop = server_stop.clone();
-                    let connection_running = Arc::clone(&listener_running);
-                    std::thread::spawn(move || {
-                        if let Err(err) = handle_connection_with_stop(
-                            stream,
-                            &api_tx,
-                            &event_hub,
-                            &connection_running,
-                            capabilities,
-                            server_stop.as_ref(),
-                        ) {
-                            warn!(err = %err, "api connection failed");
-                        }
-                    });
-                }
-                Err(err) => {
-                    error!(err = %err, "api listener accept failed");
-                    break;
+    #[cfg(windows)]
+    {
+        let listener = crate::platform::TransferableLocalListener::bound(listener)?;
+        Ok(start_windows_server_on_listener(
+            listener,
+            path,
+            identity,
+            api_tx,
+            event_hub,
+            capabilities,
+            server_stop,
+        ))
+    }
+
+    #[cfg(unix)]
+    {
+        let running = Arc::new(AtomicBool::new(true));
+        let listener_running = Arc::clone(&running);
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let api_tx = api_tx.clone();
+                        let event_hub = event_hub.clone();
+                        let capabilities = capabilities.clone();
+                        let server_stop = server_stop.clone();
+                        let connection_running = Arc::clone(&listener_running);
+                        std::thread::spawn(move || {
+                            if let Err(err) = handle_connection_with_stop(
+                                stream,
+                                &api_tx,
+                                &event_hub,
+                                &connection_running,
+                                capabilities,
+                                server_stop.as_ref(),
+                            ) {
+                                warn!(err = %err, "api connection failed");
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        error!(err = %err, "api listener accept failed");
+                        break;
+                    }
                 }
             }
-        }
-        debug!("api server thread exiting");
-    });
+            debug!("api server thread exiting");
+        });
 
-    Ok(ServerHandle {
-        _thread: thread,
+        Ok(ServerHandle {
+            _thread: thread,
+            path,
+            identity: Some(identity),
+            running,
+        })
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn start_server_from_handoff(
+    listener: crate::platform::TransferableLocalListener,
+    identity: SocketFileIdentity,
+    api_tx: ApiRequestSender,
+    event_hub: EventHub,
+    server_stop: Arc<AtomicBool>,
+) -> ServerHandle {
+    let path = socket_path();
+    info!(path = %path.display(), "api server listener adopted after handoff");
+    start_windows_server_on_listener(
+        listener,
         path,
         identity,
+        api_tx,
+        event_hub,
+        default_capabilities(),
+        Some(server_stop),
+    )
+}
+
+#[cfg(windows)]
+fn start_windows_server_on_listener(
+    listener: crate::platform::TransferableLocalListener,
+    path: PathBuf,
+    identity: SocketFileIdentity,
+    api_tx: ApiRequestSender,
+    event_hub: EventHub,
+    capabilities: Option<ServerCapabilities>,
+    server_stop: Option<Arc<AtomicBool>>,
+) -> ServerHandle {
+    let running = Arc::new(AtomicBool::new(true));
+    let listener_running = Arc::clone(&running);
+    let should_stop = Arc::clone(&running);
+    let (thread, listener_control) = crate::platform::spawn_transferable_listener(
+        listener,
+        "api listener",
+        move || !should_stop.load(Ordering::Acquire),
+        move |stream| {
+            let api_tx = api_tx.clone();
+            let event_hub = event_hub.clone();
+            let capabilities = capabilities.clone();
+            let server_stop = server_stop.clone();
+            let connection_running = Arc::clone(&listener_running);
+            std::thread::spawn(move || {
+                if let Err(err) = handle_connection_with_stop(
+                    stream,
+                    &api_tx,
+                    &event_hub,
+                    &connection_running,
+                    capabilities,
+                    server_stop.as_ref(),
+                ) {
+                    warn!(err = %err, "api connection failed");
+                }
+            });
+        },
+    );
+    ServerHandle {
+        _thread: thread,
+        path,
+        identity: Some(identity),
         running,
-    })
+        listener_control,
+    }
 }
 
 fn prepare_socket_path(path: &Path) -> std::io::Result<()> {

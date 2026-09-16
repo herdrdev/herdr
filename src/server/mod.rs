@@ -9,7 +9,7 @@ pub(crate) mod client_shell_graphics;
 pub(crate) mod client_transport;
 pub(crate) mod clients;
 pub(crate) mod clipboard_image;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod handoff;
 pub mod headless;
 pub(crate) mod keybindings;

@@ -91,7 +91,7 @@ pub fn restore(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn restore_handoff(
     snapshot: &SessionSnapshot,
     scrollback_limit_bytes: usize,
@@ -117,7 +117,7 @@ pub fn restore_handoff(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn handoff_pane_aliases(
     snapshot: &SessionSnapshot,
     workspaces: &[Workspace],
@@ -137,14 +137,14 @@ pub fn handoff_pane_aliases(
     aliases
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn collect_snapshot_pane_ids(node: &LayoutSnapshot) -> Vec<u32> {
     let mut ids = Vec::new();
     collect_snapshot_ids_inner(node, &mut ids);
     ids
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn collect_snapshot_ids_inner(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
     match node {
         LayoutSnapshot::Pane(id) => ids.push(*id),
@@ -184,7 +184,7 @@ fn collect_layout_snapshot_pane_ids(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn restore_with_imports_strict(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -566,20 +566,19 @@ fn restore_tab(
             continue;
         }
 
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         if imported_runtime.is_some() {
             failed_imports += 1;
             continue;
         }
 
         let runtime_result = {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(imported) = imported_runtime {
-                TerminalRuntime::from_handoff_fd(
-                    crate::handoff_runtime::ImportedHandoffRuntime {
-                        master_fd: imported.master_fd,
-                        state: imported.state.with_pane_id(*id),
-                    },
+                let mut imported = imported;
+                imported.state = imported.state.with_pane_id(*id);
+                TerminalRuntime::from_handoff(
+                    imported,
                     runtime_context.scrollback_limit_bytes,
                     crate::terminal_theme::TerminalTheme::default(),
                     None,
@@ -605,7 +604,7 @@ fn restore_tab(
                 )
             }
 
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             {
                 TerminalRuntime::spawn_with_initial_history(
                     *id,
