@@ -24,18 +24,20 @@ Multi-machine connections are supported on Linux and macOS clients, connecting t
 Run setup in an interactive terminal so Herdr can ask before installing or replacing anything:
 
 ```bash
-herdr machine add workbox --label "Build machine"
+herdr machine add workbox
 ```
 
-This uses the remote default session. A machine profile targets one remote session; it does not combine every session on the host.
+In an interactive terminal, Herdr prefills `workbox` as the display label so you can accept it or edit it in place. A named session defaults to `workbox/session-name`. Add `--label "Build machine"` to skip the prompt, or rename the saved machine later. Non-interactive setup uses the same default automatically.
 
-To use a named session instead, add the optional `--remote-session` flag:
+If one remote Herdr session is running, Herdr selects it automatically. If several are running, interactive setup opens a picker: use Up/Down to move, Enter to select, or Esc to cancel. With no running session, setup uses the default session. A machine profile targets one remote session; it does not combine every session on the host.
+
+To select a session explicitly, including from a non-interactive script, add `--remote-session`:
 
 ```bash
 herdr machine add workbox --label "Build machine" --remote-session agents
 ```
 
-Herdr checks both the installed binary and the running server. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.
+Herdr checks both the installed binary and the running server. On Windows, it can reuse a compatible executable associated with a running Herdr process even when SSH `PATH` resolves another version. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.
 
 Run `herdr` to open the UI. If a local client is already open, added and enabled machines normally appear within a second and connect in the background without changing your selection. An in-progress machine switch finishes before profile changes are applied. The remote server keeps running after setup exits.
 

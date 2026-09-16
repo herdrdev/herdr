@@ -29,6 +29,7 @@ mod input;
 mod loop_config;
 mod notifications;
 mod shell;
+pub(crate) use shell::TextEditor;
 mod shell_runtime;
 mod startup;
 mod state;

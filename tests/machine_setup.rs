@@ -49,6 +49,7 @@ case "$script" in
         else
             echo '{"running":true,"version":"0.8.2","capabilities":{"live_handoff":true,"detached_server_daemon":true}}'
         fi ;;
+    *'session list --json'*) echo '{"sessions":[{"name":"default","running":true}]}' ;;
     *'server live-handoff'*) echo handoff >>"$FAKE_ROOT/actions"; exit 1 ;;
     *'server stop'*) echo stop >>"$FAKE_ROOT/actions"; touch "$FAKE_ROOT/stopped" ;;
     *'remote-client-bridge'*) echo start >>"$FAKE_ROOT/actions"; echo 'test startup failure' >&2; exit 1 ;;
@@ -109,7 +110,7 @@ fn setup_with_strict_host_key_failure(
     if handoff {
         command.args(["--remote", "fake-host", "--handoff"]);
     } else {
-        command.args(["machine", "add", "fake-host", "--label", "VPS"]);
+        command.args(["machine", "add", "fake-host", "--label", "fake-host"]);
     }
     command.env(
         "PATH",
