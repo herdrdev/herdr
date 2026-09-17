@@ -1617,21 +1617,91 @@ fn default_windows_pane_shell(path: Option<std::ffi::OsString>) -> String {
         .unwrap_or_else(|| "powershell.exe".into())
 }
 
-/// Cheap whole-file sanity check for a Windows executable: PE images begin
-/// with the DOS `MZ` magic. `portable-pty` resolves the configured shell with
-/// `Path::exists` and hands it straight to `CreateProcessW`, which does not
-/// fall through to later `PATH` entries when the chosen file is not runnable.
-/// Skipping non-executable candidates here is what lets a broken `pwsh.exe`
-/// fall back to the inbox shell instead of breaking new panes.
+/// Validate that `path` looks like a Windows executable image the current
+/// machine can launch: a DOS `MZ` header whose `e_lfanew` points at a `PE\0\0`
+/// signature with a non-empty, executable-image COFF header for a compatible
+/// machine and a PE32/PE32+ optional header that fits in the file.
+///
+/// `portable-pty` resolves the configured shell with `Path::exists` and hands
+/// it straight to `CreateProcessW`, which does not fall back to later `PATH`
+/// entries, so a malformed, DLL, or foreign-architecture `pwsh.exe` must be
+/// skipped here instead of selected. Actually launching the candidate is the
+/// only way to prove it loads, and this deliberately does not do that.
 #[cfg(any(windows, test))]
 fn is_windows_executable_file(path: &std::path::Path) -> bool {
-    use std::io::Read;
+    use std::io::{Read, Seek, SeekFrom};
+
+    const PE_OFFSET_FIELD: usize = 0x3c;
+    const DOS_HEADER_LEN: u64 = 0x40;
+    const PE_SIGNATURE: &[u8; 4] = b"PE\0\0";
+    const COFF_HEADER_LEN: usize = 20;
+    const OPTIONAL_HEADER_MAGIC_LEN: u64 = 2;
+    const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
+    const IMAGE_FILE_DLL: u16 = 0x2000;
 
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return false;
+    };
+
+    let mut dos_header = [0u8; DOS_HEADER_LEN as usize];
+    if file.read_exact(&mut dos_header).is_err() || &dos_header[..2] != b"MZ" {
+        return false;
+    }
+    let pe_offset = u32::from_le_bytes([
+        dos_header[PE_OFFSET_FIELD],
+        dos_header[PE_OFFSET_FIELD + 1],
+        dos_header[PE_OFFSET_FIELD + 2],
+        dos_header[PE_OFFSET_FIELD + 3],
+    ]) as u64;
+    let pe_header_len = PE_SIGNATURE.len() as u64 + COFF_HEADER_LEN as u64;
+    if pe_offset < DOS_HEADER_LEN || pe_offset.saturating_add(pe_header_len) > len {
+        return false;
+    }
+    if file.seek(SeekFrom::Start(pe_offset)).is_err() {
+        return false;
+    }
+
+    let mut header = [0u8; 4 + COFF_HEADER_LEN];
+    if file.read_exact(&mut header).is_err() || &header[..4] != PE_SIGNATURE {
+        return false;
+    }
+    let machine = u16::from_le_bytes([header[4], header[5]]);
+    let number_of_sections = u16::from_le_bytes([header[4 + 2], header[4 + 3]]);
+    let optional_header_len = u16::from_le_bytes([header[4 + 16], header[4 + 17]]) as u64;
+    let characteristics = u16::from_le_bytes([header[4 + 18], header[4 + 19]]);
+
+    if !windows_executable_machine_is_compatible(machine)
+        || number_of_sections == 0
+        || characteristics & IMAGE_FILE_EXECUTABLE_IMAGE == 0
+        || characteristics & IMAGE_FILE_DLL != 0
+        || optional_header_len < OPTIONAL_HEADER_MAGIC_LEN
+        || pe_offset.saturating_add(pe_header_len + optional_header_len) > len
+    {
+        return false;
+    }
+
     let mut magic = [0u8; 2];
-    file.read_exact(&mut magic).is_ok() && magic == *b"MZ"
+    file.read_exact(&mut magic).is_ok() && matches!(u16::from_le_bytes(magic), 0x010b | 0x020b)
+}
+
+/// Machine types the current host can execute on Windows. ARM64 Windows
+/// emulates x64 and x86, and x64 Windows runs x86 through WOW64.
+#[cfg(any(windows, test))]
+fn windows_executable_machine_is_compatible(machine: u16) -> bool {
+    const MACHINE_I386: u16 = 0x014c;
+    const MACHINE_AMD64: u16 = 0x8664;
+    const MACHINE_ARM64: u16 = 0xaa64;
+
+    if cfg!(target_arch = "x86") {
+        machine == MACHINE_I386
+    } else if cfg!(target_arch = "aarch64") {
+        matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64)
+    } else {
+        matches!(machine, MACHINE_I386 | MACHINE_AMD64)
+    }
 }
 
 #[cfg(not(windows))]
@@ -3837,6 +3907,39 @@ mod tests {
         assert_eq!(pane_shell_from("", None), default_pane_shell());
     }
 
+    const TEST_EXECUTABLE_IMAGE: u16 = 0x0002;
+    const TEST_DLL: u16 = 0x2000;
+
+    fn host_test_machine() -> u16 {
+        if cfg!(target_arch = "x86") {
+            0x014c
+        } else if cfg!(target_arch = "aarch64") {
+            0xaa64
+        } else {
+            0x8664
+        }
+    }
+
+    /// Structurally valid PE32+ image, with fields chosen so tests can make it
+    /// malformed one way at a time.
+    fn windows_test_pe(machine: u16, characteristics: u16, number_of_sections: u16) -> Vec<u8> {
+        const PE_OFFSET: u32 = 0x80;
+        const COFF_HEADER_LEN: usize = 20;
+        const OPTIONAL_HEADER_LEN: u16 = 0x70;
+
+        let pe = PE_OFFSET as usize;
+        let mut bytes = vec![0u8; pe + 4 + COFF_HEADER_LEN + OPTIONAL_HEADER_LEN as usize];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&PE_OFFSET.to_le_bytes());
+        bytes[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        bytes[pe + 4..pe + 6].copy_from_slice(&machine.to_le_bytes());
+        bytes[pe + 4 + 2..pe + 4 + 4].copy_from_slice(&number_of_sections.to_le_bytes());
+        bytes[pe + 4 + 16..pe + 4 + 18].copy_from_slice(&OPTIONAL_HEADER_LEN.to_le_bytes());
+        bytes[pe + 4 + 18..pe + 4 + 20].copy_from_slice(&characteristics.to_le_bytes());
+        bytes[pe + 24..pe + 26].copy_from_slice(&0x020bu16.to_le_bytes());
+        bytes
+    }
+
     #[test]
     fn windows_default_pane_shell_prefers_pwsh_on_path() {
         let dir = std::env::temp_dir().join(format!(
@@ -3845,7 +3948,8 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let pwsh = dir.join("pwsh.exe");
-        std::fs::write(&pwsh, b"MZ").unwrap();
+        let image = windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 1);
+        std::fs::write(&pwsh, image).unwrap();
         let path = std::env::join_paths([&dir]).unwrap();
 
         let resolved = default_windows_pane_shell(Some(path));
@@ -3874,6 +3978,63 @@ mod tests {
     }
 
     #[test]
+    fn windows_default_pane_shell_rejects_non_executable_pe_images() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-invalid-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        let path = || std::env::join_paths([&dir]).unwrap();
+
+        let truncated_header = {
+            let mut bytes = b"MZ".to_vec();
+            bytes.resize(0x40, 0);
+            bytes[0x3c..0x40].copy_from_slice(&0x50u32.to_le_bytes());
+            bytes
+        };
+        let cases: [(&str, Vec<u8>); 6] = [
+            ("empty", Vec::new()),
+            ("dos signature only", b"MZ".to_vec()),
+            ("truncated pe header", truncated_header),
+            (
+                "dll",
+                windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE | TEST_DLL, 1),
+            ),
+            (
+                "no executable bit",
+                windows_test_pe(host_test_machine(), 0, 1),
+            ),
+            (
+                "foreign machine",
+                windows_test_pe(0x0200, TEST_EXECUTABLE_IMAGE, 1),
+            ),
+        ];
+
+        for (label, bytes) in cases {
+            std::fs::write(&pwsh, &bytes).unwrap();
+            assert_eq!(
+                default_windows_pane_shell(Some(path())),
+                "powershell.exe",
+                "case {label:?}"
+            );
+        }
+
+        std::fs::write(
+            &pwsh,
+            windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 0),
+        )
+        .unwrap();
+        assert_eq!(
+            default_windows_pane_shell(Some(path())),
+            "powershell.exe",
+            "case zero sections"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn windows_default_pane_shell_skips_invalid_pwsh_candidates() {
         let base = std::env::temp_dir().join(format!(
             "herdr-windows-default-shell-skip-{}",
@@ -3883,9 +4044,13 @@ mod tests {
         let valid_dir = base.join("valid");
         std::fs::create_dir_all(&invalid_dir).unwrap();
         std::fs::create_dir_all(&valid_dir).unwrap();
-        std::fs::write(invalid_dir.join("pwsh.exe"), b"").unwrap();
+        std::fs::write(invalid_dir.join("pwsh.exe"), b"MZ").unwrap();
         let pwsh = valid_dir.join("pwsh.exe");
-        std::fs::write(&pwsh, b"MZ").unwrap();
+        std::fs::write(
+            &pwsh,
+            windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 1),
+        )
+        .unwrap();
         let path = std::env::join_paths([&invalid_dir, &valid_dir]).unwrap();
 
         let resolved = default_windows_pane_shell(Some(path));
