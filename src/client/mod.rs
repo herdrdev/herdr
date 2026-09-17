@@ -1028,9 +1028,21 @@ async fn run_client_loop(
                     write_stream.active_surface_available(),
                 );
                 if state.shell.is_some() {
+                    #[cfg(not(windows))]
                     if events.iter().any(|event| {
                         matches!(event, crate::protocol::ClientInputEvent::FocusGained)
                     }) {
+                        refresh_host_mouse_capture(
+                            state.mouse_capture_active,
+                            host_sgr_pixels_active.load(Ordering::Acquire),
+                        );
+                    }
+                    #[cfg(windows)]
+                    if is_ssh_session()
+                        && events.iter().any(|event| {
+                            matches!(event, crate::protocol::ClientInputEvent::FocusGained)
+                        })
+                    {
                         refresh_host_mouse_capture(
                             state.mouse_capture_active,
                             host_sgr_pixels_active.load(Ordering::Acquire),
@@ -1113,10 +1125,18 @@ async fn run_client_loop(
                         .map_err(ClientError::ConnectionFailed)?;
                     host_sgr_pixels_active.store(false, Ordering::Release);
                 } else {
+                    #[cfg(not(windows))]
                     refresh_host_mouse_capture(
                         state.mouse_capture_active,
                         host_sgr_pixels_active.load(Ordering::Acquire),
                     );
+                    #[cfg(windows)]
+                    if is_ssh_session() {
+                        refresh_host_mouse_capture(
+                            state.mouse_capture_active,
+                            host_sgr_pixels_active.load(Ordering::Acquire),
+                        );
+                    }
                 }
                 state.reported_size = (new_cols, new_rows);
                 state.reported_cell_size = (cell_width_px, cell_height_px);

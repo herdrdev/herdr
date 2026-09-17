@@ -348,7 +348,9 @@ fn set_windows_native_mouse_capture<W: io::Write>(
     sgr_pixels: bool,
     set_console_capture: impl FnOnce(bool) -> io::Result<()>,
 ) -> io::Result<()> {
-    crate::terminal_modes::clear_host_mouse_reporting(writer)?;
+    if !enabled {
+        crate::terminal_modes::clear_host_mouse_reporting(writer)?;
+    }
     set_console_capture(enabled)?;
     if enabled {
         crate::terminal_modes::set_windows_mouse_reporting(writer, true, sgr_pixels)?;
@@ -365,7 +367,9 @@ fn windows_uses_vt_mouse_reporting() -> bool {
 pub(super) fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
     #[cfg(windows)]
     if windows_uses_vt_mouse_reporting() {
-        crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+        if !enabled {
+            crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+        }
         return crate::terminal_modes::set_windows_mouse_reporting(
             &mut io::stdout(),
             enabled,
@@ -663,7 +667,7 @@ mod tests {
             let bytes = output.0.borrow();
             let before = std::str::from_utf8(&bytes[start..native_boundary.get()]).unwrap();
             let after = std::str::from_utf8(&bytes[native_boundary.get()..]).unwrap();
-            assert!(before.contains("\x1b[?1016l"));
+            assert!(!before.contains("\x1b[?1016l"));
             for reset in ["\x1b[?1005l", "\x1b[?1006l", "\x1b[?1016l"] {
                 assert!(
                     !after.contains(reset),
@@ -679,15 +683,15 @@ mod tests {
     fn windows_native_mouse_capture_restores_reporting_after_reset() {
         let mut output = Vec::new();
 
-        set_windows_native_mouse_capture(&mut output, true, false, |enabled| {
-            assert!(enabled);
+        set_windows_native_mouse_capture(&mut output, false, false, |enabled| {
+            assert!(!enabled);
             Ok(())
         })
         .unwrap();
 
         assert_eq!(
             output,
-            b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
+            b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l"
         );
     }
 }
