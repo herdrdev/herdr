@@ -1602,18 +1602,36 @@ fn default_pane_shell() -> String {
 /// Windows has no `$SHELL`, so an unset `[terminal] default_shell` has to name
 /// a concrete executable. `powershell.exe` (5.1) is the only one guaranteed to
 /// exist, but `pwsh` (7+) is what every other Windows terminal prefers when it
-/// is installed. Raise the default to `pwsh.exe` when `PATH` resolves it and
-/// keep the inbox shell as the floor otherwise. An explicit `default_shell`
-/// still wins.
+/// is installed. Return the first launchable `pwsh.exe` on `PATH` as a full
+/// path so the pane launches exactly the binary that was validated; keep the
+/// inbox shell when none is found. An explicit `default_shell` still wins.
 #[cfg(any(windows, test))]
 fn default_windows_pane_shell(path: Option<std::ffi::OsString>) -> String {
-    let has_pwsh = path
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()));
-    if has_pwsh {
-        "pwsh.exe".into()
-    } else {
-        "powershell.exe".into()
-    }
+    path.as_deref()
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("pwsh.exe"))
+        .find(|candidate| is_windows_executable_file(candidate))
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .unwrap_or_else(|| "powershell.exe".into())
+}
+
+/// Cheap whole-file sanity check for a Windows executable: PE images begin
+/// with the DOS `MZ` magic. `portable-pty` resolves the configured shell with
+/// `Path::exists` and hands it straight to `CreateProcessW`, which does not
+/// fall through to later `PATH` entries when the chosen file is not runnable.
+/// Skipping non-executable candidates here is what lets a broken `pwsh.exe`
+/// fall back to the inbox shell instead of breaking new panes.
+#[cfg(any(windows, test))]
+fn is_windows_executable_file(path: &std::path::Path) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).is_ok() && magic == *b"MZ"
 }
 
 #[cfg(not(windows))]
@@ -3826,13 +3844,15 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("pwsh.exe"), b"").unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        std::fs::write(&pwsh, b"MZ").unwrap();
         let path = std::env::join_paths([&dir]).unwrap();
 
         let resolved = default_windows_pane_shell(Some(path));
+        let expected = pwsh.into_os_string().into_string().unwrap();
 
         let _ = std::fs::remove_dir_all(dir);
-        assert_eq!(resolved, "pwsh.exe");
+        assert_eq!(resolved, expected);
     }
 
     #[test]
@@ -3842,13 +3862,37 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // A file that is not a launchable executable must not be selected.
+        std::fs::write(dir.join("pwsh.exe"), b"not a PE image").unwrap();
         let path = std::env::join_paths([&dir]).unwrap();
 
-        let on_path = default_windows_pane_shell(Some(path));
+        let invalid = default_windows_pane_shell(Some(path));
 
         let _ = std::fs::remove_dir_all(dir);
-        assert_eq!(on_path, "powershell.exe");
+        assert_eq!(invalid, "powershell.exe");
         assert_eq!(default_windows_pane_shell(None), "powershell.exe");
+    }
+
+    #[test]
+    fn windows_default_pane_shell_skips_invalid_pwsh_candidates() {
+        let base = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-skip-{}",
+            std::process::id()
+        ));
+        let invalid_dir = base.join("invalid");
+        let valid_dir = base.join("valid");
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        std::fs::create_dir_all(&valid_dir).unwrap();
+        std::fs::write(invalid_dir.join("pwsh.exe"), b"").unwrap();
+        let pwsh = valid_dir.join("pwsh.exe");
+        std::fs::write(&pwsh, b"MZ").unwrap();
+        let path = std::env::join_paths([&invalid_dir, &valid_dir]).unwrap();
+
+        let resolved = default_windows_pane_shell(Some(path));
+        let expected = pwsh.into_os_string().into_string().unwrap();
+
+        let _ = std::fs::remove_dir_all(base);
+        assert_eq!(resolved, expected);
     }
 
     #[test]
