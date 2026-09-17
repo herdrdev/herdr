@@ -3,8 +3,9 @@ use super::*;
 use std::process::Command;
 use windows_sys::Win32::{
     Security::{
-        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-        OWNER_SECURITY_INFORMATION,
+        SetFileSecurityW, SetSecurityDescriptorControl, DACL_SECURITY_INFORMATION,
+        GROUP_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+        SE_DACL_AUTO_INHERITED, SE_DACL_AUTO_INHERIT_REQ, SE_DACL_PROTECTED,
     },
     Storage::FileSystem::{
         EncryptFileW, LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
@@ -83,11 +84,46 @@ fn lock_range(path: &Path, offset: u32) -> File {
     );
     file
 }
+/// Give an existing file a legacy DACL, preserving its ACEs but clearing the
+/// control bits that mark it as inherited or protected. Temp directories often
+/// grant inheritable ACEs, which would otherwise produce `D:AI(...)` and mean
+/// this fixture never exercises the legacy `D:(...)` shape.
+fn force_legacy_dacl(path: &Path) {
+    let mut descriptor = config_security_descriptor(path, DACL_SECURITY_INFORMATION).unwrap();
+    assert_ne!(
+        unsafe {
+            SetSecurityDescriptorControl(
+                descriptor.as_mut_ptr().cast(),
+                SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ | SE_DACL_PROTECTED,
+                0,
+            )
+        },
+        0,
+        "{}",
+        io::Error::last_os_error()
+    );
+    let wide = super::super::extended_length_path(path).unwrap();
+    assert_ne!(
+        unsafe {
+            SetFileSecurityW(
+                wide.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                descriptor.as_mut_ptr().cast(),
+            )
+        },
+        0,
+        "{}",
+        io::Error::last_os_error()
+    );
+}
 fn successful_update(case: &str) {
     let dir = Directory::new(case);
     let source = dir.0.join("config");
     fs::write(&source, b"original preferences").unwrap();
     fs::write(dir.0.join("config:private"), b"original stream").unwrap();
+    if case == "legacy" {
+        force_legacy_dacl(&source);
+    }
     if case == "protected" || case == "unprotected" || case == "moved" {
         powershell(
             &format!(
