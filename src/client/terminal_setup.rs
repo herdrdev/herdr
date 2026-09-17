@@ -501,7 +501,7 @@ fn pop_keyboard_enhancement_flags() -> io::Result<()> {
 pub(super) fn windows_win32_input_mode_enabled() -> bool {
     std::env::var("HERDR_WINDOWS_INPUT_PROBE")
         .map(|probe| probe.eq_ignore_ascii_case("win32"))
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 #[cfg(windows)]
