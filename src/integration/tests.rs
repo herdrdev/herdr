@@ -4,6 +4,8 @@ use super::env::*;
 use super::file_ops::*;
 use super::registry::*;
 use super::targets::*;
+#[cfg(windows)]
+use super::test_support::symlink_file;
 use super::types::*;
 use super::version::*;
 use super::*;
@@ -2565,11 +2567,12 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     fs::write(&referent, "{").unwrap();
     let linked_backup = base.join("preferences.json.herdr-backup");
     fs::rename(&backup, &linked_backup).unwrap();
-    std::os::windows::fs::symlink_file(&referent, &config).unwrap();
-    let link_before = fs::read_link(&config).unwrap();
-    let error = install_target(target).unwrap_err();
-    assert!(error.to_string().contains("preferences.json.herdr-backup"));
-    assert_eq!(fs::read_link(&config).unwrap(), link_before);
+    if symlink_file(&referent, &config) {
+        let link_before = fs::read_link(&config).unwrap();
+        let error = install_target(target).unwrap_err();
+        assert!(error.to_string().contains("preferences.json.herdr-backup"));
+        assert_eq!(fs::read_link(&config).unwrap(), link_before);
+    }
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
     assert!(!dir.join("tui.jsonc").exists());
     assert!(!dir.join(OPENCODE_V2_TUI_PLUGIN_DIR).exists());
