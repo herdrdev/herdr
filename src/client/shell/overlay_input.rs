@@ -612,7 +612,9 @@ impl ClientShellState {
                 }
                 KeyCode::Enter => {
                     let highlighted = match self.overlay.as_ref() {
-                        Some(ClientShellOverlay::ContextMenu(menu)) => menu.highlighted,
+                        Some(ClientShellOverlay::ContextMenu(menu)) => {
+                            menu.highlighted.unwrap_or(0)
+                        }
                         _ => return,
                     };
                     self.activate_context_menu_item(highlighted, outcome);

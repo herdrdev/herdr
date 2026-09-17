@@ -196,7 +196,7 @@ pub(crate) fn render_context_menu(
             break;
         }
         let row = Rect::new(inner.x, row_y, inner.width, 1);
-        let highlighted = index == menu.highlighted;
+        let highlighted = Some(index) == menu.highlighted;
         let style = if highlighted {
             Style::default()
                 .fg(panel_contrast_fg(palette))

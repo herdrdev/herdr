@@ -552,7 +552,7 @@ pub(super) struct ClientContextMenuOverlay {
     pub(super) target: ClientContextMenuTarget,
     pub(super) x: u16,
     pub(super) y: u16,
-    pub(super) highlighted: usize,
+    pub(super) highlighted: Option<usize>,
 }
 
 pub(super) struct ClientContextMenuItem {

@@ -119,7 +119,7 @@ impl ClientShellState {
             },
             x,
             y,
-            highlighted: 0,
+            highlighted: None,
         }));
     }
 
@@ -138,7 +138,7 @@ impl ClientShellState {
             },
             x,
             y,
-            highlighted: 0,
+            highlighted: None,
         }));
     }
 
@@ -163,7 +163,7 @@ impl ClientShellState {
             },
             x,
             y,
-            highlighted: 0,
+            highlighted: None,
         }));
     }
 
@@ -175,8 +175,10 @@ impl ClientShellState {
         if item_count == 0 {
             return;
         }
-        menu.highlighted = (menu.highlighted as isize + delta)
-            .clamp(0, item_count.saturating_sub(1) as isize) as usize;
+        menu.highlighted = Some(
+            (menu.highlighted.unwrap_or(0) as isize + delta)
+                .clamp(0, item_count.saturating_sub(1) as isize) as usize,
+        );
     }
 
     pub(super) fn activate_context_menu_item(

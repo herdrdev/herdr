@@ -1139,7 +1139,7 @@ fn context_menu_keyboard_and_outside_click_are_client_owned() {
     assert!(matches!(
         state.overlay,
         Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
-            highlighted: 1,
+            highlighted: Some(1),
             ..
         }))
     ));

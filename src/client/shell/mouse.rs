@@ -1376,11 +1376,12 @@ impl ClientShellState {
                 .copied();
             match mouse.kind {
                 MouseEventKind::Moved => {
-                    if let (Some((_, index)), Some(ClientShellOverlay::ContextMenu(menu))) =
-                        (row_hit, self.overlay.as_mut())
-                    {
-                        menu.highlighted = index;
-                        outcome.repaint = true;
+                    if let Some(ClientShellOverlay::ContextMenu(menu)) = self.overlay.as_mut() {
+                        let next = row_hit.map(|(_, index)| index);
+                        if next != menu.highlighted {
+                            menu.highlighted = next;
+                            outcome.repaint = true;
+                        }
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
