@@ -1445,7 +1445,8 @@ impl GhosttyPaneTerminal {
             .terminal
             .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
             .unwrap_or(false);
-        if CURSOR_POSITION_SETTLE_ENABLED {
+        // Intermediate synchronized-frame positions must not become settled cursors.
+        if CURSOR_POSITION_SETTLE_ENABLED && !synchronized_output {
             let cursor_started = crate::render_prof::timer();
             let cursor_after_write = current_cursor_state(&mut core);
             crate::render_prof::duration_since("pty.cursor_state_update", cursor_started);
@@ -4379,6 +4380,87 @@ mod tests {
             pane.cursor_state()
                 .map(|cursor| (cursor.x, cursor.y, cursor.visible)),
             Some((1, 0, true))
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cursor_settle_ignores_intermediate_synchronized_frame_positions() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[15;4H", &tx);
+
+        let previous = TerminalCursorState {
+            x: 3,
+            y: 14,
+            visible: true,
+            shape: 0,
+        };
+        {
+            let mut core = pane.core.lock().unwrap();
+            let now = Instant::now();
+            core.cursor_settle_state = CursorPositionSettleState::default();
+            core.cursor_settle_state.observe(
+                Some(TerminalCursorState { x: 2, ..previous }),
+                now - Duration::from_millis(300),
+            );
+            // Seed a pending hold whose deadline has passed, without wall-clock sleeps.
+            core.cursor_settle_state
+                .observe(Some(previous), now - Duration::from_millis(200));
+        }
+
+        for bytes in [
+            b"\x1b[?2026h\x1b[15;4Hx\x1b[13;1H".as_slice(),
+            b"\x1b[0 q\x1b[13;1H \x1b[15;5H",
+            b"\x1b[?25h",
+        ] {
+            let result = pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+            assert!(!result.request_render);
+            assert_eq!(result.render_delay, None);
+            assert_eq!(pane.cursor_state(), Some(previous));
+            assert!(pane.core.lock().unwrap().cursor_settle_state.pending());
+        }
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?2026l", &tx);
+        assert!(result.request_render);
+        assert!(!pane.core.lock().unwrap().cursor_settle_state.pending());
+        assert_eq!(
+            pane.cursor_state(),
+            Some(TerminalCursorState { x: 4, ..previous })
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cursor_settle_preserves_final_visibility_and_shape_across_split_sync_sequences() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[15;4H", &tx);
+
+        for bytes in [
+            b"\x1b[?202".as_slice(),
+            b"6h\x1b[13;1H",
+            b"\x1b[6 q\x1b[15;5H\x1b[?25l\x1b[?20",
+        ] {
+            pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+            assert!(!pane.core.lock().unwrap().cursor_settle_state.pending());
+        }
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"26l", &tx);
+        assert!(result.request_render);
+        assert_eq!(result.render_delay, None);
+        assert_eq!(
+            pane.cursor_state(),
+            Some(TerminalCursorState {
+                x: 4,
+                y: 14,
+                visible: false,
+                shape: 6,
+            })
         );
     }
 
