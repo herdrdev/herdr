@@ -4,7 +4,7 @@ This file tracks intentional local changes applied on top of the vendored
 `portable-pty` source. Remove a patch only when the upstream crate contains an
 equivalent fix or exposes an option that lets Herdr keep the same behavior.
 
-## 0001 control ConPTY loading
+## 0001 control ConPTY loading and packing
 
 status: active
 
@@ -14,6 +14,7 @@ herdr issues:
 
 - https://github.com/herdrdev/herdr/issues/761
 - https://github.com/herdrdev/herdr/issues/1533
+- https://github.com/herdrdev/herdr/issues/3651
 
 upstream discussion: https://github.com/microsoft/terminal/issues/17452
 
@@ -35,11 +36,14 @@ unexpected files, then loads the DLL by absolute path with its dependency search
 limited to that directory and System32. Installations without a bundle continue
 using the ConPTY exports from the already loaded `kernel32.dll`. Set
 `HERDR_WINDOWS_CONPTY=system` to bypass the bundle during compatibility
-recovery.
+recovery. The same loaded module supplies `ConptyPackPseudoConsole` when a
+replacement server adopts transferred pseudo-console handles; the system
+runtime has no matching transfer contract.
 
 remove when: upstream `portable-pty` exposes hash-verified app-local and system
-ConPTY selection with constrained DLL loading and no bare DLL search, or Herdr
-replaces the Windows PTY backend.
+ConPTY selection with constrained DLL loading, no bare DLL search, and bundled
+pseudo-console packing for process handoff, or Herdr replaces the Windows PTY
+backend.
 
 verification:
 
@@ -128,4 +132,44 @@ On Windows, also run:
 
 ```sh
 cargo test --manifest-path vendor/portable-pty/Cargo.toml windows_environment_rejects_malformed_entries
+```
+
+## 0004 transfer bundled ConPTY ownership
+
+status: active
+
+patch: `vendor/patches/portable-pty/0004-transfer-bundled-conpty.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/3651
+
+upstream discussion: none
+
+upstream pr: none
+
+vendored base: `portable-pty 0.9.0`
+
+local files:
+
+- `vendor/portable-pty/src/win/conpty.rs`
+- `vendor/portable-pty/src/win/mod.rs`
+
+reason: Windows live server handoff must preserve each running pane process.
+Expose transactional transfer and adoption of the master PTY and exact child
+process handle. Query handoff support before creating a PTY so empty sessions
+can report the selected runtime's capability. Patch 0001 supplies bundled
+pseudo-console packing; the system ConPTY fallback remains unsupported.
+The retained input handle closes when the returned writer is dropped, preserving
+EOF behavior while the master remains alive. Failed adoption closes transferred
+handles even when the selected runtime has no packing capability.
+
+remove when: upstream `portable-pty` supports transactional cross-process
+transfer and adoption for the pinned bundled ConPTY runtime, including partial
+duplicate cleanup, retained canonical pipe handles, and child process handle
+adoption, or Herdr replaces this Windows PTY backend.
+
+verification:
+
+```sh
+python3 -m unittest scripts.test_vendor_portable_pty
+cargo test --locked --bin herdr pty::backend::tests::bundled_conpty_handoff_transfers_six_handles_between_processes -- --ignored --exact --nocapture
 ```
