@@ -1635,6 +1635,7 @@ fn is_windows_executable_file(path: &std::path::Path) -> bool {
     const DOS_HEADER_LEN: u64 = 0x40;
     const PE_SIGNATURE: &[u8; 4] = b"PE\0\0";
     const COFF_HEADER_LEN: usize = 20;
+    const SECTION_HEADER_LEN: u64 = 40;
     const OPTIONAL_HEADER_MAGIC_LEN: u64 = 2;
     const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
     const IMAGE_FILE_DLL: u16 = 0x2000;
@@ -1678,7 +1679,9 @@ fn is_windows_executable_file(path: &std::path::Path) -> bool {
         || characteristics & IMAGE_FILE_EXECUTABLE_IMAGE == 0
         || characteristics & IMAGE_FILE_DLL != 0
         || optional_header_len < OPTIONAL_HEADER_MAGIC_LEN
-        || pe_offset.saturating_add(pe_header_len + optional_header_len) > len
+        || pe_offset.saturating_add(
+            pe_header_len + optional_header_len + number_of_sections as u64 * SECTION_HEADER_LEN,
+        ) > len
     {
         return false;
     }
@@ -1687,21 +1690,18 @@ fn is_windows_executable_file(path: &std::path::Path) -> bool {
     file.read_exact(&mut magic).is_ok() && matches!(u16::from_le_bytes(magic), 0x010b | 0x020b)
 }
 
-/// Machine types the current host can execute on Windows. ARM64 Windows
-/// emulates x64 and x86, and x64 Windows runs x86 through WOW64.
+/// Machine types Windows can execute directly or through emulation. Herdr
+/// ships an x64 build that also runs on Windows ARM64 through x64 emulation,
+/// so `cfg!(target_arch)` cannot tell whether a native ARM64 `pwsh.exe` is
+/// launchable; accept every executable machine type rather than rejecting a
+/// valid PowerShell 7 install.
 #[cfg(any(windows, test))]
 fn windows_executable_machine_is_compatible(machine: u16) -> bool {
     const MACHINE_I386: u16 = 0x014c;
     const MACHINE_AMD64: u16 = 0x8664;
     const MACHINE_ARM64: u16 = 0xaa64;
 
-    if cfg!(target_arch = "x86") {
-        machine == MACHINE_I386
-    } else if cfg!(target_arch = "aarch64") {
-        matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64)
-    } else {
-        matches!(machine, MACHINE_I386 | MACHINE_AMD64)
-    }
+    matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64)
 }
 
 #[cfg(not(windows))]
@@ -3909,16 +3909,7 @@ mod tests {
 
     const TEST_EXECUTABLE_IMAGE: u16 = 0x0002;
     const TEST_DLL: u16 = 0x2000;
-
-    fn host_test_machine() -> u16 {
-        if cfg!(target_arch = "x86") {
-            0x014c
-        } else if cfg!(target_arch = "aarch64") {
-            0xaa64
-        } else {
-            0x8664
-        }
-    }
+    const TEST_MACHINE_AMD64: u16 = 0x8664;
 
     /// Structurally valid PE32+ image, with fields chosen so tests can make it
     /// malformed one way at a time.
@@ -3926,9 +3917,16 @@ mod tests {
         const PE_OFFSET: u32 = 0x80;
         const COFF_HEADER_LEN: usize = 20;
         const OPTIONAL_HEADER_LEN: u16 = 0x70;
+        const SECTION_HEADER_LEN: usize = 40;
 
         let pe = PE_OFFSET as usize;
-        let mut bytes = vec![0u8; pe + 4 + COFF_HEADER_LEN + OPTIONAL_HEADER_LEN as usize];
+        let mut bytes = vec![
+            0u8;
+            pe + 4
+                + COFF_HEADER_LEN
+                + OPTIONAL_HEADER_LEN as usize
+                + number_of_sections as usize * SECTION_HEADER_LEN
+        ];
         bytes[..2].copy_from_slice(b"MZ");
         bytes[0x3c..0x40].copy_from_slice(&PE_OFFSET.to_le_bytes());
         bytes[pe..pe + 4].copy_from_slice(b"PE\0\0");
@@ -3948,7 +3946,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let pwsh = dir.join("pwsh.exe");
-        let image = windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 1);
+        let image = windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1);
         std::fs::write(&pwsh, image).unwrap();
         let path = std::env::join_paths([&dir]).unwrap();
 
@@ -3993,17 +3991,24 @@ mod tests {
             bytes[0x3c..0x40].copy_from_slice(&0x50u32.to_le_bytes());
             bytes
         };
-        let cases: [(&str, Vec<u8>); 6] = [
+        // One declared section, but the file ends before its 40-byte header.
+        let truncated_section_table = {
+            let mut bytes = windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1);
+            bytes.truncate(bytes.len() - 1);
+            bytes
+        };
+        let cases: [(&str, Vec<u8>); 7] = [
             ("empty", Vec::new()),
             ("dos signature only", b"MZ".to_vec()),
             ("truncated pe header", truncated_header),
+            ("truncated section table", truncated_section_table),
             (
                 "dll",
-                windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE | TEST_DLL, 1),
+                windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE | TEST_DLL, 1),
             ),
             (
                 "no executable bit",
-                windows_test_pe(host_test_machine(), 0, 1),
+                windows_test_pe(TEST_MACHINE_AMD64, 0, 1),
             ),
             (
                 "foreign machine",
@@ -4022,7 +4027,7 @@ mod tests {
 
         std::fs::write(
             &pwsh,
-            windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 0),
+            windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 0),
         )
         .unwrap();
         assert_eq!(
@@ -4048,7 +4053,7 @@ mod tests {
         let pwsh = valid_dir.join("pwsh.exe");
         std::fs::write(
             &pwsh,
-            windows_test_pe(host_test_machine(), TEST_EXECUTABLE_IMAGE, 1),
+            windows_test_pe(TEST_MACHINE_AMD64, TEST_EXECUTABLE_IMAGE, 1),
         )
         .unwrap();
         let path = std::env::join_paths([&invalid_dir, &valid_dir]).unwrap();
