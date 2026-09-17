@@ -1,7 +1,7 @@
 id = "agy"
-version = "2026.06.24.1"
+version = "2026.09.17.1"
 min_engine_version = 1
-updated_at = "2026-06-24T00:00:00Z"
+updated_at = "2026-09-17T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
 
 [[rules]]
@@ -22,12 +22,37 @@ state = "working"
 priority = 100
 region = "whole_recent"
 visible_working = true
-line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
+line_regex = ['^\s*[\u2800-\u28FF]']
+
+[[rules]]
+id = "working_cancel_hint"
+state = "working"
+priority = 98
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+any = [
+  { contains = ["esc to cancel"] },
+  { contains = ["enter/esc to cancel"] },
+]
+
+[[rules]]
+id = "background_agents_working"
+state = "working"
+priority = 95
+region = "bottom_non_empty_lines(10)"
+visible_working = true
+line_regex = ['^\s*[●•]\s+Agent\([^)]+\)\s+.*\S\s+·\s+[0-9]']
 
 [[rules]]
 id = "background_tasks_working"
 state = "working"
 priority = 90
-region = "bottom_non_empty_lines(5)"
+region = "bottom_non_empty_lines(8)"
 visible_working = true
-line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+any = [
+  { line_regex = ['^\s*[●•]\s+\[[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\]\s+.*running\b'] },
+  { line_regex = ['^\s*[●•]\s+Schedule\('] },
+  { line_regex = ['^\s*○\s+\S+\('] },
+  { line_regex = ['(?i)·\s*[1-9][0-9]*\s+task'] },
+  { line_regex = ['(?i)\b[1-9][0-9]*\s+(?:background\s+)?(?:task|command)s?\s+(?:still\s+|currently\s+)?running\b'] },
+]
