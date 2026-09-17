@@ -627,14 +627,7 @@ impl RemoteSsh {
 
     fn base_command(&self) -> Command {
         let mut command = Command::new("ssh");
-        // A command launched in a Herdr pane inherits these variables. SSH
-        // configurations can forward them with SendEnv, which makes the
-        // remote `remote-client-bridge` process look like a nested Herdr.
-        // The remote launcher must always establish an independent runtime.
-        command
-            .env_remove(crate::HERDR_ENV_VAR)
-            .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
-            .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+        remove_inherited_herdr_runtime_environment(&mut command);
         apply_managed_ssh_options(&mut command, self.options());
         command
     }
@@ -2842,22 +2835,7 @@ fn bridge_connection(
     bridge_stop: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     let upload_stop = Arc::new(BridgeUploadStop::new()?);
-    let mut command = Command::new("ssh");
-    apply_managed_ssh_options(&mut command, ssh_options);
-    if noninteractive {
-        apply_noninteractive_ssh_options(&mut command);
-    }
-    command
-        .arg("-T")
-        .arg(target)
-        .arg(remote_command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(if noninteractive {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        });
+    let mut command = bridge_ssh_command(target, remote_command, ssh_options, noninteractive);
 
     let mut child = command
         .spawn()
@@ -3004,6 +2982,43 @@ fn bridge_connection(
     } else {
         Err(ssh_bridge_exit_error(status, &stderr))
     }
+}
+
+// A command launched in a Herdr pane inherits these variables. SSH
+// configurations can forward them with SendEnv, which makes the remote
+// `remote-client-bridge` process look like a nested Herdr. Every SSH command
+// which launches Herdr remotely must establish an independent runtime.
+fn remove_inherited_herdr_runtime_environment(command: &mut Command) {
+    command
+        .env_remove(crate::HERDR_ENV_VAR)
+        .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+        .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+}
+
+fn bridge_ssh_command(
+    target: &str,
+    remote_command: &str,
+    ssh_options: Option<&ManagedSshOptions>,
+    noninteractive: bool,
+) -> Command {
+    let mut command = Command::new("ssh");
+    remove_inherited_herdr_runtime_environment(&mut command);
+    apply_managed_ssh_options(&mut command, ssh_options);
+    if noninteractive {
+        apply_noninteractive_ssh_options(&mut command);
+    }
+    command
+        .arg("-T")
+        .arg(target)
+        .arg(remote_command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(if noninteractive {
+            Stdio::piped()
+        } else {
+            Stdio::inherit()
+        });
+    command
 }
 
 fn ssh_bridge_exit_error(status: std::process::ExitStatus, stderr: &[u8]) -> io::Error {
@@ -3915,6 +3930,16 @@ mod tests {
         };
 
         let command = ssh.command();
+        assert_command_removes_inherited_herdr_runtime_environment(&command);
+    }
+
+    #[test]
+    fn bridge_ssh_command_removes_inherited_herdr_runtime_environment() {
+        let command = bridge_ssh_command("example", "remote-client-bridge", None, false);
+        assert_command_removes_inherited_herdr_runtime_environment(&command);
+    }
+
+    fn assert_command_removes_inherited_herdr_runtime_environment(command: &Command) {
         let removed = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
