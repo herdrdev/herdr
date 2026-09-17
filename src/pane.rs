@@ -1629,6 +1629,25 @@ fn default_windows_pane_shell(path: Option<std::ffi::OsString>) -> String {
 /// only way to prove it loads, and this deliberately does not do that.
 #[cfg(any(windows, test))]
 fn is_windows_executable_file(path: &std::path::Path) -> bool {
+    is_windows_executable_file_for_host(path, windows_host_native_machine())
+}
+
+/// Native processor architecture of the host. Non-Windows builds only reach
+/// this from the cross-platform unit tests, which model an x64 host.
+#[cfg(any(windows, test))]
+fn windows_host_native_machine() -> u16 {
+    #[cfg(windows)]
+    {
+        crate::platform::native_machine_type()
+    }
+    #[cfg(not(windows))]
+    {
+        0x8664
+    }
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_executable_file_for_host(path: &std::path::Path, native_machine: u16) -> bool {
     use std::io::{Read, Seek, SeekFrom};
 
     const PE_OFFSET_FIELD: usize = 0x3c;
@@ -1674,7 +1693,7 @@ fn is_windows_executable_file(path: &std::path::Path) -> bool {
     let optional_header_len = u16::from_le_bytes([header[4 + 16], header[4 + 17]]) as u64;
     let characteristics = u16::from_le_bytes([header[4 + 18], header[4 + 19]]);
 
-    if !windows_executable_machine_is_compatible(machine)
+    if !windows_executable_machine_is_compatible(machine, native_machine)
         || number_of_sections == 0
         || characteristics & IMAGE_FILE_EXECUTABLE_IMAGE == 0
         || characteristics & IMAGE_FILE_DLL != 0
@@ -1690,18 +1709,21 @@ fn is_windows_executable_file(path: &std::path::Path) -> bool {
     file.read_exact(&mut magic).is_ok() && matches!(u16::from_le_bytes(magic), 0x010b | 0x020b)
 }
 
-/// Machine types Windows can execute directly or through emulation. Herdr
-/// ships an x64 build that also runs on Windows ARM64 through x64 emulation,
-/// so `cfg!(target_arch)` cannot tell whether a native ARM64 `pwsh.exe` is
-/// launchable; accept every executable machine type rather than rejecting a
-/// valid PowerShell 7 install.
+/// Whether a Windows host can launch a given `IMAGE_FILE_MACHINE_*` image.
+/// A native host runs its own architecture; ARM64 Windows also runs x64 and
+/// x86 through emulation, and x64 Windows runs x86 through WOW64. An unknown
+/// host (detection failed) is treated as the x64 build Herdr ships.
 #[cfg(any(windows, test))]
-fn windows_executable_machine_is_compatible(machine: u16) -> bool {
+fn windows_executable_machine_is_compatible(machine: u16, native_machine: u16) -> bool {
     const MACHINE_I386: u16 = 0x014c;
     const MACHINE_AMD64: u16 = 0x8664;
     const MACHINE_ARM64: u16 = 0xaa64;
 
-    matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64)
+    match native_machine {
+        MACHINE_ARM64 => matches!(machine, MACHINE_I386 | MACHINE_AMD64 | MACHINE_ARM64),
+        MACHINE_I386 => machine == MACHINE_I386,
+        _ => matches!(machine, MACHINE_I386 | MACHINE_AMD64),
+    }
 }
 
 #[cfg(not(windows))]
@@ -4037,6 +4059,43 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn windows_executable_machine_compatibility_tracks_native_host() {
+        const I386: u16 = 0x014c;
+        const AMD64: u16 = 0x8664;
+        const ARM64: u16 = 0xaa64;
+
+        assert!(windows_executable_machine_is_compatible(I386, AMD64));
+        assert!(windows_executable_machine_is_compatible(AMD64, AMD64));
+        assert!(!windows_executable_machine_is_compatible(ARM64, AMD64));
+        assert!(windows_executable_machine_is_compatible(I386, ARM64));
+        assert!(windows_executable_machine_is_compatible(AMD64, ARM64));
+        assert!(windows_executable_machine_is_compatible(ARM64, ARM64));
+        assert!(windows_executable_machine_is_compatible(I386, I386));
+        assert!(!windows_executable_machine_is_compatible(AMD64, I386));
+        assert!(!windows_executable_machine_is_compatible(0x0200, AMD64));
+    }
+
+    #[test]
+    fn windows_executable_file_rejects_arm64_image_on_amd64_host() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-arm64-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pwsh = dir.join("pwsh.exe");
+        std::fs::write(&pwsh, windows_test_pe(0xaa64, TEST_EXECUTABLE_IMAGE, 1)).unwrap();
+
+        let on_amd64 = is_windows_executable_file_for_host(&pwsh, 0x8664);
+        let on_arm64 = is_windows_executable_file_for_host(&pwsh, 0xaa64);
+        let on_x86 = is_windows_executable_file_for_host(&pwsh, 0x014c);
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(!on_amd64, "x64 Windows cannot launch a pure ARM64 image");
+        assert!(on_arm64);
+        assert!(!on_x86);
     }
 
     #[test]
