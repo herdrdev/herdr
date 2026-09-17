@@ -2216,3 +2216,47 @@ fn word_selection_result_survives_focus_snapshot_lag() {
         .as_ref()
         .is_some_and(crate::selection::Selection::is_visible));
 }
+
+#[test]
+fn copy_mode_repeat_during_projection_gap_stays_active() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let mut enter = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::CopyMode),
+        &mut enter,
+    );
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('k'),
+        KeyModifiers::empty(),
+    ))]);
+
+    let mut next = snapshot();
+    next.revision += 1;
+    state.set_snapshot(Box::new(next));
+    assert!(state.hits.panes.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Copy);
+
+    state.handle_raw_events(vec![RawInputEvent::Key(
+        crate::input::TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty())
+            .with_kind(crossterm::event::KeyEventKind::Repeat),
+    )]);
+
+    assert_eq!(state.mode, ClientShellMode::Copy);
+    assert!(state.copy_mode.is_some());
+    assert_eq!(
+        state
+            .copy_mode
+            .as_ref()
+            .map(|copy_mode| copy_mode.cursor.row),
+        Some(19)
+    );
+}
