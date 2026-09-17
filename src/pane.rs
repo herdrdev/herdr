@@ -1596,7 +1596,24 @@ fn pane_shell_from(configured_shell: &str, env_shell: Option<String>) -> String 
 
 #[cfg(windows)]
 fn default_pane_shell() -> String {
-    "powershell.exe".into()
+    default_windows_pane_shell(std::env::var_os("PATH"))
+}
+
+/// Windows has no `$SHELL`, so an unset `[terminal] default_shell` has to name
+/// a concrete executable. `powershell.exe` (5.1) is the only one guaranteed to
+/// exist, but `pwsh` (7+) is what every other Windows terminal prefers when it
+/// is installed. Raise the default to `pwsh.exe` when `PATH` resolves it and
+/// keep the inbox shell as the floor otherwise. An explicit `default_shell`
+/// still wins.
+#[cfg(any(windows, test))]
+fn default_windows_pane_shell(path: Option<std::ffi::OsString>) -> String {
+    let has_pwsh = path
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()));
+    if has_pwsh {
+        "pwsh.exe".into()
+    } else {
+        "powershell.exe".into()
+    }
 }
 
 #[cfg(not(windows))]
@@ -3800,6 +3817,38 @@ mod tests {
             default_pane_shell()
         );
         assert_eq!(pane_shell_from("", None), default_pane_shell());
+    }
+
+    #[test]
+    fn windows_default_pane_shell_prefers_pwsh_on_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-pwsh-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pwsh.exe"), b"").unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+
+        let resolved = default_windows_pane_shell(Some(path));
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(resolved, "pwsh.exe");
+    }
+
+    #[test]
+    fn windows_default_pane_shell_falls_back_to_inbox_powershell() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-windows-default-shell-fallback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+
+        let on_path = default_windows_pane_shell(Some(path));
+
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(on_path, "powershell.exe");
+        assert_eq!(default_windows_pane_shell(None), "powershell.exe");
     }
 
     #[test]
