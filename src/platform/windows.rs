@@ -4488,3 +4488,8 @@ mod tests {
         }
     }
 }
+
+/// Parent-process lookup is not implemented on this platform.
+pub fn parent_process_id(_pid: u32) -> Option<u32> {
+    None
+}

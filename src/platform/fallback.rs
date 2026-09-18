@@ -252,3 +252,8 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
     Ok(false)
 }
+
+/// Parent-process lookup is not implemented on this platform.
+pub fn parent_process_id(_pid: u32) -> Option<u32> {
+    None
+}

@@ -262,6 +262,37 @@ async fn publish_agent_process_detected_event(
     }
 }
 
+/// How often to re-read Kiro's lock files while a Kiro agent occupies a pane.
+/// Kiro writes its lock a few seconds after launch and replaces it when the
+/// user starts a new conversation (`/clear`), so this keeps polling cheaply.
+const KIRO_SESSION_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn publish_kiro_session_discovered(
+    state_events: mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    session_id: String,
+    seq: u64,
+) {
+    let session_ref = crate::agent_resume::AgentSessionRef::id(session_id);
+    if let Err(e) = state_events
+        .send(AppEvent::AgentSessionReported {
+            pane_id,
+            source: crate::kiro_session::SOURCE.to_string(),
+            agent_label: crate::kiro_session::AGENT_LABEL.to_string(),
+            seq: Some(seq),
+            session_ref,
+            session_start_source: Some("startup".to_string()),
+        })
+        .await
+    {
+        warn!(
+            pane = pane_id.raw(),
+            err = %e,
+            "failed to deliver kiro AgentSessionReported event"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPublishUpdate {
     state: AgentState,
@@ -2623,6 +2654,11 @@ impl PaneRuntime {
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                // Hook-free Kiro session discovery: poll Kiro's lock files while
+                // a Kiro agent occupies the pane and report the owning session.
+                let mut next_kiro_session_probe: Option<Instant> = None;
+                let mut reported_kiro_session: Option<String> = None;
+                let mut kiro_session_seq: u64 = 0;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2838,6 +2874,42 @@ impl PaneRuntime {
                     }
 
                     let pid = child_pid.load(Ordering::Acquire);
+
+                    if agent == Some(Agent::Kiro) && pid > 0 {
+                        if next_kiro_session_probe.is_none_or(|at| now >= at) {
+                            next_kiro_session_probe = Some(now + KIRO_SESSION_PROBE_INTERVAL);
+                            let discovered = tokio::task::spawn_blocking(move || {
+                                crate::kiro_session::discover_for_pane(pid)
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            if let Some(lock) = discovered {
+                                if reported_kiro_session.as_deref() != Some(lock.session_id.as_str())
+                                {
+                                    kiro_session_seq += 1;
+                                    info!(
+                                        pane = pane_id.raw(),
+                                        session_id = %lock.session_id,
+                                        owner_pid = lock.owner_pid,
+                                        "discovered kiro session from lock file"
+                                    );
+                                    reported_kiro_session = Some(lock.session_id.clone());
+                                    publish_kiro_session_discovered(
+                                        state_events.clone(),
+                                        pane_id,
+                                        lock.session_id,
+                                        kiro_session_seq,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    } else if agent != Some(Agent::Kiro) {
+                        next_kiro_session_probe = None;
+                        reported_kiro_session = None;
+                    }
+
                     // Keep the terminal restore side effect separate from render notification state.
                     #[allow(clippy::collapsible_if)]
                     if pid > 0 && terminal.maybe_restore_host_terminal_theme(pane_id, pid) {

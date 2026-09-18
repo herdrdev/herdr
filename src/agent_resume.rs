@@ -225,6 +225,19 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:kiro", "kiro", AgentSessionRefKind::Id) => {
+            // kiro's bare `--resume` is a boolean (resume the most recent
+            // conversation for the cwd); the value-taking flag is
+            // `--resume-id <SESSION_ID>`. V3 ids carry a `sess_` prefix and
+            // only resolve on the V3 engine.
+            let mut argv: Vec<String> = vec!["kiro-cli".into(), "chat".into()];
+            if crate::kiro_session::KiroSessionLock::session_id_is_v3(&session_ref.value) {
+                argv.push("--v3".into());
+            }
+            argv.push("--resume-id".into());
+            argv.push(session_ref.value.clone());
+            argv
+        }
         ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
@@ -282,6 +295,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:kiro", "kiro")
             | ("herdr:letta", "letta")
     )
 }
@@ -539,6 +553,26 @@ mod tests {
         );
         assert_eq!(
             plan(
+                "herdr:kiro",
+                "kiro",
+                &AgentSessionRef::id("kiro-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["kiro-cli", "chat", "--resume-id", "kiro-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:kiro",
+                "kiro",
+                &AgentSessionRef::id("sess_kiro-v3-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["kiro-cli", "chat", "--v3", "--resume-id", "sess_kiro-v3-session"]
+        );
+        assert_eq!(
+            plan(
                 "herdr:letta",
                 "letta",
                 &AgentSessionRef::id("conversation-123").unwrap()
@@ -700,6 +734,16 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
+
+        let session_ref =
+            session_ref_from_report("herdr:kiro", "kiro", Some("kiro-id".into()), None).unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "kiro-id");
+        assert!(
+            session_ref_from_report("herdr:kiro", "kiro", None, Some("/tmp/kiro-session".into()))
+                .is_none()
+        );
+        assert!(session_ref_from_report("custom:kiro", "kiro", Some("kiro-id".into()), None).is_none());
     }
 
     #[test]
@@ -853,6 +897,20 @@ mod tests {
             "herdr:antigravity_cli",
             "agy",
             &AgentSessionRef::path(&agy_session).unwrap()
+        )
+        .is_none());
+        assert!(session_ref_from_snapshot(
+            "herdr:kiro",
+            "kiro",
+            AgentSessionRefKind::Id,
+            "kiro-session"
+        )
+        .is_some());
+        let kiro_session = absolute_test_path("kiro-session");
+        assert!(plan(
+            "herdr:kiro",
+            "kiro",
+            &AgentSessionRef::path(&kiro_session).unwrap()
         )
         .is_none());
     }
