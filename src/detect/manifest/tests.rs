@@ -1,5 +1,7 @@
 use super::*;
 
+mod codex_live_status;
+
 fn remote_manifest(version: &str, state: &str, contains: &str) -> String {
     format!(
         r#"
@@ -1318,6 +1320,83 @@ fn codex_screen_working_fallback_handles_activity_labels_and_queued_inputs() {
                 assert!(result.visible_working);
             }
         }
+    }
+}
+
+#[test]
+fn codex_configured_status_fallback_handles_remapped_and_unbound_interrupts() {
+    for status in [
+        "Working (2s • f12 to interrupt)",
+        "• Working (2s • f12 to interrupt)",
+        "◦ Working (2s • f12 to interrupt)",
+        "Working (36s)",
+        "• Working (36s)",
+        "◦ Working (36s)",
+    ] {
+        let screen = format!("{status}\n\n› Ask Codex to do anything\n");
+        let result = osc_explain(Agent::Codex, &screen, "project", "");
+
+        assert_eq!(result.state, AgentState::Working, "{screen}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("screen_working_fallback"),
+            "{screen}"
+        );
+        assert!(result.visible_working);
+    }
+}
+
+#[test]
+fn codex_configured_status_fallback_handles_wrapped_queued_inputs() {
+    for status in [
+        "Working (36s)",
+        "• Working (36s)",
+        "◦ Working (36s)",
+        "Working (2s • f12 to interrupt)",
+        "• Working (2s • f12 to interrupt)",
+        "◦ Working (2s • f12 to interrupt)",
+    ] {
+        for queue in [
+            "• Messages to be submitted after next tool call\n  ↳ Keep waiting.",
+            "• Messages to be submitted after next\n  tool call\n  ↳ Keep waiting.",
+            "• Messages to be submitted after next tool call\n  (press f12 to interrupt and send immediately)\n  ↳ Keep waiting.",
+            "• Messages to be submitted after next\n  tool call (press f12 to interrupt and\n  send immediately)\n  ↳ Keep waiting.",
+            "• Queued follow-up inputs\n  ↳ Keep waiting.\n    alt + ↑ edit last queued message",
+        ] {
+            // A hidden status hint does not hide the pending-input hint. Preserve
+            // the renderer's indentation, including wrapped heading continuations.
+            let screen = format!("{status}\n\n{queue}\n\n› unsent draft\n  second line\n");
+            let result = osc_explain(Agent::Codex, &screen, "project", "");
+
+            assert_eq!(result.state, AgentState::Working, "{screen}");
+            assert_eq!(
+                result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+                Some("screen_working_fallback"),
+                "{screen}"
+            );
+            assert!(result.visible_working);
+        }
+    }
+}
+
+#[test]
+fn codex_configured_status_fallback_rejects_inactive_lookalikes() {
+    for screen in [
+        "  Working (2s • f12 to interrupt)\n› Ask Codex to do anything\n",
+        "  Working (36s)\n› Ask Codex to do anything\n",
+        "Reconnect failed — check the endpoint, then relaunch (5s)\n› Ask Codex to do anything\n",
+        "• Reconnect failed — check the endpoint, then relaunch (5s)\n› Ask Codex to do anything\n",
+        "◦ Reconnect failed — check the endpoint, then relaunch (1m 05s)\n› Ask Codex to do anything\n",
+    ] {
+        let result = osc_explain(Agent::Codex, screen, "project", "");
+
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("osc_title_idle"),
+            "{screen}"
+        );
+        assert!(!result.visible_working);
     }
 }
 
