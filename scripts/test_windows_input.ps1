@@ -29,9 +29,10 @@ $root = [IO.Directory]::CreateDirectory($OutputDirectory).FullName
 $null = Invoke-GauntletProcess $python @($reportScript, 'matrix', '--output', (Join-Path $root 'matrix.json'))
 $matrix = Read-GauntletJson (Join-Path $root 'matrix.json')
 if ($MatrixOnly) { Write-Host "Matrix: $root/matrix.json"; exit 0 }
+$caseSelectionProvided = $PSBoundParameters.ContainsKey('Cases')
 $Cases = @($Cases | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $knownCases = @($matrix.cases | ForEach-Object id)
-if (@($Cases).Count -and @($Cases | Where-Object { $_ -notin $knownCases }).Count) { throw 'Unknown case selection' }
+if (($caseSelectionProvided -and -not @($Cases).Count) -or @($Cases | Where-Object { $_ -notin $knownCases }).Count) { throw 'Unknown case selection' }
 $selectedCases = if (@($Cases).Count) { @($matrix.cases | Where-Object id -in $Cases) } else { @($matrix.cases) }
 if (-not $IsWindows) { throw 'Real-host qualification requires Windows and an interactive desktop; no tests passed' }
 if (-not $AllowInputInjection) { throw 'Read scripts/windows_input/README.md, then explicitly pass -AllowInputInjection on an isolated desktop' }

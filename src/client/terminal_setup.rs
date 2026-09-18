@@ -646,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_native_mouse_capture_never_resets_encoding_after_native_enable() {
+    fn windows_native_mouse_capture_reasserts_final_encoding_after_native_enable() {
         let mut output = SharedOutput::default();
         for sgr_pixels in [false, false, true, false] {
             let start = output.0.borrow().len();
@@ -668,7 +668,7 @@ mod tests {
             let before = std::str::from_utf8(&bytes[start..native_boundary.get()]).unwrap();
             let after = std::str::from_utf8(&bytes[native_boundary.get()..]).unwrap();
             assert!(!before.contains("\x1b[?1016l"));
-            for reset in ["\x1b[?1005l", "\x1b[?1006l", "\x1b[?1016l"] {
+            for reset in ["\x1b[?1005l", "\x1b[?1006l"] {
                 assert!(
                     !after.contains(reset),
                     "mouse format reset after native capture (sgr_pixels={sgr_pixels}): {after:?}"
@@ -676,6 +676,9 @@ mod tests {
             }
             assert!(after.contains("\x1b[?1003h\x1b[?1006h"));
             assert_eq!(after.contains("\x1b[?1016h"), sgr_pixels);
+            if !sgr_pixels {
+                assert!(after.starts_with("\x1b[?1016l"));
+            }
         }
     }
 
