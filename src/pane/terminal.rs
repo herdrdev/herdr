@@ -4425,9 +4425,16 @@ mod tests {
 
         let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?2026l", &tx);
         assert!(result.request_render);
-        assert!(!pane.core.lock().unwrap().cursor_settle_state.pending());
+        assert_eq!(result.render_delay, Some(CURSOR_POSITION_SETTLE));
+        assert!(pane.core.lock().unwrap().cursor_settle_state.pending());
+        assert_eq!(pane.cursor_state(), Some(previous));
+
+        // ConPTY may restore the real caret after the synchronized frame closes.
+        let mut core = pane.core.lock().unwrap();
+        let current = current_cursor_state(&mut core);
         assert_eq!(
-            pane.cursor_state(),
+            core.cursor_settle_state
+                .reported_cursor(current, Instant::now() + CURSOR_POSITION_SETTLE),
             Some(TerminalCursorState { x: 4, ..previous })
         );
     }
