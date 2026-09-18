@@ -91,14 +91,32 @@ pub(crate) struct CursorPositionSettleState {
     candidate: Option<TerminalCursorState>,
     pending_since: Option<Instant>,
     candidate_since: Option<Instant>,
+    /// True when this candidate jumped away from the settled caret (a different
+    /// row, or a large same-row column move).
+    ///
+    /// Those are the shape of a redraw parking the cursor on a temporary cell,
+    /// so they are held for the max window before being shown. Ordinary caret
+    /// steps are small and same-row, and settle on the normal window.
+    candidate_jump: bool,
+    /// When the last position was observed. A gap longer than the settle window
+    /// ends the write burst, so churn accounting must restart for the next one.
+    last_observed: Option<Instant>,
 }
 
 impl CursorPositionSettleState {
     pub(crate) fn observe(&mut self, current: Option<TerminalCursorState>, now: Instant) {
-        // A quiet candidate was already eligible for display. Preserve it before
-        // considering the first (possibly temporary) position of a later redraw.
+        // A gap longer than the settle window means the previous write burst
+        // ended. The position from a later burst is a fresh sample, so the max
+        // hold must not treat it as the tail of earlier churn and adopt it.
+        let resumed_after_quiet = self
+            .last_observed
+            .is_some_and(|last| now.duration_since(last) >= CURSOR_POSITION_SETTLE);
+        self.last_observed = Some(now);
+        // A candidate that stayed quiet for its hold window is real, so preserve
+        // it before considering the first (possibly temporary) position of a
+        // later redraw.
         if let (Some(candidate), Some(since)) = (self.candidate, self.candidate_since) {
-            if now.duration_since(since) >= CURSOR_POSITION_SETTLE {
+            if now.duration_since(since) >= self.candidate_hold() {
                 self.settle(Some(candidate));
             }
         }
@@ -123,8 +141,19 @@ impl CursorPositionSettleState {
             self.candidate = Some(current);
             self.pending_since = Some(now);
             self.candidate_since = Some(now);
+            self.candidate_jump = is_jump(settled, current);
             return;
         };
+
+        if resumed_after_quiet {
+            // The previous burst finished, so start a fresh hold for this burst
+            // instead of letting the old churn window adopt a lone sample.
+            self.candidate = Some(current);
+            self.pending_since = Some(now);
+            self.candidate_since = Some(now);
+            self.candidate_jump = is_jump(settled, current);
+            return;
+        }
 
         let pending_since = self.pending_since.unwrap_or(now);
         if now.duration_since(pending_since) >= CURSOR_POSITION_MAX_HOLD {
@@ -132,6 +161,7 @@ impl CursorPositionSettleState {
         } else {
             if !same_cursor_position(candidate, current) {
                 self.candidate_since = Some(now);
+                self.candidate_jump = is_jump(settled, current);
             }
             self.candidate = Some(current);
         }
@@ -148,7 +178,10 @@ impl CursorPositionSettleState {
         };
         let candidate_since = self.candidate_since.unwrap_or(now);
         let pending_since = self.pending_since.unwrap_or(now);
-        if now.duration_since(candidate_since) >= CURSOR_POSITION_SETTLE
+        // A jump-shaped candidate is treated as a redraw park until proven
+        // otherwise, so it waits for the max window. An ordinary caret step only
+        // waits the normal settle window; the max hold bounds either case.
+        if now.duration_since(candidate_since) >= self.candidate_hold()
             || now.duration_since(pending_since) >= CURSOR_POSITION_MAX_HOLD
         {
             return Some(TerminalCursorState {
@@ -174,6 +207,14 @@ impl CursorPositionSettleState {
         self.candidate.is_some()
     }
 
+    fn candidate_hold(&self) -> Duration {
+        if self.candidate_jump {
+            CURSOR_POSITION_MAX_HOLD
+        } else {
+            CURSOR_POSITION_SETTLE
+        }
+    }
+
     fn settle(&mut self, cursor: Option<TerminalCursorState>) {
         *self = Self {
             settled: cursor,
@@ -184,6 +225,12 @@ impl CursorPositionSettleState {
 
 fn same_cursor_position(left: TerminalCursorState, right: TerminalCursorState) -> bool {
     left.x == right.x && left.y == right.y
+}
+
+/// A cursor move that changes row, or jumps more than a couple of columns, is
+/// the shape of a redraw parking the cursor rather than an ordinary caret step.
+fn is_jump(settled: TerminalCursorState, current: TerminalCursorState) -> bool {
+    current.y != settled.y || current.x.abs_diff(settled.x) > 2
 }
 
 #[cfg(test)]
@@ -397,6 +444,48 @@ mod tests {
         assert_eq!(
             settle.reported_cursor(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(4)),
             Some(cursor(1, 0, false, 0))
+        );
+    }
+
+    #[test]
+    fn cursor_settle_does_not_publish_a_jump_before_the_max_hold() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let caret = cursor(2, 26, true, 0);
+        let park = cursor(0, 25, true, 0);
+        settle.observe(Some(caret), now);
+
+        // A transition redraw parks the cursor on a cell above the composer and
+        // restores the caret in a later write, more than one settle window away.
+        // The park must not be published in the meantime.
+        settle.observe(Some(park), now + Duration::from_millis(1));
+        assert_eq!(
+            settle.reported_cursor(
+                Some(park),
+                now + CURSOR_POSITION_SETTLE + Duration::from_millis(1)
+            ),
+            Some(caret)
+        );
+        assert_eq!(
+            settle.reported_cursor(Some(park), now + Duration::from_millis(70)),
+            Some(caret)
+        );
+
+        // An ordinary same-row caret step still settles on the normal window.
+        settle.observe(
+            Some(cursor(3, 26, true, 0)),
+            now + Duration::from_millis(80),
+        );
+        settle.observe(
+            Some(cursor(4, 26, true, 0)),
+            now + Duration::from_millis(81),
+        );
+        assert_eq!(
+            settle.reported_cursor(
+                Some(cursor(4, 26, true, 0)),
+                now + CURSOR_POSITION_SETTLE + Duration::from_millis(82)
+            ),
+            Some(cursor(4, 26, true, 0))
         );
     }
 }
