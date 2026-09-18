@@ -152,8 +152,18 @@ impl EndpointRegistry {
         negotiation: EndpointNegotiation,
         surface_active: bool,
     ) {
-        let health = (!endpoint_id.is_local() && negotiation.supports_health_check())
-            .then(|| EndpointHealth::new(Instant::now()));
+        // Remote endpoints are always probed (their heartbeat is the only thing that
+        // notices a silent hang). The Local endpoint is now probed too, but only when it
+        // is a functional shell connection: a shell client negotiates the surface
+        // protocol (and therefore the health capability), while a no-shell terminal
+        // attach client sends a plain `TerminalHello`, negotiates nothing, and would
+        // otherwise false-expire the moment the 10 s initial-snapshot deadline passes.
+        // Gating on `supports_surface_interest()` means exactly "this is a shell
+        // connection that can actually be wedged", so the ANR fix applies without
+        // regressing the shell-less attach mode.
+        let health_enabled = negotiation.supports_health_check()
+            && (!endpoint_id.is_local() || negotiation.supports_surface_interest());
+        let health = health_enabled.then(|| EndpointHealth::new(Instant::now()));
         if let Some(mut previous) = self.connections.insert(
             endpoint_id,
             EndpointConnection {
@@ -473,7 +483,11 @@ mod tests {
     }
 
     #[test]
-    fn recovered_local_uses_transport_failure_not_remote_health_probes() {
+    fn local_shell_connection_is_probed_and_expires_when_silent() {
+        // A shell connection to the Local endpoint now carries health, exactly like a
+        // remote one: a silent-but-alive local server must surface as a disconnect.
+        // This is the macOS ANR fix — previously Local was never probed, so a wedged
+        // local server hung the client forever with no liveness signal.
         let mut registry = EndpointRegistry::empty();
         let sent = Arc::new(Mutex::new(Vec::new()));
         registry.insert(
@@ -484,6 +498,49 @@ mod tests {
             },
             2,
             negotiation(),
+            false,
+        );
+        let now = Instant::now();
+        registry.tick_health(now + super::super::health::HEARTBEAT_INTERVAL);
+        assert!(matches!(
+            sent.lock().unwrap().as_slice(),
+            [ClientMessage::EndpointControl { kind, .. }]
+                if kind == crate::protocol::endpoint::HEALTH_PING_KIND
+        ));
+
+        registry.tick_health(
+            now + super::super::health::HEARTBEAT_INTERVAL
+                + super::super::health::HEARTBEAT_TIMEOUT,
+        );
+        assert!(registry.connection(&ClientEndpointId::Local).is_none());
+        let failures = registry.take_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].endpoint_id, ClientEndpointId::Local);
+        assert_eq!(failures[0].kind, io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn local_terminal_attach_without_surface_interest_is_not_probed() {
+        // Regression guard: a no-shell terminal-attach client negotiates a plain
+        // `TerminalHello` — no surface protocol. It never receives a `ClientShellSnapshot`,
+        // so `mark_ready` is never called. Probing it would false-expire a perfectly
+        // healthy idle attach at the 10 s initial-snapshot deadline. The gate keys health
+        // on `supports_surface_interest()`, so a connection that supports health checks
+        // but is *not* a shell surface is left unprobed (unchanged behavior).
+        let mut registry = EndpointRegistry::empty();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let health_only = EndpointNegotiation::new(
+            Vec::new(),
+            vec![crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY.into()],
+        );
+        registry.insert(
+            ClientEndpointId::Local,
+            FakeTransport {
+                sent: sent.clone(),
+                error: None,
+            },
+            2,
+            health_only,
             false,
         );
         registry.tick_health(Instant::now() + std::time::Duration::from_secs(300));

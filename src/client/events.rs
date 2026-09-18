@@ -31,4 +31,6 @@ pub(super) enum ClientLoopEvent {
         force: bool,
     },
     Timer,
+    /// Termination wake: lets the event loop exit even while parked on the timer.
+    Quit,
 }

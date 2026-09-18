@@ -10,6 +10,9 @@ use super::{
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
+/// Default render/presentation pacing interval in milliseconds. This is the
+/// single source of the 16 ms pacing default previously hard-coded in the app.
+pub const DEFAULT_RENDER_INTERVAL_MS: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -973,6 +976,10 @@ pub struct UiConfig {
     pub toast: ToastConfig,
     /// Play sounds when agents change state in background workspaces.
     pub sound: SoundConfig,
+    /// Minimum interval between server render/presentation attempts (milliseconds).
+    /// Bounds the cadence of the headless render loop; larger values cut host CPU.
+    /// Default: `DEFAULT_RENDER_INTERVAL_MS` (16). Values below 1 are clamped to 1.
+    pub render_interval_ms: u32,
     /// Most-recent-first list of remote-mount targets ("user@host") that
     /// mounted successfully, capped at 5. TUI presentation/convenience state
     /// for the mount-remote-workspace dialog's recents list — not a shared
@@ -1209,6 +1216,7 @@ impl Default for UiConfig {
             accent: "cyan".into(),
             toast: ToastConfig::default(),
             sound: SoundConfig::default(),
+            render_interval_ms: DEFAULT_RENDER_INTERVAL_MS,
             recent_remote_mount_targets: Vec::new(),
         }
     }
@@ -1223,6 +1231,12 @@ impl UiConfig {
 
     pub fn right_click_passthrough_modifiers(&self) -> Option<KeyModifiers> {
         self.right_click_passthrough_modifier.modifiers()
+    }
+
+    /// The render/presentation pacing interval, clamped to at least 1 ms so a
+    /// malformed or zero config can never produce a zero-duration (busy) render loop.
+    pub fn render_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.render_interval_ms.max(1).into())
     }
 }
 
@@ -1360,6 +1374,28 @@ manifest_check = false
             without_update_channel.update.channel,
             default_update_channel()
         );
+    }
+
+    #[test]
+    fn render_interval_ms_defaults_parses_and_clamps() {
+        assert_eq!(
+            Config::default().ui.render_interval_ms,
+            DEFAULT_RENDER_INTERVAL_MS
+        );
+
+        let config: Config = toml::from_str("[ui]\nrender_interval_ms = 50").unwrap();
+        assert_eq!(config.ui.render_interval_ms, 50);
+        assert_eq!(config.ui.render_interval(), std::time::Duration::from_millis(50));
+
+        let clamped: Config = toml::from_str("[ui]\nrender_interval_ms = 0").unwrap();
+        assert_eq!(clamped.ui.render_interval_ms, 0);
+        assert_eq!(
+            clamped.ui.render_interval(),
+            std::time::Duration::from_millis(1)
+        );
+
+        let missing: Config = toml::from_str("[ui]\naccent = \"blue\"").unwrap();
+        assert_eq!(missing.ui.render_interval_ms, DEFAULT_RENDER_INTERVAL_MS);
     }
 
     #[test]

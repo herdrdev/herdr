@@ -296,12 +296,20 @@ fn run_client_with_mode(
         .map_err(io::Error::other)?;
 
     let should_quit = Arc::new(AtomicBool::new(false));
+    // Termination wake: the ctrlc handler runs on a separate signal thread outside
+    // the tokio runtime, so it cannot send into the loop's channels. A `Notify` can
+    // be signaled from any thread, and its `notified()` future is polled as an arm of
+    // the loop's `select!` — so Ctrl-C un-parks the loop even when it is sleeping on
+    // a far/stale timer deadline (the macOS ANR condition).
+    let quit_notify = Arc::new(tokio::sync::Notify::new());
 
     // ctrlc's "termination" feature also catches SIGTERM/SIGHUP so direct
     // termination signals still run the quit path and TerminalGuard::Drop.
     let quit_flag = should_quit.clone();
+    let quit_notify_handler = quit_notify.clone();
     if let Err(err) = ctrlc::set_handler(move || {
         quit_flag.store(true, Ordering::Release);
+        quit_notify_handler.notify_one();
     }) {
         warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
     }
@@ -316,6 +324,7 @@ fn run_client_with_mode(
             cell_height_px,
             exact_cell_size,
             should_quit,
+            quit_notify,
             loop_config,
             attach_escape,
         )
@@ -366,6 +375,7 @@ async fn run_client_loop(
     initial_cell_height_px: u32,
     initial_pixel_geometry_exact: bool,
     should_quit: Arc<AtomicBool>,
+    quit_notify: Arc<tokio::sync::Notify>,
     config: ClientLoopConfig,
     attach_escape: Option<AttachEscapeState>,
 ) -> Result<(), ClientError> {
@@ -690,6 +700,7 @@ async fn run_client_loop(
             event
         } else {
             tokio::select! {
+                _ = quit_notify.notified() => ClientLoopEvent::Quit,
                 _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
                 ev = stdin_rx.recv(), if stdin_open => match ev {
                     Some(event) => event,
@@ -708,6 +719,7 @@ async fn run_client_loop(
         } else {
             tokio::select! {
                 biased;
+                _ = quit_notify.notified() => ClientLoopEvent::Quit,
                 _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
                 ev = supervisor_rx.recv() => ev.map(ClientLoopEvent::EndpointSupervisor).unwrap_or(ClientLoopEvent::Timer),
                 ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
@@ -1943,6 +1955,14 @@ async fn run_client_loop(
                     &endpoint_id,
                     io::Error::new(io::ErrorKind::UnexpectedEof, "connection was lost"),
                 );
+            }
+            ClientLoopEvent::Quit => {
+                // The termination wake fired while we were parked on the timer.
+                // Set the shared flag and let the loop exit through the normal
+                // `while !should_quit` head check so the existing shutdown path
+                // (Detach + terminal restore) still runs.
+                should_quit.store(true, Ordering::Release);
+                continue;
             }
             ClientLoopEvent::Timer => {
                 client_timer.fired();

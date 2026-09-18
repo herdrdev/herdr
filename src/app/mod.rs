@@ -37,7 +37,6 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -149,6 +148,9 @@ pub struct App {
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
     window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
+    /// Configured render/presentation pacing interval (`ui.render_interval_ms`),
+    /// defaulting to `config::DEFAULT_RENDER_INTERVAL_MS`. Reloadeable from config.
+    pub(crate) render_interval: Duration,
     /// Last render-loop attempt, including a throttled hidden-only PTY skip.
     pub(crate) last_render_at: Option<Instant>,
     /// Last attempt that could update a connected presentation surface.
@@ -769,6 +771,7 @@ impl App {
             next_tab_bar_datetime_refresh: None,
             window_title_template: None,
             persist_pane_history: config.experimental.pane_history,
+            render_interval: config.ui.render_interval(),
             last_render_at: None,
             last_presentation_at: None,
             api_rx,
@@ -1032,6 +1035,7 @@ impl App {
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.sound = config.ui.sound.clone();
+                self.render_interval = config.ui.render_interval();
                 self.state.toast_config = config.ui.toast.clone();
                 self.state.recent_remote_mount_targets = dedup_capped_recent_remote_mount_targets(
                     &config.ui.recent_remote_mount_targets,
