@@ -51,6 +51,16 @@ The full catalogue normally exits `2` because operator-assisted and explicitly
 unimplemented qualification cases remain. That is incomplete coverage, not an
 automated test failure; inspect the printed matrix and retained `report.json`.
 
+### Expected outcome
+
+A healthy run builds and identifies the current checkout, reaches the result
+matrix, and reports no `FAIL` rows or cleanup errors. The default Herdr column
+should identify itself as `Win32 (Herdr)*` from captured runtime evidence. A full
+run may still exit `2` and show `MANUAL`, `NOT TESTED`, or a documented host
+capability limitation when a terminal channel, physical gesture, or oracle is
+unavailable. A focused campaign exits `0` when every selected observation passes;
+exit `1` means an assertion, harness, or cleanup failure and needs investigation.
+
 The recipe itself is the explicit opt-in to foreground input injection. It builds
 the current checkout in release mode, stages that exact binary with the pinned
 ConPTY runtime, and prints its path and hash. Use `-ExePath` only to compare a
