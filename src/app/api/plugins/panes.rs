@@ -144,7 +144,7 @@ impl App {
                 )
             }
         };
-        if params.focus || placement == PluginPanePlacement::Zoomed {
+        if crate::api::schema::plugin_pane_forces_focus(params.focus, placement) {
             self.state.switch_workspace_tab(ws_idx, tab_idx);
             self.state
                 .record_pane_focus_change(previous_focus, ws_idx, new_pane.pane_id);

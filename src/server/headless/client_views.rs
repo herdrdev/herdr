@@ -232,6 +232,7 @@ impl HeadlessServer {
                 | Method::PaneEditScrollback(_)
                 | Method::PaneMove(_)
                 | Method::PaneSplit(_)
+                | Method::PluginPaneOpen(_)
                 | Method::TabClose(_)
                 | Method::TabCreate(_)
                 | Method::WorkspaceClose(_)
@@ -265,6 +266,7 @@ impl HeadlessServer {
                 | Method::PaneSplit(_)
                 | Method::PaneSwap(_)
                 | Method::PaneZoom(_)
+                | Method::PluginPaneOpen(_)
                 | Method::TabClose(_)
                 | Method::TabCreate(_)
                 | Method::TabFocus(_)
@@ -298,6 +300,7 @@ impl HeadlessServer {
                 | Method::PaneSplit(_)
                 | Method::PaneSwap(_)
                 | Method::PaneZoom(_)
+                | Method::PluginPaneOpen(_)
                 | Method::TabClose(_)
                 | Method::TabCreate(_)
                 | Method::TabFocus(_)
@@ -848,6 +851,12 @@ impl HeadlessServer {
         let create_focus_requested = match &msg.request.method {
             api::schema::Method::WorkspaceCreate(params) => params.focus,
             api::schema::Method::TabCreate(params) => params.focus,
+            api::schema::Method::PluginPaneOpen(params) => api::schema::plugin_pane_forces_focus(
+                params.focus,
+                params
+                    .placement
+                    .unwrap_or(api::schema::PluginPanePlacement::Split),
+            ),
             _ => false,
         };
         let inspect_worktree_open = matches!(

@@ -2348,6 +2348,150 @@ async fn public_background_tab_create_preserves_client_locations() {
     shutdown_test_runtimes(&mut server);
 }
 
+fn plugin_tab_server() -> HeadlessServer {
+    let mut server = test_headless_server();
+    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-tab")];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.installed_plugins.insert(
+        "example.tabtest".into(),
+        crate::api::schema::InstalledPluginInfo {
+            plugin_id: "example.tabtest".into(),
+            name: "Tab Test".into(),
+            version: "0.1.0".into(),
+            min_herdr_version: String::new(),
+            description: None,
+            manifest_path: std::env::temp_dir()
+                .join("herdr-plugin.toml")
+                .display()
+                .to_string(),
+            plugin_root: std::env::temp_dir().display().to_string(),
+            enabled: true,
+            platforms: None,
+            build: Vec::new(),
+            startup: Vec::new(),
+            actions: Vec::new(),
+            events: Vec::new(),
+            panes: vec![crate::api::schema::PluginManifestPane {
+                id: "tab".into(),
+                title: "Tab Test Pane".into(),
+                description: None,
+                platforms: None,
+                placement: crate::api::schema::PluginPanePlacement::Tab,
+                width: None,
+                height: None,
+                command: vec![crate::app::exiting_test_command().into()],
+            }],
+            link_handlers: Vec::new(),
+            source: crate::api::schema::PluginSourceInfo::default(),
+            warnings: Vec::new(),
+        },
+    );
+    server
+}
+
+fn public_plugin_open(
+    server: &mut HeadlessServer,
+    placement: Option<crate::api::schema::PluginPanePlacement>,
+    focus: bool,
+) -> crate::api::schema::PluginPaneInfo {
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+        request: crate::api::schema::Request {
+            id: "plugin-tab-open".into(),
+            method: crate::api::schema::Method::PluginPaneOpen(
+                crate::api::schema::PluginPaneOpenParams {
+                    plugin_id: "example.tabtest".into(),
+                    entrypoint: "tab".into(),
+                    placement,
+                    width: None,
+                    height: None,
+                    workspace_id: None,
+                    target_pane_id: None,
+                    direction: None,
+                    cwd: None,
+                    focus,
+                    env: std::collections::HashMap::new(),
+                },
+            ),
+        },
+        respond_to,
+        response_write_complete: None,
+        stream_active: None,
+    });
+    let response = response_rx.recv().expect("plugin pane open response");
+    let success =
+        serde_json::from_str::<crate::api::schema::SuccessResponse>(&response).expect("success");
+    let crate::api::schema::ResponseResult::PluginPaneOpened { plugin_pane } = success.result
+    else {
+        panic!(
+            "expected plugin pane opened response, got {:?}",
+            success.result
+        );
+    };
+    plugin_pane
+}
+
+fn client_focused_tab(server: &HeadlessServer, client_id: u64) -> Option<String> {
+    server.clients[&client_id]
+        .shell_location
+        .as_ref()
+        .unwrap()
+        .focused_tab_id()
+        .map(String::from)
+}
+
+#[tokio::test]
+async fn public_plugin_pane_open_in_tab_with_focus_moves_attached_client() {
+    let mut server = plugin_tab_server();
+    let initial_tab = server.app.public_tab_id(0, 0).unwrap();
+    let (_control_rx, _render_rx) = connect_test_shell(&mut server, 9, 80, 23);
+    assert_eq!(
+        client_focused_tab(&server, 9),
+        Some(initial_tab.clone()),
+        "client starts on the initial tab"
+    );
+
+    let opened = public_plugin_open(
+        &mut server,
+        Some(crate::api::schema::PluginPanePlacement::Tab),
+        true,
+    );
+    assert_ne!(opened.pane.tab_id, initial_tab);
+    assert_eq!(server.app.state.workspaces[0].active_tab, 1);
+    assert_eq!(
+        client_focused_tab(&server, 9),
+        Some(opened.pane.tab_id.clone()),
+        "a successful focused panel open in a new tab must move the attached client"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn public_plugin_pane_open_in_tab_without_focus_preserves_client_view() {
+    let mut server = plugin_tab_server();
+    let initial_tab = server.app.public_tab_id(0, 0).unwrap();
+    let (_control_rx, _render_rx) = connect_test_shell(&mut server, 9, 80, 23);
+
+    public_plugin_open(
+        &mut server,
+        Some(crate::api::schema::PluginPanePlacement::Tab),
+        false,
+    );
+    assert_eq!(
+        server.app.state.workspaces[0].active_tab, 0,
+        "a no-focus tab open must not switch the server tab"
+    );
+    assert_eq!(
+        client_focused_tab(&server, 9),
+        Some(initial_tab),
+        "a no-focus plugin pane open must not move the attached client"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
 #[tokio::test]
 async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
     let mut server = test_headless_server();

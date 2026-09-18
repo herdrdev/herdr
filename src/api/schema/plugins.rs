@@ -188,6 +188,10 @@ pub(crate) fn has_windows_reserved_stem_for_path_component(value: &str) -> bool 
     )
 }
 
+pub(crate) fn plugin_pane_forces_focus(focus: bool, placement: PluginPanePlacement) -> bool {
+    focus || placement == PluginPanePlacement::Zoomed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +227,21 @@ mod tests {
             plugin_managed_path_component("example:a"),
             plugin_managed_path_component("example/a")
         );
+    }
+
+    #[test]
+    fn plugin_pane_forces_focus_only_on_flag_or_zoomed() {
+        for placement in [
+            PluginPanePlacement::Overlay,
+            PluginPanePlacement::Popup,
+            PluginPanePlacement::Split,
+            PluginPanePlacement::Tab,
+        ] {
+            assert!(!plugin_pane_forces_focus(false, placement));
+            assert!(plugin_pane_forces_focus(true, placement));
+        }
+        assert!(plugin_pane_forces_focus(false, PluginPanePlacement::Zoomed));
+        assert!(plugin_pane_forces_focus(true, PluginPanePlacement::Zoomed));
     }
 }
 
