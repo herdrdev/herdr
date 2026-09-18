@@ -7,6 +7,8 @@ Keep your local work and remote agents in one Herdr window. Save an SSH machine 
 
 Each machine keeps its own Herdr server, sessions, and running processes. A lost connection to one machine does not disconnect the others.
 
+Herdr requests SSH compression to reduce screen-update traffic on limited connections. This works with older compatible Herdr servers and does not change how typing or other input is delivered. Herdr's `-C` option overrides `Compression no` in your SSH config. If SSH reuses an existing connection through an external ControlMaster, that connection keeps its original compression setting.
+
 ## Before you connect
 
 You need normal SSH access to the remote machine. Verify it first:
