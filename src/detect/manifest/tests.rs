@@ -725,6 +725,123 @@ fn osc_explain(
     )
 }
 
+#[test]
+fn grok_osc_activity_does_not_depend_on_configurable_title_text() {
+    for (title, progress, expected_state, expected_rule) in [
+        (
+            "project · session · id",
+            "4;0;0",
+            AgentState::Idle,
+            "osc_progress_idle",
+        ),
+        (
+            "project · session · id",
+            "",
+            AgentState::Idle,
+            "prompt_hints_idle",
+        ),
+        ("grok", "", AgentState::Idle, "osc_title_idle"),
+        (
+            "⠋ - Waiting for response… - project",
+            "",
+            AgentState::Working,
+            "osc_title_working",
+        ),
+        (
+            "project - ⠹ - session",
+            "4;0;0",
+            AgentState::Working,
+            "osc_title_working",
+        ),
+        (
+            "project · session · id",
+            "4;1;-1",
+            AgentState::Working,
+            "osc_progress_working",
+        ),
+        (
+            "grok",
+            "4;1;-1",
+            AgentState::Working,
+            "osc_progress_working",
+        ),
+        (
+            "⚠ Action Required - project",
+            "4;1;-1",
+            AgentState::Blocked,
+            "osc_title_blocked",
+        ),
+    ] {
+        let result = osc_explain(
+            Agent::Grok,
+            "Shift+Tab:mode │ Ctrl+.:shortcuts\n",
+            title,
+            progress,
+        );
+        assert_eq!(
+            result.state, expected_state,
+            "title={title}, progress={progress}"
+        );
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some(expected_rule),
+            "title={title}, progress={progress}",
+        );
+    }
+}
+
+#[test]
+fn grok_visible_activity_outranks_idle_osc_signals() {
+    for (screen, expected_rule) in [
+        (
+            "⠴ Sleep for 8 … 1.9s 5.0s ⇣19.5k [↓][stop]\n",
+            "spinner_status_working",
+        ),
+        (
+            "Shift+Tab:mode │ Ctrl+c:cancel │ Ctrl+.:shortcuts\n",
+            "esc_cancel_hints_working",
+        ),
+        (
+            "Shift+Tab:mode │ Esc:cancel │ Ctrl+.:shortcuts\n",
+            "esc_cancel_hints_working",
+        ),
+        ("◎ 1 command still running\n", "background_status_working"),
+        ("○ 1 command still running\n", "background_status_working"),
+        ("◉ 1 command still running\n", "background_status_working"),
+        (
+            "◎ 2 commands · 1 subagent still running · send a message to interrupt\n",
+            "background_status_working",
+        ),
+    ] {
+        for progress in ["", "4;0;0"] {
+            let result = osc_explain(Agent::Grok, screen, "grok", progress);
+            assert_eq!(result.state, AgentState::Working, "screen={screen}");
+            assert_eq!(
+                result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+                Some(expected_rule)
+            );
+        }
+        let blocked = osc_explain(Agent::Grok, screen, "⚠ Action Required - grok", "4;1;-1");
+        assert_eq!(blocked.state, AgentState::Blocked);
+    }
+}
+
+#[test]
+fn grok_background_activity_requires_a_live_nonzero_status_row() {
+    for screen in [
+        "1 command still running\n",
+        "◎ 0 commands still running\n",
+        "Discussed: ◎ 1 command still running\n",
+        "◎ 1 command still running\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n",
+        "Worked for 3.9s\nShift+Tab:mode │ Ctrl+.:shortcuts\n",
+    ] {
+        assert_eq!(
+            osc_explain(Agent::Grok, screen, "project · session", "4;0;0").state,
+            AgentState::Idle
+        );
+    }
+}
+
 // --- Claude OSC rules ---
 
 #[test]

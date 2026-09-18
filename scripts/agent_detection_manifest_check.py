@@ -58,9 +58,9 @@ MAX_MATCHER_CHARS = 512
 # publishes the bundled Grok manifest.
 STAGED_PUBLISHED_MANIFESTS = {
     "grok": (
-        "2026.07.16.2",
-        "2026.07.16.1",
-        "1f35b3271a96cf830c64bed78751619bfd8013c277c0d7c0f999b7a433895f28",
+        "2026.09.18.2",
+        "2026.09.18.1",
+        "0f31b111144900b02f303577d27587f72d58d8c505185a682bd7887f822316ee",
     ),
 }
 
