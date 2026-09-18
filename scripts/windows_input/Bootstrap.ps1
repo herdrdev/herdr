@@ -14,7 +14,7 @@ Add-Type -Path "$PSScriptRoot/Native.cs"
 $before = [HerdrInputGauntlet.ConsoleProbe]::Geometry()
 $child = $null
 try {
-    if ($plan.path -eq 'herdr') {
+    if ($plan.path -in @('herdr', 'herdr-remote')) {
         $child = New-GauntletProcess $plan.exe @('--session', $plan.session) $plan
     } else {
         $child = New-GauntletProcess $plan.pwsh @('-NoProfile', '-File', "$PSScriptRoot/Probe.ps1", '-PlanPath', $PlanPath) $plan
@@ -38,12 +38,6 @@ try {
             if (-not $child.WaitForExit(5000)) { $cleanup += 'Child remained active after forced termination' }
         }
         $child.Dispose()
-    }
-    if ($plan.path -eq 'herdr') {
-        foreach ($verb in @('stop', 'delete')) {
-            try { $null = Invoke-GauntletProcess $plan.exe @('session', $verb, $plan.session) $plan }
-            catch { $cleanup += $_.ToString() }
-        }
     }
     Write-GauntletJson (Join-Path $plan.work 'bootstrap-exit.json') @{
         nonce = $plan.nonce; before = $before; after = [HerdrInputGauntlet.ConsoleProbe]::Geometry(); cleanup_errors = $cleanup

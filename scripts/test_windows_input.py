@@ -89,6 +89,18 @@ class WindowsInputGauntletTests(unittest.TestCase):
                                (b"\x1b[200~\xff\x1b[201~", "fail")]:
             self.assertEqual(verdict(case, "kitty", {**self.evidence, "hex": data.hex()})[0], expected)
 
+    def test_remote_clipboard_image_requires_empty_host_paste_and_staged_png_path(self):
+        case = self.cases["clipboard-image"]
+        empty_paste = b"\x1b[200~\x1b[201~"
+        staged = b"\x1b[200~C:\\Temp\\herdr-clipboard-images-user\\image.png\x1b[201~"
+        self.assertEqual(verdict(case, "legacy", {**self.evidence, "path": "direct", "hex": empty_paste.hex()})[0], "pass")
+        remote = {**self.evidence, "path": "herdr-remote", "hex": staged.hex(),
+                  "staged_image_sha256": case["expected"]["legacy"]["sha256"]}
+        self.assertEqual(verdict(case, "legacy", remote)[0], "pass")
+        self.assertEqual(verdict(case, "legacy", {**remote, "staged_image_sha256": "0" * 64})[0], "fail")
+        self.assertEqual(verdict(case, "legacy", {**self.evidence, "path": "herdr-remote", "hex": empty_paste.hex()})[0], "fail")
+        self.assertEqual(verdict(case, "legacy", {**self.evidence, "path": "herdr", "hex": empty_paste.hex()})[0], "not_run")
+
     def test_mouse_interleave_requires_ordered_motion_and_paste(self):
         case = self.cases["mouse-interleave"]
         motion = b"\x1b[<35;10;5M"

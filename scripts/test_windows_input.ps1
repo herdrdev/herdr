@@ -11,7 +11,7 @@ param(
     [ValidateSet('default', 'win32', 'vt')][string] $Profile = 'default',
     [ValidateSet('native', 'legacy', 'mok2', 'kitty')][string[]] $Modes = @('native', 'legacy', 'mok2', 'kitty'),
     [ValidateSet('stable', 'preview')][string[]] $Channels = @('stable', 'preview'),
-    [ValidateSet('direct', 'herdr')][string[]] $Paths = @('direct', 'herdr'),
+    [ValidateSet('direct', 'herdr', 'herdr-remote')][string[]] $Paths = @('direct', 'herdr'),
     [string[]] $Cases,
     [int[]] $Widths = @(80, 119, 120, 121, 132, 160, 240),
     [int[]] $Heights = @(24, 50),
@@ -172,7 +172,7 @@ try {
             $cursorPosition = $null; $mouseReporting = $false
             Update-GauntletLease $root
             try {
-                if ($path -eq 'herdr') {
+                if ($path -in @('herdr', 'herdr-remote')) {
                     $server = New-GauntletProcess $exe @('--session', $nonce, 'server') $plan -Capture
                     # Drain pipes asynchronously; server output must never block readiness.
                     $serverOut = $server.StandardOutput.ReadToEndAsync(); $serverErr = $server.StandardError.ReadToEndAsync()
@@ -267,11 +267,11 @@ try {
                         $row.outer_sequence = $fresh.sequence
                         $row.negotiation_hex = $ready.negotiation_hex
                         if ($mode -eq 'kitty' -and -not $ready.kitty_acknowledged) { $row.status = 'inconclusive'; $row.reason = 'Kitty disambiguation query not acknowledged; host support is not established'; continue }
-                        if ($case.kind -in @('paste', 'mouse-interleave') -and [HerdrInputGauntlet.Desktop]::CountClipboardFormats() -ne 0) {
+                        if ($case.kind -in @('paste', 'mouse-interleave', 'clipboard-image', 'clipboard-mixed') -and [HerdrInputGauntlet.Desktop]::CountClipboardFormats() -ne 0) {
                             $row.status = 'not_run'; $row.reason = 'Clipboard is not empty; refusing to replace user data'; continue
                         }
                         if ($case.kind -in @('mouse-interleave', 'mouse-focus-refresh')) { $null = Observer-Request $plan 'mouse-on'; $mouseReporting = $true }
-                        $traceLineCount = if ($path -eq 'herdr' -and (Test-Path -LiteralPath $plan.input_trace)) { @(Get-Content -LiteralPath $plan.input_trace).Count } else { 0 }
+                        $traceLineCount = if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) { @(Get-Content -LiteralPath $plan.input_trace).Count } else { 0 }
                         $begin = Observer-Request $plan 'begin'
                         $row.ready = $true; $row.pane_geometry = $begin.geometry
                         [HerdrInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid)
@@ -281,6 +281,10 @@ try {
                             foreach ($chord in $case.chords) { $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
                         } elseif ($case.kind -eq 'paste') {
                             $clipboardSequence = [HerdrInputGauntlet.Desktop]::SetEmptyClipboard($window, $case.text)
+                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
+                        } elseif ($case.kind -in @('clipboard-image', 'clipboard-mixed')) {
+                            $text = if ($case.kind -eq 'clipboard-mixed') { [string]$case.text } else { $null }
+                            $clipboardSequence = [HerdrInputGauntlet.Desktop]::SetEmptyClipboardImage($window, $text)
                             $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
                         } elseif ($case.kind -eq 'mouse-interleave') {
                             $cursorPosition = [HerdrInputGauntlet.Desktop]::Cursor()
@@ -329,9 +333,18 @@ try {
                         if ($case.kind -eq 'mode-transitions') { $null = Observer-Request $plan 'set-mode' $mode }
                         $row.capture_id = $end.id
                         $row.hex = $end.hex; $row.records = $end.records; $row.error = $end.error; $row.complete = $end.quiet_reached
+                        if ($case.kind -eq 'clipboard-image' -and $path -eq 'herdr-remote') {
+                            $capture = [Convert]::FromHexString([string]$end.hex)
+                            if ($capture.Length -ge 12) {
+                                $stagedPath = [Text.Encoding]::UTF8.GetString($capture, 6, $capture.Length - 12)
+                                if (Test-Path -LiteralPath $stagedPath -PathType Leaf) {
+                                    $row.staged_image_sha256 = (Get-FileHash -LiteralPath $stagedPath -Algorithm SHA256).Hash
+                                }
+                            }
+                        }
                         $row.final_outer_geometry = (Outer-State $plan).geometry
                         $row.status = 'observed'; $row.final_pane_geometry = $end.geometry
-                        if ($path -eq 'herdr' -and (Test-Path -LiteralPath $plan.input_trace)) {
+                        if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) {
                             $traceLines = @(Get-Content -LiteralPath $plan.input_trace)
                             $trace = $traceLines -join "`n"
                             $captureTrace = ($traceLines | Select-Object -Skip $traceLineCount) -join "`n"
@@ -339,7 +352,7 @@ try {
                             if ($captureTrace.Contains('transport=win32-serialized')) { $row.input_transport = 'win32-serialized' }
                         }
                         if ($null -ne $clipboardSequence) {
-                            if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
+                            if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
                             $clipboardSequence = $null
                         }
                         if ($mouseReporting) { $null = Observer-Request $plan 'mouse-off'; $mouseReporting = $false }
@@ -361,7 +374,7 @@ try {
                 if ($null -ne $cursorPosition -and [HerdrInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
                     [HerdrInputGauntlet.Desktop]::RestoreCursor($cursorPosition); $cursorPosition = $null
                 }
-                if ($null -ne $clipboardSequence -and -not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($clipboardSequence)) { $document.cleanup_errors += 'Could not clear test-owned clipboard' }
+                if ($null -ne $clipboardSequence -and -not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { $document.cleanup_errors += 'Could not clear test-owned clipboard' }
                 [IO.File]::WriteAllText((Join-Path $work 'probe-stop'), '')
                 if (Test-Path (Join-Path $work 'ready.json')) {
                     try {
@@ -370,7 +383,7 @@ try {
                     } catch { $document.cleanup_errors += $_.Exception.Message }
                 }
                 # Normal detach only while still owning foreground focus; never type into another window.
-                if ($injectionAuthorized -and $path -eq 'herdr' -and [HerdrInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [HerdrInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
+                if ($injectionAuthorized -and $path -in @('herdr', 'herdr-remote') -and [HerdrInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [HerdrInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
                     try {
                         $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 66))
                         Start-Sleep -Milliseconds 100
@@ -398,9 +411,7 @@ try {
                         $document.cleanup_errors += "$nonce server required forced cleanup"
                         if (-not $server.WaitForExit(5000)) { $document.cleanup_errors += "$nonce server remained active after forced cleanup" }
                     }
-                    if (-not (Test-Path (Join-Path $work 'bootstrap-exit.json'))) {
-                        try { $null = Invoke-GauntletProcess $exe @('session', 'delete', $nonce) $plan } catch { $document.cleanup_errors += $_.Exception.Message }
-                    }
+                    try { $null = Invoke-GauntletProcess $exe @('session', 'delete', $nonce) $plan } catch { $document.cleanup_errors += $_.Exception.Message }
                     $server.Dispose()
                 }
                 if ($null -ne $launcher) { $launcher.Dispose() }
