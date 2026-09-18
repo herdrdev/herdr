@@ -174,9 +174,13 @@ fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64 {
     hash
 }
 
+const STATUS_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const STATUS_SPINNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
+
 fn status_icon(
     status: crate::api::schema::AgentStatus,
     style: crate::config::StatusIndicatorStyle,
+    spinner_frame: Option<usize>,
 ) -> &'static str {
     use crate::api::schema::AgentStatus;
     use crate::config::StatusIndicatorStyle;
@@ -192,11 +196,17 @@ fn status_icon(
         (StatusIndicatorStyle::Symbols, AgentStatus::Done) => "✓",
         (StatusIndicatorStyle::Symbols, AgentStatus::Idle) => "○",
         (StatusIndicatorStyle::Symbols, AgentStatus::Unknown) => "·",
+        (StatusIndicatorStyle::Animated, AgentStatus::Blocked) => "▲",
+        (StatusIndicatorStyle::Animated, AgentStatus::Working) => {
+            STATUS_SPINNER_FRAMES[spinner_frame.unwrap_or_default() % STATUS_SPINNER_FRAMES.len()]
+        }
+        (StatusIndicatorStyle::Animated, AgentStatus::Done | AgentStatus::Idle) => "✓",
+        (StatusIndicatorStyle::Animated, AgentStatus::Unknown) => "·",
     }
 }
 
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
-    status_icon(status, crate::config::StatusIndicatorStyle::Dots)
+    status_icon(status, crate::config::StatusIndicatorStyle::Dots, None)
 }
 
 fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {

@@ -157,7 +157,11 @@ pub(super) fn render_collapsed(
                 rect.x.saturating_add(number_width),
                 rect.y,
                 rect.width.saturating_sub(number_width),
-                status_icon(workspace.agent_status, config.status_indicators),
+                status_icon(
+                    workspace.agent_status,
+                    config.status_indicators,
+                    state.spinner_frame.filter(|_| !stale),
+                ),
                 Style::default()
                     .fg(if stale {
                         palette.overlay0
@@ -165,6 +169,15 @@ pub(super) fn render_collapsed(
                         status_color(workspace.agent_status, palette)
                     })
                     .add_modifier(dim),
+            );
+            super::render::record_animated_status_cells(
+                buffer,
+                hits,
+                workspace.agent_status,
+                config.status_indicators,
+                state.spinner_frame.filter(|_| !stale),
+                (rect.width > number_width)
+                    .then_some((rect.x.saturating_add(number_width), rect.y)),
             );
             hits.workspaces.push(WorkspaceHit {
                 rect,
@@ -192,6 +205,7 @@ pub(super) fn render_collapsed(
         state.endpoints,
         state.active_endpoint_id,
         config,
+        state.spinner_frame,
         hits,
     );
     hits.sidebar_toggle = if area.is_empty() || workspace_area.width == 0 {
@@ -446,12 +460,19 @@ pub(super) fn render_expanded(
                 let selected = state.selected_workspace_id.is_some_and(|target| {
                     target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
                 });
+                let spinner_start = hits.animated_status_cells.len();
                 super::sidebar::render_workspace_rows(
                     buffer,
                     nested,
                     workspace,
                     status,
-                    config.status_indicators,
+                    (
+                        config.status_indicators,
+                        state
+                            .spinner_frame
+                            .filter(|_| endpoint.status == ClientEndpointStatus::Online),
+                        hits,
+                    ),
                     entry,
                     tokens,
                     endpoint_active,
@@ -461,6 +482,11 @@ pub(super) fn render_expanded(
                 );
                 if selected && palette.selection_bg == ratatui::style::Color::Reset {
                     buffer.set_style(nested, Style::default().bg(palette.active_row_bg));
+                    for spinner in &mut hits.animated_status_cells[spinner_start..] {
+                        if let Some(cell) = buffer.cell((spinner.x, spinner.y)) {
+                            spinner.cell = crate::protocol::CellData::from_ratatui_cell(cell);
+                        }
+                    }
                 }
                 if endpoint.status != ClientEndpointStatus::Online {
                     buffer.set_style(
@@ -542,6 +568,7 @@ pub(super) fn render_expanded(
         state.active_endpoint_id,
         config,
         state.agent_scroll,
+        state.spinner_frame,
         hits,
     );
     hits.sidebar_toggle = Rect::new(

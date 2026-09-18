@@ -95,6 +95,7 @@ pub(super) struct ShellHitMap {
     pub(super) pane_splits: Vec<PaneSplitHit>,
     pub(super) agents: Vec<(Rect, String)>,
     pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
+    pub(super) animated_status_cells: Vec<ClientAnimatedStatusCell>,
     pub(super) agent_body: Rect,
     pub(super) agent_scrollbar: Rect,
     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
@@ -136,6 +137,12 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+}
+
+pub(super) struct ClientAnimatedStatusCell {
+    pub(super) x: u16,
+    pub(super) y: u16,
+    pub(super) cell: crate::protocol::CellData,
 }
 
 #[derive(Clone)]
@@ -871,6 +878,8 @@ pub(crate) struct ClientShellState {
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) last_composed_at: Option<std::time::Instant>,
     pub(super) selection_repaint_deadline: Option<std::time::Instant>,
+    pub(super) spinner_frame: usize,
+    pub(super) next_spinner_frame: Option<std::time::Instant>,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
@@ -1033,6 +1042,8 @@ impl ClientShellState {
             last_composed_size: None,
             last_composed_at: None,
             selection_repaint_deadline: None,
+            spinner_frame: 0,
+            next_spinner_frame: None,
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,
@@ -1836,11 +1847,46 @@ impl ClientShellState {
         false
     }
 
-    pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
+    fn spinner_eligible(&self) -> bool {
+        self.config.status_indicators == crate::config::StatusIndicatorStyle::Animated
+            && self.mode != ClientShellMode::Navigate
+            && self.endpoint_status(&self.active_endpoint_id) == Some(ClientEndpointStatus::Online)
+            && self
+                .last_composed_size
+                .is_some_and(|(cols, rows)| self.layout(cols, rows).sidebar.width > 0)
+            && !self.hits.animated_status_cells.is_empty()
+    }
+
+    fn sync_spinner_deadline(&mut self, now: std::time::Instant) {
+        if self.spinner_eligible() {
+            self.next_spinner_frame
+                .get_or_insert(now + STATUS_SPINNER_INTERVAL);
+        } else {
+            self.spinner_frame = 0;
+            self.next_spinner_frame = None;
+        }
+    }
+
+    pub(crate) fn tick_spinner(&mut self, now: std::time::Instant) -> bool {
+        self.sync_spinner_deadline(now);
+        if self
+            .next_spinner_frame
+            .is_none_or(|deadline| now < deadline)
+        {
+            return false;
+        }
+        self.spinner_frame = (self.spinner_frame + 1) % STATUS_SPINNER_FRAMES.len();
+        self.next_spinner_frame = Some(now + STATUS_SPINNER_INTERVAL);
+        true
+    }
+
+    pub(crate) fn timer_delay(&mut self, now: std::time::Instant) -> std::time::Duration {
+        self.sync_spinner_deadline(now);
         let default = std::time::Duration::from_millis(100);
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.next_spinner_frame)
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

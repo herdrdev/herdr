@@ -705,7 +705,7 @@ async fn run_client_loop(
         }
         let timer_delay = state
             .shell
-            .as_ref()
+            .as_mut()
             .map_or(Duration::from_millis(100), |shell| {
                 shell.timer_delay(std::time::Instant::now())
             });
@@ -2096,9 +2096,10 @@ async fn run_client_loop(
                             write_stream.accepts(&expired.endpoint_id, expired.generation)
                         })
                         .collect::<Vec<_>>();
-                    let (effects, outcome, frame) = {
+                    let (effects, outcome, spinner_ticked, spinner_patch) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        let spinner_ticked = shell.tick_spinner(now);
                         for expired in expired_endpoints {
                             if !shell.endpoint_is_active(&expired.endpoint_id) {
                                 continue;
@@ -2115,12 +2116,35 @@ async fn run_client_loop(
                         outcome.repaint |= notification_repaint
                             | shell.tick_copy_feedback(now)
                             | shell.tick_endpoint_error(now);
-                        let frame = outcome
-                            .repaint
-                            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
-                            .flatten();
-                        (effects, outcome, frame)
+                        let spinner_patch = (spinner_ticked
+                            && !outcome.repaint
+                            && outcome.actions.is_empty())
+                        .then(|| {
+                            shell
+                                .compose_spinner_patch(state.reported_size.0, state.reported_size.1)
+                        })
+                        .flatten();
+                        (effects, outcome, spinner_ticked, spinner_patch)
                     };
+                    let spinner_patched = if let Some(patch) = spinner_patch {
+                        match state.present_surface_patch(patch) {
+                            Ok(presented) => presented,
+                            Err(error) => {
+                                warn!(%error, "failed to present animated sidebar patch");
+                                state.request_repaint();
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    let frame = (outcome.repaint || (spinner_ticked && !spinner_patched))
+                        .then(|| {
+                            state.shell.as_mut().and_then(|shell| {
+                                shell.compose(state.reported_size.0, state.reported_size.1)
+                            })
+                        })
+                        .flatten();
                     handle_shell_notification_effects(effects, &state.sound_config);
                     if finish_client_shell_input(
                         &mut state,
