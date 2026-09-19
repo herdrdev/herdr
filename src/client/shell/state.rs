@@ -354,6 +354,7 @@ pub(super) struct ClientNavigatorRow {
     pub(super) status: Option<crate::api::schema::AgentStatus>,
     pub(super) stale: bool,
     pub(super) current: bool,
+    pub(super) matches_query: bool,
     pub(super) target: ClientNavigatorTarget,
 }
 

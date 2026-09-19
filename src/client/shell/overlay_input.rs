@@ -685,27 +685,30 @@ impl ClientShellState {
                 outcome.repaint = true;
                 return;
             }
-            if code == KeyCode::Home && modifiers.is_empty() {
-                if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
-                    navigator.selected = None;
-                    navigator.scroll = 0;
-                }
-                outcome.repaint = true;
-                return;
-            }
-            if matches!(code, KeyCode::End | KeyCode::Char('G')) && modifiers.is_empty() {
-                let last = self.overlay.as_ref().and_then(|overlay| match overlay {
-                    ClientShellOverlay::Navigator(navigator) => render::client_navigator_rows(
-                        &self.endpoints,
-                        &self.active_endpoint_id,
-                        navigator,
-                    )
-                    .last()
-                    .map(|row| row.target.clone()),
+            if matches!(code, KeyCode::Home | KeyCode::End | KeyCode::Char('G'))
+                && modifiers.is_empty()
+            {
+                let target = self.overlay.as_ref().and_then(|overlay| match overlay {
+                    ClientShellOverlay::Navigator(navigator) => {
+                        let rows = render::client_navigator_rows(
+                            &self.endpoints,
+                            &self.active_endpoint_id,
+                            navigator,
+                        );
+                        if code == KeyCode::Home {
+                            rows.first()
+                        } else {
+                            rows.last()
+                        }
+                        .map(|row| row.target.clone())
+                    }
                     _ => None,
                 });
                 if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
-                    navigator.selected = last;
+                    navigator.selected = target;
+                    if code == KeyCode::Home {
+                        navigator.scroll = 0;
+                    }
                 }
                 outcome.repaint = true;
                 return;
