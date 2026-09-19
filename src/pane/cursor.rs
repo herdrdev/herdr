@@ -98,20 +98,10 @@ pub(crate) struct CursorPositionSettleState {
     /// so they are held for the max window before being shown. Ordinary caret
     /// steps are small and same-row, and settle on the normal window.
     candidate_jump: bool,
-    /// When the last position was observed. A gap longer than the settle window
-    /// ends the write burst, so churn accounting must restart for the next one.
-    last_observed: Option<Instant>,
 }
 
 impl CursorPositionSettleState {
     pub(crate) fn observe(&mut self, current: Option<TerminalCursorState>, now: Instant) {
-        // A gap longer than the settle window means the previous write burst
-        // ended. The position from a later burst is a fresh sample, so the max
-        // hold must not treat it as the tail of earlier churn and adopt it.
-        let resumed_after_quiet = self
-            .last_observed
-            .is_some_and(|last| now.duration_since(last) >= CURSOR_POSITION_SETTLE);
-        self.last_observed = Some(now);
         // A candidate that stayed quiet for its hold window is real, so preserve
         // it before considering the first (possibly temporary) position of a
         // later redraw.
@@ -144,16 +134,6 @@ impl CursorPositionSettleState {
             self.candidate_jump = is_jump(settled, current);
             return;
         };
-
-        if resumed_after_quiet {
-            // The previous burst finished, so start a fresh hold for this burst
-            // instead of letting the old churn window adopt a lone sample.
-            self.candidate = Some(current);
-            self.pending_since = Some(now);
-            self.candidate_since = Some(now);
-            self.candidate_jump = is_jump(settled, current);
-            return;
-        }
 
         let pending_since = self.pending_since.unwrap_or(now);
         if now.duration_since(pending_since) >= CURSOR_POSITION_MAX_HOLD {
@@ -205,6 +185,10 @@ impl CursorPositionSettleState {
 
     pub(crate) fn pending(&self) -> bool {
         self.candidate.is_some()
+    }
+
+    pub(crate) fn render_delay(&self) -> Option<Duration> {
+        self.pending().then(|| self.candidate_hold())
     }
 
     fn candidate_hold(&self) -> Duration {
@@ -350,21 +334,23 @@ mod tests {
     #[test]
     fn cursor_settle_caps_hold_even_without_another_observation() {
         let now = Instant::now();
-        let mut settle = CursorPositionSettleState::default();
-        settle.observe(Some(cursor(0, 0, true, 0)), now);
-        for ms in (1..=91).step_by(10) {
-            settle.observe(
-                Some(cursor(ms as u16, 0, true, 0)),
-                now + Duration::from_millis(ms),
+        for step in [10, 30] {
+            let mut settle = CursorPositionSettleState::default();
+            settle.observe(Some(cursor(0, 0, true, 0)), now);
+            for ms in (1..=91).step_by(step) {
+                settle.observe(
+                    Some(cursor(ms as u16, 1, true, 0)),
+                    now + Duration::from_millis(ms),
+                );
+            }
+            assert_eq!(
+                settle.reported_cursor(
+                    Some(cursor(91, 1, true, 0)),
+                    now + Duration::from_millis(101)
+                ),
+                Some(cursor(91, 1, true, 0))
             );
         }
-        assert_eq!(
-            settle.reported_cursor(
-                Some(cursor(91, 0, true, 0)),
-                now + Duration::from_millis(101)
-            ),
-            Some(cursor(91, 0, true, 0))
-        );
     }
 
     #[test]
@@ -377,6 +363,21 @@ mod tests {
         settle.observe(Some(next), now + Duration::from_millis(19));
         assert_eq!(
             settle.reported_cursor(Some(next), now + Duration::from_millis(21)),
+            Some(next)
+        );
+    }
+
+    #[test]
+    fn cursor_settle_repeated_jump_position_does_not_starve() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let next = cursor(2, 1, true, 0);
+        settle.observe(Some(cursor(2, 0, true, 0)), now);
+        for ms in [1, 31, 61, 91] {
+            settle.observe(Some(next), now + Duration::from_millis(ms));
+        }
+        assert_eq!(
+            settle.reported_cursor(Some(next), now + Duration::from_millis(101)),
             Some(next)
         );
     }
