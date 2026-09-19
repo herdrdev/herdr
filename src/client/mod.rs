@@ -468,6 +468,8 @@ async fn run_client_loop(
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme =
         state.attach_escape.is_none() && should_query_host_terminal_theme();
+    let host_theme_query_pending = Arc::new(AtomicBool::new(false));
+    let stdin_host_theme_query_pending = host_theme_query_pending.clone();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
     let will_query_host_cell_size = state.attach_escape.is_none()
@@ -487,6 +489,7 @@ async fn run_client_loop(
             stdin_tx,
             &stdin_quit,
             will_query_host_terminal_theme,
+            stdin_host_theme_query_pending,
             will_query_host_cell_size,
             stdin_mouse_capture_active,
             stdin_sgr_pixels_active,
@@ -1108,6 +1111,13 @@ async fn run_client_loop(
                 cell_height_px,
                 pixel_geometry_exact,
             ) => {
+                // Palette updates through OSC do not necessarily produce a color-scheme
+                // notification. Re-query on redraw, including SIGWINCH without a resize,
+                // so desktop theme switchers can refresh the existing panes in place.
+                if will_query_host_terminal_theme {
+                    host_theme_query_pending.store(true, Ordering::Release);
+                    query_host_terminal_theme();
+                }
                 if !pixel_geometry_exact && host_sgr_pixels_active.load(Ordering::Acquire) {
                     set_mouse_capture(state.mouse_capture_active, false)
                         .map_err(ClientError::ConnectionFailed)?;

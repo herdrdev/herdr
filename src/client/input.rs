@@ -39,6 +39,7 @@ pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
+    host_theme_query_pending: Arc<AtomicBool>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
@@ -49,6 +50,7 @@ pub fn stdin_reader_loop(
     {
         let _ = (
             host_color_query_sent,
+            host_theme_query_pending,
             host_cell_size_query_sent,
             host_mouse_capture_active,
             host_sgr_pixels_active,
@@ -61,6 +63,7 @@ pub fn stdin_reader_loop(
         event_tx,
         should_quit,
         host_color_query_sent,
+        host_theme_query_pending,
         host_cell_size_query_sent,
         host_mouse_capture_active,
         host_sgr_pixels_active,
@@ -74,6 +77,7 @@ fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
+    host_theme_query_pending: Arc<AtomicBool>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
@@ -119,6 +123,11 @@ fn unix_stdin_reader_loop(
         match reader.read(&mut scratch) {
             Ok(0) => break,
             Ok(n) => {
+                // A redraw can issue queries while this thread is blocked in read().
+                // Arm the split-reply guard before framing the returned bytes.
+                if host_theme_query_pending.swap(false, Ordering::AcqRel) {
+                    framer.host_color_query_sent();
+                }
                 let sgr_pixels = *pending_mode
                     .get_or_insert_with(|| host_sgr_pixels_active.load(Ordering::Acquire));
                 if sgr_pixels {
