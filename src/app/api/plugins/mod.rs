@@ -10,7 +10,7 @@ use crate::api::schema::{
     PluginActionListParams, PluginLinkParams, PluginListParams, PluginLogListParams,
     PluginManifestAction, PluginManifestLinkHandler, PluginPaneCloseParams, PluginPaneFocusParams,
     PluginPaneInfo, PluginPaneOpenParams, PluginPanePlacement, PluginSetEnabledParams,
-    PluginUnlinkParams, ResponseResult,
+    PluginSourceKind, PluginUnlinkParams, ResponseResult,
 };
 use crate::app::App;
 pub(super) use manifest::normalize_plugin_id;
@@ -66,6 +66,10 @@ impl App {
     }
 
     pub(super) fn handle_plugin_link(&mut self, id: String, params: PluginLinkParams) -> String {
+        let preserve_enabled = params
+            .source
+            .as_ref()
+            .is_some_and(|source| source.kind == PluginSourceKind::Github);
         let mut plugin = match load_plugin_manifest(&params.path, params.enabled) {
             Ok(plugin) => plugin,
             Err((code, message)) => return encode_error(id, code, message),
@@ -80,6 +84,11 @@ impl App {
             return encode_error(id, "plugin_user_dir_create_failed", err.to_string());
         }
         if let Err(err) = self.update_installed_plugins(|plugins| {
+            if preserve_enabled {
+                if let Some(existing) = plugins.get(&plugin.plugin_id) {
+                    plugin.enabled = existing.enabled;
+                }
+            }
             plugins.insert(plugin.plugin_id.clone(), plugin.clone());
         }) {
             return encode_error(id, "plugin_registry_save_failed", err.to_string());

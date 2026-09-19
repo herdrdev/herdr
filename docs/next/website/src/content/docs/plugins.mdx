@@ -172,6 +172,7 @@ Install an example plugin:
 
 ```bash
 herdr plugin install ogulcancelik/herdr-plugin-examples/agent-telegram-notify
+herdr plugin update
 herdr plugin config-dir examples.agent-telegram-notify
 herdr plugin list
 herdr plugin action list --plugin examples.agent-telegram-notify
@@ -193,6 +194,10 @@ herdr plugin log list --plugin example.layout
 terminals, runs supported build commands, then stores the checkout under
 Herdr-managed plugin data and registers it. Use `--yes` for noninteractive
 installs. Reinstalling a GitHub-managed plugin replaces that managed checkout.
+`plugin update` refreshes every GitHub-managed plugin when called without a
+target, or only the listed plugin ids or GitHub sources. It refetches the ref
+recorded during install, skips unchanged commits, and ignores locally linked
+plugins during bulk updates. Use `--yes` for noninteractive updates.
 Installed and linked plugins, including their enabled state, are global to the
 current user and available in every Herdr session. Both `plugin install` and
 `plugin link` can register plugins while no Herdr server is running. Plugins
@@ -207,8 +212,7 @@ directory for setup docs and shell scripts.
 installs it also removes the managed checkout, and it accepts either the plugin
 id or the same `owner/repo[/subdir...]` shorthand used by install.
 `plugin unlink <id>` only unregisters a plugin and leaves files alone, which is
-useful for local development. There is no separate `plugin update` in v1;
-reinstall from GitHub to refresh a managed plugin.
+useful for local development.
 
 The example cookbook repo is `ogulcancelik/herdr-plugin-examples`. It contains
 separate example plugins in subdirectories, including `agent-telegram-notify`,

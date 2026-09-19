@@ -12,6 +12,13 @@ pub(crate) fn managed_checkout_path(plugin_id: &str) -> PathBuf {
         .join(crate::api::schema::plugin_managed_path_component(plugin_id))
 }
 
+pub(crate) fn managed_checkout_lock_path(plugin_id: &str) -> PathBuf {
+    managed_plugins_dir().join(".locks").join(format!(
+        ".{}.lock",
+        crate::api::schema::plugin_managed_path_component(plugin_id)
+    ))
+}
+
 pub(crate) fn plugin_config_dir(plugin_id: &str) -> PathBuf {
     managed_plugins_dir()
         .join("config")

@@ -81,6 +81,7 @@ fn named_sessions_share_live_plugin_registry() {
         &runtime_dir,
         &["--session", "beta", "plugin", "disable", "example.first"],
     );
+
     let disabled = run_named_cli(
         &config_home,
         &runtime_dir,
@@ -244,6 +245,348 @@ platforms = ["linux", "macos", "windows"]
 
     let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "alpha"]);
     drop(alpha);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn plugin_update_refreshes_selected_then_all_github_plugins() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let source_repo = base.join("source-repo");
+    create_committed_repo(&source_repo);
+    run_git(&source_repo, &["checkout", "-b", "plugin-updates"]);
+
+    for (subdir, id) in [("first", "example.first"), ("second", "example.second")] {
+        let plugin_dir = source_repo.join(subdir);
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join("herdr-plugin.toml"),
+            format!(
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    run_git(&source_repo, &["add", "."]);
+    run_git(&source_repo, &["commit", "--quiet", "-m", "add plugins"]);
+
+    let git_config = base.join("gitconfig");
+    fs::write(
+        &git_config,
+        format!(
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/example/plugins.git\n",
+            source_repo.display()
+        ),
+    )
+    .unwrap();
+    for subdir in ["first", "second"] {
+        let source = format!("example/plugins/{subdir}");
+        let ref_args = (subdir == "first").then_some(["--ref", "plugin-updates"]);
+        let mut args = vec!["plugin", "install", source.as_str(), "--yes"];
+        if let Some(ref_args) = ref_args {
+            args.extend(ref_args);
+        }
+        let output = run_named_cli_with_env(
+            &config_home,
+            &runtime_dir,
+            &args,
+            &[("GIT_CONFIG_GLOBAL", &git_config)],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let server = spawn_named_server(&config_home, &runtime_dir, "updates");
+    wait_for_socket(
+        &named_session_socket(&config_home, "updates"),
+        Duration::from_secs(5),
+    );
+    run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "disable", "example.first"],
+    );
+    let reinstalled = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "updates",
+            "plugin",
+            "install",
+            "example/plugins/first",
+            "--ref",
+            "plugin-updates",
+            "--yes",
+        ],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(reinstalled.status.success());
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "list", "--json"],
+    );
+    assert_eq!(listed["result"]["plugins"][0]["enabled"], false);
+    let offline_reinstall = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "offline-update",
+            "plugin",
+            "install",
+            "example/plugins/first",
+            "--ref",
+            "plugin-updates",
+            "--yes",
+        ],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(offline_reinstall.status.success());
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "list", "--json"],
+    );
+    assert_eq!(listed["result"]["plugins"][0]["enabled"], false);
+    let malformed = run_named_cli(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "updates",
+            "plugin",
+            "update",
+            "example/plugins/..",
+            "--yes",
+        ],
+    );
+    assert_eq!(malformed.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&malformed.stderr).contains("invalid plugin subdir segment"));
+
+    for (subdir, id) in [("first", "example.first"), ("second", "example.second")] {
+        fs::write(
+            source_repo.join(subdir).join("herdr-plugin.toml"),
+            format!(
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.2.0\"\nmin_herdr_version = \"0.6.10\"\n"
+            ),
+        )
+        .unwrap();
+    }
+    run_git(&source_repo, &["add", "."]);
+    run_git(&source_repo, &["commit", "--quiet", "-m", "update plugins"]);
+
+    let selected = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "updates",
+            "plugin",
+            "update",
+            "EXAMPLE/PLUGINS/first",
+            "example.first",
+            "--yes",
+        ],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(selected.status.success());
+    assert!(String::from_utf8_lossy(&selected.stdout).contains("Updated example.first"));
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "list", "--json"],
+    );
+    assert_eq!(listed["result"]["plugins"][0]["version"], "0.2.0");
+    assert_eq!(listed["result"]["plugins"][0]["enabled"], false);
+    assert_eq!(listed["result"]["plugins"][1]["version"], "0.1.0");
+
+    let local_dir = base.join("local-plugin");
+    fs::create_dir_all(&local_dir).unwrap();
+    fs::write(
+        local_dir.join("herdr-plugin.toml"),
+        "id = \"example.local\"\nname = \"Local\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n",
+    )
+    .unwrap();
+    let linked = run_named_cli(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "updates",
+            "plugin",
+            "link",
+            local_dir.to_str().unwrap(),
+        ],
+    );
+    assert!(linked.status.success());
+
+    let all = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "update", "--yes"],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(all.status.success());
+    let stdout = String::from_utf8_lossy(&all.stdout);
+    assert!(stdout.contains("example.first is already up to date"));
+    assert!(stdout.contains("Updated example.second"));
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "updates", "plugin", "list", "--json"],
+    );
+    let plugins = listed["result"]["plugins"].as_array().unwrap();
+    for id in ["example.first", "example.second"] {
+        let plugin = plugins
+            .iter()
+            .find(|plugin| plugin["plugin_id"] == id)
+            .unwrap();
+        assert_eq!(plugin["version"], "0.2.0");
+    }
+    assert!(plugins
+        .iter()
+        .any(|plugin| plugin["plugin_id"] == "example.local"));
+
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "updates"]);
+    drop(server);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let source_repo = base.join("source-repo");
+    let plugin_dir = source_repo.join("plugin");
+    let build_started = base.join("build-started");
+    let release_build = base.join("release-build");
+    create_committed_repo(&source_repo);
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(
+        plugin_dir.join("herdr-plugin.toml"),
+        "id = \"example.race\"\nname = \"Race\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n",
+    )
+    .unwrap();
+    run_git(&source_repo, &["add", "."]);
+    run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
+
+    let git_config = base.join("gitconfig");
+    fs::write(
+        &git_config,
+        format!(
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/example/race.git\n",
+            source_repo.display()
+        ),
+    )
+    .unwrap();
+    let installed = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "race",
+            "plugin",
+            "install",
+            "example/race/plugin",
+            "--yes",
+        ],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(installed.status.success());
+
+    let server = spawn_named_server(&config_home, &runtime_dir, "race");
+    wait_for_socket(
+        &named_session_socket(&config_home, "race"),
+        Duration::from_secs(5),
+    );
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "race", "plugin", "list", "--json"],
+    );
+    let managed_path = PathBuf::from(
+        listed["result"]["plugins"][0]["source"]["managed_path"]
+            .as_str()
+            .unwrap(),
+    );
+
+    fs::write(
+        plugin_dir.join("herdr-plugin.toml"),
+        format!(
+            "id = \"example.race\"\nname = \"Race\"\nversion = \"0.2.0\"\nmin_herdr_version = \"0.6.10\"\n\n[[build]]\ncommand = [\"sh\", \"-c\", \"touch {}; while [ ! -e {} ]; do sleep 0.05; done\"]\n",
+            build_started.display(),
+            release_build.display()
+        ),
+    )
+    .unwrap();
+    run_git(&source_repo, &["add", "."]);
+    run_git(&source_repo, &["commit", "--quiet", "-m", "update plugin"]);
+
+    let mut update = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    update
+        .args([
+            "--session",
+            "race",
+            "plugin",
+            "update",
+            "example.race",
+            "--yes",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("GIT_CONFIG_GLOBAL", &git_config)
+        .env_remove("HERDR_SOCKET_PATH")
+        .env_remove("HERDR_CLIENT_SOCKET_PATH")
+        .env_remove("HERDR_ENV")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = update.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !build_started.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if !build_started.exists() {
+        fs::write(&release_build, "release").unwrap();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "plugin update never reached its build: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let unlinked = run_named_cli(
+        &config_home,
+        &runtime_dir,
+        &["--session", "race", "plugin", "unlink", "example.race"],
+    );
+    assert!(unlinked.status.success());
+    fs::write(&release_build, "release").unwrap();
+    let updated = child.wait_with_output().unwrap();
+    assert!(!updated.status.success());
+    assert!(String::from_utf8_lossy(&updated.stderr)
+        .contains("changed while its update was in progress"));
+
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "race", "plugin", "list", "--json"],
+    );
+    assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
+    assert!(
+        fs::read_to_string(managed_path.join("plugin/herdr-plugin.toml"))
+            .unwrap()
+            .contains("version = \"0.1.0\"")
+    );
+
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "race"]);
+    drop(server);
     cleanup_test_base(&base);
 }
 
