@@ -1,63 +1,97 @@
 id = "kiro"
-version = "2026.08.01.1"
-min_engine_version = 1
-updated_at = "2026-08-01T00:00:00Z"
+version = "2026.09.19.1"
+min_engine_version = 2
+updated_at = "2026-09-19T00:00:00Z"
 aliases = ["kiro-cli"]
+
+[[rules]]
+id = "live_prompt_idle"
+state = "idle"
+priority = 1100
+region = "bottom_non_empty_lines(4)"
+visible_idle = true
+line_regex = ['(?i)^\s*[>›]\s*ask a question or describe a task(?:\s+(?:enter|↵))?\s*$']
 
 [[rules]]
 id = "tool_approval"
 state = "blocked"
-priority = 300
-region = "whole_recent"
+priority = 1050
+region = "bottom_non_empty_lines(8)"
 visible_blocker = true
-contains = ["requires approval"]
 any = [
-  { contains = ["yes, single permission"] },
-  { contains = ["trust, always allow"] },
-  { contains = ["no (tab to edit)"] },
-  { contains = ["esc to close"] },
+  { all = [
+    { regex = ['(?is)(?:^|\n)\s*esc\s+to\s+close\b(?:[^\n]*\bto\s+navigate\b[^\n]*|.*\bto\s+navigate\b.*\bto\s+select\b.*\btab\s+to\s+edit|[^\n]*\benter\s+to\s+see\s+more\s+options)\s*\z'] },
+    { any = [
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:allow|always allow|deny|always deny)\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?allow\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?always allow\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?deny\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?always deny\s*$',
+      ] },
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:yes, single permission|trust, always allow in this session|no \(tab to edit\))\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?yes, single permission\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?trust, always allow in this session\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?no \(tab to edit\)\s*$',
+      ] },
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:trust\b.*|entire tool)\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?(?:trust )?entire tool(?:\s+\([^\n]*\))?(?:\s+(?:session|workspace|always))?\s*$',
+      ] },
+    ] },
+  ] },
 ]
 
 [[rules]]
-id = "subagent_approval"
+id = "tool_approval_edit"
 state = "blocked"
-priority = 290
+priority = 1045
 region = "whole_recent"
 visible_blocker = true
-contains = ["pending from subagents"]
-any = [
-  { contains = ["tool approval"] },
-  { contains = ["tool approvals"] },
-]
-all = [
-  { any = [{ contains = ["approve all pending"] }, { contains = ["configure individually"] }, { contains = ["exit (cancel subagents)"] }] },
+regex = ['(?im)(?:^|\n)[ \t]*[-─]+[ \t]*\n[^\n]*requires\s+approval\s*[·.]\s*modify\s+request[ \t]*\n(?:[ \t]*\n|[^\n]*[^\s─-][^\n]*\n)*?[ \t]*[>›][ \t]*[^\n]*\n(?:[ \t]*\n|[^\n]*[^\s─-][^\n]*\n)*[ \t]*[-─]+[ \t]*\n[ \t]*esc[ \t]+to[ \t]+close[ \t]*\n?\z']
+
+[[rules]]
+id = "crew_approval"
+state = "blocked"
+priority = 1040
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = [
+  "tool approval",
+  "approve all pending",
+  "configure individually (agent monitor)",
+  "exit (cancel subagents)",
 ]
 
 [[rules]]
-id = "prompt_idle"
-state = "idle"
-priority = 200
-region = "bottom_non_empty_lines(5)"
-visible_idle = true
-contains = ["ask a question or describe a task", "/copy to clipboard"]
-not = [
-  { contains = ["kiro is working"] },
-  { contains = ["esc to cancel"] },
-]
+id = "question_panel"
+state = "blocked"
+priority = 1030
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["to navigate", "to submit", "esc to cancel"]
 
 [[rules]]
-id = "kiro_working_marker"
+id = "live_working_footer"
 state = "working"
-priority = 100
-region = "whole_recent"
+priority = 950
+region = "bottom_non_empty_lines(4)"
 visible_working = true
-contains = ["kiro is working"]
+contains = ["kiro is working", "type to steer", "ctrl+s to queue"]
 
 [[rules]]
-id = "tool_spinner_working"
+id = "osc_title_working"
 state = "working"
-priority = 90
-region = "whole_recent"
+priority = 900
+region = "osc_title"
 visible_working = true
-contains = ["esc to cancel"]
-line_regex = ['^\s*(◔|◑|◕|●)\s+\p{Alphabetic}']
+regex = ['(?i)^[◐◓◑◒/|\\-]\s+kiro:']
+
+[[rules]]
+id = "osc_progress_working"
+state = "working"
+priority = 890
+region = "osc_progress"
+visible_working = true
+regex = ['^4;3;?$']
