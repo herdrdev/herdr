@@ -3,12 +3,13 @@ use std::io;
 use super::registry::{integration_target_label, integration_target_supported};
 use super::targets::{
     install_antigravity_cli, install_claude, install_codex, install_copilot, install_cursor,
-    install_devin, install_droid, install_grok, install_hermes, install_kilo, install_kimi,
-    install_letta, install_mastracode, install_omp, install_opencode, install_pi, install_qodercli,
-    install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex, uninstall_copilot,
-    uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok, uninstall_hermes,
-    uninstall_kilo, uninstall_kimi, uninstall_letta, uninstall_mastracode, uninstall_omp,
-    uninstall_opencode, uninstall_pi, uninstall_qodercli, uninstall_qwen,
+    install_devin, install_droid, install_grok, install_hermes, install_jcode, install_kilo,
+    install_kimi, install_letta, install_mastracode, install_omp, install_opencode, install_pi,
+    install_qodercli, install_qwen, uninstall_antigravity_cli, uninstall_claude, uninstall_codex,
+    uninstall_copilot, uninstall_cursor, uninstall_devin, uninstall_droid, uninstall_grok,
+    uninstall_hermes, uninstall_jcode, uninstall_kilo, uninstall_kimi, uninstall_letta,
+    uninstall_mastracode, uninstall_omp, uninstall_opencode, uninstall_pi, uninstall_qodercli,
+    uninstall_qwen,
 };
 use super::version::{agent_version_requirement, enforce_agent_version};
 use super::{KIMI_MIN_VERSION, PI_EXTENSION_INSTALL_NAME};
@@ -72,6 +73,59 @@ pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
     });
     let outcome = if result.is_ok() { "ok" } else { "error" };
     crate::logging::integration_action("uninstall", "letta", outcome);
+    result
+}
+
+/// Experimental Jcode install that bypasses the frozen client endpoint
+/// `IntegrationTarget` enum. Fold into the agent registry when it lands.
+pub(crate) fn install_experimental_jcode() -> io::Result<Vec<String>> {
+    let result = install_jcode().map(|installed| {
+        vec![
+            format!(
+                "installed jcode integration hook to {}",
+                installed.hook_path.display()
+            ),
+            format!(
+                "ensured jcode session_start hook at {}",
+                installed.config_path.display()
+            ),
+        ]
+    });
+    let outcome = if result.is_ok() { "ok" } else { "error" };
+    crate::logging::integration_action("install", "jcode", outcome);
+    result
+}
+
+/// Experimental Jcode uninstall counterpart.
+pub(crate) fn uninstall_experimental_jcode() -> io::Result<Vec<String>> {
+    let result = uninstall_jcode().map(|result| {
+        let mut messages = Vec::new();
+        if result.removed_hook_file {
+            messages.push(format!(
+                "removed jcode hook at {}",
+                result.hook_path.display()
+            ));
+        } else {
+            messages.push(format!(
+                "no jcode hook found at {}",
+                result.hook_path.display()
+            ));
+        }
+        if result.updated_config {
+            messages.push(format!(
+                "removed herdr jcode hook entry from {}",
+                result.config_path.display()
+            ));
+        } else {
+            messages.push(format!(
+                "no herdr jcode hook entry found in {}",
+                result.config_path.display()
+            ));
+        }
+        messages
+    });
+    let outcome = if result.is_ok() { "ok" } else { "error" };
+    crate::logging::integration_action("uninstall", "jcode", outcome);
     result
 }
 

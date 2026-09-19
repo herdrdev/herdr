@@ -109,6 +109,7 @@ pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
             | ("herdr:qwen", "qwen")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
+            | ("herdr:jcode", "jcode")
     )
 }
 
@@ -245,6 +246,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 ]
             }
         }
+        ("herdr:jcode", "jcode", AgentSessionRefKind::Id) => {
+            vec!["jcode".into(), "--resume".into(), session_ref.value.clone()]
+        }
         _ => return None,
     };
 
@@ -283,6 +287,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
             | ("herdr:letta", "letta")
+            | ("herdr:jcode", "jcode")
     )
 }
 
@@ -314,6 +319,7 @@ mod tests {
         assert!(is_reserved_native_state_source("herdr:claude", "claude"));
         assert!(is_reserved_native_state_source("herdr:codex", "codex"));
         assert!(is_reserved_native_state_source("herdr:devin", "devin"));
+        assert!(is_reserved_native_state_source("herdr:jcode", "jcode"));
         assert!(!is_reserved_native_state_source("herdr:kimi", "kimi"));
         assert!(!is_reserved_native_state_source(
             "herdr:opencode",
@@ -563,6 +569,16 @@ mod tests {
             &AgentSessionRef::id("default:").unwrap()
         )
         .is_none());
+        assert_eq!(
+            plan(
+                "herdr:jcode",
+                "jcode",
+                &AgentSessionRef::id("jcode-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["jcode", "--resume", "jcode-session"]
+        );
     }
 
     #[test]
@@ -760,6 +776,9 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+
+        let jcode_plan = plan("herdr:jcode", "jcode", &AgentSessionRef::id(id).unwrap()).unwrap();
+        assert_eq!(jcode_plan.argv, vec!["jcode", "--resume", id]);
     }
 
     #[test]
@@ -769,6 +788,7 @@ mod tests {
         let kilo_session = absolute_test_path("kilo-session");
         let copilot_session = absolute_test_path("copilot-session");
         let devin_session = absolute_test_path("devin-session");
+        let jcode_session = absolute_test_path("jcode-session");
         assert!(plan(
             "herdr:hermes",
             "hermes",
@@ -797,6 +817,12 @@ mod tests {
             "herdr:devin",
             "devin",
             &AgentSessionRef::path(&devin_session).unwrap()
+        )
+        .is_none());
+        assert!(plan(
+            "herdr:jcode",
+            "jcode",
+            &AgentSessionRef::path(&jcode_session).unwrap()
         )
         .is_none());
         assert!(session_ref_from_snapshot(

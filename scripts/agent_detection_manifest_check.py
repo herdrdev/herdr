@@ -64,7 +64,11 @@ STAGED_PUBLISHED_MANIFESTS = {
     ),
 }
 
-UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
+# Stable clients do not yet recognize Jcode. Publish its manifest and remove
+# this exact exception before the first stable release shipping the integration.
+UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {
+    "jcode": ("2026.08.03.1", "3e1ba0e533ffa9b957489243cf0a343bedfedb96050873879ea151903e37e7b2"),
+}
 
 
 def parse_args() -> argparse.Namespace:

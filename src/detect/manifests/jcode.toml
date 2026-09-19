@@ -1,0 +1,47 @@
+id = "jcode"
+version = "2026.08.03.1"
+min_engine_version = 1
+updated_at = "2026-08-03T00:00:00Z"
+aliases = ["j-code", "herdr:jcode"]
+
+# Jcode pins its composer to the bottom of the pane. The next message number is
+# followed by one marker: `>` for ready, `…` while a turn is in flight, `»` for
+# an armed skill, or `$` for shell mode. Only `…` means working.
+[[rules]]
+id = "composer_processing"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(4)"
+visible_working = true
+line_regex = ['^\s*\d+…']
+
+# A multi-line composer can move its marker outside the recent-line window.
+# Jcode's processing line then shows either a braille spinner or an animated
+# three-dot tool bar directly above the composer.
+[[rules]]
+id = "status_line_spinner_working"
+state = "working"
+priority = 890
+region = "bottom_non_empty_lines(4)"
+visible_working = true
+line_regex = ['^[\x{2800}-\x{28FF}] \S']
+
+[[rules]]
+id = "status_line_tool_bar_working"
+state = "working"
+priority = 890
+region = "bottom_non_empty_lines(4)"
+visible_working = true
+line_regex = ['^[·●]{3} \S+ [·●]{3}(\s|$)']
+
+[[rules]]
+id = "composer_ready"
+state = "idle"
+priority = 850
+region = "bottom_non_empty_lines(4)"
+visible_idle = true
+line_regex = ['^\s*\d+[>»$]']
+
+# Jcode emits no state-bearing OSC progress/title sequence. It also has no
+# in-session approval prompt, so there is deliberately no blocked rule. Shell
+# mode and user-opened overlays correctly remain idle.

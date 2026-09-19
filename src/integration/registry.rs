@@ -441,6 +441,22 @@ fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) 
             .is_some_and(|version| version >= expected_version)))
 }
 
+fn jcode_hook_config_is_valid(hook_path: &Path) -> bool {
+    let Some(jcode_dir) = hook_path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    let config_path = jcode_dir.join("config.toml");
+    fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|content| {
+            super::config_edit::jcode_session_start_commands(&content, &config_path).ok()
+        })
+        .is_some_and(|commands| {
+            let hook_command = super::targets::jcode_hook_command(hook_path);
+            commands.iter().any(|command| command == &hook_command)
+        })
+}
+
 fn integration_state_for_path(
     path: &Path,
     expected_version: u32,
@@ -513,6 +529,31 @@ pub(crate) fn experimental_letta_integration_status() -> Option<super::Experimen
         installed_version,
         expected_version: super::LETTA_INTEGRATION_VERSION,
     })
+}
+
+/// Experimental CLI-only Jcode status, outside the frozen endpoint enum.
+pub(crate) fn experimental_jcode_integration_status() -> Option<super::ExperimentalIntegrationStatus>
+{
+    let path = jcode_dir()
+        .ok()?
+        .join("hooks")
+        .join(super::JCODE_HOOK_INSTALL_NAME);
+    Some(jcode_integration_status_at(path))
+}
+
+pub(crate) fn jcode_integration_status_at(path: PathBuf) -> super::ExperimentalIntegrationStatus {
+    let expected_version = super::JCODE_INTEGRATION_VERSION;
+    let (mut state, installed_version) = integration_state_for_path(&path, expected_version);
+    if state == super::IntegrationStatusKind::Current && !jcode_hook_config_is_valid(&path) {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+    super::ExperimentalIntegrationStatus {
+        label: "jcode",
+        path,
+        state,
+        installed_version,
+        expected_version,
+    }
 }
 
 pub(crate) fn parse_integration_version(content: &str) -> Option<u32> {

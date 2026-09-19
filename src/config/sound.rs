@@ -47,6 +47,7 @@ pub struct AgentSoundOverrides {
     pub letta: AgentSoundSetting,
     pub maki: AgentSoundSetting,
     pub muse: AgentSoundSetting,
+    pub jcode: AgentSoundSetting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -146,6 +147,7 @@ impl AgentSoundOverrides {
             Some(Agent::Letta) => self.letta,
             Some(Agent::Maki) => self.maki,
             Some(Agent::Muse) => self.muse,
+            Some(Agent::Jcode) => self.jcode,
             None => AgentSoundSetting::Default,
         }
     }
@@ -188,6 +190,7 @@ impl Default for AgentSoundOverrides {
             letta: AgentSoundSetting::Default,
             maki: AgentSoundSetting::Default,
             muse: AgentSoundSetting::Default,
+            jcode: AgentSoundSetting::Default,
         }
     }
 }
