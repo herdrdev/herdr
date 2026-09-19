@@ -228,6 +228,53 @@ mod tests {
     }
 
     #[test]
+    fn delayed_notifications_retain_each_endpoints_resolved_sound_metadata() {
+        let mut config = Config::default();
+        config.ui.toast.delay_seconds = 1;
+        config.ui.toast.delivery = crate::config::ToastDelivery::Off;
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        let now = std::time::Instant::now();
+        let endpoints = [
+            ClientEndpointId::Local,
+            ClientEndpointId::Ssh(
+                crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef")
+                    .unwrap(),
+            ),
+        ];
+        let profiles = [
+            ClientNotificationSoundProfile::Resolved(Some(
+                crate::protocol::endpoint::NotificationSoundProfile {
+                    config_key: "remote_key".into(),
+                    default_off: true,
+                },
+            )),
+            ClientNotificationSoundProfile::Resolved(None),
+        ];
+        for (endpoint, profile) in endpoints.iter().zip(&profiles) {
+            let mut event = notification().event;
+            event.kind = SemanticNotificationKind::NeedsAttention;
+            event.agent = Some("future-agent".into());
+            event.sound = Some(SemanticNotificationSound::Request);
+            let (effects, _) = state.receive_notification_with_sound_profile(
+                endpoint,
+                event,
+                profile.clone(),
+                now,
+            );
+            assert!(effects.is_empty());
+        }
+        let (effects, _) = state.tick_notifications(now + std::time::Duration::from_secs(1));
+        let retained = effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                ClientShellNotificationEffect::Sound { sound_profile, .. } => Some(sound_profile),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(retained, profiles);
+    }
+
+    #[test]
     fn mobile_notification_is_a_bottom_banner_with_released_title() {
         let palette = crate::app::client_palette_from_config(&Config::default());
         let mut notification = notification();

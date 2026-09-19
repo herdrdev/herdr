@@ -99,15 +99,13 @@ fn server_update_agent_manifests(args: &[String]) -> std::io::Result<i32> {
         }
     };
 
-    let response = match update_agent_manifest_status(super::send_request, || {
-        crate::detect::manifest_update::check_and_update().map(|_| ())
-    })? {
+    let response = match update_agent_manifest_status(super::send_request)? {
         Ok(response) => response,
         Err(err) => {
             if json {
                 return super::print_response(&agent_manifest_update_error_response(&err));
             }
-            eprintln!("failed to update agent detection manifests: {err}");
+            eprintln!("failed to update agent registry: {err}");
             return Ok(1);
         }
     };
@@ -121,25 +119,37 @@ fn server_update_agent_manifests(args: &[String]) -> std::io::Result<i32> {
 
 fn update_agent_manifest_status(
     mut send_request: impl FnMut(&Request) -> std::io::Result<serde_json::Value>,
-    update_manifests: impl FnOnce() -> Result<(), String>,
 ) -> std::io::Result<Result<serde_json::Value, String>> {
-    if let Err(err) = update_manifests() {
-        return Ok(Err(err));
-    }
-
-    let reload_response = send_request(&Request {
-        id: "cli:server:reload-agent-manifests".into(),
-        method: Method::ServerReloadAgentManifests(EmptyParams::default()),
+    let update_response = send_request(&Request {
+        id: "cli:server:update-agent-manifests".into(),
+        method: Method::RegistryUpdate(crate::api::schema::RegistryUpdateParams::default()),
     })?;
-    if reload_response.get("error").is_some() {
-        return Ok(Ok(reload_response));
+    if let Some(error) = update_response.get("error") {
+        return Ok(Err(error["message"]
+            .as_str()
+            .unwrap_or("registry update failed")
+            .to_string()));
     }
 
-    send_request(&Request {
+    let mut response = send_request(&Request {
         id: "cli:server:agent-manifests".into(),
         method: Method::ServerAgentManifests(EmptyParams::default()),
-    })
-    .map(Ok)
+    })?;
+    if let Some(result) = response
+        .get_mut("result")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        let registry = &update_response["result"]["registry"];
+        result.insert(
+            "last_result".into(),
+            serde_json::json!(format!(
+                "registry update complete; generation {}, digest {}",
+                registry["generation"],
+                registry["digest"].as_str().unwrap_or("unavailable"),
+            )),
+        );
+    }
+    Ok(Ok(response))
 }
 
 fn agent_manifest_update_error_response(err: &str) -> serde_json::Value {
@@ -154,12 +164,10 @@ fn agent_manifest_update_error_response(err: &str) -> serde_json::Value {
 
 fn print_agent_manifest_status(response: &serde_json::Value) {
     let result = &response["result"];
-    let last_check = result["last_check_unix"]
-        .as_u64()
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "never".to_string());
+    if let Some(last_check) = result["last_check_unix"].as_u64() {
+        println!("last check: {last_check}");
+    }
     let last_result = result["last_result"].as_str().unwrap_or("not checked");
-    println!("last check: {last_check}");
     println!("result: {last_result}");
     println!();
 
@@ -263,7 +271,7 @@ fn print_server_help() {
     eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
     eprintln!("  herdr server reload-config  reload config.toml in the running server");
     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");
-    eprintln!("  herdr server update-agent-manifests [--json]  fetch and reload agent detection manifests");
+    eprintln!("  herdr server update-agent-manifests [--json]  compatibility alias for registry update (R2)");
     eprintln!("  herdr server reload-agent-manifests  reload agent detection manifests in the running server");
 }
 
@@ -272,80 +280,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn update_agent_manifest_status_fetches_reloads_then_reads_status() {
+    fn update_agent_manifest_status_updates_selected_server_then_reads_status() {
         let mut methods = Vec::new();
-        let response = update_agent_manifest_status(
-            |request| {
-                methods.push(request.method.clone());
-                match &request.method {
-                    Method::ServerReloadAgentManifests(_) => Ok(serde_json::json!({
-                        "id": request.id,
-                        "result": { "type": "agent_manifest_reload", "manifests": [] }
-                    })),
-                    Method::ServerAgentManifests(_) => Ok(serde_json::json!({
-                        "id": request.id,
-                        "result": {
-                            "type": "agent_manifest_status",
-                            "last_result": "checked",
-                            "manifests": []
-                        }
-                    })),
-                    _ => panic!("unexpected request"),
-                }
-            },
-            || Ok(()),
-        )
+        let response = update_agent_manifest_status(|request| {
+            methods.push(request.method.clone());
+            match &request.method {
+                Method::RegistryUpdate(_) => Ok(serde_json::json!({
+                    "id": request.id,
+                    "result": { "type": "agent_registry", "registry": { "generation": 7, "digest": "abc123" } }
+                })),
+                Method::ServerAgentManifests(_) => Ok(serde_json::json!({
+                    "id": request.id,
+                    "result": {
+                        "type": "agent_manifest_status",
+                        "last_result": "checked",
+                        "manifests": []
+                    }
+                })),
+                _ => panic!("unexpected request"),
+            }
+        })
         .unwrap()
         .unwrap();
 
         assert_eq!(response["result"]["type"], "agent_manifest_status");
         assert_eq!(
+            response["result"]["last_result"],
+            "registry update complete; generation 7, digest abc123"
+        );
+        assert_eq!(response["result"]["manifests"], serde_json::json!([]));
+        assert_eq!(
             methods,
             vec![
-                Method::ServerReloadAgentManifests(EmptyParams::default()),
+                Method::RegistryUpdate(crate::api::schema::RegistryUpdateParams::default()),
                 Method::ServerAgentManifests(EmptyParams::default())
             ]
         );
     }
 
     #[test]
-    fn update_agent_manifest_status_skips_server_when_fetch_fails() {
-        let response = update_agent_manifest_status(
-            |_request| panic!("server should not be called after fetch failure"),
-            || Err("network unavailable".to_string()),
-        )
-        .unwrap();
-
-        assert_eq!(response, Err("network unavailable".to_string()));
-        assert_eq!(
-            agent_manifest_update_error_response("network unavailable")["error"]["code"],
-            "agent_manifest_update_failed"
-        );
-    }
-
-    #[test]
-    fn update_agent_manifest_status_stops_after_reload_error() {
+    fn update_agent_manifest_status_stops_after_remote_error() {
         let mut methods = Vec::new();
-        let response = update_agent_manifest_status(
-            |request| {
-                methods.push(request.method.clone());
-                Ok(serde_json::json!({
-                    "id": request.id,
-                    "error": {
-                        "code": "reload_failed",
-                        "message": "reload failed"
-                    }
-                }))
-            },
-            || Ok(()),
-        )
-        .unwrap()
+        let response = update_agent_manifest_status(|request| {
+            methods.push(request.method.clone());
+            Ok(serde_json::json!({
+                "id": request.id,
+                "error": {
+                    "code": "reload_failed",
+                    "message": "reload failed"
+                }
+            }))
+        })
         .unwrap();
 
-        assert_eq!(response["error"]["code"], "reload_failed");
+        assert_eq!(response, Err("reload failed".into()));
         assert_eq!(
             methods,
-            vec![Method::ServerReloadAgentManifests(EmptyParams::default())]
+            vec![Method::RegistryUpdate(
+                crate::api::schema::RegistryUpdateParams::default()
+            )]
+        );
+        assert_eq!(
+            agent_manifest_update_error_response("reload failed")["error"]["code"],
+            "agent_manifest_update_failed"
         );
     }
 

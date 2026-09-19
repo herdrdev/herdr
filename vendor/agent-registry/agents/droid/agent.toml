@@ -1,0 +1,13 @@
+schema = 1
+id = "droid"
+name = "droid"
+aliases = []
+startable = true
+
+[launch]
+unix = "droid"
+windows = "droid"
+
+[sound]
+key = "droid"
+default = "off"

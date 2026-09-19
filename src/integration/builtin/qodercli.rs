@@ -1,0 +1,90 @@
+use std::io;
+use std::path::PathBuf;
+
+use crate::agents::integration::{IntegrationAdapter, IntegrationProfile};
+use crate::integration::qodercli_dir;
+use crate::integration::{install_qodercli, uninstall_qodercli};
+
+pub(super) const HOOK_INSTALL_NAME_UNIX: &str = "herdr-agent-state.sh";
+pub(super) const HOOK_INSTALL_NAME_WINDOWS: &str = "herdr-agent-state.ps1";
+pub(crate) const HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    HOOK_INSTALL_NAME_WINDOWS
+} else {
+    HOOK_INSTALL_NAME_UNIX
+};
+#[cfg(test)]
+pub(crate) const HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry/agents/qodercli/assets/herdr-agent-state.ps1"
+    ))
+} else {
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry/agents/qodercli/assets/herdr-agent-state.sh"
+    ))
+};
+pub(crate) const HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
+pub(crate) const REMOVED_LIFECYCLE_HOOK_EVENTS: [(&str, &str); 12] = [
+    ("SessionStart", "idle"),
+    ("UserPromptSubmit", "working"),
+    ("PreToolUse", "working"),
+    ("PostToolUse", "working"),
+    ("PostToolUseFailure", "working"),
+    ("SubagentStart", "working"),
+    ("SubagentStop", "working"),
+    ("PreCompact", "working"),
+    ("Notification", "blocked"),
+    ("PermissionRequest", "blocked"),
+    ("Stop", "idle"),
+    ("SessionEnd", "release"),
+];
+
+pub(super) const ADAPTER: IntegrationAdapter =
+    IntegrationAdapter::new(install_adapter, uninstall_adapter, integration_path);
+
+fn install_adapter(profile: &IntegrationProfile) -> io::Result<Vec<String>> {
+    let installed = install_qodercli(profile)?;
+    Ok(vec![
+        format!(
+            "installed qodercli integration hook to {}",
+            installed.hook_path.display()
+        ),
+        format!(
+            "ensured qodercli settings at {}",
+            installed.settings_path.display()
+        ),
+    ])
+}
+
+fn uninstall_adapter() -> io::Result<Vec<String>> {
+    let result = uninstall_qodercli()?;
+    let mut messages = Vec::new();
+    if result.removed_hook_file {
+        messages.push(format!(
+            "removed qodercli hook at {}",
+            result.hook_path.display()
+        ));
+    } else {
+        messages.push(format!(
+            "no qodercli hook found at {}",
+            result.hook_path.display()
+        ));
+    }
+    if result.updated_settings {
+        messages.push(format!(
+            "removed herdr qodercli hook entries from {}",
+            result.settings_path.display()
+        ));
+    } else {
+        messages.push(format!(
+            "no herdr qodercli hook entries found in {}",
+            result.settings_path.display()
+        ));
+    }
+    Ok(messages)
+}
+
+fn integration_path() -> io::Result<PathBuf> {
+    qodercli_dir().map(|dir| dir.join("hooks").join(HOOK_INSTALL_NAME))
+}

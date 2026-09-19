@@ -1,0 +1,4 @@
+accepted_references = ["id"]
+preferred_reference = "id"
+strategy = "separate_flag"
+token = "--conversation"

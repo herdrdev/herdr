@@ -467,7 +467,7 @@
           "key": "update.manifest_check",
           "type": "boolean",
           "default": "true",
-          "description": "Check herdr.dev for remote agent-detection manifest updates in the background. Bundled manifests and local overrides still apply."
+          "description": "Automatically check registry.herdr.dev at startup and every 30 minutes and hot-activate compatible agent registry updates. Local overrides still apply; local registry mode and debug builds do not auto-update."
         }
       ]
     },

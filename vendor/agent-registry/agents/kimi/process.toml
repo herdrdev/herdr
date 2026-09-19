@@ -1,0 +1,5 @@
+names = ["kimi", "kimi-code", "kimi code"]
+
+[[package_paths]]
+kind = "exact_suffix"
+components = ["node_modules", "@moonshot-ai", "kimi-code", "dist", "main.mjs"]

@@ -1,0 +1,13 @@
+schema = 1
+id = "letta"
+name = "letta"
+aliases = ["letta-code", "letta code"]
+startable = true
+
+[launch]
+unix = "letta"
+windows = "letta"
+
+[sound]
+key = "letta"
+default = "default"

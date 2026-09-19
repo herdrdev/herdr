@@ -165,6 +165,15 @@ pub(super) fn spawn_named_server(
     runtime_dir: &Path,
     session: &str,
 ) -> SpawnedServerProcess {
+    spawn_named_server_with_home(config_home, runtime_dir, session, None)
+}
+
+pub(super) fn spawn_named_server_with_home(
+    config_home: &Path,
+    runtime_dir: &Path,
+    session: &str,
+    home: Option<&Path>,
+) -> SpawnedServerProcess {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
@@ -186,6 +195,12 @@ pub(super) fn spawn_named_server(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
+    if let Some(home) = home {
+        command
+            .env("HOME", home)
+            .env("PI_CODING_AGENT_DIR", home.join(".pi/agent"));
+        command.env_remove("HERDR_AGENT_REGISTRY_SOURCE");
+    }
     let child = command.spawn().unwrap();
     register_spawned_herdr_pid(Some(child.id()));
     SpawnedServerProcess { child }
@@ -230,6 +245,7 @@ pub(super) fn run_named_cli_with_env_and_socket_override(
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
+        .env_remove("HERDR_AGENT_REGISTRY_SOURCE")
         .env_remove("HERDR_ENV");
     for (key, value) in envs {
         command.env(key, value);

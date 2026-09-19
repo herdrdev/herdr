@@ -6,6 +6,18 @@ use std::time::Duration;
 use super::{
     background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
 };
+fn take_due_registry_check(deadline: &mut Option<Instant>, now: Instant, enabled: bool) -> bool {
+    if !enabled {
+        *deadline = None;
+        return false;
+    }
+    if !deadline.is_some_and(|deadline| now >= deadline) {
+        return false;
+    }
+    *deadline = Some(now + AUTO_UPDATE_CHECK_INTERVAL);
+    true
+}
+
 fn retain_detached_process_after_wait(
     pid: u32,
     result: std::io::Result<Option<std::process::ExitStatus>>,
@@ -117,19 +129,35 @@ impl App {
         std::thread::spawn(move || crate::update::auto_update(update_tx));
     }
 
-    pub(crate) fn run_agent_manifest_update_check(&mut self) {
-        if !background_update_check_enabled(
+    pub(crate) fn run_agent_registry_update_check(
+        &mut self,
+        now: Instant,
+        api_tx: Option<&crate::api::ApiRequestSender>,
+    ) {
+        let enabled = background_update_check_enabled(
             self.policy.background_updates,
             self.update_manifest_check_enabled,
-        ) {
-            self.next_agent_manifest_update_check = None;
+        );
+        if !take_due_registry_check(&mut self.next_agent_registry_update_check, now, enabled) {
             return;
         }
-
-        self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
-
-        let manifest_update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
+        let Some(api_tx) = api_tx.cloned() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let before = crate::agents::store::generation();
+            match crate::agents::store::auto_update_remote() {
+                Ok(Some(status)) => {
+                    crate::api::REGISTRY_PUBLICATION_WAKEUP.notify(
+                        before,
+                        status.generation,
+                        &api_tx,
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "automatic agent registry update failed"),
+            }
+        });
     }
 
     pub(crate) fn next_headless_loop_deadline_with_git_refresh(
@@ -155,7 +183,7 @@ impl App {
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
             self.next_auto_update_check,
-            self.next_agent_manifest_update_check,
+            self.next_agent_registry_update_check,
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
@@ -206,6 +234,45 @@ impl App {
 mod tests {
     use super::*;
     use crate::workspace::Workspace;
+
+    #[test]
+    fn registry_schedule_runs_at_startup_then_every_thirty_minutes_without_catchup_bursts() {
+        let now = Instant::now();
+        let mut deadline = Some(now);
+        assert!(take_due_registry_check(&mut deadline, now, true));
+        assert_eq!(deadline, Some(now + Duration::from_secs(30 * 60)));
+        assert!(!take_due_registry_check(&mut deadline, now, true));
+        assert!(!take_due_registry_check(
+            &mut deadline,
+            now + Duration::from_secs(30 * 60 - 1),
+            true
+        ));
+        assert!(take_due_registry_check(
+            &mut deadline,
+            now + Duration::from_secs(30 * 60),
+            true
+        ));
+        let after_sleep = now + Duration::from_secs(5 * 60 * 60);
+        assert!(take_due_registry_check(&mut deadline, after_sleep, true));
+        assert_eq!(deadline, Some(after_sleep + AUTO_UPDATE_CHECK_INTERVAL));
+        assert!(!take_due_registry_check(&mut deadline, after_sleep, true));
+        assert!(!take_due_registry_check(&mut deadline, after_sleep, false));
+        assert!(deadline.is_none());
+        assert!(!take_due_registry_check(&mut deadline, after_sleep, true));
+    }
+
+    #[test]
+    fn registry_deadline_wakes_headless_loop_without_a_client_or_pending_render() {
+        let (mut app, _) = test_app_with_pane();
+        let now = Instant::now();
+        app.next_agent_registry_update_check = Some(now);
+        assert_eq!(
+            app.next_headless_loop_deadline_with_git_refresh(now, false, false),
+            Some(now)
+        );
+        app.run_agent_registry_update_check(now, None);
+        assert!(app.next_agent_registry_update_check.is_none());
+    }
 
     #[test]
     fn hidden_render_attempt_keeps_presentation_cadence_available() {

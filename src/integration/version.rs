@@ -1,25 +1,6 @@
 use std::io;
 
-pub(crate) struct AgentVersionRequirement {
-    pub label: &'static str,
-    pub binary: &'static str,
-    pub args: &'static [&'static str],
-    pub min_version: &'static str,
-}
-
-pub(crate) fn agent_version_requirement(
-    target: crate::api::schema::IntegrationTarget,
-) -> Option<AgentVersionRequirement> {
-    match target {
-        crate::api::schema::IntegrationTarget::Kimi => Some(AgentVersionRequirement {
-            label: "kimi code",
-            binary: "kimi",
-            args: &["--version"],
-            min_version: super::KIMI_MIN_VERSION,
-        }),
-        _ => None,
-    }
-}
+pub(crate) use crate::agents::integration::AgentVersionRequirement;
 
 pub(crate) fn extract_version_triple(text: &str) -> Option<(u64, u64, u64)> {
     text.split_whitespace().find_map(|token| {

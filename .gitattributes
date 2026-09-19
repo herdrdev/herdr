@@ -1,2 +1,8 @@
 * text=auto eol=lf
 packaging/windows/licenses/* binary
+
+# Preserve the exact source bytes pinned by the registry lock on every platform.
+vendor/agent-registry/** -text
+# The generated index is compared byte-for-byte by the offline registry checker.
+src/agents/bundled.rs text eol=lf
+docs/next/api/herdr-api.schema.json text eol=lf

@@ -312,6 +312,109 @@ fn integration_commands_run_locally_when_server_is_missing() {
 }
 
 #[test]
+fn named_registry_update_supplies_explicit_api_and_offline_cli_integration_installs() {
+    let base = unique_test_dir();
+    let home = base.join("home");
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let agent_dir = home.join(".pi/agent");
+    let installed = agent_dir.join("extensions/herdr-agent-state.ts");
+    fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    let source = base.join("registry");
+    let package = source.join("agents/pi");
+    fs::create_dir_all(package.join("assets")).unwrap();
+    let vendored = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/agent-registry/agents/pi"
+    ));
+    for name in [
+        "agent.toml",
+        "process.toml",
+        "detection.toml",
+        "resume.toml",
+        "integration.toml",
+        "assets/herdr-agent-state.ts",
+    ] {
+        fs::copy(vendored.join(name), package.join(name)).unwrap();
+    }
+    let old_asset = fs::read_to_string(vendored.join("assets/herdr-agent-state.ts")).unwrap();
+    fs::write(&installed, &old_asset).unwrap();
+    let mut metadata: toml::Value =
+        toml::from_str(&fs::read_to_string(package.join("integration.toml")).unwrap()).unwrap();
+    let old_version = metadata["versions"]["unix"].as_integer().unwrap();
+    assert_eq!(
+        metadata["versions"]["windows"].as_integer(),
+        Some(old_version)
+    );
+    metadata["versions"]["unix"] = (old_version + 1).into();
+    metadata["versions"]["windows"] = (old_version + 1).into();
+    fs::write(
+        package.join("integration.toml"),
+        toml::to_string(&metadata).unwrap(),
+    )
+    .unwrap();
+    let new_asset = old_asset.replace(
+        &format!("HERDR_INTEGRATION_VERSION={old_version}"),
+        &format!("HERDR_INTEGRATION_VERSION={}", old_version + 1),
+    );
+    fs::write(package.join("assets/herdr-agent-state.ts"), &new_asset).unwrap();
+
+    let session = "integration-assets";
+    let socket = named_session_socket(&config_home, session);
+    let server = spawn_named_server_with_home(&config_home, &runtime_dir, session, Some(&home));
+    wait_for_socket(&socket, Duration::from_secs(10));
+    let run = |args: &[&str]| {
+        let output = run_named_cli_with_env(
+            &config_home,
+            &runtime_dir,
+            args,
+            &[("HOME", &home), ("PI_CODING_AGENT_DIR", &agent_dir)],
+        );
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    run(&["--session", session, "workspace", "list"]);
+    run(&[
+        "--session",
+        session,
+        "registry",
+        "reload",
+        source.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        fs::read_to_string(&installed).unwrap(),
+        old_asset,
+        "reload must not install executable files"
+    );
+    let status = run(&["--session", session, "integration", "status"]);
+    assert!(String::from_utf8_lossy(&status.stdout).contains("pi: outdated"));
+    let applied = send_request(
+        &socket,
+        r#"{"id":"install","method":"integration.install","params":{"target":"pi"}}"#,
+    );
+    assert!(applied.get("error").is_none(), "{applied}");
+    assert_eq!(fs::read_to_string(&installed).unwrap(), new_asset);
+    let status = run(&["--session", session, "integration", "status"]);
+    assert!(String::from_utf8_lossy(&status.stdout)
+        .contains(&format!("pi: current (v{})", old_version + 1)));
+    drop(server);
+    fs::remove_dir_all(&source).unwrap();
+    fs::write(&installed, &old_asset).unwrap();
+    run(&["--session", session, "integration", "install", "pi"]);
+    assert_eq!(
+        fs::read_to_string(&installed).unwrap(),
+        new_asset,
+        "fresh offline CLI must use the selected session's saved registry"
+    );
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn integration_status_outdated_only_prints_action_for_legacy_install() {
     let base = unique_test_dir();
     let home_dir = base.join("home");

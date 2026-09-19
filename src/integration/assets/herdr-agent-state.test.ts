@@ -45,17 +45,17 @@ afterEach(async () => {
 });
 
 const integrations = [
-  { name: "Pi", modulePath: "./pi/herdr-agent-state.ts" },
-  { name: "Oh My Pi", modulePath: "./omp/herdr-agent-state.ts" },
+  { name: "Pi", modulePath: "../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts" },
+  { name: "Oh My Pi", modulePath: "../../../vendor/agent-registry/agents/omp/assets/herdr-agent-state.ts" },
 ] as const;
 
 const socketPlugins = [
   {
     name: "OpenCode",
-    modulePath: "./opencode/herdr-agent-state.js",
+    modulePath: "../../../vendor/agent-registry/agents/opencode/assets/herdr-agent-state.js",
     sessionID: "opencode-session",
   },
-  { name: "Kilo", modulePath: "./kilo/herdr-agent-state.js", sessionID: "kilo-session" },
+  { name: "Kilo", modulePath: "../../../vendor/agent-registry/agents/kilo/assets/herdr-agent-state.js", sessionID: "kilo-session" },
 ] as const;
 
 function importFresh(modulePath: string) {
@@ -155,7 +155,7 @@ test("OpenCode stays disabled without the Herdr socket environment", async () =>
   process.env.HERDR_PANE_ID = "test:p1";
   delete process.env.HERDR_SOCKET_PATH;
 
-  const { HerdrAgentStatePlugin } = await importFresh("./opencode/herdr-agent-state.js");
+  const { HerdrAgentStatePlugin } = await importFresh("../../../vendor/agent-registry/agents/opencode/assets/herdr-agent-state.js");
 
   expect(await HerdrAgentStatePlugin()).toEqual({});
 });
@@ -237,7 +237,7 @@ test("OMP ignores nested sessions launched inside another OMP shell", async () =
   process.env.OMPCODE = "1";
   const { handlers, pi } = createExtensionHarness();
 
-  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/omp/assets/herdr-agent-state.ts");
   install(pi);
 
   // OMP sets OMPCODE on every shell it spawns. A nested `omp` inherits it and
@@ -260,7 +260,7 @@ test("OMP ignores nested sessions launched inside another OMP shell", async () =
 });
 
 test("OMP accepts POSIX and Windows session paths", async () => {
-  const { isAbsoluteSessionPath } = await importFresh("./omp/herdr-agent-state.ts");
+  const { isAbsoluteSessionPath } = await importFresh("../../../vendor/agent-registry/agents/omp/assets/herdr-agent-state.ts");
 
   expect(isAbsoluteSessionPath("/tmp/omp-session.jsonl")).toBe(true);
   expect(isAbsoluteSessionPath("C:\\Users\\User\\.omp\\agent\\sessions\\omp-session.jsonl")).toBe(
@@ -273,7 +273,7 @@ test("OMP accepts POSIX and Windows session paths", async () => {
 test("Pi reports a Windows session path", async () => {
   const requests = await startRecordingServer("pi-windows-session-path");
   const { handlers, pi } = createExtensionHarness();
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   const sessionPath = "C:\\Users\\User\\.pi\\agent\\sessions\\pi-session.jsonl";
@@ -295,7 +295,7 @@ test("Pi reports a Windows session path", async () => {
 test("Pi reports idle only after the agent settles", async () => {
   const requests = await startRecordingServer("pi-settled");
   const { handlers, pi } = createExtensionHarness();
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   expect(completionHandlers(handlers)).toEqual(["agent_settled"]);
@@ -325,7 +325,7 @@ test("Pi reports idle only after the agent settles", async () => {
 test("Pi ignores RPC sessions even when UI APIs are available", async () => {
   const requests = await startRecordingServer("pi-rpc");
   const { handlers, pi } = createExtensionHarness();
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   const context = {
@@ -344,7 +344,7 @@ test("Pi ignores RPC sessions even when UI APIs are available", async () => {
 test("Pi settlement preserves explicit blocked-state precedence", async () => {
   const requests = await startRecordingServer("pi-settled-blocked");
   const { eventHandlers, handlers, pi } = createExtensionHarness();
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   let idle = true;
@@ -371,7 +371,7 @@ test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
   const { handlers, pi } = createExtensionHarness();
 
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   const sessionStart = handlers.get("session_start");
@@ -435,7 +435,7 @@ test("Pi waits for a replacement session report before publishing state", async 
 
   configureIntegrationEnvironment(recordingSocketPath);
   const { handlers, pi } = createExtensionHarness();
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   const sessionStart = handlers.get("session_start");
@@ -525,7 +525,7 @@ test("Oh My Pi retries working before a queued idle state", async () => {
   process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
   const { handlers, pi } = createExtensionHarness();
 
-  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/omp/assets/herdr-agent-state.ts");
   install(pi);
 
   const context = {
@@ -555,7 +555,7 @@ test("Oh My Pi keeps working when a turn ends with a scheduled continuation", as
   process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "0";
   const { handlers, pi } = createExtensionHarness();
 
-  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/omp/assets/herdr-agent-state.ts");
   install(pi);
 
   let idle = true;
@@ -594,7 +594,7 @@ test("Pi retries working state after an unanswered socket attempt", async () => 
     await startDroppedFirstResponseServer("pi-retry");
   const { handlers, pi } = createExtensionHarness();
 
-  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  const { default: install } = await importFresh("../../../vendor/agent-registry/agents/pi/assets/herdr-agent-state.ts");
   install(pi);
 
   const sessionStart = handlers.get("session_start");

@@ -1,0 +1,13 @@
+schema = 1
+id = "qwen"
+name = "qwen"
+aliases = ["qwen-code", "qwen code"]
+startable = true
+
+[launch]
+unix = "qwen"
+windows = "qwen"
+
+[sound]
+key = "qwen"
+default = "default"

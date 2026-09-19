@@ -23,6 +23,7 @@ use super::{
 };
 
 struct AgentRestoreState<'a> {
+    registry: Arc<crate::agents::RegistrySnapshot>,
     enabled: bool,
     resumed_sessions: &'a mut HashSet<String>,
 }
@@ -35,6 +36,7 @@ struct PaneRestoreStartup<'a> {
 }
 
 struct RestoreRuntimeContext<'a> {
+    registry: Arc<crate::agents::RegistrySnapshot>,
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'a>,
     resume_agents_on_restore: bool,
@@ -272,8 +274,10 @@ fn restore_with_imports_and_failures(
     let mut terminal_runtimes = HashMap::new();
     let mut resumed_agent_sessions = HashSet::new();
     let mut failed_imports = 0;
+    let registry = crate::agents::registry();
     for (idx, ws_snap) in snapshot.workspaces.iter().enumerate() {
         let runtime_context = RestoreRuntimeContext {
+            registry: registry.clone(),
             scrollback_limit_bytes,
             shell_config,
             resume_agents_on_restore,
@@ -494,13 +498,14 @@ fn restore_tab(
         let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
         let saved_managed_agent = saved_pane
             .and_then(|pane| pane.managed_agent_kind.as_deref())
-            .and_then(crate::detect::parse_canonical_agent_label);
+            .and_then(|id| crate::detect::Agent::parse(id).ok());
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let saved_history =
             old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
         let startup = {
             let mut agent_restore = AgentRestoreState {
+                registry: runtime_context.registry.clone(),
                 enabled: runtime_context.resume_agents_on_restore,
                 resumed_sessions: resumed_agent_sessions,
             };
@@ -511,7 +516,7 @@ fn restore_tab(
         let initial_restore_agent = startup
             .restore_plan
             .as_ref()
-            .and_then(|plan| crate::detect::parse_agent_label(&plan.agent));
+            .and_then(|plan| crate::detect::Agent::parse(&plan.agent).ok());
 
         let old_pane_id = reverse_id_map.get(id).copied();
         let public_pane_id = old_pane_id
@@ -535,31 +540,25 @@ fn restore_tab(
         };
         if let Some(plan) = pending_native_agent_restore {
             let terminal_id = TerminalId::alloc();
+            let strict_input_readiness = plan.strict_input_readiness;
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
             if let Some(label) = saved_label {
                 terminal.set_manual_label(label);
             }
             if let Some(session) = restored_agent_session {
-                terminal.set_persisted_agent_session(session);
-            }
-            match (saved_agent_name, saved_managed_agent) {
-                (Some(agent_name), Some(agent)) => {
-                    terminal.restore_managed_agent(agent_name, agent)
-                }
-                (Some(_), None) => {}
-                (None, _) => {}
+                terminal.restore_agent_session(
+                    session,
+                    saved_agent_session.map_or_else(Vec::new, |saved| saved.resume_options.clone()),
+                );
+                terminal.pinned_agent_resume_recipe =
+                    saved_agent_session.and_then(|session| session.recipe.clone());
             }
             if let Some(agent) = initial_restore_agent {
-                let _ = terminal.set_detected_state_with_screen_signals_at(
-                    Some(agent),
-                    AgentState::Idle,
-                    false,
-                    false,
-                    false,
-                    false,
-                    std::time::Instant::now(),
-                );
+                let restored_name = (saved_managed_agent == Some(agent))
+                    .then_some(saved_agent_name)
+                    .flatten();
+                terminal.queue_managed_agent(restored_name, agent, strict_input_readiness);
             }
             panes.insert(*id, PaneState::new(terminal_id));
             terminals.push(terminal);
@@ -638,7 +637,29 @@ fn restore_tab(
                     terminal.set_manual_label(label);
                 }
                 if let Some(session) = restored_agent_session {
-                    terminal.set_persisted_agent_session(session);
+                    terminal.restore_agent_session(
+                        session,
+                        saved_agent_session
+                            .map_or_else(Vec::new, |saved| saved.resume_options.clone()),
+                    );
+                    terminal.pinned_agent_resume_recipe =
+                        saved_agent_session.and_then(|session| session.recipe.clone());
+                }
+                if was_imported {
+                    if let Some(session) = saved_agent_session {
+                        if let Ok(agent) = crate::detect::Agent::parse(&session.agent) {
+                            let recipe = session.recipe.clone().or_else(|| {
+                                crate::agents::bundled_profile(&session.agent)
+                                    .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
+                            });
+                            terminal.admit_agent_resume_recipe(
+                                agent,
+                                recipe,
+                                terminal.persisted_agent_session.clone(),
+                                std::time::Instant::now(),
+                            );
+                        }
+                    }
                 }
                 match (saved_agent_name, saved_managed_agent) {
                     (Some(agent_name), Some(agent)) if was_imported => {
@@ -745,8 +766,13 @@ fn pane_restore_startup<'a>(
     // resumable agent session and resume is enabled, do not replay saved pane
     // presentation history into that terminal, even when this pane is a
     // duplicate suppressed by session de-duplication.
-    let restore_plan =
-        session.and_then(|session| restore_plan_for_snapshot(session, agent_restore.enabled));
+    let restore_plan = session.and_then(|session| {
+        restore_plan_for_snapshot_with_registry(
+            session,
+            agent_restore.enabled,
+            &agent_restore.registry,
+        )
+    });
     let has_native_agent_restore = restore_plan.is_some();
     // Reserve before spawning so later panes in the same restore pass cannot
     // launch the same native agent session. The caller rolls this reservation
@@ -781,21 +807,36 @@ fn pane_restore_startup<'a>(
     }
 }
 
-fn restore_plan_for_snapshot(
+fn restore_plan_for_snapshot_with_registry(
     session: &PaneAgentSessionSnapshot,
     resume_agents_on_restore: bool,
+    registry: &crate::agents::RegistrySnapshot,
 ) -> Option<crate::agent_resume::AgentResumePlan> {
     if !resume_agents_on_restore {
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    match crate::agent_resume::pinned_plan(registry, &persisted, session.recipe.as_ref()) {
+        Ok(mut plan) => {
+            plan.resume_options = registry
+                .profile_by_id(&session.agent)
+                .and_then(|profile| profile.session())
+                .map_or_else(Vec::new, |profile| {
+                    profile.resume_options.filter(&session.resume_options)
+                });
+            Some(plan)
+        }
+        Err(reason) => {
+            warn!(agent = %session.agent, reason, "automatic agent resume disabled; session metadata retained");
+            None
+        }
+    }
 }
 
 fn persisted_agent_session_from_snapshot(
     session: &PaneAgentSessionSnapshot,
 ) -> Option<crate::agent_resume::PersistedAgentSession> {
-    crate::agent_resume::session_ref_from_snapshot(
+    crate::agent_resume::retained_snapshot_session(
         &session.source,
         &session.agent,
         session.kind,
@@ -813,6 +854,13 @@ fn restored_terminal_agent_session(
     session.and_then(persisted_agent_session_from_snapshot)
 }
 
+#[cfg(test)]
+fn restore_plan_for_snapshot(
+    session: &PaneAgentSessionSnapshot,
+    enabled: bool,
+) -> Option<crate::agent_resume::AgentResumePlan> {
+    restore_plan_for_snapshot_with_registry(session, enabled, &crate::agents::registry())
+}
 #[cfg(test)]
 fn take_restore_plan_for_snapshot(
     session: &PaneAgentSessionSnapshot,
@@ -917,6 +965,192 @@ fn collect_ids_inner(node: &Node, ids: &mut Vec<PaneId>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resume_options_snapshot_is_optional_bounded_and_revalidated_for_novel_agents() {
+        let registry = crate::agent_resume::resume_options_test_registry(1, "options=['--model']");
+        let recipe = crate::agent_resume::PinnedAgentResumeRecipe::capture(
+            registry.profile_by_id("novel-options").unwrap(),
+        )
+        .unwrap();
+        let mut json = serde_json::json!({"source":"herdr:launch", "agent":"novel-options", "kind":"id", "value":"native", "recipe":recipe});
+        let old: PaneAgentSessionSnapshot = serde_json::from_value(json.clone()).unwrap();
+        assert!(old.resume_options.is_empty());
+        json["resume_options"] =
+            serde_json::json!(["--model", "chosen model", "--yolo", "--resume=other"]);
+        let saved: PaneAgentSessionSnapshot = serde_json::from_value(json.clone()).unwrap();
+        let plan = restore_plan_for_snapshot_with_registry(&saved, true, &registry).unwrap();
+        assert_eq!(plan.resume_options, ["--model", "chosen model"]);
+        json["resume_options"] = serde_json::json!(["x".repeat(4097)]);
+        assert!(serde_json::from_value::<PaneAgentSessionSnapshot>(json.clone()).is_err());
+        json["resume_options"] = serde_json::json!(vec!["--model"; 129]);
+        assert!(serde_json::from_value::<PaneAgentSessionSnapshot>(json).is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_dynamic_package_preserves_recipe_and_metadata_without_auto_resume() {
+        let registry = crate::agent_resume::test_registry(
+            "novel-42",
+            "shared-cli",
+            "separate_flag",
+            "--session",
+        );
+        let recipe = crate::agent_resume::PinnedAgentResumeRecipe::capture(
+            registry.profile_by_id("novel-42").unwrap(),
+        )
+        .unwrap();
+        let mut state = crate::app::AppState::test_with_adversarial_identity_state();
+        state.assert_invariants_for_test();
+        let ws = &state.workspaces[0];
+        let tab_idx = ws.active_tab;
+        let pane_id = ws.tabs[tab_idx].root_pane;
+        let terminal_id = ws.terminal_id(pane_id).unwrap().clone();
+        let public_number = ws.public_pane_number(pane_id).unwrap();
+        let public_tab_number = ws.tabs[tab_idx].number;
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.restore_managed_agent(
+            "reviewer".into(),
+            registry.profile_by_id("novel-42").unwrap().legacy_agent(),
+        );
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:launch".into(),
+            agent: "novel-42".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("native-id").unwrap(),
+        });
+        terminal.pinned_agent_resume_recipe = Some(recipe.clone());
+        let snapshot = super::super::snapshot::capture(
+            &state.workspaces,
+            &state.terminals,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+            state.active,
+            state.selected,
+        );
+        let session = snapshot.workspaces[0].tabs[tab_idx].panes[&pane_id.raw()]
+            .agent_session
+            .clone()
+            .unwrap();
+        let snapshot: SessionSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        let (events, _rx) = mpsc::channel(32);
+        let (workspaces, terminals, runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        state.workspaces = workspaces;
+        state.terminals = terminals;
+        state.assert_invariants_for_test();
+        let ws = &state.workspaces[0];
+        assert_eq!(ws.tabs[tab_idx].number, public_tab_number);
+        let restored_pane = ws.tabs[tab_idx].root_pane;
+        assert_eq!(ws.public_pane_number(restored_pane), Some(public_number));
+        let terminal = &state.terminals[ws.terminal_id(restored_pane).unwrap()];
+        assert!(terminal.pending_agent_resume_plan.is_none());
+        assert!(crate::agent_resume::pinned_plan(
+            &crate::agents::registry(),
+            terminal.persisted_agent_session.as_ref().unwrap(),
+            terminal.pinned_agent_resume_recipe.as_ref(),
+        )
+        .unwrap_err()
+        .contains("missing"));
+        assert!(terminal.hook_authority.is_none());
+        assert!(terminal.managed_agent_kind().is_none());
+        assert_eq!(
+            terminal.persisted_agent_session.as_ref().unwrap().agent,
+            "novel-42"
+        );
+        assert_eq!(terminal.pinned_agent_resume_recipe.as_ref(), Some(&recipe));
+        let captured = super::super::snapshot::capture(
+            &state.workspaces,
+            &state.terminals,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+            state.active,
+            state.selected,
+        );
+        let saved = captured.workspaces[0].tabs[tab_idx].panes[&restored_pane.raw()]
+            .agent_session
+            .as_ref()
+            .unwrap();
+        assert_eq!(saved, &session);
+        for runtime in runtimes.into_values() {
+            runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn restore_plan_uses_one_retained_snapshot() {
+        let old = crate::agent_resume::test_registry("novel-42", "old-cli", "subcommand", "resume");
+        let new = crate::agent_resume::test_registry("novel-42", "new-cli", "subcommand", "resume");
+        let session = PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            source: "herdr:launch".into(),
+            agent: "novel-42".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "native-id".into(),
+            recipe: old
+                .profile_by_id("novel-42")
+                .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture),
+        };
+        assert_eq!(
+            restore_plan_for_snapshot_with_registry(&session, true, &old)
+                .unwrap()
+                .argv[0],
+            "old-cli"
+        );
+        assert!(restore_plan_for_snapshot_with_registry(&session, true, &new).is_none());
+        assert!(crate::agent_resume::pinned_plan(
+            &new,
+            &persisted_agent_session_from_snapshot(&session).unwrap(),
+            session.recipe.as_ref(),
+        )
+        .unwrap_err()
+        .contains("changed"));
+    }
+
+    #[test]
+    fn rejected_recipe_keeps_history_and_does_not_reserve_a_session() {
+        let mut session = PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "native-id".into(),
+            recipe: crate::agents::bundled_profile("codex")
+                .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture),
+        };
+        session.recipe.as_mut().unwrap().token = "changed".into();
+        let history = PaneHistorySnapshot {
+            ansi: "saved history".into(),
+            lines: 1,
+        };
+        let mut resumed = HashSet::new();
+        let mut state = AgentRestoreState {
+            registry: crate::agents::registry(),
+            enabled: true,
+            resumed_sessions: &mut resumed,
+        };
+        let startup = pane_restore_startup(Some(&session), Some(&history), &mut state);
+        assert!(startup.restore_plan.is_none());
+        assert_eq!(startup.initial_history_ansi, Some("saved history"));
+        assert!(!startup.duplicate_agent_session);
+        assert!(state.resumed_sessions.is_empty());
+        assert!(restored_terminal_agent_session(Some(&session), false).is_some());
+        assert!(crate::agent_resume::pinned_plan(
+            &state.registry,
+            &persisted_agent_session_from_snapshot(&session).unwrap(),
+            session.recipe.as_ref(),
+        )
+        .unwrap_err()
+        .contains("changed"));
+    }
+
     fn test_session_path(name: &str) -> String {
         std::env::current_dir()
             .unwrap()
@@ -1013,6 +1247,8 @@ mod tests {
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1026,6 +1262,8 @@ mod tests {
         );
 
         let unsupported_path = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:claude".into(),
             agent: "claude".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1038,6 +1276,8 @@ mod tests {
     fn restore_plan_selection_suppresses_duplicates() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1060,6 +1300,8 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1071,6 +1313,7 @@ mod tests {
         };
         let mut resumed = HashSet::new();
         let mut agent_restore = AgentRestoreState {
+            registry: crate::agents::registry(),
             enabled: true,
             resumed_sessions: &mut resumed,
         };
@@ -1085,6 +1328,8 @@ mod tests {
     #[test]
     fn pane_restore_startup_suppresses_history_for_duplicate_native_agent_session() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1096,6 +1341,7 @@ mod tests {
         };
         let mut resumed = HashSet::new();
         let mut agent_restore = AgentRestoreState {
+            registry: crate::agents::registry(),
             enabled: true,
             resumed_sessions: &mut resumed,
         };
@@ -1113,6 +1359,8 @@ mod tests {
     #[test]
     fn pane_restore_startup_keeps_history_without_native_agent_resume() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1124,6 +1372,7 @@ mod tests {
         };
         let mut resumed = HashSet::new();
         let mut agent_restore = AgentRestoreState {
+            registry: crate::agents::registry(),
             enabled: false,
             resumed_sessions: &mut resumed,
         };
@@ -1139,6 +1388,8 @@ mod tests {
     #[test]
     fn restore_rehydrates_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:hermes".into(),
             agent: "hermes".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1155,6 +1406,8 @@ mod tests {
     #[test]
     fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            resume_options: Vec::new(),
+            recipe: None,
             source: "herdr:pi".into(),
             agent: "pi".into(),
             kind: crate::agent_resume::AgentSessionRefKind::Path,
@@ -1192,6 +1445,8 @@ mod tests {
                             agent_name: Some("reviewer".into()),
                             managed_agent_kind: Some("opencode".into()),
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                resume_options: Vec::new(),
+                                recipe: None,
                                 source: "herdr:opencode".into(),
                                 agent: "opencode".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1352,6 +1607,8 @@ mod tests {
             agent_name: Some("planner".into()),
             managed_agent_kind: None,
             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                resume_options: Vec::new(),
+                recipe: None,
                 source: "herdr:codex".into(),
                 agent: "codex".into(),
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1479,8 +1736,11 @@ mod tests {
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn native_agent_restore_defers_runtime_launch() {
+    async fn native_agent_restore_defers_runtime_launch_without_claiming_readiness() {
         let cwd = std::env::current_dir().unwrap();
+        let recipe = crate::agents::bundled_profile("codex")
+            .and_then(crate::agent_resume::PinnedAgentResumeRecipe::capture)
+            .expect("bundled codex resume recipe");
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
@@ -1503,6 +1763,8 @@ mod tests {
                             agent_name: None,
                             managed_agent_kind: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                                resume_options: Vec::new(),
+                                recipe: Some(recipe.clone()),
                                 source: "herdr:codex".into(),
                                 agent: "codex".into(),
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
@@ -1547,6 +1809,21 @@ mod tests {
             terminal.pending_agent_resume_plan.is_some(),
             "restored native agent panes should defer resume until client terminal context is known"
         );
+        assert!(
+            terminal.is_agent_terminal(),
+            "unnamed queued restore remains addressable"
+        );
+        assert_eq!(terminal.agent_name, None);
+        assert_eq!(
+            terminal.managed_agent_kind(),
+            Some(crate::detect::Agent::Codex)
+        );
+        assert!(terminal.managed_agent_launch_pending());
+        assert!(!terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.next_managed_agent_deadline(), None);
+        assert_eq!(terminal.detected_agent, None);
+        assert_eq!(terminal.state, AgentState::Unknown);
+        assert_eq!(terminal.pinned_agent_resume_recipe.as_ref(), Some(&recipe));
         assert!(
             !terminal.respawn_shell_on_exit,
             "deferred agent resume should not use native restore lifecycle before launch"

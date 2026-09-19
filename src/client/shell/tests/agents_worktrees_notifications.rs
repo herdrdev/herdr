@@ -430,6 +430,40 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
 }
 
 #[test]
+fn agent_sidebar_uses_canonical_overrides_without_local_registry_membership() {
+    let mut projected = snapshot();
+    projected.agents = vec![ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("remote worker".into()),
+        display_agent: None,
+        agent: Some("future-agent".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Done,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: vec![("summary".into(), "remote-only".into())],
+        focused: true,
+    }];
+    let config: Config =
+        toml::from_str("[ui.sidebar.agents.rows_by_agent]\nfuture-agent = [[\"$summary\"]]\n")
+            .expect("canonical remote identity is valid config");
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    assert!(text.contains("remote-only"), "frame: {text}");
+}
+
+#[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();

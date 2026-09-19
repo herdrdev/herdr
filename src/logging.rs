@@ -370,11 +370,7 @@ pub(crate) fn update_available(version: &str) {
     );
 }
 
-pub(crate) fn integration_action(
-    action: &'static str,
-    target: &'static str,
-    outcome: &'static str,
-) {
+pub(crate) fn integration_action(action: &'static str, target: &str, outcome: &'static str) {
     tracing::info!(
         event = "integration.action",
         subsystem = "integration",

@@ -2,12 +2,12 @@ use std::path::Path;
 
 #[cfg(not(windows))]
 pub(crate) fn create_private_state_file(path: &Path) -> std::io::Result<std::fs::File> {
-    super::create_remote_ssh_config_file(path)
+    super::create_private_file(path)
 }
 
 #[cfg(windows)]
 pub(crate) fn create_private_state_file(path: &Path) -> std::io::Result<std::fs::File> {
-    super::windows::create_remote_ssh_config_file(path)
+    super::windows::create_private_file(path)
 }
 
 #[cfg(not(windows))]

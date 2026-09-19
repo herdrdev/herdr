@@ -20,6 +20,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,6 +41,8 @@ VARIANT_RE = re.compile(
 )
 RENAME_ALL_RE = re.compile(r'rename_all\s*=\s*"([^"]+)"')
 RENAME_RE = re.compile(r'rename\s*=\s*"([^"]+)"')
+SOUND_OVERRIDES_STRUCT = "AgentSoundOverrides"
+SOUND_SETTING_ENUM = "AgentSoundSetting"
 
 
 @dataclass
@@ -67,10 +70,84 @@ def apply_rename_all(name: str, style: str | None) -> str:
     raise ValueError(f"unsupported serde rename_all style: {style}")
 
 
-def parse_model(paths: list[Path]) -> Model:
+def parse_sound_profile_keys(text: str) -> list[str]:
+    """Read the optional [sound] config key from one agent.toml package."""
+    package = tomllib.loads(text)
+    if "sound" not in package:
+        return []
+    sound = package["sound"]
+    if not isinstance(sound, dict) or not isinstance(sound.get("key"), str):
+        raise ValueError("sound profile must have a string config key")
+    key = sound["key"]
+    if not key.strip():
+        raise ValueError("sound profile config keys must not be empty")
+    return [key]
+
+
+def augment_sound_override_fields(model: Model, sound_keys: list[str]) -> None:
+    """Expose registry-owned sound keys to the config reference walker."""
+    if not sound_keys:
+        return
+    if SOUND_OVERRIDES_STRUCT not in model.structs:
+        raise KeyError(
+            f"struct {SOUND_OVERRIDES_STRUCT} not found in config model"
+        )
+
+    fields = model.structs[SOUND_OVERRIDES_STRUCT]
+    existing = {struct_field.name for struct_field in fields}
+    for key in sound_keys:
+        if key in existing:
+            raise ValueError(
+                f"sound profile config key duplicates a literal config field: {key}"
+            )
+        fields.append(StructField(name=key, rust_type=SOUND_SETTING_ENUM, doc=""))
+        existing.add(key)
+
+
+def agent_profile_paths(source: Path) -> list[Path]:
+    """Return one TOML fixture or the exact per-agent package paths."""
+    if source.is_file():
+        return [source]
+    if source.is_dir():
+        paths = sorted(source.glob("*/agent.toml"))
+        if not paths:
+            raise ValueError(f"no agent.toml packages found in {source}")
+        return paths
+    raise FileNotFoundError(f"agent profile source does not exist: {source}")
+
+
+def parse_sound_profile_source(source: Path) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for path in agent_profile_paths(source):
+        for key in parse_sound_profile_keys(path.read_text(encoding="utf-8")):
+            if key in seen:
+                raise ValueError(f"duplicate sound profile config key: {key}")
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def inferred_agents_directory(paths: list[Path]) -> Path | None:
+    if not paths:
+        return None
+    model_roots = {path.parent for path in paths}
+    if len(model_roots) != 1:
+        return None
+    src = next(iter(model_roots)).parent
+    candidate = src.parent / "vendor" / "agent-registry" / "agents"
+    return candidate if candidate.is_dir() or src.name == "src" else None
+
+
+def parse_model(paths: list[Path], agent_catalog: Path | None = None) -> Model:
     model = Model()
     for path in paths:
         parse_file(path.read_text(encoding="utf-8"), model)
+
+    profile_source = agent_catalog or inferred_agents_directory(paths)
+    if profile_source is not None:
+        sound_keys = parse_sound_profile_source(profile_source)
+        augment_sound_override_fields(model, sound_keys)
     return model
 
 
@@ -262,8 +339,15 @@ def reference_entries(reference_path: Path) -> tuple[dict[str, dict], list[str]]
     return entries, errors
 
 
-def check(model_root: Path, reference_path: Path) -> list[str]:
-    model = parse_model(sorted(model_root.glob("*.rs")))
+def check(
+    model_root: Path,
+    reference_path: Path,
+    agent_catalog: Path | None = None,
+) -> list[str]:
+    model = parse_model(
+        sorted(model_root.glob("*.rs")),
+        agent_catalog=agent_catalog,
+    )
     code_entries = {entry["key"]: entry for entry in collect_entries(model)}
     doc_entries, errors = reference_entries(reference_path)
     code_keys = set(code_entries)
@@ -293,6 +377,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--model-root", default=DEFAULT_MODEL_ROOT, type=Path)
     parser.add_argument("--reference", default=DEFAULT_REFERENCE, type=Path)
     parser.add_argument(
+        "--agent-profiles",
+        "--agent-catalog",
+        dest="agent_catalog",
+        type=Path,
+        help=(
+            "Optional agents directory or single agent.toml fixture. By default, "
+            "vendor/agent-registry/agents is discovered from the model root."
+        ),
+    )
+    parser.add_argument(
         "--emit",
         action="store_true",
         help="Print extracted keys with types and doc comments as JSON and exit.",
@@ -304,11 +398,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
     if args.emit:
-        model = parse_model(sorted(args.model_root.glob("*.rs")))
+        model = parse_model(
+            sorted(args.model_root.glob("*.rs")),
+            agent_catalog=args.agent_catalog,
+        )
         print(json.dumps(collect_entries(model), indent=2))
         return 0
 
-    errors = check(args.model_root, args.reference)
+    errors = check(
+        args.model_root,
+        args.reference,
+        agent_catalog=args.agent_catalog,
+    )
     if errors:
         print("error: config reference is out of sync with src/config", file=sys.stderr)
         for error in errors:

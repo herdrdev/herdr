@@ -1,0 +1,13 @@
+schema = 1
+id = "kimi"
+name = "kimi"
+aliases = ["kimi-code", "kimi code"]
+startable = true
+
+[launch]
+unix = "kimi"
+windows = "kimi"
+
+[sound]
+key = "kimi"
+default = "default"

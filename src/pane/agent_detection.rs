@@ -175,6 +175,7 @@ pub(super) enum DetectionTransitionDecision {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DetectionTransitionInput {
+    pub(super) force_publish: bool,
     pub(super) previous_publish: DetectionPublishState,
     pub(super) next_publish: DetectionPublishState,
     pub(super) agent_changed: bool,
@@ -197,13 +198,15 @@ pub(super) fn decide_detection_transition(
         return DetectionTransitionDecision::NoPublish;
     }
 
-    if should_publish_detection_update(
-        input.previous_publish,
-        input.next_publish,
-        input.agent_changed,
-        input.process_exited,
-        input.stable_refresh_due,
-    ) {
+    if input.force_publish
+        || should_publish_detection_update(
+            input.previous_publish,
+            input.next_publish,
+            input.agent_changed,
+            input.process_exited,
+            input.stable_refresh_due,
+        )
+    {
         return DetectionTransitionDecision::PublishNext;
     }
 
@@ -216,6 +219,7 @@ pub(super) enum DetectionPublishDecision {
     Publish {
         state: AgentState,
         visible_idle: bool,
+        screen_visible_idle: bool,
         visible_blocker: bool,
         visible_working: bool,
         process_exited: bool,
@@ -224,14 +228,17 @@ pub(super) enum DetectionPublishDecision {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ScreenDetectionPublishInput {
+    pub(super) force_publish: bool,
     pub(super) current_state: AgentState,
     pub(super) last_visible_idle: bool,
+    pub(super) last_screen_visible_idle: bool,
     pub(super) last_visible_blocker: bool,
     pub(super) last_visible_working: bool,
     pub(super) last_visible_signal_refresh: Option<std::time::Instant>,
     pub(super) screen_detection: AgentDetection,
     pub(super) process_exited: bool,
     pub(super) agent_changed: bool,
+    pub(super) startup_grace_active: bool,
     pub(super) now: std::time::Instant,
 }
 
@@ -242,8 +249,22 @@ pub(super) fn decide_screen_detection_publish(
     let detection = input.screen_detection;
     let new_state = crate::terminal::state::stabilize_agent_detection(detection);
     let visible_idle = detection.visible_idle && new_state == AgentState::Idle;
+    let screen_visible_idle = detection.screen_visible_idle && new_state == AgentState::Idle;
     let visible_blocker = detection.visible_blocker && new_state == AgentState::Blocked;
     let visible_working = detection.visible_working && new_state == AgentState::Working;
+
+    // Startup grace debounces only the known-agent idle fallback. Explicit
+    // screen evidence must remain observable for strict managed readiness and
+    // for permission/working transitions shown during startup.
+    if input.startup_grace_active
+        && !input.process_exited
+        && !visible_idle
+        && !visible_blocker
+        && !visible_working
+    {
+        pending_idle.clear();
+        return DetectionPublishDecision::NoPublish;
+    }
 
     let previous_publish = DetectionPublishState {
         state: input.current_state,
@@ -266,6 +287,8 @@ pub(super) fn decide_screen_detection_publish(
 
     match decide_detection_transition(
         DetectionTransitionInput {
+            force_publish: input.force_publish
+                || screen_visible_idle != input.last_screen_visible_idle,
             previous_publish,
             next_publish,
             agent_changed: input.agent_changed,
@@ -279,6 +302,7 @@ pub(super) fn decide_screen_detection_publish(
         DetectionTransitionDecision::PublishNext => DetectionPublishDecision::Publish {
             state: new_state,
             visible_idle,
+            screen_visible_idle,
             visible_blocker,
             visible_working,
             process_exited: input.process_exited,
@@ -286,33 +310,44 @@ pub(super) fn decide_screen_detection_publish(
     }
 }
 
-#[allow(dead_code)] // shim for tests; detection_update_for_publish_with_osc is the real path
-pub(super) fn detection_update_for_publish(
-    agent: Option<Agent>,
-    content: &str,
-    process_exited: bool,
-) -> Option<crate::detect::AgentDetection> {
-    detection_update_for_publish_with_osc(agent, content, "", "", process_exited)
-}
-
-pub(super) fn detection_update_for_publish_with_osc(
+pub(super) fn detection_update_for_publish_with_registry(
+    snapshot: &crate::agents::store::RegistrySnapshot,
     agent: Option<Agent>,
     content: &str,
     osc_title: &str,
     osc_progress: &str,
     process_exited: bool,
-) -> Option<crate::detect::AgentDetection> {
+) -> Option<AgentDetection> {
     if process_exited {
         return Some(crate::detect::AgentDetection {
             state: AgentState::Idle,
             skip_state_update: false,
             visible_idle: true,
+            screen_visible_idle: false,
             visible_blocker: false,
             visible_working: false,
         });
     }
 
-    let detection = crate::detect::detect_agent_with_osc(agent, content, osc_title, osc_progress);
+    let detection = match agent {
+        Some(agent) => crate::detect::manifest::detect_with_registry(
+            snapshot,
+            agent,
+            crate::detect::manifest::DetectionInput {
+                screen: content,
+                osc_title,
+                osc_progress,
+            },
+        ),
+        None => AgentDetection {
+            state: AgentState::Unknown,
+            skip_state_update: false,
+            visible_idle: false,
+            screen_visible_idle: false,
+            visible_blocker: false,
+            visible_working: false,
+        },
+    };
     (!detection.skip_state_update).then_some(detection)
 }
 
@@ -344,6 +379,7 @@ mod tests {
             state,
             skip_state_update: false,
             visible_idle: state == AgentState::Idle,
+            screen_visible_idle: state == AgentState::Idle,
             visible_blocker: false,
             visible_working: state == AgentState::Working,
         }
@@ -355,14 +391,17 @@ mod tests {
         now: std::time::Instant,
     ) -> ScreenDetectionPublishInput {
         ScreenDetectionPublishInput {
+            force_publish: false,
             current_state,
             last_visible_idle: false,
+            last_screen_visible_idle: false,
             last_visible_blocker: false,
             last_visible_working: false,
             last_visible_signal_refresh: None,
             screen_detection,
             process_exited: false,
             agent_changed: false,
+            startup_grace_active: false,
             now,
         }
     }
@@ -478,6 +517,7 @@ mod tests {
         assert_eq!(
             decide_detection_transition(
                 DetectionTransitionInput {
+                    force_publish: false,
                     previous_publish: publish_state(AgentState::Idle),
                     next_publish: blocked,
                     agent_changed: false,
@@ -486,6 +526,62 @@ mod tests {
                     now,
                 },
                 &mut pending_idle,
+            ),
+            DetectionTransitionDecision::PublishNext
+        );
+    }
+
+    #[test]
+    fn generation_republish_preserves_pending_idle_confirmation() {
+        let now = std::time::Instant::now();
+        let mut pending = PendingIdleConfirmation::default();
+        let input = DetectionTransitionInput {
+            force_publish: true,
+            previous_publish: publish_state(AgentState::Working),
+            next_publish: publish_state(AgentState::Idle),
+            agent_changed: false,
+            process_exited: false,
+            stable_refresh_due: false,
+            now,
+        };
+        assert_eq!(
+            decide_detection_transition(input, &mut pending),
+            DetectionTransitionDecision::NoPublish
+        );
+        assert!(pending.active());
+        assert_eq!(
+            decide_detection_transition(input, &mut pending),
+            DetectionTransitionDecision::NoPublish
+        );
+        assert!(pending.active());
+        assert_eq!(
+            decide_detection_transition(
+                DetectionTransitionInput {
+                    now: now + AGENT_PENDING_IDLE_CAP,
+                    ..input
+                },
+                &mut pending
+            ),
+            DetectionTransitionDecision::PublishNext
+        );
+    }
+
+    #[test]
+    fn generation_republishes_unchanged_state_after_stale_observation_was_dropped() {
+        let now = std::time::Instant::now();
+        let mut pending = PendingIdleConfirmation::default();
+        assert_eq!(
+            decide_detection_transition(
+                DetectionTransitionInput {
+                    force_publish: true,
+                    previous_publish: publish_state(AgentState::Idle),
+                    next_publish: publish_state(AgentState::Idle),
+                    agent_changed: false,
+                    process_exited: false,
+                    stable_refresh_due: false,
+                    now,
+                },
+                &mut pending
             ),
             DetectionTransitionDecision::PublishNext
         );
@@ -504,6 +600,7 @@ mod tests {
             DetectionPublishDecision::Publish {
                 state: AgentState::Working,
                 visible_idle: false,
+                screen_visible_idle: false,
                 visible_blocker: false,
                 visible_working: true,
                 process_exited: false,
@@ -524,11 +621,79 @@ mod tests {
             DetectionPublishDecision::Publish {
                 state: AgentState::Idle,
                 visible_idle: true,
+                screen_visible_idle: true,
                 visible_blocker: false,
                 visible_working: false,
                 process_exited: false,
             }
         );
+    }
+
+    #[test]
+    fn painted_idle_republishes_after_osc_idle_without_changing_status() {
+        let now = std::time::Instant::now();
+        let mut pending = PendingIdleConfirmation::default();
+        let mut osc = screen_detection(AgentState::Idle);
+        osc.screen_visible_idle = false;
+        assert!(matches!(
+            decide_screen_detection_publish(
+                screen_publish_input(AgentState::Unknown, osc, now),
+                &mut pending,
+            ),
+            DetectionPublishDecision::Publish {
+                state: AgentState::Idle,
+                visible_idle: true,
+                screen_visible_idle: false,
+                ..
+            }
+        ));
+        let mut painted =
+            screen_publish_input(AgentState::Idle, screen_detection(AgentState::Idle), now);
+        painted.last_visible_idle = true;
+        painted.last_visible_signal_refresh = Some(now);
+        assert!(matches!(
+            decide_screen_detection_publish(painted, &mut pending),
+            DetectionPublishDecision::Publish {
+                state: AgentState::Idle,
+                screen_visible_idle: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn startup_grace_debounces_only_plain_fallback_and_keeps_positive_screen_evidence() {
+        let now = std::time::Instant::now();
+        let mut pending_idle = PendingIdleConfirmation::default();
+        let mut plain = screen_detection(AgentState::Idle);
+        plain.visible_idle = false;
+        plain.screen_visible_idle = false;
+        let mut input = screen_publish_input(AgentState::Unknown, plain, now);
+        input.startup_grace_active = true;
+        assert_eq!(
+            decide_screen_detection_publish(input, &mut pending_idle),
+            DetectionPublishDecision::NoPublish
+        );
+
+        for detection in [
+            screen_detection(AgentState::Idle),
+            AgentDetection {
+                state: AgentState::Blocked,
+                skip_state_update: false,
+                visible_idle: false,
+                screen_visible_idle: false,
+                visible_blocker: true,
+                visible_working: false,
+            },
+            screen_detection(AgentState::Working),
+        ] {
+            let mut input = screen_publish_input(AgentState::Unknown, detection, now);
+            input.startup_grace_active = true;
+            assert!(matches!(
+                decide_screen_detection_publish(input, &mut pending_idle),
+                DetectionPublishDecision::Publish { .. }
+            ));
+        }
     }
 
     #[test]

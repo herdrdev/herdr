@@ -1,0 +1,6 @@
+names = ["qwen", "qwen-code", "qwen code"]
+secondary_runtime_argv_fallback = true
+
+[[package_paths]]
+kind = "normalized_components"
+components = ["node_modules", "@qwen-code", "qwen-code", "dist", "index"]

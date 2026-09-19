@@ -12,9 +12,12 @@ pub(super) fn handle_shell_notification_effects(
 ) {
     for effect in effects {
         match effect {
-            shell::ClientShellNotificationEffect::Sound { sound, agent } => {
-                let agent = agent.as_deref().and_then(crate::detect::parse_agent_label);
-                if sound_config.allows(agent) {
+            shell::ClientShellNotificationEffect::Sound {
+                sound,
+                agent,
+                sound_profile,
+            } => {
+                if notification_sound_allowed(sound_config, agent.as_deref(), &sound_profile) {
                     crate::sound::play(sound, sound_config);
                 }
             }
@@ -32,6 +35,22 @@ pub(super) fn handle_shell_notification_effects(
                 }
             }
         }
+    }
+}
+
+fn notification_sound_allowed(
+    config: &crate::config::SoundConfig,
+    agent: Option<&str>,
+    sound_profile: &shell::ClientNotificationSoundProfile,
+) -> bool {
+    match sound_profile {
+        shell::ClientNotificationSoundProfile::LocalRegistry => {
+            config.allows(agent.and_then(|id| crate::detect::Agent::parse(id).ok()))
+        }
+        shell::ClientNotificationSoundProfile::Resolved(profile) => config.allows_resolved_sound(
+            profile.as_ref().map(|profile| profile.config_key.as_str()),
+            profile.as_ref().is_some_and(|profile| profile.default_off),
+        ),
     }
 }
 
@@ -98,5 +117,70 @@ pub(super) fn sound_from_notify_message(message: &str) -> Option<crate::sound::S
         "agent done" => Some(crate::sound::Sound::Done),
         "agent attention" => Some(crate::sound::Sound::Request),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::endpoint::NotificationSoundProfile;
+    use shell::ClientNotificationSoundProfile::{LocalRegistry, Resolved};
+
+    #[test]
+    fn resolved_sound_overrides_stale_local_registry_without_changing_legacy_fallback() {
+        let config = crate::config::SoundConfig::default();
+        assert!(!notification_sound_allowed(
+            &config,
+            Some("droid"),
+            &LocalRegistry
+        ));
+        assert!(notification_sound_allowed(
+            &config,
+            Some("droid"),
+            &Resolved(None)
+        ));
+        let profile = |off| {
+            Resolved(Some(NotificationSoundProfile {
+                config_key: "new_remote_key".into(),
+                default_off: off,
+            }))
+        };
+        assert!(!notification_sound_allowed(
+            &config,
+            Some("future-agent"),
+            &profile(true)
+        ));
+        assert!(notification_sound_allowed(
+            &config,
+            Some("future-agent"),
+            &profile(false)
+        ));
+        let muted = crate::config::SoundConfig {
+            enabled: false,
+            ..config
+        };
+        assert!(!notification_sound_allowed(
+            &muted,
+            Some("future-agent"),
+            &profile(false)
+        ));
+    }
+
+    #[test]
+    fn resolved_sound_respects_explicit_local_remote_keys() {
+        let config: crate::config::SoundConfig =
+            toml::from_str("[agents]\nremote_key = 'on'\nother_key = 'off'\n").unwrap();
+        for (key, default_off, expected) in
+            [("remote_key", true, true), ("other_key", false, false)]
+        {
+            let profile = Resolved(Some(NotificationSoundProfile {
+                config_key: key.into(),
+                default_off,
+            }));
+            assert_eq!(
+                notification_sound_allowed(&config, Some("unknown-remote-agent"), &profile),
+                expected
+            );
+        }
     }
 }

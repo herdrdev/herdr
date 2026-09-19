@@ -1,0 +1,22 @@
+accepted_references = ["id"]
+preferred_reference = "id"
+strategy = "joined_flag"
+token = "--resume="
+
+[resume_options]
+flags = [
+  "--allow-all",
+  "--allow-all-tools",
+  "--allow-all-urls",
+  "--autopilot",
+  "--plan",
+  "--disallow-temp-dir",
+  "--enable-memory",
+  "--enable-reasoning-summaries",
+  "--experimental",
+  "--no-experimental",
+  "--no-ask-user",
+  "--no-custom-instructions",
+  "--yolo",
+]
+options = ["--agent", "--effort", "--reasoning-effort", "--max-ai-credits", "--max-autopilot-continues", "--mode", "--model", "--stream"]

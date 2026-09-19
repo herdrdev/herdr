@@ -1,0 +1,26 @@
+cli_name = "opencode"
+aliases = []
+
+[commands]
+unix = ["opencode"]
+windows = ["opencode"]
+
+[supported]
+unix = true
+windows = true
+
+[versions]
+unix = 12
+windows = 12
+
+[[assets]]
+path = "assets/herdr-agent-state.js"
+platform = "all"
+role = "reporter"
+install_name = "herdr-agent-state.js"
+
+[[assets]]
+path = "assets/herdr-tui-session.js"
+platform = "all"
+role = "tui"
+install_name = "herdr-tui-session.js"

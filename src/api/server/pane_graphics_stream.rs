@@ -10,7 +10,7 @@ use crate::api::schema::{
     ResponseResult, SuccessResponse,
 };
 use crate::api::ApiRequestSender;
-use crate::ipc::{is_connection_closed_error, LocalStream};
+use crate::ipc::{is_connection_closed_error, LocalStream, LocalStreamReadCount};
 
 use super::{
     api_response_outcome, dispatch_stream_frame, dispatch_stream_open,
@@ -394,8 +394,11 @@ fn read_line(
                 "timed out reading stream frame header",
             )?;
             match wait.read(stream, &mut byte) {
-                Ok(0) => return Ok(None),
-                Ok(_) => {
+                Ok(LocalStreamReadCount::Pending) => {
+                    wait.after_retry(idle_deadline, total_deadline);
+                }
+                Ok(LocalStreamReadCount::Closed) => return Ok(None),
+                Ok(LocalStreamReadCount::Data(_)) => {
                     wait.on_progress();
                     let now = Instant::now();
                     let total_deadline_at =
@@ -456,14 +459,17 @@ fn read_exact(
             let remaining = len - data.len();
             let read_len = remaining.min(chunk.len());
             match wait.read(stream, &mut chunk[..read_len]) {
-                Ok(0) if data.is_empty() => return Ok(None),
-                Ok(0) => {
+                Ok(LocalStreamReadCount::Pending) => {
+                    wait.after_retry(Some(idle_deadline), Some(total_deadline));
+                }
+                Ok(LocalStreamReadCount::Closed) if data.is_empty() => return Ok(None),
+                Ok(LocalStreamReadCount::Closed) => {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "stream ended mid-frame",
                     ));
                 }
-                Ok(n) => {
+                Ok(LocalStreamReadCount::Data(n)) => {
                     wait.on_progress();
                     let now = Instant::now();
                     if now >= total_deadline {
@@ -494,14 +500,14 @@ enum ReadWait {
 }
 
 impl ReadWait {
-    fn read(&self, stream: &mut LocalStream, buffer: &mut [u8]) -> io::Result<usize> {
-        if matches!(self, Self::SocketTimeout) {
-            return stream.read(buffer);
-        }
-        match crate::ipc::poll_local_stream_read_count(stream, buffer)? {
-            crate::ipc::LocalStreamReadCount::Data(count) => Ok(count),
-            crate::ipc::LocalStreamReadCount::Pending => Err(io::ErrorKind::WouldBlock.into()),
-            crate::ipc::LocalStreamReadCount::Closed => Ok(0),
+    fn read(&self, stream: &mut LocalStream, buf: &mut [u8]) -> io::Result<LocalStreamReadCount> {
+        match self {
+            Self::Poll(_) => crate::ipc::poll_local_stream_read_count(stream, buf),
+            Self::SocketTimeout => match stream.read(buf) {
+                Ok(0) => Ok(LocalStreamReadCount::Closed),
+                Ok(read) => Ok(LocalStreamReadCount::Data(read)),
+                Err(error) => Err(error),
+            },
         }
     }
 
@@ -921,6 +927,59 @@ mod tests {
 
         running.store(false, Ordering::Relaxed);
         assert!(server_thread.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn polling_reads_distinguish_pending_data_and_closed_peers() {
+        let (mut client, mut server, _path) = local_stream_pair("graphics-poll-states");
+        crate::ipc::set_local_stream_polling(&mut server, true).unwrap();
+        let wait = ReadWait::Poll(PollBackoff::new());
+        let mut byte = [0];
+        assert!(matches!(
+            wait.read(&mut server, &mut byte).unwrap(),
+            LocalStreamReadCount::Pending
+        ));
+        client.write_all(b"x").unwrap();
+        assert!(matches!(
+            wait.read(&mut server, &mut byte).unwrap(),
+            LocalStreamReadCount::Data(1)
+        ));
+        assert_eq!(byte, *b"x");
+        assert!(matches!(
+            wait.read(&mut server, &mut byte).unwrap(),
+            LocalStreamReadCount::Pending
+        ));
+        drop(client);
+        // Written Windows pipes close through interprocess's background flush pool.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match wait.read(&mut server, &mut byte).unwrap() {
+                LocalStreamReadCount::Closed => break,
+                LocalStreamReadCount::Pending => {
+                    assert!(Instant::now() < deadline, "peer did not close");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                LocalStreamReadCount::Data(_) => panic!("unexpected data after draining peer"),
+            }
+        }
+    }
+
+    #[test]
+    fn actual_mid_body_disconnect_remains_unexpected_eof() {
+        let (mut client, mut server, _path) = local_stream_pair("graphics-partial-body-close");
+        client.write_all(b"ab").unwrap();
+        let closer = std::thread::spawn(move || drop(client));
+        let error = read_exact(
+            &mut server,
+            4,
+            &Arc::new(AtomicBool::new(true)),
+            &Arc::new(AtomicBool::new(true)),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        closer.join().unwrap();
     }
 
     #[test]

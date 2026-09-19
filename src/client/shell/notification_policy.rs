@@ -102,6 +102,21 @@ impl ClientShellState {
         event: SemanticNotification,
         now: std::time::Instant,
     ) -> (Vec<ClientShellNotificationEffect>, bool) {
+        self.receive_notification_with_sound_profile(
+            endpoint_id,
+            event,
+            ClientNotificationSoundProfile::LocalRegistry,
+            now,
+        )
+    }
+
+    pub(crate) fn receive_notification_with_sound_profile(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        event: SemanticNotification,
+        sound_profile: ClientNotificationSoundProfile,
+        now: std::time::Instant,
+    ) -> (Vec<ClientShellNotificationEffect>, bool) {
         let delay = if event.kind == SemanticNotificationKind::Custom {
             0
         } else {
@@ -136,6 +151,7 @@ impl ClientShellState {
         self.pending_notifications.push(ClientPendingNotification {
             endpoint_id: endpoint_id.clone(),
             event,
+            sound_profile,
             deadline,
             expires_at: now.checked_add(COMPLETION_EVIDENCE_GRACE).unwrap_or(now),
             validate_state,
@@ -204,6 +220,7 @@ impl ClientShellState {
                             SemanticNotificationSound::Request => crate::sound::Sound::Request,
                         },
                         agent: pending.event.agent.clone(),
+                        sound_profile: pending.sound_profile.clone(),
                     });
                 }
             }

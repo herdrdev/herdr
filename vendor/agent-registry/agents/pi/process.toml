@@ -1,0 +1,9 @@
+names = ["pi"]
+
+[[package_paths]]
+kind = "exact_suffix"
+components = ["node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"]
+
+[[package_paths]]
+kind = "exact_suffix"
+components = ["node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"]

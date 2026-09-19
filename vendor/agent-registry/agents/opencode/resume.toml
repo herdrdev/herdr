@@ -1,0 +1,8 @@
+accepted_references = ["id"]
+preferred_reference = "id"
+strategy = "separate_flag"
+token = "--session"
+
+[resume_options]
+flags = ["--pure", "--auto", "--mini", "--no-replay"]
+options = ["-m", "--model", "--agent", "--replay-limit"]

@@ -592,8 +592,8 @@ mod tests {
         app.state.integration_recommendations =
             vec![crate::integration::IntegrationRecommendation {
                 target: crate::api::schema::IntegrationTarget::Claude,
-                label: "claude",
-                command: "claude",
+                label: "claude".into(),
+                command: "claude".into(),
                 available: true,
                 path: std::path::PathBuf::from("claude-hook"),
                 state: crate::integration::IntegrationStatusKind::NotInstalled,

@@ -342,11 +342,6 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         eprintln!("missing required --pane");
         return Ok(2);
     };
-    let Some(expected_kind) = crate::detect::parse_agent_label(&kind) else {
-        eprintln!("unsupported interactive agent kind: {kind}");
-        return Ok(2);
-    };
-    let expected_kind = crate::detect::agent_label(expected_kind).to_string();
     let agent_args = if separator < args.len() {
         args[separator + 1..].to_vec()
     } else {
@@ -416,13 +411,16 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
     {
         return super::print_response(&agent_name_lost_error("cli:agent:start", name));
     }
-    let waited = wait_for_named_agent(
-        name,
-        &pane_id,
-        timeout,
-        &expected_kind,
-        expected_terminal_id,
-    );
+    // The server owns kind admission and alias resolution, including registry
+    // identities that this client has never loaded.
+    let Some(expected_kind) = response["result"]["agent"]["agent"].as_str() else {
+        return super::print_response(&cli_agent_error(
+            "cli:agent:start",
+            "agent_start_failed",
+            "agent start response did not include canonical agent kind",
+        ));
+    };
+    let waited = wait_for_named_agent(name, &pane_id, timeout, expected_kind, expected_terminal_id);
     match waited {
         Ok(Ok(agent)) => {
             response["result"]["agent"] = agent;
@@ -942,7 +940,7 @@ fn print_agent_help() {
         "  herdr agent explain --file PATH --agent LABEL [--json|--format text|json] [--verbose]"
     );
     eprintln!("  targets accept unique agent names and pane ids that currently host agents");
-    eprintln!("  kinds: {}", super::spec::agent_kind_values().join("|"));
+    eprintln!("  kinds and aliases are resolved by the server's active registry");
 }
 
 fn parse_timeout(value: &str) -> Result<u64, i32> {

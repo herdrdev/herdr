@@ -66,13 +66,16 @@ impl TerminalState {
         agent_label
             .and_then(crate::detect::parse_agent_label)
             .or_else(|| {
-                crate::detect::Agent::ALL.iter().copied().find(|agent| {
-                    let agent_label = crate::detect::agent_label(*agent);
-                    crate::agent_resume::is_official_agent_source(source, agent_label)
+                let registry = crate::agents::registry();
+                let agent = registry.known_profiles().find_map(|profile| {
+                    let id = profile.canonical_id();
+                    (registry.profile_for_exact_report_pair(source, id).is_some()
                         || applies_to_source.is_some_and(|source| {
-                            crate::agent_resume::is_official_agent_source(source, agent_label)
-                        })
-                })
+                            registry.profile_for_exact_report_pair(source, id).is_some()
+                        }))
+                    .then(|| profile.legacy_agent())
+                });
+                agent
             })
     }
 
@@ -85,7 +88,7 @@ impl TerminalState {
         let Some(exit) = self.recent_agent_process_exit else {
             return false;
         };
-        let exited_agent_label = crate::detect::agent_label(exit.agent);
+        let exited_agent_label = crate::detect::agent_label(&exit.agent);
         agent_label.and_then(crate::detect::parse_agent_label) == Some(exit.agent)
             || crate::agent_resume::is_official_agent_source(source, exited_agent_label)
             || applies_to_source.is_some_and(|source| {

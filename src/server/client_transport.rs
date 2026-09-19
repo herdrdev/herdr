@@ -400,6 +400,7 @@ pub(crate) enum ServerEvent {
         surface_active: bool,
         surface_reuse: bool,
         surface_delta: bool,
+        notification_sound_profile: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -767,6 +768,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_active,
                     hello.surface_reuse,
                     hello.surface_delta,
+                    hello.notification_sound_profile,
                 )),
             )
         }
@@ -863,6 +865,7 @@ pub(crate) fn handle_client_handshake(
         surface_active,
         surface_reuse,
         surface_delta,
+        notification_sound_profile,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -878,6 +881,7 @@ pub(crate) fn handle_client_handshake(
             surface_active,
             surface_reuse,
             surface_delta,
+            notification_sound_profile,
             writer,
         }
     } else {
@@ -1454,6 +1458,7 @@ mod tests {
             surface_active: true,
             surface_reuse: false,
             surface_delta: false,
+            notification_sound_profile: true,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -1971,6 +1976,7 @@ mod tests {
                 surface_active,
                 surface_reuse,
                 surface_delta,
+                notification_sound_profile,
                 writer,
             } => {
                 assert!(!surface_reuse);
@@ -1983,6 +1989,7 @@ mod tests {
                 assert!(endpoint_keybindings);
                 assert!(mouse_capture);
                 assert!(surface_active);
+                assert!(notification_sound_profile);
                 drop(writer);
             }
             other => panic!("expected ClientShellConnected, got {other:?}"),

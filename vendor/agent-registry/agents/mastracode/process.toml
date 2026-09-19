@@ -1,0 +1,5 @@
+names = ["mastracode", "mastra-code", "mastra code"]
+
+[[package_paths]]
+kind = "normalized_components"
+components = ["node_modules", "mastracode", "dist", "cli"]

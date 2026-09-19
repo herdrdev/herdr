@@ -1,0 +1,6 @@
+names = ["letta", "letta-code", "letta code"]
+secondary_runtime_argv_fallback = true
+
+[[package_paths]]
+kind = "normalized_components"
+components = ["node_modules", "@letta-ai", "letta-code", "letta"]

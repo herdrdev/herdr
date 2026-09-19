@@ -1,0 +1,13 @@
+schema = 1
+id = "muse"
+name = "muse"
+aliases = ["muse-code", "muse-cli"]
+startable = true
+
+[launch]
+unix = "muse"
+windows = "muse"
+
+[sound]
+key = "muse"
+default = "default"

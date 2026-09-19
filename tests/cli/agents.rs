@@ -621,7 +621,7 @@ fn agent_start_timeout_releases_the_name_for_reuse() {
 }
 
 #[test]
-fn agent_start_reports_detected_kind_mismatch_before_released_name() {
+fn agent_start_reports_detected_kind_mismatch_but_preserves_name_until_timeout() {
     use std::os::unix::fs::PermissionsExt;
 
     let base = unique_test_dir();
@@ -691,8 +691,18 @@ fn agent_start_reports_detected_kind_mismatch_before_released_name() {
     )
     .status
     .success());
-    let reused = run_cli(&socket_path, &["agent", "rename", &reuse_pane_id, "worker"]);
-    assert!(reused.status.success());
+    let still_reserved = run_cli(&socket_path, &["agent", "rename", &reuse_pane_id, "worker"]);
+    assert_eq!(still_reserved.status.code(), Some(1));
+    let reserved_error: serde_json::Value = serde_json::from_slice(&still_reserved.stderr).unwrap();
+    assert_eq!(reserved_error["error"]["code"], "agent_name_taken");
+
+    assert!(wait_until(
+        Duration::from_secs(7),
+        Duration::from_millis(100),
+        || run_cli(&socket_path, &["agent", "rename", &reuse_pane_id, "worker"])
+            .status
+            .success()
+    ));
 
     cleanup_spawned_herdr(herdr, base);
 }

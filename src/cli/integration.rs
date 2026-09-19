@@ -133,12 +133,32 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
-/// Integration target accepted by the CLI. Letta is deliberately kept out of
-/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
-/// experimental CLI-only target until the agent registry replaces it.
+// Letta retains master's CLI-only installer without extending the frozen endpoint enum.
+#[derive(Debug, PartialEq, Eq)]
 enum IntegrationCommandTarget {
     Builtin(IntegrationTarget),
     Letta,
+}
+
+fn integration_target_labels() -> Vec<String> {
+    crate::agents::registry()
+        .integration_capable_profiles()
+        .map(|profile| {
+            profile
+                .integration()
+                .expect("integration-capable profile must contain metadata")
+                .cli_label()
+                .to_owned()
+        })
+        .chain(std::iter::once("letta".to_owned()))
+        .collect()
+}
+
+fn print_integration_usage(action: &str) {
+    eprintln!(
+        "usage: herdr integration {action} <{}>",
+        integration_target_labels().join("|")
+    );
 }
 
 fn parse_integration_target(
@@ -146,88 +166,69 @@ fn parse_integration_target(
     action: &str,
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
-        eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
-        );
+        print_integration_usage(action);
         return Ok(None);
     };
     if args.len() != 1 {
-        eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
-        );
+        print_integration_usage(action);
         return Ok(None);
     }
 
-    let parsed = match target {
-        "pi" => IntegrationCommandTarget::Builtin(IntegrationTarget::Pi),
-        "omp" => IntegrationCommandTarget::Builtin(IntegrationTarget::Omp),
-        "claude" => IntegrationCommandTarget::Builtin(IntegrationTarget::Claude),
-        "codex" => IntegrationCommandTarget::Builtin(IntegrationTarget::Codex),
-        "copilot" => IntegrationCommandTarget::Builtin(IntegrationTarget::Copilot),
-        "devin" => IntegrationCommandTarget::Builtin(IntegrationTarget::Devin),
-        "droid" => IntegrationCommandTarget::Builtin(IntegrationTarget::Droid),
-        "kimi" => IntegrationCommandTarget::Builtin(IntegrationTarget::Kimi),
-        "opencode" => IntegrationCommandTarget::Builtin(IntegrationTarget::Opencode),
-        "kilo" => IntegrationCommandTarget::Builtin(IntegrationTarget::Kilo),
-        "hermes" => IntegrationCommandTarget::Builtin(IntegrationTarget::Hermes),
-        "qodercli" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qodercli),
-        "qwen" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qwen),
-        "letta" => IntegrationCommandTarget::Letta,
-        "cursor" => IntegrationCommandTarget::Builtin(IntegrationTarget::Cursor),
-        "mastracode" => IntegrationCommandTarget::Builtin(IntegrationTarget::Mastracode),
-        "antigravity-cli" | "antigravity_cli" => {
-            IntegrationCommandTarget::Builtin(IntegrationTarget::AntigravityCli)
-        }
-        "grok" => IntegrationCommandTarget::Builtin(IntegrationTarget::Grok),
-        _ => {
-            eprintln!("unknown integration target: {target}");
-            eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
-            );
-            return Ok(None);
-        }
+    if target == "letta" {
+        return Ok(Some(IntegrationCommandTarget::Letta));
+    }
+    let Some(parsed) = crate::agents::registry()
+        .profile_by_integration_cli_name(target)
+        .and_then(|profile| profile.integration())
+        .map(|integration| integration.target())
+    else {
+        eprintln!("unknown integration target: {target}");
+        eprintln!(
+            "currently supported: {}",
+            integration_target_labels().join(", ")
+        );
+        return Ok(None);
     };
 
-    Ok(Some(parsed))
+    Ok(Some(IntegrationCommandTarget::Builtin(parsed)))
 }
 
 fn print_integration_help() {
     eprintln!("herdr integration commands:");
-    eprintln!("  herdr integration install pi");
-    eprintln!("  herdr integration install omp");
-    eprintln!("  herdr integration install claude");
-    eprintln!("  herdr integration install codex");
-    eprintln!("  herdr integration install copilot");
-    eprintln!("  herdr integration install devin");
-    eprintln!("  herdr integration install droid");
-    eprintln!("  herdr integration install kimi");
-    eprintln!("  herdr integration install opencode");
-    eprintln!("  herdr integration install kilo");
-    eprintln!("  herdr integration install hermes");
-    eprintln!("  herdr integration install qodercli");
-    eprintln!("  herdr integration install qwen");
-    eprintln!("  herdr integration install letta");
-    eprintln!("  herdr integration install cursor");
-    eprintln!("  herdr integration install mastracode");
-    eprintln!("  herdr integration install antigravity-cli");
-    eprintln!("  herdr integration install grok");
-    eprintln!("  herdr integration uninstall pi");
-    eprintln!("  herdr integration uninstall omp");
-    eprintln!("  herdr integration uninstall claude");
-    eprintln!("  herdr integration uninstall codex");
-    eprintln!("  herdr integration uninstall copilot");
-    eprintln!("  herdr integration uninstall devin");
-    eprintln!("  herdr integration uninstall droid");
-    eprintln!("  herdr integration uninstall kimi");
-    eprintln!("  herdr integration uninstall opencode");
-    eprintln!("  herdr integration uninstall kilo");
-    eprintln!("  herdr integration uninstall hermes");
-    eprintln!("  herdr integration uninstall qodercli");
-    eprintln!("  herdr integration uninstall qwen");
-    eprintln!("  herdr integration uninstall letta");
-    eprintln!("  herdr integration uninstall cursor");
-    eprintln!("  herdr integration uninstall mastracode");
-    eprintln!("  herdr integration uninstall antigravity-cli");
-    eprintln!("  herdr integration uninstall grok");
+    for action in ["install", "uninstall"] {
+        for label in integration_target_labels() {
+            eprintln!("  herdr integration {action} {label}");
+        }
+    }
     eprintln!("  herdr integration status [--outdated-only]");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integration_cli_labels_and_aliases_route_through_registry() {
+        for profile in crate::agents::registry().integration_capable_profiles() {
+            let integration = profile.integration().expect("integration metadata");
+            for name in std::iter::once(integration.cli_label())
+                .chain(integration.cli_aliases().iter().map(String::as_str))
+            {
+                assert_eq!(
+                    parse_integration_target(&[name.to_string()], "install").unwrap(),
+                    Some(IntegrationCommandTarget::Builtin(integration.target()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn integration_cli_parsing_remains_exact() {
+        for rejected in ["agy", "antigravity", "Antigravity-cli", " kilo "] {
+            assert_eq!(
+                parse_integration_target(&[rejected.to_string()], "install").unwrap(),
+                None
+            );
+        }
+    }
 }
