@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=opencode
-// HERDR_INTEGRATION_VERSION=12
+// HERDR_INTEGRATION_VERSION=13
 
 import net from "node:net";
 
@@ -118,8 +118,23 @@ function reportState(state, sessionID) {
   return request("pane.report_agent", params);
 }
 
+function ownsLocalLifecycle() {
+  const args = process.argv.slice(2);
+  const separator = args.indexOf("--");
+  if (separator !== -1) args.splice(separator);
+  if (args.some((arg) => arg === "--attach" || arg.startsWith("--attach="))) return false;
+  while (args[0] === "--print-logs" || args[0] === "--log-level" || args[0]?.startsWith("--log-level=")) {
+    args.splice(0, args[0] === "--log-level" ? 2 : 1);
+  }
+  // These local clients have no TUI plugin. Shared servers and the TUI worker
+  // cannot identify their attached panes; their lifecycle belongs to each TUI.
+  return args[0] === "run" ||
+    (!["serve", "web", "attach"].includes(args[0]) && args.includes("--mini"));
+}
+
 export const HerdrAgentStatePlugin = async () => {
   if (
+    !ownsLocalLifecycle() ||
     process.env.HERDR_ENV !== "1" ||
     !process.env.HERDR_SOCKET_PATH ||
     !process.env.HERDR_PANE_ID
@@ -200,9 +215,8 @@ export const HerdrAgentStatePlugin = async () => {
   };
 };
 
-// V1 (1.18.29+) calls server(). V2 calls setup() instead. Its shared server
-// cannot attribute sessions using its process environment: the pane-local TUI
-// owns both selection and lifecycle reporting there, including remote servers.
+// V1 local run/Mini retain their server hooks. V1/V2 full TUIs own both
+// selection and lifecycle, including when attached to a shared remote server.
 export default {
   id: "herdr.opencode",
   server: HerdrAgentStatePlugin,

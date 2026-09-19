@@ -1,4 +1,7 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+
+const originalArgv = process.argv;
+afterEach(() => { process.argv = originalArgv; });
 
 const requests: unknown[] = [];
 const clients: FakeClient[] = [];
@@ -43,6 +46,7 @@ beforeEach(() => {
   clients.length = 0;
   requestWaiters.length = 0;
   autoAcknowledge = true;
+  process.argv = ["bun", "/$bunfs/root/src/index.js", "run"];
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = "test.sock";
   process.env.HERDR_PANE_ID = "test:p1";
@@ -221,6 +225,27 @@ test("routes nested child prompts to their own root, not the last active root", 
     "root-session",
     "root-session",
   ]);
+});
+
+test("only local run and Mini own server lifecycle, never shared servers or TUI workers", async () => {
+  for (const args of [
+    ["run"], ["run", "--session", "existing"], ["--mini"], ["--mini", "--session", "existing"],
+    ["--print-logs", "--log-level", "DEBUG", "run"], ["run", "--", "--attach"],
+  ]) {
+    process.argv = ["bun", "/$bunfs/root/src/index.js", ...args];
+    expect((await loadPlugin()).event).toBeFunction();
+  }
+  for (const args of [
+    [], ["--session", "existing"], ["serve"], ["web"], ["attach", "http://localhost:4096"],
+    ["run", "--attach", "http://localhost:4096"], ["--mini", "--attach=http://localhost:4096"],
+    ["serve", "--", "--mini"],
+  ]) {
+    process.argv = ["bun", "/$bunfs/root/src/index.js", ...args];
+    expect(await loadPlugin()).toEqual({});
+  }
+  process.argv = ["bun", "/$bunfs/root/src/cli/tui/worker.js"];
+  expect(await loadPlugin()).toEqual({});
+  expect(requests).toHaveLength(0);
 });
 
 function requestMethod(request: unknown): unknown {

@@ -70,12 +70,48 @@ async function loadPlugin() {
 
 function fakeApi() {
   const sessions = new Map<string, { id: string; parentID?: string }>();
+  const statuses: Record<string, { type: string }> = {};
+  const permissions: Array<{ id: string; sessionID: string; tool?: { messageID: string; callID: string } }> = [];
+  const questions: typeof permissions = [];
+  const messages = new Map<string, { info?: { error?: { name: string } }; parts: Array<object> }>();
+  const listeners = new Map<string, Set<(event: object) => void>>();
+  const calls: string[] = [];
   let current: { name: string; params?: { sessionID: string } } = { name: "home" };
   let dispose: (() => void) | undefined;
   activeDisposers.push(() => dispose?.());
 
   return {
+    statuses, permissions, questions, messages, listeners, calls,
+    emit(type: string, properties: object) {
+      for (const receive of listeners.get(type) ?? []) receive({ type, properties });
+    },
     api: {
+      client: {
+        session: {
+          async get({ sessionID }: { sessionID: string }) {
+            calls.push(`get:${sessionID}`);
+            const data = sessions.get(sessionID);
+            if (!data) throw new Error("session not found");
+            return { data };
+          },
+          async status() { calls.push("status"); return { data: { ...statuses } }; },
+          async message({ messageID }: { sessionID: string; messageID: string }) {
+            calls.push(`message:${messageID}`);
+            const data = messages.get(messageID);
+            if (!data) throw new Error("message unavailable");
+            return { data };
+          },
+        },
+        permission: { async list() { return { data: [...permissions] }; } },
+        question: { async list() { return { data: [...questions] }; } },
+      },
+      event: {
+        on(type: string, receive: (event: object) => void) {
+          if (!listeners.has(type)) listeners.set(type, new Set());
+          listeners.get(type)!.add(receive);
+          return () => listeners.get(type)!.delete(receive);
+        },
+      },
       route: {
         get current() {
           return current;
@@ -101,6 +137,7 @@ function fakeApi() {
     select(sessionID: string) {
       current = { name: "session", params: { sessionID } };
     },
+    home() { current = { name: "home" }; },
     dispose() {
       dispose?.();
     },
@@ -140,10 +177,9 @@ test("retries an initial selection while Herdr detects the process", async () =>
   await plugin.tui(tui.api);
   await new Promise((resolve) => setTimeout(resolve, 125));
 
-  expect(requests.map((request) => requestParam(request, "agent_session_id"))).toEqual([
-    "session-a",
-    "session-a",
-  ]);
+  const selections = requests.filter((request) => requestParam(request, "state") === undefined);
+  expect(selections.length).toBeGreaterThanOrEqual(2);
+  expect(selections.every((request) => requestParam(request, "agent_session_id") === "session-a")).toBe(true);
 });
 
 test("does not report root sessions not selected by this TUI", async () => {
@@ -169,13 +205,13 @@ test("does not replace the root session with a selected child session", async ()
   tui.addSession({ id: "child-session", parentID: "root-session" });
   tui.select("root-session");
   await plugin.tui(tui.api);
-  expect(requests).toHaveLength(1);
+  await flushReports();
 
   tui.select("child-session");
   await new Promise((resolve) => setTimeout(resolve, 125));
 
-  expect(requests).toHaveLength(1);
-  expect(requestParam(requests[0], "agent_session_id")).toBe("root-session");
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "root-session")).toBe(true);
 });
 
 test("stops route polling when the TUI plugin is disposed", async () => {
@@ -244,6 +280,274 @@ function v2Api() {
 const flushReports = () => new Promise((resolve) => setTimeout(resolve, 10));
 const states = () => requests.filter((r) => requestParam(r, "state") !== undefined)
   .map((r) => requestParam(r, "state"));
+
+function familyApi() {
+  const tui = fakeApi();
+  tui.addSession({ id: "root" });
+  tui.addSession({ id: "child", parentID: "root" });
+  tui.addSession({ id: "sibling", parentID: "root" });
+  tui.addSession({ id: "grandchild", parentID: "child" });
+  tui.addSession({ id: "other" });
+  tui.select("root");
+  return tui;
+}
+
+test("V1 hydrates active descendants and keeps working until the whole family settles", async () => {
+  const tui = familyApi();
+  tui.statuses.child = { type: "busy" };
+  tui.statuses.grandchild = { type: "retry" };
+  tui.statuses.other = { type: "busy" };
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states().at(-1)).toBe("working");
+  tui.emit("session.status", { sessionID: "child", status: { type: "idle" } });
+  await flushReports();
+  expect(states().at(-1)).toBe("working");
+  tui.emit("session.status", { sessionID: "grandchild", status: { type: "idle" } });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "root")).toBe(true);
+});
+
+test("V1 retains sibling blockers and cancellation does not finish an active parent", async () => {
+  const tui = familyApi();
+  tui.statuses.root = { type: "busy" };
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  tui.emit("permission.asked", { id: "p", sessionID: "child" });
+  tui.emit("question.asked", { id: "q", sessionID: "sibling", tool: { messageID: "m", callID: "call" } });
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  tui.emit("permission.replied", { requestID: "p", sessionID: "child" });
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  tui.emit("session.idle", { sessionID: "sibling" });
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  tui.emit("message.part.updated", { part: {
+    type: "tool", sessionID: "sibling", messageID: "m", callID: "call", state: { status: "error" },
+  } });
+  await flushReports();
+  expect(states().at(-1)).toBe("working");
+  tui.emit("session.idle", { sessionID: "root" });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 hydration rejects aborted tool requests even if their session is busy again", async () => {
+  for (const kind of ["permissions", "questions"] as const) {
+    const tui = familyApi();
+    tui.statuses.child = { type: "busy" };
+    tui[kind].push({ id: "stale", sessionID: "child", tool: { messageID: "m", callID: "call" } });
+    tui.messages.set("m", { info: { error: { name: "MessageAbortedError" } }, parts: [
+      { type: "tool", callID: "call", state: { status: "error" } },
+    ] });
+    await (await loadPlugin()).tui(tui.api);
+    await flushReports();
+    expect(states().at(-1)).toBe("working");
+    tui.dispose();
+  }
+});
+
+test("V1 validates pending tools instead of assuming an idle owner has no requests", async () => {
+  const tui = familyApi();
+  tui.permissions.push({ id: "pending", sessionID: "child", tool: { messageID: "m", callID: "call" } });
+  tui.messages.set("m", { parts: [{ type: "tool", callID: "call", state: { status: "running" } }] });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  tui.emit("message.part.updated", { part: {
+    type: "tool", sessionID: "child", messageID: "m", callID: "call", state: { status: "error" },
+  } });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 replays completion and replies over a late initial snapshot", async () => {
+  const tui = familyApi();
+  let resolveStatus!: (result: { data: Record<string, { type: string }> }) => void;
+  tui.api.client.session.status = () => new Promise((resolve) => { resolveStatus = resolve; });
+  tui.permissions.push({ id: "p", sessionID: "child" });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states()).not.toContain("idle");
+  tui.emit("session.idle", { sessionID: "child" });
+  tui.emit("permission.replied", { sessionID: "child", requestID: "p" });
+  resolveStatus({ data: { child: { type: "busy" } } });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 retains replies received between failed hydration and its retry", async () => {
+  const tui = familyApi();
+  tui.permissions.push({ id: "p", sessionID: "child" });
+  const status = tui.api.client.session.status;
+  tui.api.client.session.status = async () => {
+    tui.api.client.session.status = status;
+    throw new Error("temporarily unavailable");
+  };
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  tui.emit("permission.replied", { sessionID: "child", requestID: "p" });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  expect(states().at(-1)).toBe("idle");
+  expect(states()).not.toContain("blocked");
+});
+
+test("V1 deleted sessions cannot return through a late hydration snapshot", async () => {
+  const tui = familyApi();
+  let resolveStatus!: (result: { data: Record<string, { type: string }> }) => void;
+  tui.api.client.session.status = () => new Promise((resolve) => { resolveStatus = resolve; });
+  tui.permissions.push({ id: "p", sessionID: "child" });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  tui.emit("session.deleted", { info: { id: "child", parentID: "root" } });
+  resolveStatus({ data: { child: { type: "busy" } } });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 ignores stale hydration across A/B/A route changes and disposal", async () => {
+  const tui = familyApi();
+  let resolveOld!: (result: { data: Record<string, { type: string }> }) => void;
+  const status = tui.api.client.session.status;
+  tui.api.client.session.status = () => {
+    tui.api.client.session.status = status;
+    return new Promise((resolve) => { resolveOld = resolve; });
+  };
+  await (await loadPlugin()).tui(tui.api);
+  tui.select("other");
+  tui.emit("session.updated", { info: { id: "other" } });
+  await flushReports();
+  tui.select("root");
+  tui.emit("session.updated", { info: { id: "root" } });
+  await flushReports();
+  requests.length = 0;
+  resolveOld({ data: { root: { type: "busy" } } });
+  await flushReports();
+  expect(states()).not.toContain("working");
+  tui.dispose();
+  expect([...tui.listeners.values()].every((set) => set.size === 0)).toBe(true);
+});
+
+test("V1 a directly attached child owns its descendants, not its parent or siblings", async () => {
+  const tui = familyApi();
+  tui.select("child");
+  tui.statuses.root = { type: "busy" };
+  tui.statuses.sibling = { type: "busy" };
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+  tui.emit("session.status", { sessionID: "grandchild", status: { type: "busy" } });
+  await flushReports();
+  expect(states().at(-1)).toBe("working");
+  tui.select("grandchild");
+  tui.emit("session.updated", { info: { id: "grandchild", parentID: "child" } });
+  await flushReports();
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "child")).toBe(true);
+});
+
+test("V1 a terminal tool event during hydration cannot revive a cancelled blocker", async () => {
+  const tui = familyApi();
+  tui.questions.push({ id: "q", sessionID: "child", tool: { messageID: "m", callID: "call" } });
+  let resolveMessage!: (result: { data: { parts: Array<object> } }) => void;
+  tui.api.client.session.message = () => new Promise((resolve) => { resolveMessage = resolve; });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  tui.emit("message.part.updated", { part: {
+    type: "tool", sessionID: "child", messageID: "m", callID: "call", state: { status: "error" },
+  } });
+  resolveMessage({ data: { parts: [{ type: "tool", callID: "call", state: { status: "running" } }] } });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 unknown tool evidence remains blocked and retries failed message reads", async () => {
+  const tui = familyApi();
+  tui.permissions.push({ id: "p", sessionID: "child", tool: { messageID: "m", callID: "call" } });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  tui.messages.set("m", { parts: [{ type: "tool", callID: "call", state: { status: "error" } }] });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 request validation matches the exact tool and deduplicates message reads", async () => {
+  const tui = familyApi();
+  tui.permissions.push({ id: "p", sessionID: "child", tool: { messageID: "m", callID: "running" } });
+  tui.questions.push({ id: "q", sessionID: "child", tool: { messageID: "m", callID: "finished" } });
+  tui.messages.set("m", { parts: [
+    { type: "tool", callID: "running", state: { status: "running" } },
+    { type: "tool", callID: "finished", state: { status: "completed" } },
+  ] });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  expect(states().at(-1)).toBe("blocked");
+  expect(tui.calls.filter((call) => call === "message:m")).toHaveLength(1);
+  tui.emit("permission.replied", { sessionID: "child", requestID: "p" });
+  await flushReports();
+  expect(states().at(-1)).toBe("idle");
+});
+
+test("V1 reselecting an aborted request does not resurrect it or poll completed tools", async () => {
+  const tui = familyApi();
+  tui.permissions.push({ id: "p", sessionID: "child", tool: { messageID: "m", callID: "call" } });
+  tui.messages.set("m", { parts: [{ type: "tool", callID: "call", state: { status: "error" } }] });
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  tui.select("other");
+  tui.emit("session.updated", { info: { id: "other" } });
+  await flushReports();
+  tui.select("root");
+  tui.emit("session.updated", { info: { id: "root" } });
+  await flushReports();
+  expect(states()).not.toContain("blocked");
+  const reads = tui.calls.length;
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  expect(tui.calls).toHaveLength(reads);
+});
+
+test("V1 home and selected-session deletion settle authority and retry a dropped idle report", async () => {
+  for (const action of ["home", "delete"]) {
+    const tui = familyApi();
+    tui.statuses.root = { type: "busy" };
+    await (await loadPlugin()).tui(tui.api);
+    await flushReports();
+    expect(states().at(-1)).toBe("working");
+    failConnections = true;
+    if (action === "home") {
+      tui.home();
+      tui.emit("session.updated", { info: { id: "root" } });
+    } else tui.emit("session.deleted", { info: { id: "root" } });
+    await flushReports();
+    failConnections = false;
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    expect(states().at(-1)).toBe("idle");
+    tui.dispose();
+  }
+});
+
+test("V1 a delayed home settlement cannot overwrite the next selected session", async () => {
+  const tui = familyApi();
+  tui.statuses.root = { type: "busy" };
+  await (await loadPlugin()).tui(tui.api);
+  await flushReports();
+  requests.length = 0;
+  holdConnections = true;
+  tui.home();
+  tui.emit("session.updated", { info: { id: "root" } });
+  await flushReports();
+  expect(connections.length).toBeGreaterThan(0);
+  tui.select("other");
+  tui.emit("session.updated", { info: { id: "other" } });
+  holdConnections = false;
+  for (const connect of connections.splice(0)) connect();
+  await flushReports();
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every((r) => requestParam(r, "agent_session_id") === "other")).toBe(true);
+  expect(states().at(-1)).toBe("idle");
+});
 
 test("V2 ignores events without data", async () => {
   const plugin = await loadPlugin();

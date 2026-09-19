@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const originalPlatform = process.platform;
+const originalArgv = process.argv;
 const originalCreateConnection = net.createConnection;
 const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
@@ -35,6 +36,7 @@ afterEach(async () => {
 
   Object.defineProperty(process, "platform", { value: originalPlatform });
   net.createConnection = originalCreateConnection;
+  process.argv = originalArgv;
   for (const [name, value] of Object.entries(originalEnvironment)) {
     if (value === undefined) {
       delete process.env[name];
@@ -137,6 +139,7 @@ for (const socketPlugin of socketPlugins) {
     Object.defineProperty(process, "platform", { value: "win32" });
     const connectedEndpoint = captureConnectionEndpoint();
 
+    process.argv = ["bun", "/$bunfs/root/src/index.js", "run"];
     const { HerdrAgentStatePlugin } = await importFresh(socketPlugin.modulePath);
     const plugin = await HerdrAgentStatePlugin();
     await plugin.event({

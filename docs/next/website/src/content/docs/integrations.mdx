@@ -227,6 +227,10 @@ Install registers the V1 TUI plugin in `tui.jsonc` and the V2 TUI plugin in `cli
 
 V2 lifecycle reporting runs in the pane-local TUI, which associates events with its selected root session even when multiple panes share one OpenCode server. Completion and interruption clear the working state; pending permission requests, pending forms, and failed executions keep the pane blocked. V2 Mini and headless clients do not run the TUI plugin and therefore do not provide this lifecycle reporting.
 
+V1 TUI reporting follows the pane's selected session and its descendants. The pane stays working while any of them is busy or retrying, and blocked while any has a pending permission or question. Attaching loads existing activity; cancelled tool requests do not become blockers again after reconnecting. Browsing a subagent keeps the original session family, while directly attaching to a child tracks that child's subtree rather than its siblings.
+
+Local V1 `opencode run` and `opencode --mini` retain their legacy server hooks; this change does not add pane-local lifecycle reporting to Mini/headless clients. After updating the integration, restart shared OpenCode servers as well as their TUIs so the old server reporter cannot overwrite pane-local state.
+
 The plugin reports lifecycle state and session identity while OpenCode runs inside a Herdr pane. After OpenCode emits a session-bearing event, Herdr can use the reported session id to resume the pane with `opencode --session <id>`. Native screen manifest detection remains available when the plugin is not installed.
 
 ## Kilo Code CLI
