@@ -1,7 +1,7 @@
 id = "kiro"
-version = "2026.09.16.1"
+version = "2026.09.19.1"
 min_engine_version = 2
-updated_at = "2026-09-16T00:00:00Z"
+updated_at = "2026-09-19T00:00:00Z"
 aliases = ["kiro-cli"]
 
 [[rules]]
@@ -16,13 +16,40 @@ line_regex = ['(?i)^\s*[>›]\s*ask a question or describe a task(?:\s+(?:enter|
 id = "tool_approval"
 state = "blocked"
 priority = 1050
-region = "bottom_non_empty_lines(10)"
+region = "bottom_non_empty_lines(8)"
 visible_blocker = true
-contains = ["requires approval", "esc to close"]
 any = [
-  { contains = ["always allow", "deny"] },
-  { contains = ["yes, single permission", "no (tab to edit)"] },
+  { all = [
+    { regex = ['(?is)(?:^|\n)\s*esc\s+to\s+close\b(?:[^\n]*\bto\s+navigate\b[^\n]*|.*\bto\s+navigate\b.*\bto\s+select\b.*\btab\s+to\s+edit|[^\n]*\benter\s+to\s+see\s+more\s+options)\s*\z'] },
+    { any = [
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:allow|always allow|deny|always deny)\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?allow\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?always allow\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?deny\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?always deny\s*$',
+      ] },
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:yes, single permission|trust, always allow in this session|no \(tab to edit\))\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?yes, single permission\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?trust, always allow in this session\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?no \(tab to edit\)\s*$',
+      ] },
+      { line_regex = [
+        '(?i)^\s*[>❯]\s*(?:trust\b.*|entire tool)\s*$',
+        '(?i)^\s*(?:[>❯]\s*)?(?:trust )?entire tool(?:\s+\([^\n]*\))?(?:\s+(?:session|workspace|always))?\s*$',
+      ] },
+    ] },
+  ] },
 ]
+
+[[rules]]
+id = "tool_approval_edit"
+state = "blocked"
+priority = 1045
+region = "whole_recent"
+visible_blocker = true
+regex = ['(?im)(?:^|\n)[ \t]*[-─]+[ \t]*\n[^\n]*requires\s+approval\s*[·.]\s*modify\s+request[ \t]*\n(?:[ \t]*\n|[^\n]*[^\s─-][^\n]*\n)*?[ \t]*[>›][ \t]*[^\n]*\n(?:[ \t]*\n|[^\n]*[^\s─-][^\n]*\n)*[ \t]*[-─]+[ \t]*\n[ \t]*esc[ \t]+to[ \t]+close[ \t]*\n?\z']
 
 [[rules]]
 id = "crew_approval"
