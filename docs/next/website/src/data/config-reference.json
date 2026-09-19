@@ -698,6 +698,12 @@
           "description": "Open the focused pane scrollback in $EDITOR."
         },
         {
+          "key": "keys.clear_pane",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Clear the focused pane screen and scrollback, keeping the current cursor line and its visible soft-wrapped rows. Sends no input to the running program and does nothing on the alternate screen (for example, Vim). Unset by default; for example, clear_pane = \"prefix+ctrl+k\"."
+        },
+        {
           "key": "keys.copy_mode",
           "type": "keybinding",
           "default": "\"prefix+[\"",

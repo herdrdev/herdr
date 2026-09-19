@@ -62,6 +62,8 @@ Workspaces and session:
 
 The full keymap and the binding syntax live in the [keybinding reference](/docs/configuration/#keybindings).
 
+The Goto picker (`prefix+g`) lists each agent or terminal on its own row, grouped by workspace. Split tabs never hide their panes behind another row. Click a row or press Enter to jump directly to it. Press `/` to search names, agent kinds, tabs, workspaces, branches, or paths; use Up/Down or `j/k` to move between rows when not typing a search. Left/Right jumps to the first agent or terminal in the previous/next workspace section, without wrapping. While editing a search, Left/Right moves the text cursor instead. Outside search, `b/w/i/d` filter blocked, working, idle, or done agents, and `a` shows all terminals again. The selected destination's location and path appear below the list. When the list overflows, use the mouse wheel, click the scrollbar track, or drag its thumb to scroll without opening a destination.
+
 ## Editing text fields
 
 Herdr's naming dialogs, worktree branch fields, filters, and copy-mode search support editing at the cursor. These shortcuts apply to Herdr-owned fields, not to the shell or agent inside a pane.

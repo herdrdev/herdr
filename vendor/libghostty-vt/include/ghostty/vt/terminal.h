@@ -2008,6 +2008,14 @@ GHOSTTY_API void ghostty_terminal_free(GhosttyTerminal terminal);
 GHOSTTY_API void ghostty_terminal_reset(GhosttyTerminal terminal);
 
 /**
+ * Clear screen and history, retaining the cursor's soft-wrapped active line.
+ * Does not alter the VT parser or write to the child process. Returns false
+ * without changing the terminal on the alternate screen or for a NULL handle.
+ * Otherwise returns true and moves the retained line to the top of the screen.
+ */
+GHOSTTY_API bool ghostty_terminal_clear_screen(GhosttyTerminal terminal);
+
+/**
  * Resize the terminal to the given dimensions.
  *
  * Changes the number of columns and rows in the terminal. The primary

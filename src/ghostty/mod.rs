@@ -1619,6 +1619,10 @@ impl Terminal {
         Ok(text)
     }
 
+    pub fn clear_screen(&mut self) -> bool {
+        unsafe { ffi::ghostty_terminal_clear_screen(self.raw) }
+    }
+
     pub fn scroll_viewport_bottom(&mut self) {
         let viewport = ffi::GhosttyTerminalScrollViewport {
             tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_SCROLL_VIEWPORT_BOTTOM,

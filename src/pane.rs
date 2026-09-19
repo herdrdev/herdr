@@ -3081,6 +3081,20 @@ impl PaneRuntime {
         self.compression.wake();
     }
 
+    pub fn clear_screen(&self) -> Result<(), String> {
+        let guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.content_seq.fetch_add(1, Ordering::AcqRel);
+        let result = self.terminal.clear_screen();
+        self.content_seq.fetch_add(1, Ordering::Release);
+        drop(guard);
+        self.compression.wake();
+        mark_detection_content_changed(&self.detection_content_seq);
+        result
+    }
+
     /// Reset scroll to live view (offset = 0).
     pub fn scroll_reset(&self) {
         self.terminal.scroll_reset();
@@ -3667,6 +3681,56 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn clear_pane_preserves_wrapped_input_and_unfinished_vt_sequence() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel_and_scrollback_bytes(
+            10,
+            5,
+            100_000,
+            b"old\r\nold\r\nold\r\nold\r\nold\r\n\x1b[32m$ abcdefghijklmnop\x1b[1A\x1b[4G\x1b[",
+            4,
+        );
+        let before = runtime.content_seq();
+        runtime.scroll_up(1);
+        runtime.clear_screen().unwrap();
+        let snapshot = runtime.collect_dirty_patch_snapshot(10, 5).unwrap();
+        assert!(snapshot.content_revision > before);
+        assert!(!matches!(snapshot.patch, TerminalDirtyPatchOutcome::Clean));
+        let metrics = runtime.scroll_metrics().unwrap();
+        assert_eq!(metrics.max_offset_from_bottom, 0);
+        assert_eq!(metrics.offset_from_bottom, 0);
+        let text = runtime.recent_unwrapped_text_snapshot(100).text;
+        assert!(text.contains("$ abcdefghijklmnop"), "{text:?}");
+        assert!(!text.contains("old"), "{text:?}");
+        runtime.test_process_pty_bytes(b"5 q");
+        assert!(!runtime.visible_text().contains("5 q"));
+        assert!(rx.try_recv().is_err(), "clear must not send child input");
+    }
+
+    #[tokio::test]
+    async fn clear_pane_preserves_alternate_screen_and_primary_history() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            20,
+            4,
+            100_000,
+            b"one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[?1049halt app",
+        );
+        let before = runtime.visible_text();
+        runtime.clear_screen().unwrap();
+        assert_eq!(runtime.visible_text(), before);
+        runtime.test_process_pty_bytes(b"\x1b[?1049l");
+        assert!(runtime
+            .recent_unwrapped_text_snapshot(100)
+            .text
+            .contains("one"));
+        runtime.clear_screen().unwrap();
+        assert!(!runtime
+            .recent_unwrapped_text_snapshot(100)
+            .text
+            .contains("one"));
+        assert!(runtime.visible_text().contains("five"));
+    }
 
     #[tokio::test]
     async fn dirty_patch_snapshot_keeps_clean_metadata_and_terminal_fallback() {

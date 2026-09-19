@@ -191,21 +191,12 @@ impl ClientShellState {
     }
 
     pub(super) fn open_navigator_overlay(&mut self) {
-        let expanded_workspaces =
-            super::aggregate_navigation::cached_endpoint_snapshots(&self.endpoints)
-                .flat_map(|endpoint| {
-                    endpoint.snapshot.workspaces.iter().map(move |workspace| {
-                        (endpoint.endpoint_id.clone(), workspace.workspace_id.clone())
-                    })
-                })
-                .collect();
         let mut navigator = ClientNavigatorOverlay {
             query: TextEditor::default(),
             search_focused: false,
             selected: None,
             scroll: 0,
             filter: None,
-            expanded_workspaces,
         };
         let rows =
             render::client_navigator_rows(&self.endpoints, &self.active_endpoint_id, &navigator);
@@ -231,6 +222,55 @@ impl ClientShellState {
         let next =
             (selected as isize + delta).clamp(0, rows.len().saturating_sub(1) as isize) as usize;
         navigator.selected = Some(rows[next].target.clone());
+    }
+
+    pub(super) fn scroll_navigator_to(&mut self, scroll: usize, viewport_rows: usize) {
+        let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() else {
+            return;
+        };
+        let rows =
+            render::client_navigator_rows(&self.endpoints, &self.active_endpoint_id, navigator);
+        let viewport_rows = viewport_rows.max(1);
+        navigator.scroll = scroll.min(rows.len().saturating_sub(viewport_rows));
+        let selected =
+            super::aggregate_navigation::navigator_selected_index(&rows, navigator).unwrap_or(0);
+        // Keep the selection in the dragged viewport so rendering does not snap back to it.
+        let selected = selected.clamp(navigator.scroll, navigator.scroll + viewport_rows - 1);
+        navigator.selected = rows.get(selected).map(|row| row.target.clone());
+    }
+
+    fn move_navigator_workspace(&mut self, forward: bool) {
+        let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() else {
+            return;
+        };
+        let rows =
+            render::client_navigator_rows(&self.endpoints, &self.active_endpoint_id, navigator);
+        let Some(selected) =
+            super::aggregate_navigation::navigator_selected_index(&rows, navigator)
+        else {
+            return;
+        };
+        let section = rows[..=selected]
+            .iter()
+            .rposition(|row| !matches!(row.target, ClientNavigatorTarget::Pane { .. }))
+            .unwrap_or(selected);
+        let mut destinations = rows.windows(2).enumerate().filter(|(index, pair)| {
+            matches!(pair[0].target, ClientNavigatorTarget::Workspace { .. })
+                && matches!(pair[1].target, ClientNavigatorTarget::Pane { .. })
+                && if forward {
+                    *index > section
+                } else {
+                    *index < section
+                }
+        });
+        let destination = if forward {
+            destinations.next()
+        } else {
+            destinations.next_back()
+        };
+        if let Some((_, pair)) = destination {
+            navigator.selected = Some(pair[1].target.clone());
+        }
     }
 
     pub(super) fn accept_navigator_selection(&mut self, outcome: &mut ClientShellInput) {
@@ -260,12 +300,6 @@ impl ClientShellState {
                 ClientEndpointFocusTarget::Workspace(workspace_id),
                 outcome,
             ),
-            ClientNavigatorTarget::Tab {
-                endpoint_id,
-                tab_id,
-            } => {
-                self.focus_or_activate(endpoint_id, ClientEndpointFocusTarget::Tab(tab_id), outcome)
-            }
             ClientNavigatorTarget::Pane {
                 endpoint_id,
                 pane_id,
@@ -279,37 +313,6 @@ impl ClientShellState {
             self.overlay = None;
         }
         outcome.repaint = true;
-    }
-
-    pub(super) fn toggle_selected_navigator_workspace(&mut self) {
-        let workspace_key = self.overlay.as_ref().and_then(|overlay| match overlay {
-            ClientShellOverlay::Navigator(navigator) => {
-                let rows = render::client_navigator_rows(
-                    &self.endpoints,
-                    &self.active_endpoint_id,
-                    navigator,
-                );
-                super::aggregate_navigation::selected_navigator_target(&rows, navigator).and_then(
-                    |target| match target {
-                        ClientNavigatorTarget::Workspace {
-                            endpoint_id,
-                            workspace_id,
-                        } => Some((endpoint_id, workspace_id)),
-                        _ => None,
-                    },
-                )
-            }
-            _ => None,
-        });
-        if let (Some(workspace_key), Some(ClientShellOverlay::Navigator(navigator))) =
-            (workspace_key, self.overlay.as_mut())
-        {
-            if !navigator.expanded_workspaces.remove(&workspace_key) {
-                navigator.expanded_workspaces.insert(workspace_key);
-            }
-            navigator.selected = None;
-            navigator.scroll = 0;
-        }
     }
 
     pub(super) fn workspace_action_id(&self) -> Option<String> {
@@ -676,6 +679,11 @@ impl ClientShellState {
                 }
                 return;
             }
+            if matches!(code, KeyCode::Left | KeyCode::Right) && modifiers.is_empty() {
+                self.move_navigator_workspace(code == KeyCode::Right);
+                outcome.repaint = true;
+                return;
+            }
             if code == KeyCode::Backspace && modifiers.is_empty() {
                 if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
                     if navigator.filter.take().is_some() {
@@ -759,11 +767,6 @@ impl ClientShellState {
                     navigator.filter = None;
                     navigator.selected = None;
                 }
-                outcome.repaint = true;
-                return;
-            }
-            if code == KeyCode::Char(' ') && modifiers.is_empty() {
-                self.toggle_selected_navigator_workspace();
                 outcome.repaint = true;
                 return;
             }
