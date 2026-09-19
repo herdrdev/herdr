@@ -111,13 +111,17 @@ function Outer-State($Plan) {
     $Plan.outer_sequence = $state.sequence
     return $state
 }
-function Get-GauntletClientTrace($Plan, [int] $Since) {
+function Get-GauntletClientTrace($Plan) {
     # The client writes its mapper trace into the named session's data directory.
+    # The client log grows independently of the transport log, so this keeps its
+    # own cursor rather than reusing the transport line count.
     $log = Join-Path $Plan.config_home "herdr/sessions/$($Plan.session)/herdr-client.log"
     if (-not (Test-Path -LiteralPath $log)) { return $null }
     $lines = @(Get-Content -LiteralPath $log | Where-Object { $_ -like '*windows input trace: input batch*' })
-    if ($lines.Count -le $Since) { return @() }
-    return @($lines | Select-Object -Skip $Since)
+    $since = if ($Plan.ContainsKey('client_trace_lines')) { [int]$Plan.client_trace_lines } else { 0 }
+    $Plan.client_trace_lines = $lines.Count
+    if ($lines.Count -le $since) { return @() }
+    return @($lines | Select-Object -Skip $since)
 }
 function Set-ObservedGeometry($Plan, $Window, $WindowPid, $Width, $Height) {
     # Correct against actual console cell measurements, not a claimed pixel size.
@@ -362,7 +366,7 @@ try {
                         if ($path -in @('herdr', 'herdr-remote')) {
                             # The mapper's own client-event view disambiguates a paste the
                             # terminal issued from a remote-image-bridge reaction (#4314).
-                            $clientEvents = Get-GauntletClientTrace $plan $traceLineCount
+                            $clientEvents = Get-GauntletClientTrace $plan
                             if ($null -ne $clientEvents) { $row.client_events = $clientEvents }
                         }
                         if ($null -ne $clipboardSequence) {

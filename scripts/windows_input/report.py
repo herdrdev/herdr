@@ -133,20 +133,22 @@ def classification_of_client_events(trace_lines):
     reaction to a consumed key or an empty bracketed paste (#4314). The mapper
     trace records the decoded client events, so the batch that carried the
     paste identifies its origin. Returns one of:
-    "terminal-paste", "empty-paste", "bridge-key", "none", or None when the
-    trace is unavailable (never a pass).
+    "terminal-paste", "empty-paste", "key-event", "none", or None when the
+    trace is unavailable. Only "terminal-paste" and "empty-paste" are positive
+    evidence; callers must not treat the others as bridge proof.
     """
     if trace_lines is None:
         return None
     for line in trace_lines:
         if not isinstance(line, str):
             return None
-        if 'Paste { text: ""' in line or "Paste { text: \"\" }" in line:
+        if 'Paste { text: ""' in line:
             return "empty-paste"
         if "Paste {" in line:
             return "terminal-paste"
-        if "Key {" in line and "Char('v')" in line:
-            return "bridge-key"
+    for line in trace_lines:
+        if isinstance(line, str) and 'Key {' in line and "kind: Press" in line:
+            return "key-event"
     return "none"
 
 
@@ -236,10 +238,10 @@ def verdict(case, mode, evidence):
     except (KeyError, ValueError, TypeError):
         return "inconclusive", "Missing or malformed raw bytes"
     if expected.get("clipboard_image"):
+        origin = evidence.get("paste_origin")
         if evidence.get("path") == "direct":
             if raw != b"\x1b[200~\x1b[201~":
                 return "fail", "Terminal did not emit an empty bracketed paste for image-only clipboard"
-            origin = evidence.get("paste_origin")
             if origin not in (None, "empty-paste"):
                 return "fail", f"Direct empty paste was decoded as {origin}, not an empty paste"
             return "pass", "Terminal emitted an empty bracketed paste for image-only clipboard"
@@ -256,9 +258,12 @@ def verdict(case, mode, evidence):
             return "fail", "Pane did not receive a staged clipboard PNG path"
         # A staged image must come from the bridge reacting to an empty paste, not
         # from a paste the terminal issued for text on the clipboard (#4314).
-        origin = evidence.get("paste_origin")
         if origin == "terminal-paste":
             return "fail", "Terminal issued the paste; the remote image bridge did not react to the empty paste"
+        if origin != "empty-paste":
+            # Without the mapper trace there is no evidence the bridge reacted to
+            # an empty paste; a staged path alone cannot qualify the bridge.
+            return "inconclusive", "Missing client trace evidence of an empty-paste bridge reaction"
         return (("pass", "Exact clipboard PNG was staged and its path reached the pane")
                 if evidence.get("staged_image_sha256") == expected["sha256"] else
                 ("fail", "Staged clipboard image contents differ from the fixture"))
