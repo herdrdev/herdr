@@ -48,7 +48,7 @@ impl ChildExitReason {
 }
 
 #[cfg(unix)]
-pub(crate) use unix_common::classify_child_exit;
+pub(crate) use unix_common::{classify_child_exit, poll_fd_readable, read_fd};
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildExitReason {
