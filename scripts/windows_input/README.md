@@ -132,6 +132,11 @@ Every run needs a **new** output directory. By default it is
   the runner does not dismiss unexpected dialogs or rebind Terminal shortcuts.
 - Image-only Ctrl+V through the remote clipboard bridge, plus a mixed image/text
   clipboard check that proves Windows Terminal and Herdr preserve the text paste.
+  The report records `paste_origin`, classified from the client's own mapper trace
+  (`terminal-paste`, `empty-paste`, `key-event`, or `none`). A staged image only
+  passes when the origin is a positively observed `empty-paste`: a paste the
+  terminal issued for clipboard text fails, and a missing or inconclusive trace is
+  `inconclusive` rather than a qualification (#4314).
 - A full case pass at an observed 120×30 host size; keyboard/paste sentinels at
   **80, 119, 120, 121, 132, 160, 240 columns**, at 24 and 50 rows; then return to
   80 columns. This exercises narrow→wide→narrow resizing of the actual outer
