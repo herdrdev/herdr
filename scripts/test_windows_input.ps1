@@ -111,6 +111,14 @@ function Outer-State($Plan) {
     $Plan.outer_sequence = $state.sequence
     return $state
 }
+function Get-GauntletClientTrace($Plan, [int] $Since) {
+    # The client writes its mapper trace into the named session's data directory.
+    $log = Join-Path $Plan.config_home "herdr/sessions/$($Plan.session)/herdr-client.log"
+    if (-not (Test-Path -LiteralPath $log)) { return $null }
+    $lines = @(Get-Content -LiteralPath $log | Where-Object { $_ -like '*windows input trace: input batch*' })
+    if ($lines.Count -le $Since) { return @() }
+    return @($lines | Select-Object -Skip $Since)
+}
 function Set-ObservedGeometry($Plan, $Window, $WindowPid, $Width, $Height) {
     # Correct against actual console cell measurements, not a claimed pixel size.
     for ($attempt = 0; $attempt -lt 8; $attempt++) {
@@ -350,6 +358,12 @@ try {
                             $captureTrace = ($traceLines | Select-Object -Skip $traceLineCount) -join "`n"
                             $row.input_reader = if ($trace.Contains('reader=windows-console')) { 'windows-console' } elseif ($trace.Contains('reader=crossterm')) { 'crossterm' } else { 'unknown' }
                             if ($captureTrace.Contains('transport=win32-serialized')) { $row.input_transport = 'win32-serialized' }
+                        }
+                        if ($path -in @('herdr', 'herdr-remote')) {
+                            # The mapper's own client-event view disambiguates a paste the
+                            # terminal issued from a remote-image-bridge reaction (#4314).
+                            $clientEvents = Get-GauntletClientTrace $plan $traceLineCount
+                            if ($null -ne $clientEvents) { $row.client_events = $clientEvents }
                         }
                         if ($null -ne $clipboardSequence) {
                             if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }

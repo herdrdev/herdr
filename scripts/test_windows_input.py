@@ -1,7 +1,7 @@
 """Portable tests of the gauntlet's oracle, not Windows input qualification."""
 import copy
 import unittest
-from scripts.windows_input.report import catalogue, channel_identity_errors, herdr_protocol_label, known_host_gap, qualification_matrix, summarize, verdict
+from scripts.windows_input.report import classification_of_client_events, catalogue, channel_identity_errors, herdr_protocol_label, known_host_gap, qualification_matrix, summarize, verdict
 
 
 class WindowsInputGauntletTests(unittest.TestCase):
@@ -100,6 +100,34 @@ class WindowsInputGauntletTests(unittest.TestCase):
         self.assertEqual(verdict(case, "legacy", {**remote, "staged_image_sha256": "0" * 64})[0], "fail")
         self.assertEqual(verdict(case, "legacy", {**self.evidence, "path": "herdr-remote", "hex": empty_paste.hex()})[0], "fail")
         self.assertEqual(verdict(case, "legacy", {**self.evidence, "path": "herdr", "hex": empty_paste.hex()})[0], "not_run")
+
+    def test_remote_clipboard_image_rejects_a_paste_the_terminal_issued(self):
+        # A staged PNG that came from a terminal-issued text paste proves nothing
+        # about the empty-paste bridge (#4314).
+        case = self.cases["clipboard-image"]
+        staged = b"\x1b[200~C:\\Temp\\herdr-clipboard-images-user\\image.png\x1b[201~"
+        remote = {**self.evidence, "path": "herdr-remote", "hex": staged.hex(),
+                  "staged_image_sha256": case["expected"]["legacy"]["sha256"]}
+        self.assertEqual(verdict(case, "legacy", {**remote, "paste_origin": "terminal-paste"})[0], "fail")
+        for origin in ("empty-paste", "bridge-key", None):
+            self.assertEqual(verdict(case, "legacy", {**remote, "paste_origin": origin})[0], "pass", origin)
+        direct = {**self.evidence, "path": "direct", "hex": b"\x1b[200~\x1b[201~".hex()}
+        self.assertEqual(verdict(case, "legacy", {**direct, "paste_origin": "terminal-paste"})[0], "fail")
+
+    def test_client_event_trace_classifies_paste_origin(self):
+        self.assertEqual(classification_of_client_events(None), None)
+        self.assertEqual(classification_of_client_events([]), "none")
+        self.assertEqual(
+            classification_of_client_events(['mapped_event_groups=[Paste { text: "" }]']),
+            "empty-paste")
+        self.assertEqual(
+            classification_of_client_events(['mapped_event_groups=[Paste { text: "hello" }]']),
+            "terminal-paste")
+        self.assertEqual(
+            classification_of_client_events(
+                ["mapped_event_groups=[Key { code: Char('v'), modifiers: 0, kind: Release }]"]),
+            "bridge-key")
+        self.assertEqual(classification_of_client_events(["not a trace line", 7]), None)
 
     def test_mouse_interleave_requires_ordered_motion_and_paste(self):
         case = self.cases["mouse-interleave"]
