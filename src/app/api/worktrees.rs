@@ -597,10 +597,10 @@ impl App {
         let canonical_checkout = crate::worktree::canonical_or_original(checkout_path);
         let checkout_key = canonical_checkout.display().to_string();
         self.state.workspaces.iter().position(|ws| {
-            if ws.worktree_space().is_some_and(|space| {
-                crate::worktree::canonical_or_original(&space.checkout_path) == canonical_checkout
-            }) {
-                return true;
+            if let Some(space) = ws.worktree_space() {
+                // Explicit checkout provenance must not be overridden by shell navigation.
+                return crate::worktree::canonical_or_original(&space.checkout_path)
+                    == canonical_checkout;
             }
 
             let git_space = ws.git_space().cloned().or_else(|| {
@@ -1478,6 +1478,108 @@ mod tests {
                     && *already_open
             )
         }));
+
+        let remove = crate::worktree::build_worktree_remove_command(&repo, &checkout, false, false);
+        crate::worktree::run_worktree_command(&remove).unwrap();
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn api_worktree_open_preserves_explicit_membership_after_shell_cd() {
+        let repo = create_committed_repo("api-worktree-membership-repo");
+        let checkout = unique_temp_path("api-worktree-membership-checkout");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "worktree/membership",
+                checkout.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        // Use Git's path spelling, as worktree create/open do when assigning membership.
+        let checkout = crate::worktree::list_existing_worktrees(&repo, false)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.branch.as_deref() == Some("worktree/membership"))
+            .unwrap()
+            .path;
+        let mut app = app_with_parent(&repo);
+        let parent_id = app.state.workspaces[0].id.clone();
+        let source = app
+            .resolve_worktree_source(Some(parent_id.clone()), None)
+            .unwrap_or_else(|err| panic!("{}", err.message));
+        app.mark_worktree_membership(&source, 0, repo.clone(), false, false);
+        let parent_membership = app.state.workspaces[0].worktree_space().cloned();
+
+        // Shell navigation and refreshed Git metadata must not override provenance.
+        let parent = &mut app.state.workspaces[0];
+        parent.cached_git_space = crate::workspace::git_space_metadata(&checkout);
+        let terminal_id = parent.tabs[0]
+            .terminal_id(parent.tabs[0].root_pane)
+            .unwrap();
+        app.state.terminals.get_mut(terminal_id).unwrap().cwd = checkout.clone();
+        assert_eq!(app.open_workspace_idx_for_checkout(&checkout), None);
+
+        let mut child = Workspace::test_new("child");
+        child.identity_cwd = checkout.clone();
+        let child_id = child.id.clone();
+        app.state.workspaces.push(child);
+        app.state.ensure_test_terminals();
+        app.mark_worktree_membership(&source, 1, checkout.clone(), true, false);
+        let child_membership = app.state.workspaces[1].worktree_space().cloned();
+
+        let response = app.handle_api_request(Request {
+            id: "list".into(),
+            method: crate::api::schema::Method::WorktreeList(WorktreeListParams {
+                workspace_id: Some(parent_id.clone()),
+                ..WorktreeListParams::default()
+            }),
+        });
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeList { worktrees, .. } = success.result else {
+            panic!("expected worktree_list response");
+        };
+        let entry = worktrees
+            .iter()
+            .find(|entry| entry.branch.as_deref() == Some("worktree/membership"))
+            .unwrap();
+        assert_eq!(entry.open_workspace_id.as_deref(), Some(child_id.as_str()));
+
+        let response = app.handle_api_request(Request {
+            id: "open".into(),
+            method: crate::api::schema::Method::WorktreeOpen(WorktreeOpenParams {
+                workspace_id: Some(parent_id),
+                branch: Some("worktree/membership".into()),
+                focus: false,
+                ..WorktreeOpenParams::default()
+            }),
+        });
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeOpened {
+            workspace,
+            already_open,
+            ..
+        } = success.result
+        else {
+            panic!("expected worktree_opened response");
+        };
+        assert!(already_open);
+        assert_eq!(workspace.workspace_id, child_id);
+        assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(
+            app.state.workspaces[0].worktree_space(),
+            parent_membership.as_ref()
+        );
+        assert_eq!(
+            app.state.workspaces[1].worktree_space(),
+            child_membership.as_ref()
+        );
+        app.state.assert_invariants_for_test();
 
         let remove = crate::worktree::build_worktree_remove_command(&repo, &checkout, false, false);
         crate::worktree::run_worktree_command(&remove).unwrap();
