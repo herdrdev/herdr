@@ -237,6 +237,73 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// A rejected noninteractive attach must not create a session or start its daemon.
+#[test]
+fn session_attach_without_terminal_leaves_no_session() {
+    use std::os::unix::process::CommandExt as _;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    register_runtime_dir(&runtime_dir);
+    let name = "no-tty";
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    let session_dir = config_home.join(app_dir).join("sessions").join(name);
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+        command
+            .args(args)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_RUNTIME_DIR", &runtime_dir)
+            .env_remove("HERDR_CONFIG_PATH")
+            .env_remove("HERDR_ENV")
+            .env_remove("HERDR_SESSION")
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_CLIENT_SOCKET_PATH")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_TAB_ID")
+            .env_remove("HERDR_PANE_ID");
+        // Piped stdio alone can still leave /dev/tty usable. Match noninteractive
+        // SSH by detaching the child from the test runner's controlling terminal.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.output().unwrap()
+    };
+    let before = run(&["session", "list", "--json"]);
+    let output = run(&["session", "attach", name]);
+    let session_created = session_dir.exists();
+    let after = run(&["session", "list", "--json"]);
+    // Clean up even when a regression started a daemon, before assertions panic.
+    cleanup_test_base(&base);
+
+    assert!(
+        !session_created,
+        "failed attach created a session directory"
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("terminal"), "stderr={stderr}");
+    assert!(stderr.contains("run inside a terminal"), "stderr={stderr}");
+    assert!(
+        output.stdout.is_empty(),
+        "failed attach emitted terminal output"
+    );
+    assert!(before.status.success());
+    assert!(after.status.success());
+    assert_eq!(before.stdout, after.stdout, "session inventory changed");
+}
+
 /// Running `herdr` with no server present starts a server
 /// and attaches as client.
 #[test]
