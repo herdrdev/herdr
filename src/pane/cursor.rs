@@ -102,10 +102,22 @@ pub(crate) struct CursorPositionSettleState {
 
 impl CursorPositionSettleState {
     pub(crate) fn observe(&mut self, current: Option<TerminalCursorState>, now: Instant) {
-        // A candidate that stayed quiet for its hold window is real, so preserve
-        // it before considering the first (possibly temporary) position of a
-        // later redraw.
+        // A return to the caret's position or row ends the redraw hold, even
+        // when typing advanced its column. Otherwise the accumulated typing
+        // deadline can settle a later repair cell and anchor redraws there.
         if let (Some(candidate), Some(since)) = (self.candidate, self.candidate_since) {
+            let restored = self.settled.zip(current).is_some_and(|(settled, current)| {
+                settled.visible
+                    && (same_cursor_position(settled, current)
+                        || (candidate.y != settled.y
+                            && current.y == settled.y
+                            && now.duration_since(since) < self.candidate_hold()))
+            });
+            if restored {
+                self.settle(current);
+                return;
+            }
+            // Preserve an eligible caret before a later redraw moves it away.
             if now.duration_since(since) >= self.candidate_hold() {
                 self.settle(Some(candidate));
             }
@@ -264,25 +276,82 @@ mod tests {
     #[test]
     fn cursor_settle_keeps_previous_caret_during_next_system_conpty_redraw() {
         let now = Instant::now();
-        let mut settle = CursorPositionSettleState::default();
         let caret = cursor(2, 12, true, 0);
-        let typed_caret = cursor(3, 12, true, 0);
-        let repair = cursor(0, 10, true, 0);
-        settle.observe(Some(caret), now);
-        settle.observe(Some(typed_caret), now + Duration::from_millis(1));
+        for (next_caret, repair) in [
+            (cursor(3, 12, true, 0), cursor(0, 10, true, 0)),
+            (cursor(20, 12, true, 0), cursor(0, 10, true, 0)),
+            (cursor(2, 13, true, 0), cursor(0, 10, true, 0)),
+            (cursor(2, 13, true, 0), cursor(0, 12, true, 0)),
+        ] {
+            let mut settle = CursorPositionSettleState::default();
+            settle.observe(Some(caret), now);
+            settle.observe(Some(next_caret), now + Duration::from_millis(1));
 
-        // System ConPTY closes the next frame at the repair cell, then emits
-        // the caret restoration separately about 10 ms later.
-        settle.observe(Some(repair), now + Duration::from_millis(160));
-        assert_eq!(
-            settle.reported_cursor(Some(repair), now + Duration::from_millis(161)),
-            Some(typed_caret)
-        );
-        settle.observe(Some(typed_caret), now + Duration::from_millis(170));
-        assert_eq!(
-            settle.reported_cursor(Some(typed_caret), now + Duration::from_millis(171)),
-            Some(typed_caret)
-        );
+            // Preserve real typing, Home/End, and row moves before the next
+            // ConPTY redraw parks briefly at its repair cell.
+            settle.observe(Some(repair), now + Duration::from_millis(160));
+            assert_eq!(
+                settle.reported_cursor(Some(repair), now + Duration::from_millis(161)),
+                Some(next_caret)
+            );
+            settle.observe(Some(next_caret), now + Duration::from_millis(170));
+            assert_eq!(
+                settle.reported_cursor(Some(next_caret), now + Duration::from_millis(171)),
+                Some(next_caret)
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_settle_recovers_from_a_late_restore_during_continuous_redraws() {
+        let now = Instant::now();
+        let caret = cursor(6, 9, true, 0);
+        let park = cursor(0, 7, true, 0);
+        for (restored, first_restore) in [
+            (caret, 161),
+            (cursor(7, 9, true, 0), 71),
+            (cursor(30, 9, true, 0), 71),
+        ] {
+            let mut settle = CursorPositionSettleState::default();
+            settle.observe(Some(caret), now);
+            settle.observe(Some(park), now + Duration::from_millis(1));
+
+            // Exact restoration can miss the max hold. A changed column only
+            // restores the old row while the new row is still provisional.
+            for ms in (first_restore..first_restore + 1800).step_by(30) {
+                let restored_at = now + Duration::from_millis(ms);
+                settle.observe(Some(restored), restored_at);
+                assert_eq!(
+                    settle.reported_cursor(Some(restored), restored_at),
+                    Some(restored),
+                    "the repair cell must not become the anchor for later redraws"
+                );
+                settle.observe(Some(park), restored_at + Duration::from_millis(20));
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_settle_keeps_typing_deadlines_from_adopting_redraw_positions() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let park = cursor(0, 37, true, 0);
+        settle.observe(Some(cursor(3, 39, true, 0)), now);
+        settle.observe(Some(cursor(4, 39, true, 0)), now + Duration::from_millis(1));
+
+        // Fast typing advances the caret while redraws briefly visit another
+        // row. A burst's max deadline can fall on one of those repair writes.
+        for step in 0..60 {
+            let parked_at = now + Duration::from_millis(11 + step * 30);
+            settle.observe(Some(park), parked_at);
+            assert_eq!(
+                settle.reported_cursor(Some(park), parked_at).unwrap().y,
+                39,
+                "a fresh repair position must not inherit the typing deadline"
+            );
+            let caret = cursor(6 + step as u16 * 2, 39, true, 0);
+            settle.observe(Some(caret), parked_at + Duration::from_millis(10));
+        }
     }
 
     #[test]
