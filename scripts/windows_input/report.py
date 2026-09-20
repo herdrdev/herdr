@@ -126,6 +126,32 @@ def catalogue():
     return dict(schema=1, widths=WIDTHS, heights=HEIGHTS, modes=MODES, cases=cases)
 
 
+def classification_of_client_events(trace_lines):
+    """Classify how a paste reached the pane from the mapper's client-event trace.
+
+    The pane capture alone cannot tell a paste the terminal issued from a
+    reaction to a consumed key or an empty bracketed paste (#4314). The mapper
+    trace records the decoded client events, so the batch that carried the
+    paste identifies its origin. Returns one of:
+    "terminal-paste", "empty-paste", "key-event", "none", or None when the
+    trace is unavailable. Only "terminal-paste" and "empty-paste" are positive
+    evidence; callers must not treat the others as bridge proof.
+    """
+    if trace_lines is None:
+        return None
+    for line in trace_lines:
+        if not isinstance(line, str):
+            return None
+        if 'Paste { text: ""' in line:
+            return "empty-paste"
+        if "Paste {" in line:
+            return "terminal-paste"
+    for line in trace_lines:
+        if isinstance(line, str) and 'Key {' in line and "kind: Press" in line:
+            return "key-event"
+    return "none"
+
+
 def verdict(case, mode, evidence):
     """The full capture, not a matching prefix, is the primary assertion."""
     if evidence.get("status") in {"not_run", "unsupported", "inconclusive"}:
@@ -212,10 +238,13 @@ def verdict(case, mode, evidence):
     except (KeyError, ValueError, TypeError):
         return "inconclusive", "Missing or malformed raw bytes"
     if expected.get("clipboard_image"):
+        origin = evidence.get("paste_origin")
         if evidence.get("path") == "direct":
-            return (("pass", "Terminal emitted an empty bracketed paste for image-only clipboard")
-                    if raw == b"\x1b[200~\x1b[201~" else
-                    ("fail", "Terminal did not emit an empty bracketed paste for image-only clipboard"))
+            if raw != b"\x1b[200~\x1b[201~":
+                return "fail", "Terminal did not emit an empty bracketed paste for image-only clipboard"
+            if origin not in (None, "empty-paste"):
+                return "fail", f"Direct empty paste was decoded as {origin}, not an empty paste"
+            return "pass", "Terminal emitted an empty bracketed paste for image-only clipboard"
         if evidence.get("path") != "herdr-remote":
             return "not_run", "Clipboard image bridge requires the remote-client gauntlet path"
         if not raw.startswith(b"\x1b[200~") or not raw.endswith(b"\x1b[201~"):
@@ -227,6 +256,14 @@ def verdict(case, mode, evidence):
         valid_path = re.fullmatch(r"[A-Za-z]:\\.*\\herdr-clipboard-images-[^\\]+\\[^\\]+\.png", path)
         if not valid_path:
             return "fail", "Pane did not receive a staged clipboard PNG path"
+        # A staged image must come from the bridge reacting to an empty paste, not
+        # from a paste the terminal issued for text on the clipboard (#4314).
+        if origin == "terminal-paste":
+            return "fail", "Terminal issued the paste; the remote image bridge did not react to the empty paste"
+        if origin != "empty-paste":
+            # Without the mapper trace there is no evidence the bridge reacted to
+            # an empty paste; a staged path alone cannot qualify the bridge.
+            return "inconclusive", "Missing client trace evidence of an empty-paste bridge reaction"
         return (("pass", "Exact clipboard PNG was staged and its path reached the pane")
                 if evidence.get("staged_image_sha256") == expected["sha256"] else
                 ("fail", "Staged clipboard image contents differ from the fixture"))
@@ -302,6 +339,9 @@ def summarize(document):
             raise ValueError(f"Duplicate observation identity: {identity}")
         seen.add(identity)
         case = cases[observation["case"]]
+        paste_origin = classification_of_client_events(observation.get("client_events"))
+        if paste_origin is not None:
+            observation = {**observation, "paste_origin": paste_origin}
         status, reason = verdict(case, observation["mode"], observation)
         scope = "direct_host" if observation.get("path") == "direct" else "through_herdr_not_yet_attributed"
         if status in ("pass", "fail"):

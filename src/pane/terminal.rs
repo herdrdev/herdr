@@ -21,7 +21,9 @@ mod migration_tests;
 #[cfg(windows)]
 mod windows_recent_fallback;
 
-use super::cursor::{CursorPositionSettleState, DecscusrTracker, CURSOR_POSITION_SETTLE};
+#[cfg(test)]
+use super::cursor::CURSOR_POSITION_SETTLE;
+use super::cursor::{CursorPositionSettleState, DecscusrTracker};
 use super::{
     input::{
         ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
@@ -1445,7 +1447,8 @@ impl GhosttyPaneTerminal {
             .terminal
             .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
             .unwrap_or(false);
-        if CURSOR_POSITION_SETTLE_ENABLED {
+        // Intermediate synchronized-frame positions must not become settled cursors.
+        if CURSOR_POSITION_SETTLE_ENABLED && !synchronized_output {
             let cursor_started = crate::render_prof::timer();
             let cursor_after_write = current_cursor_state(&mut core);
             crate::render_prof::duration_since("pty.cursor_state_update", cursor_started);
@@ -1463,7 +1466,7 @@ impl GhosttyPaneTerminal {
         let render_delay = render_delay_after_pty_write(
             synchronized_output,
             has_kitty_graphics_sequence,
-            cursor_position_settle_pending(&core),
+            core.cursor_settle_state.render_delay(),
             CURSOR_POSITION_SETTLE_ENABLED,
         );
         if request_render {
@@ -2476,10 +2479,6 @@ fn encoded_key_preserves_event_kind(
         })
 }
 
-fn cursor_position_settle_pending(core: &GhosttyPaneCore) -> bool {
-    core.cursor_settle_state.pending()
-}
-
 fn effective_cursor_state(
     core: &mut GhosttyPaneCore,
     current: Option<TerminalCursorState>,
@@ -2494,17 +2493,16 @@ fn effective_cursor_state(
 fn render_delay_after_pty_write(
     synchronized_output: bool,
     has_kitty_graphics_sequence: bool,
-    cursor_position_settle_pending: bool,
+    cursor_position_settle_delay: Option<Duration>,
     cursor_position_settle_enabled: bool,
 ) -> Option<Duration> {
     if synchronized_output {
         None
-    } else if has_kitty_graphics_sequence {
-        Some(KITTY_GRAPHICS_REDRAW_SETTLE)
-    } else if cursor_position_settle_enabled && cursor_position_settle_pending {
-        Some(CURSOR_POSITION_SETTLE)
     } else {
-        None
+        let cursor_delay = cursor_position_settle_enabled
+            .then_some(cursor_position_settle_delay)
+            .flatten();
+        cursor_delay.max(has_kitty_graphics_sequence.then_some(KITTY_GRAPHICS_REDRAW_SETTLE))
     }
 }
 
@@ -4374,11 +4372,108 @@ mod tests {
 
         let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[6;21H", &tx);
 
-        assert_eq!(result.render_delay, Some(CURSOR_POSITION_SETTLE));
+        assert_eq!(result.render_delay, Some(Duration::from_millis(100)));
         assert_eq!(
             pane.cursor_state()
                 .map(|cursor| (cursor.x, cursor.y, cursor.visible)),
             Some((1, 0, true))
+        );
+        // If output stops here, the scheduled repaint must be late enough to
+        // publish this cursor without relying on an unrelated later redraw.
+        let mut core = pane.core.lock().unwrap();
+        let current = current_cursor_state(&mut core);
+        assert_eq!(
+            core.cursor_settle_state
+                .reported_cursor(current, Instant::now() + result.render_delay.unwrap()),
+            current
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cursor_settle_ignores_intermediate_synchronized_frame_positions() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[15;4H", &tx);
+
+        let previous = TerminalCursorState {
+            x: 3,
+            y: 14,
+            visible: true,
+            shape: 0,
+        };
+        {
+            let mut core = pane.core.lock().unwrap();
+            let now = Instant::now();
+            core.cursor_settle_state = CursorPositionSettleState::default();
+            core.cursor_settle_state.observe(
+                Some(TerminalCursorState { x: 2, ..previous }),
+                now - Duration::from_millis(300),
+            );
+            // Seed a pending hold whose deadline has passed, without wall-clock sleeps.
+            core.cursor_settle_state
+                .observe(Some(previous), now - Duration::from_millis(200));
+        }
+
+        for bytes in [
+            b"\x1b[?2026h\x1b[15;4Hx\x1b[13;1H".as_slice(),
+            b"\x1b[0 q\x1b[13;1H \x1b[15;5H",
+            b"\x1b[?25h",
+        ] {
+            let result = pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+            assert!(!result.request_render);
+            assert_eq!(result.render_delay, None);
+            assert_eq!(pane.cursor_state(), Some(previous));
+            assert!(pane.core.lock().unwrap().cursor_settle_state.pending());
+        }
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?2026l", &tx);
+        assert!(result.request_render);
+        assert_eq!(result.render_delay, Some(CURSOR_POSITION_SETTLE));
+        assert!(pane.core.lock().unwrap().cursor_settle_state.pending());
+        assert_eq!(pane.cursor_state(), Some(previous));
+
+        // ConPTY may restore the real caret after the synchronized frame closes.
+        let mut core = pane.core.lock().unwrap();
+        let current = current_cursor_state(&mut core);
+        assert_eq!(
+            core.cursor_settle_state
+                .reported_cursor(current, Instant::now() + CURSOR_POSITION_SETTLE),
+            Some(TerminalCursorState { x: 4, ..previous })
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cursor_settle_preserves_final_visibility_and_shape_across_split_sync_sequences() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[15;4H", &tx);
+
+        for bytes in [
+            b"\x1b[?202".as_slice(),
+            b"6h\x1b[13;1H",
+            b"\x1b[6 q\x1b[15;5H\x1b[?25l\x1b[?20",
+        ] {
+            pane.process_pty_bytes(pane_id, 0, bytes, &tx);
+            assert!(!pane.core.lock().unwrap().cursor_settle_state.pending());
+        }
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"26l", &tx);
+        assert!(result.request_render);
+        assert_eq!(result.render_delay, None);
+        assert_eq!(
+            pane.cursor_state(),
+            Some(TerminalCursorState {
+                x: 4,
+                y: 14,
+                visible: false,
+                shape: 6,
+            })
         );
     }
 
@@ -4403,19 +4498,25 @@ mod tests {
 
     #[test]
     fn cursor_settle_policy_controls_render_delay() {
+        let delay = Some(CURSOR_POSITION_SETTLE);
         assert_eq!(
-            render_delay_after_pty_write(false, false, true, true),
-            Some(CURSOR_POSITION_SETTLE)
+            render_delay_after_pty_write(false, false, delay, true),
+            delay
         );
         assert_eq!(
-            render_delay_after_pty_write(false, false, true, false),
+            render_delay_after_pty_write(false, false, delay, false),
             None
         );
         assert_eq!(
-            render_delay_after_pty_write(false, true, true, false),
+            render_delay_after_pty_write(false, true, delay, false),
             Some(KITTY_GRAPHICS_REDRAW_SETTLE)
         );
-        assert_eq!(render_delay_after_pty_write(true, false, true, true), None);
+        assert_eq!(render_delay_after_pty_write(true, false, delay, true), None);
+        let jump_delay = Some(Duration::from_millis(100));
+        assert_eq!(
+            render_delay_after_pty_write(false, true, jump_delay, true),
+            jump_delay
+        );
     }
 
     #[test]
