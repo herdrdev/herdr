@@ -1534,32 +1534,141 @@ fn navigator_narrow_layout_and_long_search_stay_inside_the_popup() {
     }
 }
 
+fn navigator_scale_snapshot(workspaces: usize, tabs: usize, panes: usize) -> ClientShellSnapshot {
+    let mut result = snapshot();
+    let workspace_template = result.workspaces[0].clone();
+    let tab_template = result.tabs[0].clone();
+    let pane_template = result.panes[0].clone();
+    result.workspaces.clear();
+    result.tabs.clear();
+    result.panes.clear();
+    for w in 0..workspaces {
+        let mut workspace = workspace_template.clone();
+        workspace.workspace_id = format!("workspace_{w}");
+        workspace.active_tab_id = format!("tab_{w}_0");
+        workspace.number = w + 1;
+        workspace.label = format!("workspace {w}");
+        workspace.focused = w == 0;
+        for t in 0..tabs {
+            let mut tab = tab_template.clone();
+            tab.workspace_id = workspace.workspace_id.clone();
+            tab.tab_id = format!("tab_{w}_{t}");
+            tab.number = t + 1;
+            tab.label = format!("tab {t}");
+            tab.focused = w == 0 && t == 0;
+            for p in 0..panes {
+                let mut pane = pane_template.clone();
+                pane.workspace_id = workspace.workspace_id.clone();
+                pane.tab_id = tab.tab_id.clone();
+                pane.pane_id = format!("pane_{w}_{t}_{p}");
+                pane.label = Some(format!("terminal {p}"));
+                pane.focused = w == 0 && t == 0 && p == 0;
+                result.panes.push(pane);
+            }
+            result.tabs.push(tab);
+        }
+        result.workspaces.push(workspace);
+    }
+    result.focused_workspace_id = Some(result.workspaces[0].workspace_id.clone());
+    result.focused_tab_id = Some(result.tabs[0].tab_id.clone());
+    result.focused_pane_id = Some(result.panes[0].pane_id.clone());
+    result
+}
+
+#[test]
+fn navigator_grouping_keeps_snapshot_order_with_interleaved_tabs_and_panes() {
+    let mut snapshot = navigator_scale_snapshot(2, 2, 2);
+    snapshot.tabs.swap(1, 2);
+    snapshot.panes.reverse();
+    let expected = snapshot
+        .workspaces
+        .iter()
+        .flat_map(|workspace| {
+            snapshot
+                .tabs
+                .iter()
+                .filter(|tab| tab.workspace_id == workspace.workspace_id)
+                .flat_map(|tab| {
+                    snapshot
+                        .panes
+                        .iter()
+                        .filter(|pane| pane.tab_id == tab.tab_id)
+                        .map(|pane| pane.pane_id.clone())
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let remote = SavedSshEndpoint::new("Remote", "dev@example.invalid", "test").unwrap();
+    let remote_id = ClientEndpointId::Ssh(remote.id.clone());
+    state.set_endpoint_catalog(&[remote]);
+    state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
+    state.set_endpoint_snapshot(&remote_id, Box::new(snapshot.clone()));
+    state.set_snapshot(Box::new(snapshot));
+    state.open_navigator_overlay();
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_ref() else {
+        panic!("navigator")
+    };
+    let rows =
+        render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+    let actual = rows
+        .iter()
+        .filter_map(|row| match &row.target {
+            ClientNavigatorTarget::Pane {
+                endpoint_id,
+                pane_id,
+            } => {
+                assert!(endpoint_id == &state.active_endpoint_id || endpoint_id == &remote_id);
+                Some((endpoint_id.clone(), pane_id.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let expected = [state.active_endpoint_id.clone(), remote_id]
+        .into_iter()
+        .flat_map(|endpoint| {
+            expected
+                .iter()
+                .map(move |pane| (endpoint.clone(), pane.clone()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
 #[test]
 #[ignore = "manual navigator composition scaling profile"]
 fn navigator_render_scale_profile() {
-    for panes in [1, 15, 52] {
-        let mut snapshot = snapshot();
-        for index in 1..panes {
-            let mut pane = snapshot.panes[0].clone();
-            pane.pane_id = format!("pane_{index}_extra");
-            pane.focused = false;
-            snapshot.panes.push(pane);
+    for (workspaces, tabs, panes) in [
+        (1, 1, 1),
+        (1, 1, 15),
+        (1, 1, 52),
+        (1, 1, 512),
+        (1, 128, 4),
+        (64, 2, 4),
+        (128, 4, 1),
+    ] {
+        for query in ["", "terminal 0"] {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_snapshot(Box::new(navigator_scale_snapshot(workspaces, tabs, panes)));
+            let mut pane_surface = surface();
+            pane_surface.panes[0].pane_id = "pane_0_0_0".into();
+            state.set_pane_surface(pane_surface);
+            state.open_navigator_overlay();
+            if let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() {
+                navigator.query = query.into();
+            }
+            for _ in 0..20 {
+                std::hint::black_box(state.compose(106, 30).expect("navigator frame"));
+            }
+            let start = std::time::Instant::now();
+            for _ in 0..1000 {
+                std::hint::black_box(state.compose(106, 30).expect("navigator frame"));
+            }
+            eprintln!(
+                "navigator: {workspaces}x{tabs}x{panes}, query={query:?}, {:.1} us/frame",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
         }
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-        state.set_snapshot(Box::new(snapshot));
-        state.set_pane_surface(surface());
-        state.open_navigator_overlay();
-        for _ in 0..20 {
-            std::hint::black_box(state.compose(106, 30).expect("navigator frame"));
-        }
-        let start = std::time::Instant::now();
-        for _ in 0..1000 {
-            std::hint::black_box(state.compose(106, 30).expect("navigator frame"));
-        }
-        eprintln!(
-            "navigator: {panes} panes, {:.1} us/frame",
-            start.elapsed().as_secs_f64() * 1000.0
-        );
     }
 }
 

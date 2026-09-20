@@ -304,23 +304,39 @@ pub(super) fn navigator_rows(
                 .iter()
                 .map(|agent| (agent.pane_id.as_str(), agent))
                 .collect::<HashMap<_, _>>();
+            // Build endpoint-local indexes once. Walk each bucket in snapshot
+            // order so interleaved input and overlapping IDs on other endpoints
+            // retain their existing navigation order and targets.
+            let mut tabs_by_workspace = HashMap::new();
+            for tab in &snapshot.tabs {
+                tabs_by_workspace
+                    .entry(tab.workspace_id.as_str())
+                    .or_insert_with(Vec::new)
+                    .push(tab);
+            }
+            let mut panes_by_tab = HashMap::new();
+            for pane in &snapshot.panes {
+                panes_by_tab
+                    .entry(pane.tab_id.as_str())
+                    .or_insert_with(Vec::new)
+                    .push(pane);
+            }
             for workspace in &snapshot.workspaces {
                 let workspace_matches = endpoint_query_matches
                     || text(&workspace.label)
                     || workspace.branch.as_deref().is_some_and(text);
                 let mut children = Vec::new();
-                let workspace_tabs = snapshot
-                    .tabs
-                    .iter()
-                    .filter(|tab| tab.workspace_id == workspace.workspace_id);
-                let multiple_tabs = workspace_tabs.clone().nth(1).is_some();
+                let workspace_tabs = tabs_by_workspace
+                    .get(workspace.workspace_id.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let multiple_tabs = workspace_tabs.len() > 1;
                 for tab in workspace_tabs {
                     let tab_matches = workspace_matches || text(&tab.label);
-                    let tab_panes = snapshot
-                        .panes
-                        .iter()
-                        .filter(|pane| pane.tab_id == tab.tab_id)
-                        .collect::<Vec<_>>();
+                    let tab_panes = panes_by_tab
+                        .get(tab.tab_id.as_str())
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
                     for (index, pane) in tab_panes.iter().enumerate() {
                         let agent = agents.get(pane.pane_id.as_str()).copied();
                         let status = agent
