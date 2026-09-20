@@ -124,6 +124,16 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::CloseTab {
+                    if let Some(tab_id) = self
+                        .snapshot
+                        .as_deref()
+                        .and_then(|snapshot| snapshot.focused_tab_id.clone())
+                    {
+                        self.request_tab_close(tab_id, outcome);
+                    }
+                    return;
+                }
                 if action == crate::input::KeybindAction::NewTab && self.config.prompt_new_tab_name
                 {
                     self.open_new_tab_overlay();
@@ -1019,9 +1029,6 @@ impl ClientShellState {
                     env: Default::default(),
                 }))
             }
-            KeybindAction::CloseTab => Some(Method::TabClose(TabTarget {
-                tab_id: focused_tab?,
-            })),
             KeybindAction::ClosePane => Some(Method::PaneClose(PaneTarget {
                 pane_id: focused_pane.clone()?,
             })),

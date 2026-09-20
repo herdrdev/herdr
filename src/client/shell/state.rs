@@ -563,8 +563,15 @@ pub(super) struct ClientContextMenuItem {
 }
 
 #[derive(Debug)]
+pub(super) struct ClientTabCloseConfirmation {
+    pub(super) tab_id: String,
+    pub(super) workspace: WorkspaceNavigationTarget,
+}
+
+#[derive(Debug)]
 pub(super) struct ClientConfirmCloseOverlay {
     pub(super) workspace_id: String,
+    pub(super) tab_target: Option<ClientTabCloseConfirmation>,
     pub(super) title: String,
     pub(super) detail: String,
 }
