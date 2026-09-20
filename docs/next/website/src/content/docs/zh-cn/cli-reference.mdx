@@ -191,7 +191,7 @@ herdr tab rename <tab_id> <label>
 herdr tab close <tab_id>
 ```
 
-标签页是工作区内的另一个终端布局。不指定 `--workspace` 时,`tab create` 使用活动工作区;如果没有活动工作区则失败。JSON 响应中的 `.result.tab.tab_id` 和 `.result.root_pane.pane_id` 是对应 ID。
+标签页是工作区内的另一个终端布局。不指定 `--workspace` 时,`tab create` 使用活动工作区;如果没有活动工作区则失败。JSON 响应中的 `.result.tab.tab_id` 和 `.result.root_pane.pane_id` 是对应 ID。关闭工作区的最后一个标签页也会关闭该工作区。启用 `ui.confirm_close` 时，如果关闭父工作树的最后一个标签页会连带关闭整个工作树组，`tab close` 会返回 `confirmation_required` 错误。
 
 启用 `ui.confirm_close` 时，通过快捷键或标签页菜单关闭工作区的最后一个标签页前，TUI 会要求确认。普通的 CLI/API 标签页关闭操作仍立即执行。
 
