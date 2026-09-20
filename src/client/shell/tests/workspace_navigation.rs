@@ -827,6 +827,80 @@ fn navigation_highlight_requires_enqueued_focus_and_yields_to_new_intent() {
 }
 
 #[test]
+fn directional_pane_focus_releases_an_accepted_workspace_highlight() {
+    use crate::api::schema::{Method, PaneDirection, ResponseResult};
+
+    for (key, direction) in [
+        (b'h', PaneDirection::Left),
+        (b'j', PaneDirection::Down),
+        (b'k', PaneDirection::Up),
+        (b'l', PaneDirection::Right),
+    ] {
+        for rejected in [false, true] {
+            let mut state = local_navigation_state(false);
+            let pending_request = request_local_navigation(&mut state, 2);
+            assert_local_highlight(&mut state, "ws_3");
+            preview_key(&mut state, &[0x02]);
+            let outcome = state.handle_input_bytes(&[key]);
+            let [ClientShellAction::Endpoint { request, .. }] = outcome.actions.as_slice() else {
+                panic!("expected a directional pane focus request");
+            };
+            let Method::PaneFocusDirection(params) = &request.method else {
+                panic!("expected PaneFocusDirection");
+            };
+            assert_eq!(params.direction, direction);
+            assert_eq!(params.pane_id.as_deref(), Some("pane_1"));
+            assert!(state.pending_workspace_highlight.is_none());
+            assert_local_highlight(&mut state, "ws_1");
+            let result = if rejected {
+                Err(ClientShellEndpointError {
+                    code: Some("rejected".into()),
+                    message: "focus rejected".into(),
+                })
+            } else {
+                Ok(ResponseResult::Ok {})
+            };
+            state.handle_endpoint_result("boot-1", &pending_request, result);
+            assert_local_highlight(&mut state, "ws_1");
+        }
+    }
+}
+
+#[test]
+fn direct_agent_focus_repaints_when_releasing_a_workspace_highlight() {
+    let mut config = Config::default();
+    config.keys.focus_agent = crate::config::BindingConfig::one("ctrl+alt+1");
+    let mut projected = workspaces(3);
+    projected.agents.push(agent("agent", AgentStatus::Idle, 1));
+
+    for pending in [false, true] {
+        let mut state = local_navigation_state(false);
+        state.config.keybinds = ClientShellConfig::from_config(&config).keybinds;
+        state.set_snapshot(Box::new(projected.clone()));
+        state.compose(100, 28).unwrap();
+        if pending {
+            request_local_navigation(&mut state, 2);
+            assert_local_highlight(&mut state, "ws_3");
+        }
+
+        // Direct bindings do not inherit the repaint from leaving prefix mode.
+        let outcome =
+            state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+                KeyCode::Char('1'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ))]);
+        assert!(
+            matches!(outcome.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::PaneFocus(params)
+                if params.pane_id == "pane_1"))
+        );
+        assert!(state.pending_workspace_highlight.is_none());
+        assert_eq!(outcome.repaint, pending);
+        assert_local_highlight(&mut state, "ws_1");
+    }
+}
+
+#[test]
 fn cancelled_close_does_not_restore_an_older_navigation_highlight() {
     let mut state = local_navigation_state(false);
     request_local_navigation(&mut state, 2);

@@ -353,14 +353,15 @@ impl ClientShellState {
         let changes_focus = match &method {
             crate::api::schema::Method::WorkspaceFocus(_)
             | crate::api::schema::Method::TabFocus(_)
-            | crate::api::schema::Method::PaneFocus(_) => true,
+            | crate::api::schema::Method::PaneFocus(_)
+            | crate::api::schema::Method::PaneFocusDirection(_) => true,
             crate::api::schema::Method::WorkspaceCreate(params) => params.focus,
             crate::api::schema::Method::TabCreate(params) => params.focus,
             crate::api::schema::Method::PaneSplit(params) => params.focus,
             _ => false,
         };
         if changes_focus {
-            self.pending_workspace_highlight = None;
+            outcome.repaint |= self.pending_workspace_highlight.take().is_some();
         }
         if !self.endpoint_is_online(&self.active_endpoint_id) {
             let label = self.active_endpoint_label().to_owned();
